@@ -178,3 +178,20 @@ def test_run_claimable_error_line_never_leaks_the_token(monkeypatch, capsys, tmp
     assert json.loads(out.strip())["error"] == (
         "RuntimeError: connection refused to https://tracker.example.com"
     )
+
+
+def test_wip_saturation_is_unreachable_for_the_standalone_check():
+    """The hub's `kind` enum is CLOSED and it fail-closes on an unknown value, so
+    wip_saturated must never reach classify_next. It cannot: the CLI passes no `exclude`,
+    so a non-empty active set always returns via the resume branch BEFORE the slot guard.
+    This pins that reasoning — if a future edit lets saturation through, the verdict would
+    silently degrade to 'empty' and every hub loop would idle on a board that has work."""
+    api = FakeAPI(buckets=STAGES)
+    wf = Workflow(api, project_id=3, wip_limit=1)
+    task = api.add_task("held", "Queue")
+    wf.claim(task["id"])
+    api.add_task("free", "Queue")
+
+    result = wf.next_task()
+    assert "wip_saturated" not in result
+    assert classify_next(result) == {"claimable": True, "kind": "resume", "task_id": task["id"]}

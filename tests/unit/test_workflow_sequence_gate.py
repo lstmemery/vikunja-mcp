@@ -163,7 +163,12 @@ def test_unfinished_predecessor_deduped_across_kinds(env):
 
 # --- C2 (#102): next_task filters gated successors + reports the starving tail ---
 
-EMPTY = {"task": None, "message": "the queue is empty — no work for the agent"}
+# wip is on every next_task() result now (parallel-drain slot accounting, tracker #250); the
+# `env` fixture builds an unconfigured Workflow (no wip_limit), so it's always this shape here.
+EMPTY = {
+    "task": None, "message": "the queue is empty — no work for the agent",
+    "wip": {"active": 0, "limit": None, "free": None},
+}
 
 
 def test_next_task_skips_gated_offers_ungated_free(env):

@@ -225,7 +225,7 @@ def _tool(fn):
 
 @mcp.tool()
 @_tool
-def next_task() -> dict:
+def next_task(exclude: list[int] | None = None) -> dict:
     """What to do next, in order: (1) YOUR active task (Design/Build, incl. one bounced
     back from Your Call), (2) a task in Queue assigned to you, (3) a task in Review
     awaiting independent review — ANY card except an epic container, with no fresh verdict
@@ -246,8 +246,14 @@ def next_task() -> dict:
     self-unblock), the result is instead a distinct cycle signal (task:null PLUS cycle:true and
     cycle_tasks naming the loop): this is NOT sleepable — surface it via call_human so a human
     breaks the cycle (removes one link in the web UI). A genuinely empty queue is still task:null
-    with 'the queue is empty'."""
-    return _wf().next_task()
+    with 'the queue is empty'.
+
+    PARALLEL DRAIN: pass `exclude` = the ids of tasks you ALREADY have a live agent on, so
+    they are not handed back and dispatched twice. They still occupy their WIP slot. Every
+    result carries wip: {active, limit, free}. free == 0 comes back as task:null PLUS
+    wip_saturated:true — that means WAIT for an agent to return, NOT that the queue is empty.
+    """
+    return _wf().next_task(exclude=exclude)
 
 
 @mcp.tool()

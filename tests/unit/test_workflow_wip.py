@@ -70,3 +70,67 @@ def test_a_freed_slot_is_reusable():
     wf.advance(first["id"], to="review", worklog="did the thing", evidence="abc1234")
     second = api.add_task("second", "Queue")
     assert wf.claim(second["id"])["claimed"] is True
+
+
+# --- next_task in parallel mode: exclude + slot accounting ---
+
+def test_next_task_reports_wip_on_every_result():
+    api, wf = _env(wip_limit=2)
+    api.add_task("free", "Queue")
+    res = wf.next_task()
+    assert res["wip"] == {"active": 0, "limit": 2, "free": 2}
+
+
+def test_wip_free_is_none_when_unlimited():
+    api, wf = _env()
+    assert wf.next_task()["wip"] == {"active": 0, "limit": None, "free": None}
+
+
+def test_excluded_active_task_is_not_offered_again():
+    """The orchestrator already has a live agent on it; re-offering would dispatch a second
+    agent onto the same task. Liveness is a fact of the harness, so the CALLER states it."""
+    api, wf = _env(wip_limit=2)
+    held = _hold(api, wf, "in flight")
+    free = api.add_task("free", "Queue")
+    res = wf.next_task(exclude=[held["id"]])
+    assert res["task"]["id"] == free["id"]
+    assert res["resume"] is False
+
+
+def test_excluded_task_still_occupies_its_slot():
+    api, wf = _env(wip_limit=1)
+    held = _hold(api, wf, "in flight")
+    api.add_task("free", "Queue")
+    res = wf.next_task(exclude=[held["id"]])
+    assert res["task"] is None
+    assert res["wip_saturated"] is True
+    assert res["wip"] == {"active": 1, "limit": 1, "free": 0}
+
+
+def test_empty_exclude_still_hands_back_the_active_task():
+    """A killed turn loses the in-flight set. The next tick passes nothing, and abandoned
+    work must surface as resume — this is the crash-recovery path, not a regression."""
+    api, wf = _env(wip_limit=2)
+    held = _hold(api, wf, "abandoned")
+    res = wf.next_task()
+    assert res["resume"] is True and res["task"]["id"] == held["id"]
+
+
+def test_saturation_does_not_suppress_a_review_offer():
+    """Background review is not 'your active task' and consumes no slot (SKILL.md rule)."""
+    api, wf = _env(wip_limit=1)
+    held = _hold(api, wf, "in flight")
+    other = api.add_task("someone else's work", "Review")
+    api.add_comment(other["id"], "[worklog] done")
+    res = wf.next_task(exclude=[held["id"]])
+    assert res["review"] is True and res["task"]["id"] == other["id"]
+
+
+def test_saturated_result_is_not_the_empty_queue():
+    """The pump idles on an empty queue; it must WAIT (not sleep) when merely saturated."""
+    api, wf = _env(wip_limit=1)
+    held = _hold(api, wf, "in flight")
+    api.add_task("free", "Queue")
+    res = wf.next_task(exclude=[held["id"]])
+    assert res.get("wip_saturated") is True
+    assert "empty" not in res["message"]

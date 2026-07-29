@@ -354,7 +354,7 @@ class Workflow:
         }
 
     # --- тулзы ---
-    def next_task(self) -> dict:
+    def next_task(self, exclude: list[int] | None = None) -> dict:
         # READ-ONLY BY CONTRACT: next_task never writes (no comments, moves, labels, assigns) —
         # its whole call inventory is GETs: me / kanban_view / view_tasks (which itself probes
         # GET /info once, cached, for the page size) / get_task / comments — pinned by
@@ -371,7 +371,26 @@ class Workflow:
         my_id = self._me()["id"]
 
         mine = self._my_active_tasks(raw)
-        if mine:
+        # parallel drain: `exclude` names the tasks the CALLER already has a live
+        # agent on. The tracker cannot know sub-agent liveness — that is a fact of the harness,
+        # not of the board — so the pump states it. An excluded id is never OFFERED by any
+        # branch, but it still OCCUPIES its slot: it is real work in progress. On a fresh tick
+        # after a killed turn the set is empty and the abandoned task correctly resurfaces as
+        # resume (the crash-recovery path).
+        excluded = set(exclude or [])
+        limit = self._effective_wip_limit()
+        wip = {
+            "active": len(mine),
+            "limit": limit,
+            "free": None if limit is None else max(0, limit - len(mine)),
+        }
+
+        def with_wip(result: dict) -> dict:
+            result["wip"] = wip
+            return result
+
+        offerable = [st for st in mine if st[1]["id"] not in excluded]
+        if offerable:
             # rework-first ordering (option C, epic #94, mechanism 3): when I hold TWO+ active
             # tasks from one chain, hand back the one that is a PREDECESSOR of another of my
             # active tasks BEFORE its successor — even when the successor outranks it by priority
@@ -379,7 +398,11 @@ class Workflow:
             # is latched anyway, mechanism 2). Both tasks being active ⇒ both below Review ⇒ the
             # predecessor surfaces in _unfinished_predecessors; keys off follows/blocked only,
             # never parenttask. Computed only for 2+ active tasks — the common 0/1-active path
-            # keeps a plain -priority sort and makes zero extra get_task calls.
+            # keeps a plain -priority sort and makes zero extra get_task calls. active_ids is
+            # built from ALL of `mine`, not `offerable`: if I hold both a predecessor (excluded —
+            # another agent is live on it) and its successor, the successor must still rank as
+            # rework-first-blocked-by-that-predecessor; filtering active_ids to offerable would
+            # silently lose that ordering.
             rework_first: set[int] = set()
             if len(mine) > 1:
                 active_ids = {t["id"] for _s, t in mine}
@@ -387,11 +410,11 @@ class Workflow:
                     for pred in self._unfinished_predecessors(t["id"], board=raw):
                         if pred["id"] in active_ids:
                             rework_first.add(pred["id"])
-            mine.sort(key=lambda st: (
+            offerable.sort(key=lambda st: (
                 0 if st[1]["id"] in rework_first else 1, -st[1].get("priority", 0)
             ))
-            stage, task = mine[0]
-            return {
+            stage, task = offerable[0]
+            return with_wip({
                 "resume": True, "stage": stage, "task": self._summary(task),
                 "note": (
                     "this is your active task — don't claim a new one. First reconcile "
@@ -400,7 +423,7 @@ class Workflow:
                     "Done — verify it and advance(to='review') with honest evidence; "
                     "not — continue from where it left off"
                 ),
-            }
+            })
 
         # skip an epic here too: an epic container assigned to me in Queue (only ever a human's
         # doing — decompose parks epics in Backlog with the assignee cleared) is NOT claimable
@@ -410,17 +433,19 @@ class Workflow:
         # this is not a false-skip of "really my active work" — an epic container is never one.
         stuck = [
             t for t in board.get("Queue", [])
-            if my_id in self._assignee_ids(t) and not self._has_label(t, LABEL_EPIC)
+            if my_id in self._assignee_ids(t)
+            and not self._has_label(t, LABEL_EPIC)
+            and t["id"] not in excluded
         ]
         if stuck:
             stuck.sort(key=lambda t: -t.get("priority", 0))
-            return {
+            return with_wip({
                 "resume": True, "stage": "Queue", "task": self._summary(stuck[0]),
                 "note": (
                     "this task in Queue is assigned to you (by a human or an unfinished "
                     "claim) — call claim(task_id) to finish moving it into Design"
                 ),
-            }
+            })
 
         # independent-review pull path (#117): offer ANY task in Review awaiting review —
         # not just bug fixes — EXCEPT an epic container (label epic), whose code lives in its
@@ -431,6 +456,8 @@ class Workflow:
         # its last report (else an already-reviewed card is handed back forever and the queue
         # never advances — the freshness check just below).
         for t in sorted(board.get("Review", []), key=lambda t: -t.get("priority", 0)):
+            if t["id"] in excluded:
+                continue
             if self._has_label(t, LABEL_EPIC) or my_id in self._assignee_ids(t):
                 continue
             # вердикт актуален, только если он свежее последнего отчёта: после цикла
@@ -457,7 +484,7 @@ class Workflow:
             if last_review is not None and last_review >= last_worklog:
                 continue
             review_kind = "bug" if self._has_label(t, LABEL_BUG) else "change"
-            return {
+            return with_wip({
                 "review": True, "review_kind": review_kind, "task": self._summary(t),
                 "note": (
                     "this task is waiting for independent review — run it and cast a verdict "
@@ -468,7 +495,26 @@ class Workflow:
                     "and look for obvious regressions nearby. Do NOT review it if you wrote "
                     "this code in this session"
                 ),
-            }
+            })
+
+        # no free slot -> do not even look at the free queue. This is NOT an empty queue: the
+        # pump must WAIT for a dispatched agent to return, not idle the tick. Reported alone —
+        # `starving` describes a chain that cannot start, which is not the actionable fact when
+        # there is nowhere to put a task anyway (and computing it can cost a board escalation).
+        if wip["free"] == 0:
+            return with_wip({
+                "task": None,
+                "wip_saturated": True,
+                "message": (
+                    f"all {limit} WIP slot(s) are busy ({wip['active']} active) — "
+                    f"nothing can be claimed until one finishes"
+                ),
+                "note": (
+                    "NOT an empty queue: wait for a dispatched agent to return, then call "
+                    "next_task again. Do NOT claim, and do NOT end the tick / ScheduleWakeup "
+                    "as if there were no work"
+                ),
+            })
 
         # #126: exhaustive-board escalation for the sequence gate, memoised to AT MOST ONE fetch
         # per next_task. The board above is LIGHT (NEXT_TASK_STAGES omits Backlog/Your Call/Done,
@@ -511,7 +557,7 @@ class Workflow:
         for t in queue:
             blockers = self._unfinished_predecessors(t["id"], board=raw, resolve_full=resolve_full)
             if not blockers:
-                return {
+                return with_wip({
                     "resume": False, "task": self._summary(t),
                     "note": (
                         "a free task from the queue — call claim(task_id) (it moves it into "
@@ -523,7 +569,7 @@ class Workflow:
                         "'steward, not initiator: don't start fresh work without a go-ahead' "
                         "— it does not apply to draining the tracker queue"
                     ),
-                }
+                })
             gated.append((t, blockers))
         # Queue non-empty but EVERY free candidate gated -> starving tail. This MUST be
         # distinguishable from the empty queue below (the pump idles on task:null), else a
@@ -539,9 +585,9 @@ class Workflow:
             # genuinely claimable free task — the loop above already RETURNED it before here.
             cycle = self._find_predecessor_cycle(gated, raw, resolve_full=resolve_full)
             if cycle is not None:
-                return self._cycle_signal(cycle, full_board.get("board", raw))
-            return self._starving_tail(gated)
-        return {"task": None, "message": "the queue is empty — no work for the agent"}
+                return with_wip(self._cycle_signal(cycle, full_board.get("board", raw)))
+            return with_wip(self._starving_tail(gated))
+        return with_wip({"task": None, "message": "the queue is empty — no work for the agent"})
 
     def _starving_tail(self, gated: list[tuple[dict, list[dict]]]) -> dict:
         """The distinguishable "everything is blocked" signal — NOT the empty queue.

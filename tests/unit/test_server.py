@@ -36,7 +36,7 @@ def test_tool_errors_are_returned_not_raised(monkeypatch, tmp_path):
 def test_tool_catches_transport_errors_with_hint(monkeypatch):
     """httpx-исключения (сеть/VPN недоступны) не должны ронять сервер сырым traceback'ом."""
     class BoomWorkflow:
-        def next_task(self):
+        def next_task(self, exclude=None):
             raise httpx.ConnectError("boom")
 
     monkeypatch.setattr(server, "_wf", lambda: BoomWorkflow())
@@ -53,7 +53,7 @@ def test_401_message_owns_both_expired_and_scope_without_the_restart_myth(monkey
     can't help 'because scopes are fixed at mint' (dead wrong for a rotated token). It names both
     required groups, the file to fix, the expired possibility, and preserves the raw server text."""
     class Boom:
-        def next_task(self):
+        def next_task(self, exclude=None):
             raise VikunjaError(401, '{"code":11,"message":"invalid token"}')
 
     monkeypatch.setattr(server, "_wf", lambda: Boom())
@@ -75,7 +75,7 @@ def test_401_reloads_config_and_retries_once_then_succeeds(monkeypatch):
     state = {"token_ok": False}
 
     class WF:
-        def next_task(self):
+        def next_task(self, exclude=None):
             if not state["token_ok"]:
                 raise VikunjaError(401, '{"code":11}')
             return {"ok": True}
@@ -98,7 +98,7 @@ def test_second_401_after_reload_is_not_retried_again(monkeypatch):
     calls = {"n": 0}
 
     class WF:
-        def next_task(self):
+        def next_task(self, exclude=None):
             calls["n"] += 1
             raise VikunjaError(401, '{"code":11,"message":"still bad"}')
 
@@ -129,7 +129,7 @@ def test_non_401_errors_never_reload_or_retry(monkeypatch):
         calls = {"n": 0}
 
         class WF:
-            def next_task(self):
+            def next_task(self, exclude=None):
                 calls["n"] += 1
                 raise VikunjaError(status, "boom")
 
@@ -152,7 +152,7 @@ def test_reload_failure_degrades_gracefully_without_crashing(monkeypatch, config
     calls = {"n": 0}
 
     class WF:
-        def next_task(self):
+        def next_task(self, exclude=None):
             calls["n"] += 1
             raise VikunjaError(401, '{"code":11}')
 
@@ -337,7 +337,7 @@ def test_401_rotation_that_changes_project_id_refuses_to_repoint(monkeypatch, ca
     calls = {"n": 0}
 
     class WF:
-        def next_task(self):
+        def next_task(self, exclude=None):
             calls["n"] += 1
             raise VikunjaError(401, '{"code":11}')
 
@@ -361,7 +361,7 @@ def test_401_rotation_that_changes_url_refuses_to_repoint(monkeypatch, capsys):
     calls = {"n": 0}
 
     class WF:
-        def next_task(self):
+        def next_task(self, exclude=None):
             calls["n"] += 1
             raise VikunjaError(401, '{"code":11}')
 
@@ -388,7 +388,7 @@ def test_401_pure_rotation_same_url_and_project_still_self_heals(monkeypatch, ca
     state = {"ok": False}
 
     class WF:
-        def next_task(self):
+        def next_task(self, exclude=None):
             calls["n"] += 1
             if not state["ok"]:
                 raise VikunjaError(401, '{"code":11}')
@@ -499,7 +499,7 @@ def test_401_rotation_with_a_cosmetic_url_change_still_self_heals(monkeypatch, c
     state = {"ok": False}
 
     class WF:
-        def next_task(self):
+        def next_task(self, exclude=None):
             calls["n"] += 1
             if not state["ok"]:
                 raise VikunjaError(401, '{"code":11}')
@@ -530,7 +530,7 @@ def test_403_is_surfaced_as_project_permission_error(monkeypatch):
     """403 is a different remedy than 401: the token is fine but its user lacks
     permission on the project/resource — grant write access, don't touch scopes."""
     class Boom:
-        def next_task(self):
+        def next_task(self, exclude=None):
             raise VikunjaError(403, "forbidden")
 
     monkeypatch.setattr(server, "_wf", lambda: Boom())
@@ -543,7 +543,7 @@ def test_403_is_surfaced_as_project_permission_error(monkeypatch):
 def test_non_auth_vikunja_errors_are_left_untouched(monkeypatch):
     """Only 401/403 get the credential guidance; other statuses keep the terse form."""
     class Boom:
-        def next_task(self):
+        def next_task(self, exclude=None):
             raise VikunjaError(404, "not found")
 
     monkeypatch.setattr(server, "_wf", lambda: Boom())
