@@ -312,3 +312,29 @@ def test_wip_limit_non_numeric_is_a_config_error(tmp_path):
     (tmp_path / ".vikunja-mcp.env").write_text("VIKUNJA_TOKEN=t\n")
     with pytest.raises(ConfigError, match="wip_limit"):
         load_config(cwd=tmp_path, environ={})
+
+
+# --- worktree_root: MACHINE-local path for per-task git worktrees (parallel drain) ---
+
+def test_worktree_root_defaults_to_none(tmp_path):
+    (tmp_path / ".vikunja-mcp.toml").write_text('[tracker]\nurl = "http://x"\nproject_id = 3\n')
+    (tmp_path / ".vikunja-mcp.env").write_text("VIKUNJA_TOKEN=t\n")
+    assert load_config(cwd=tmp_path, environ={}).worktree_root is None
+
+
+def test_worktree_root_reads_from_toml(tmp_path):
+    (tmp_path / ".vikunja-mcp.toml").write_text(
+        '[tracker]\nurl = "http://x"\nproject_id = 3\nworktree_root = "../wt"\n'
+    )
+    (tmp_path / ".vikunja-mcp.env").write_text("VIKUNJA_TOKEN=t\n")
+    assert load_config(cwd=tmp_path, environ={}).worktree_root == "../wt"
+
+
+def test_env_overrides_worktree_root(tmp_path):
+    """Unlike wip_limit (team policy), the worktree location is MACHINE-local — env wins."""
+    (tmp_path / ".vikunja-mcp.toml").write_text(
+        '[tracker]\nurl = "http://x"\nproject_id = 3\nworktree_root = "../wt"\n'
+    )
+    (tmp_path / ".vikunja-mcp.env").write_text("VIKUNJA_TOKEN=t\n")
+    cfg = load_config(cwd=tmp_path, environ={"VIKUNJA_WORKTREE_ROOT": "/srv/trees"})
+    assert cfg.worktree_root == "/srv/trees"

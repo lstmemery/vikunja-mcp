@@ -458,6 +458,13 @@ def main(argv: list[str] | None = None) -> None:
         from vikunja_mcp.claimable_cmd import run_claimable
 
         raise SystemExit(run_claimable())
+    # `workspace` — per-task git worktrees for the parallel drain. Dispatched before the
+    # self-heal for the same reasons as `claimable`: it is called per task by the pump and
+    # must start fast, and it must not touch ~/.claude.
+    if args and args[0] == "workspace":
+        from vikunja_mcp.workspace_cmd import run_workspace
+
+        raise SystemExit(run_workspace(args[1:]))
     _self_heal_installed_artifacts()
     mcp.run()
 
