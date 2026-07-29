@@ -134,3 +134,27 @@ def test_saturated_result_is_not_the_empty_queue():
     res = wf.next_task(exclude=[held["id"]])
     assert res.get("wip_saturated") is True
     assert "empty" not in res["message"]
+
+
+def test_excluded_review_task_is_not_offered_for_review():
+    """review_task never assigns the reviewer to the reviewed task, so the pre-existing
+    'my_id in assignees' self-review guard does NOT catch a task one of the pump's own
+    live sub-agents is already reviewing — exclude is the ONLY thing standing between this
+    board and a second agent dispatched onto the same review."""
+    api, wf = _env()
+    other = api.add_task("someone else's work", "Review")
+    api.add_comment(other["id"], "[worklog] done")
+    res = wf.next_task(exclude=[other["id"]])
+    assert res["task"] is None
+    assert "review" not in res
+
+
+def test_excluded_stuck_queue_task_is_not_handed_back():
+    """An unfinished claim (assigned to me, still sitting in Queue) that another live
+    sub-agent is already finishing must not be handed back as a second 'call claim' — the
+    same slot, dispatched twice."""
+    api, wf = _env()
+    stuck = api.add_task("stuck claim", "Queue", assignee=api.me_user)
+    res = wf.next_task(exclude=[stuck["id"]])
+    assert res["task"] is None
+    assert "resume" not in res

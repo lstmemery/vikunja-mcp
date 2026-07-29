@@ -539,6 +539,11 @@ class Workflow:
         # epic, НИКОГДА за наличие подзадач (тот же миграционный принцип, что у гейта
         # последовательности): у обычной задачи тоже может быть подзадача, и она обязана остаться
         # клеймабельной.
+        # No `excluded` check needed here (unlike the resume/stuck/review branches above): this
+        # filter already requires `not self._assignee_ids(t)`, and an excluded id is by
+        # definition a task the caller already holds — i.e. assigned. An excluded task therefore
+        # can never pass the assignee filter and reach this list. If that filter is ever loosened
+        # to admit assigned tasks, this reasoning breaks and `excluded` would need to be added here.
         queue = [
             t for t in board.get("Queue", [])
             if not self._assignee_ids(t)
