@@ -153,7 +153,7 @@ class WorkflowError(Exception):
 class Workflow:
     def __init__(
         self, api: Any, project_id: int, enforce_single_wip: bool = False,
-        notifier: WebhookNotifier | None = None,
+        notifier: WebhookNotifier | None = None, wip_limit: int | None = None,
     ):
         self.api = api
         self.project_id = project_id
@@ -164,6 +164,10 @@ class Workflow:
         # server; None (default, URL unset) -> call_human behaves bit-for-bit as before.
         # Called strictly best-effort — see call_human.
         self.notifier = notifier
+        # parallel drain: how many tasks may be active (Design/Build) at once. None -> fall
+        # back to the legacy flag, so an unconfigured consumer is unchanged. See
+        # _effective_wip_limit for the precedence.
+        self.wip_limit = wip_limit
         self._me_cache: dict | None = None
         self._view_cache: dict | None = None
         self._buckets_cache: dict[str, dict] | None = None
@@ -214,6 +218,16 @@ class Workflow:
             for t in by_stage.get(stage, [])
             if my_id in self._assignee_ids(t)
         ]
+
+    def _effective_wip_limit(self) -> int | None:
+        """How many active tasks this token may hold. None = no limit.
+
+        Precedence: an explicit wip_limit is the truth; otherwise the legacy #38 flag means
+        exactly 1; otherwise unlimited (today's default). Keeping both keys alive means an
+        existing consumer that committed enforce_single_wip = true needs no edit."""
+        if self.wip_limit is not None:
+            return self.wip_limit
+        return 1 if self.enforce_single_wip else None
 
     def _find_task(self, task_id: int, board: list[dict] | None = None) -> tuple[dict, str]:
         for bucket in (board if board is not None else self._board()):
@@ -736,17 +750,18 @@ class Workflow:
                 f"predecessor: {joined}. A predecessor becomes ready only at Review or Done; "
                 f"finish that one first"
             )
-        # optional single-WIP gate (opt-in via enforce_single_wip). Off -> no extra
-        # board fetch, behavior unchanged. On -> refuse a new task while an active one
-        # exists; the discipline answer is "finish it or return_task it first".
-        if self.enforce_single_wip:
-            active = self._my_active_tasks()
-            if active:
+        # WIP slot gate (generalises the #38 single-WIP flag): refuse a claim that would put
+        # this token over its configured number of simultaneously active tasks. Reuse the board
+        # snapshot claim already fetched — the old code called _my_active_tasks() with no board
+        # and paid for a SECOND full board fetch on every gated claim.
+        limit = self._effective_wip_limit()
+        if limit is not None:
+            active = self._my_active_tasks(board=board)
+            if len(active) >= limit:
                 names = ", ".join(f"#{t['id']}" for _stage, t in active)
                 raise WorkflowError(
-                    f"you already have an active task ({names}) — finish it (advance to "
-                    f"Review) or return_task it before claiming another (single-WIP limit "
-                    f"is on: enforce_single_wip)"
+                    f"WIP limit reached ({len(active)}/{limit}) — you already hold {names}. "
+                    f"Finish one (advance to Review) or return_task it before claiming another"
                 )
         existing = task.get("assignees") or []
         me = self._me()

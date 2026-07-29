@@ -81,6 +81,7 @@ def _build_workflow(cfg) -> Workflow:
     return Workflow(
         VikunjaAPI(cfg.url, cfg.token), cfg.project_id,
         enforce_single_wip=cfg.enforce_single_wip,
+        wip_limit=cfg.wip_limit,
         notifier=notifier,
     )
 

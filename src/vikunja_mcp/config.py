@@ -28,6 +28,11 @@ class Config:
     # claim() refuses a new task while you already have an active Design/Build one.
     # Default off -> ships inert and reversible; opt in per team.
     enforce_single_wip: bool = False
+    # how many tasks this token may hold in Design/Build AT ONCE — the parallel-drain slot
+    # count, and the generalisation of enforce_single_wip (which is exactly wip_limit=1).
+    # Committed TEAM POLICY of the same class: repo toml ONLY, never env, never a secret.
+    # None (default) -> fall back to enforce_single_wip, i.e. today's behavior byte-for-byte.
+    wip_limit: int | None = None
     # Slack-compatible incoming-webhook URL pinged when call_human parks a card in
     # Your Call (#252). A secret of the token's class — whoever holds the URL can post
     # into the humans' channel — so like the token it is NEVER read from the committed
@@ -109,9 +114,23 @@ def load_config(cwd: Path | None = None, environ: Mapping[str, str] | None = Non
         raise ConfigError(
             f"VIKUNJA_PROJECT_ID/project_id must be a number, got {raw_pid!r}"
         )
+
+    raw_limit = repo.get("wip_limit")
+    wip_limit: int | None = None
+    if raw_limit is not None:
+        try:
+            wip_limit = int(raw_limit)
+        except (TypeError, ValueError):
+            raise ConfigError(f"wip_limit must be a number, got {raw_limit!r}")
+        if wip_limit < 1:
+            raise ConfigError(
+                f"wip_limit must be >= 1 (got {wip_limit}) — omit the key entirely for no limit"
+            )
+
     return Config(
         url=str(url), token=str(token),
         project_id=project_id, project_name=repo.get("project"),
         enforce_single_wip=bool(repo.get("enforce_single_wip", False)),
         notify_webhook=notify_webhook,
+        wip_limit=wip_limit,
     )

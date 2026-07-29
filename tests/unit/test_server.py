@@ -180,7 +180,7 @@ def test_reload_rebuilds_workflow_with_the_fresh_on_disk_token(monkeypatch):
     )
     monkeypatch.setattr(
         server, "Workflow",
-        lambda api, pid, enforce_single_wip=False, notifier=None: ("wf", api, pid),
+        lambda api, pid, enforce_single_wip=False, notifier=None, wip_limit=None: ("wf", api, pid),
     )
     server._reset_workflow_cache()
     try:

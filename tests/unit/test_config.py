@@ -268,3 +268,47 @@ def test_enforce_single_wip_reads_true_from_toml(tmp_path):
     )
     cfg = load_config(cwd=tmp_path, environ={"VIKUNJA_TOKEN": "tk"})
     assert cfg.enforce_single_wip is True
+
+
+# --- wip_limit: the parallel-drain slot count (committed in the toml, generalises #38) ---
+
+def test_wip_limit_defaults_to_none(tmp_path):
+    (tmp_path / ".vikunja-mcp.toml").write_text('[tracker]\nurl = "http://x"\nproject_id = 3\n')
+    (tmp_path / ".vikunja-mcp.env").write_text("VIKUNJA_TOKEN=t\n")
+    assert load_config(cwd=tmp_path, environ={}).wip_limit is None
+
+
+def test_wip_limit_reads_from_toml(tmp_path):
+    (tmp_path / ".vikunja-mcp.toml").write_text(
+        '[tracker]\nurl = "http://x"\nproject_id = 3\nwip_limit = 3\n'
+    )
+    (tmp_path / ".vikunja-mcp.env").write_text("VIKUNJA_TOKEN=t\n")
+    assert load_config(cwd=tmp_path, environ={}).wip_limit == 3
+
+
+def test_wip_limit_is_never_read_from_env(tmp_path):
+    """Committed TEAM POLICY, like enforce_single_wip: a machine-local env var must not
+    quietly widen another repo's slot count."""
+    (tmp_path / ".vikunja-mcp.toml").write_text('[tracker]\nurl = "http://x"\nproject_id = 3\n')
+    (tmp_path / ".vikunja-mcp.env").write_text("VIKUNJA_TOKEN=t\n")
+    cfg = load_config(cwd=tmp_path, environ={"VIKUNJA_WIP_LIMIT": "9"})
+    assert cfg.wip_limit is None
+
+
+def test_wip_limit_below_one_is_a_config_error(tmp_path):
+    """0 slots would silently wedge every claim — fail loudly at load instead."""
+    (tmp_path / ".vikunja-mcp.toml").write_text(
+        '[tracker]\nurl = "http://x"\nproject_id = 3\nwip_limit = 0\n'
+    )
+    (tmp_path / ".vikunja-mcp.env").write_text("VIKUNJA_TOKEN=t\n")
+    with pytest.raises(ConfigError, match="wip_limit"):
+        load_config(cwd=tmp_path, environ={})
+
+
+def test_wip_limit_non_numeric_is_a_config_error(tmp_path):
+    (tmp_path / ".vikunja-mcp.toml").write_text(
+        '[tracker]\nurl = "http://x"\nproject_id = 3\nwip_limit = "many"\n'
+    )
+    (tmp_path / ".vikunja-mcp.env").write_text("VIKUNJA_TOKEN=t\n")
+    with pytest.raises(ConfigError, match="wip_limit"):
+        load_config(cwd=tmp_path, environ={})

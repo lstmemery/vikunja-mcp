@@ -83,6 +83,7 @@ def run_claimable() -> int:
         wf = Workflow(
             VikunjaAPI(cfg.url, cfg.token), cfg.project_id,
             enforce_single_wip=cfg.enforce_single_wip,
+            wip_limit=cfg.wip_limit,
         )
         verdict = classify_next(wf.next_task())
     except Exception as e:  # noqa: BLE001 — a CLI check: ANY failure is exit 1, never a crash
