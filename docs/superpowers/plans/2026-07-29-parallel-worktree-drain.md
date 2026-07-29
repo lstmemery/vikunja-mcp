@@ -842,13 +842,19 @@ def repo_root(cwd: Path | None = None) -> Path:
 def worktree_root(root: Path) -> Path:
     """Where per-task trees live. Default: a SIBLING of the repo, never inside it — inside,
     pytest collection, ruff and `git add -A` would all sweep them up."""
-    from vikunja_mcp.config import load_config
+    import os
 
-    configured = None
-    try:
-        configured = load_config(cwd=root).worktree_root
-    except Exception:      # noqa: BLE001 — no tracker config is fine; create/release need none
-        pass
+    from vikunja_mcp.config import ENV_WORKTREE_ROOT, load_config
+
+    # env FIRST, on purpose: create/release need no tracker config at all, and load_config
+    # RAISES without url/project_id — reading it first would throw away a perfectly good
+    # VIKUNJA_WORKTREE_ROOT in any repo that is not tracker-configured.
+    configured = os.environ.get(ENV_WORKTREE_ROOT)
+    if not configured:
+        try:
+            configured = load_config(cwd=root).worktree_root
+        except Exception:  # noqa: BLE001 — no tracker config is fine; create/release need none
+            configured = None
     if configured:
         path = Path(configured)
         return path if path.is_absolute() else (root / path).resolve()
