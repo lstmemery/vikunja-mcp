@@ -1671,39 +1671,154 @@ _CODE_UNIVERSAL_CANDIDATE = re.compile(
 # "release" cannot bless itself; a bare `create` DOES count, because the bullet legitimately
 # quantifies over create refusals ("on create every refusal has the same answer").
 _NAMES_A_CHANNEL = re.compile(r"(?i)--release|--gc|\bcreate\b")
+# A `.`/`!`/`?` that actually ENDS a sentence: followed by whitespace or the end of the text, and
+# not the dot of a one-letter abbreviation (`i.e.`, `e.g.`). Both halves are load-bearing and were
+# measured SEPARATELY — see `_unscoped_code_universal`. This primitive is where the previous round
+# went wrong: it located the sentence start with a bare `rfind(".")`, which counts the dot inside
+# `SKILL.md`, so the window below began mid-clause and flagged true, correctly-scoped prose.
+_SENTENCE_END = re.compile(r"(?<![.\s][A-Za-z])[.!?](?=\s|$)")
 # the same claim, correctly scoped: the `code` is attributed to the release/gc channel
 _SCOPED_CODE_CLAIM = re.compile(r"`--release`/`--gc`[^.!?]{0,160}?\bcode\b")
+
+
+def _sentence_start(flat: str, pos: int) -> int:
+    """Index just past the last real sentence terminator before `pos` (0 when there is none).
+
+    Deliberately NOT `_SENTENCE_END.finditer(flat, 0, pos)`: an `endpos` makes `$` match there, so
+    a dot sitting immediately before the candidate would count as a terminator on the strength of a
+    boundary this function invented. Scanning the whole string and stopping evaluates every
+    lookahead against the real neighbouring character.
+    """
+    start = 0
+    for terminator in _SENTENCE_END.finditer(flat):
+        if terminator.start() >= pos:
+            break
+        start = terminator.end()
+    return start
 
 
 def _unscoped_code_universal(flat: str):
     """The first `code` universal in `flat` that scopes itself to NEITHER refusal channel.
 
-    A candidate is scoped when its SCOPE WINDOW — the text from the start of its sentence up to
-    the NOUN it quantifies — names a channel. That window is everything which can narrow what
-    "every … refusal" ranges over, and nothing that merely follows it, so both legitimate shapes
-    land inside it: "Every `--release`/`--gc` refusal …" narrows at the noun phrase (this is the
-    `gap` the old pattern captured and never read), "on create every refusal …" narrows at the
-    clause before it.
+    A candidate is scoped when its SCOPE WINDOW — from the start of its sentence through the end of
+    the `code` clause that closes the candidate — names a channel. All three legitimate shapes land
+    inside that window, which is why it has those two edges and not narrower ones:
+      * "Every `--release`/`--gc` refusal …" narrows at the noun phrase (this is the `gap` the
+        original pattern captured and never read);
+      * "on create every refusal …" narrows at the clause BEFORE the quantifier — so the window
+        must extend LEFT past the quantifier, not merely cover the gap;
+      * "Every refusal on the `--release`/`--gc` path carries a `code`" narrows AFTER the noun — so
+        the window must also extend RIGHT, through the `code` clause.
 
-    The window deliberately STOPS there rather than running to the end of the sentence, and that
-    boundary is the whole difference between a check and a rubber stamp: the exact sentence 580
-    deleted, "Every refusal carries a machine-readable `code`, and `--gc` GRADES them into two
-    lists", names `--gc` further along the SAME sentence — so a sentence-wide window would bless
-    the one text this pin exists to forbid. MEASURED, with a case built so that ONLY this clause
-    can speak (the forbidden sentence ADDED beside the intact attribution, so the `{"error"`,
-    `exit 1` and attribution clauses all still pass): shipped boundary -> FAIL, quoting it;
-    the same run with the window widened to the sentence end -> PASS, rc 0.
+    WHY THE RIGHT EDGE IS THERE, correcting a claim this function used to make. It previously
+    stopped at the noun, justified by "a tail-inclusive window would bless the very sentence 580
+    deleted". MEASURED, that is false as stated: the deleted sentence is "Every refusal carries a
+    machine-readable `code`, and `--gc` GRADES them into two lists", and its `--gc` sits AFTER the
+    word `code`, i.e. OUTSIDE a window that ends there — a tail-up-to-`code` window still FLAGS it.
+    Only a window widened to the SENTENCE END blesses it, and that is the boundary the earlier
+    measurement actually compared against. So the right edge costs nothing (the deleted sentence,
+    the quantifier-synonym round and every other round are unchanged by it) and buys the
+    post-nominal shape above, which the noun boundary rejected as a false positive.
 
-    Not a parser, and the limit is worth stating: a sentence that names a channel before the noun
-    and then over-generalises anyway ("on create every refusal carries a `code`") reads as scoped
-    here and is review's job. The drift this catches is the measured one — an unqualified
-    universal — in every wording of it.
+    WHY THE LEFT EDGE NEEDS A REAL TERMINATOR. `_SENTENCE_END` replaces the bare `rfind(".")` this
+    used to do, and both of its clauses were measured on their own, on prose whose TAIL names no
+    channel so that only the left edge can rescue it:
+      * `(?=\\s|$)` — "On create (see `SKILL.md`) every refusal gets the same treatment, so adding
+        a machine-readable `code` would be pointless." True, scoped, and flagged under `rfind`,
+        because the dot in `SKILL.md` cut the lead off before the word "create". That is the same
+        accident that used to make this bullet's own create clause pass, so the fix had made a
+        known-broken primitive load-bearing.
+      * the abbreviation lookbehind — the same sentence with "i.e." in place of the code span is
+        flagged even WITH `(?=\\s|$)`, because "i.e." really is a dot followed by a space. Left
+        unhandled it looks fixed by accident: the reported wording of that case happens to say
+        "create-side" in its tail, so the right edge rescues it and the false positive only
+        resurfaces on the next rewording.
+
+    NOT A PARSER, and here is everything it does not catch. Bounds, so a later reader does not
+    trust it further than it goes:
+      * a channel named ANYWHERE before `code` blesses the rest of the sentence, including a
+        sentence that scopes itself and then over-generalises anyway ("a create refusal is
+        `{\"error\"}` + exit 1, and every refusal carries a machine-readable `code`");
+      * the claim split across two sentences ("Every refusal is uniform. Each one carries a
+        machine-readable `code`.") — each half is harmless alone;
+      * the quantifier AFTER the noun ("A refusal, every single one, carries a `code`");
+      * the 32/72-character caps in the candidate pattern, which keep it inside one clause: a long
+        qualifier that pushes `code` past 72 characters walks past ("Every refusal, whichever
+        channel produced it and whatever the underlying reason turns out to be, carries a
+        machine-readable `code`.");
+      * a synonym for the NOUN ("Every rejection/failure carries a machine-readable `code`") and
+        quantifier-free phrasings ("Refusals carry a `code`", "Both refusal channels carry a
+        `code`");
+      * in the other direction it is deliberately strict about the release side's spelling — the
+        FLAG form is required, so "Every release/gc refusal …" is flagged, as is "On creation every
+        refusal …"; and a sentence ending in a one-letter word ("… option A. Every refusal …")
+        reads as one sentence too far left, the abbreviation lookbehind's own price.
+    So: the drift this catches is the measured one — an unqualified universal — in every
+    QUANTIFIER wording of it, which is the axis that actually re-generalised in review. The rest is
+    review's job, and review is what caught every bound listed above.
     """
     for match in _CODE_UNIVERSAL_CANDIDATE.finditer(flat):
-        sentence_start = max(flat.rfind(end, 0, match.start()) for end in ".!?") + 1
-        if not _NAMES_A_CHANNEL.search(flat[sentence_start:match.start("noun")]):
+        window = flat[_sentence_start(flat, match.start()):match.end()]
+        if not _NAMES_A_CHANNEL.search(window):
             return match
     return None
+
+
+# Prose whose verdict is FIXED, so the window above is exercised by a GREEN run and not only under
+# mutation. MEASURED and load-bearing: the shipped bullet yields ZERO candidates (the dot in
+# `SKILL.md` cuts its create clause before `code` reaches the pattern), so the pin below would pass
+# whatever this function did — every defect found in review so far was invisible until someone
+# reflowed that clause, which is precisely the edit this pin exists to police. Every window
+# variant considered and rejected disagrees with at least one row here: sentence-start..noun on
+# three, gap-only on four, gap+tail on two, `rfind` for the left edge on two, no-abbreviation-guard
+# on one, sentence-wide on three.
+_SCOPE_WINDOW_EXAMPLES = (
+    # (what the row is for, prose, is it a violation)
+    ("the universal 580 deleted — a channel named only AFTER `code` does not scope it",
+     "Every refusal carries a machine-readable `code`, and `--gc` GRADES them into two lists.",
+     True),
+    ("a quantifier synonym re-generalises just as well",
+     "Each refusal carries a machine-readable `code`.", True),
+    ("a channel named in the PREVIOUS sentence does not carry over",
+     "`--gc` grades the codes it gets. Every refusal carries a machine-readable `code`.", True),
+    ("scoped at the noun phrase — the wording this pin's failure message dictates",
+     "Every `--release`/`--gc` refusal carries a machine-readable `code`.", False),
+    ("scoped AFTER the noun — ordinary English, and why the window keeps its tail",
+     "Every refusal on the `--release`/`--gc` path carries a machine-readable `code`.", False),
+    ("scoped by the clause BEFORE the quantifier — why the window extends left",
+     "On create every refusal has the same answer, so a `code` there would be a public value.",
+     False),
+    ("…and that clause survives a dot inside a code span",
+     "On create (see `SKILL.md`) every refusal gets the same treatment, so adding a "
+     "machine-readable `code` would be pointless.", False),
+    ("…and an abbreviation",
+     "On create, i.e. when the tree cannot be made, every refusal gets the same treatment, so "
+     "adding a machine-readable `code` would be pointless.", False),
+)
+
+
+def test_the_code_universal_scope_window_agrees_with_its_worked_examples():
+    """VMCP-110 (580): the scope window of `_unscoped_code_universal`, pinned on fixed prose.
+
+    This exists because the pin below it is CURRENTLY VACUOUS as a check of the window: measured,
+    CLAUDE.md's workspace bullet produces zero candidates, so the window never runs on a green
+    suite and two rounds of review found false positives in it that no run would ever have shown.
+    A prose pin that only exercises its own predicate under mutation is a predicate nobody is
+    testing; these rows run it every time.
+
+    The rows are not decoration — each is a wording that a real author might write about THIS
+    module, and between them they discriminate every window boundary that was proposed and rejected
+    while getting this right (see the comment on `_SCOPE_WINDOW_EXAMPLES` for which variant each
+    row kills). They pin the PREDICATE, not CLAUDE.md; the document itself is pinned below.
+    """
+    for reason, prose, is_violation in _SCOPE_WINDOW_EXAMPLES:
+        violation = _unscoped_code_universal(_flat(prose))
+        assert (violation is not None) is is_violation, (
+            f"the `code` universal's scope window disagrees with a worked example ({reason}): "
+            f"{prose!r} should {'be flagged' if is_violation else 'pass'}, and it "
+            f"{'passed' if violation is None else 'was flagged'}. If the window was changed on "
+            f"purpose, re-measure this table — do not delete the row that disagrees"
+        )
 
 
 def test_the_claude_md_workspace_bullet_keeps_the_code_claim_scoped():
@@ -1726,9 +1841,12 @@ def test_the_claude_md_workspace_bullet_keeps_the_code_claim_scoped():
     Three clauses are pinned, deliberately as ANCHORS rather than as sentences, because the failure
     mode is not deletion but re-wording that quietly re-generalises:
       * NO unscoped universal survives — the claim is caught by its SHAPE ("every … refusal …
-        code" inside one sentence) whenever nothing before the NOUN names a channel, so a reflow,
-        a synonym for "carries" or a synonym for "every" cannot walk past it. What counts as
-        scoping, and why the window stops where it does, is in `_unscoped_code_universal`.
+        code" inside one sentence) whenever nothing from that sentence's start through its `code`
+        clause names a channel, so a reflow, a synonym for "carries" or a synonym for "every"
+        cannot walk past it. What counts as scoping, where the window's two edges are and what it
+        does NOT catch are all in `_unscoped_code_universal`; the window itself is exercised on a
+        green run by test_the_code_universal_scope_window_agrees_with_its_worked_examples, since
+        this bullet yields no candidates of its own.
       * the CREATE channel is stated at all: its literal payload token and its exit code. A bullet
         that merely stops saying "every" would satisfy the first clause while leaving the reader
         with no idea what a create refusal looks like — which is the state that produced the drift.
@@ -1748,15 +1866,20 @@ def test_the_claude_md_workspace_bullet_keeps_the_code_claim_scoped():
     slicer, not a vacuous pass; widen the end anchor to the next `##` -> FAIL from the swallow
     guard.
 
-    And mutation-checked in the other direction too, because the first version of this pin was RED
-    ON CORRECT PROSE — it captured the gap and never read it, so "scoped" was never actually
-    tested. All three cases measured, on this bullet: the wording the failure message itself
-    dictates ("Every `--release`/`--gc` refusal carries a machine-readable `code`, and `--gc`
-    GRADES them…", create paragraph intact) -> PASS, where it used to fail and leave an author who
-    OBEYED the error message with no way out but to weaken the pin; the bullet's own create clause
-    reworded without its "SKILL.md" citation (which only ever passed because that literal dot ended
-    the sentence scan) -> PASS; and "Each refusal carries a machine-readable `code`." added beside
-    the intact attribution -> FAIL, where the "every"-only pattern let it through.
+    And mutation-checked in the other direction too, twice over, because BOTH earlier versions of
+    this pin were RED ON CORRECT PROSE. The first captured the gap and never read it, so "scoped"
+    was never actually tested; the second read a window that stopped at the noun and located that
+    window's left edge with a bare `rfind(".")`. Five cases measured, on this bullet: the wording
+    the failure message itself dictates ("Every `--release`/`--gc` refusal carries a
+    machine-readable `code`, and `--gc` GRADES them…", create paragraph intact) -> PASS, where it
+    used to fail and leave an author who OBEYED the error message with no way out but to weaken the
+    pin; the bullet's own create clause reworded without its "SKILL.md" citation -> PASS; a create
+    clause that KEEPS a citation ("on create (see `SKILL.md`) every refusal …") or uses an
+    abbreviation ("on create, i.e. …") -> PASS, where the dot in each used to truncate the window's
+    lead; post-nominal scoping ("Every refusal on the `--release`/`--gc` path carries a
+    machine-readable `code`.") -> PASS, where the noun boundary rejected ordinary scoped English;
+    and "Each refusal carries a machine-readable `code`." added beside the intact attribution ->
+    FAIL, where the "every"-only pattern let it through.
 
     The vacuity question was then asked PROPERLY, because "the slicer can't miss" is not the same
     claim as "a miss can't pass": with the slice replaced by the WHOLE file AND the subset/swallow
@@ -1773,12 +1896,13 @@ def test_the_claude_md_workspace_bullet_keeps_the_code_claim_scoped():
     assert violation is None, (
         f"CLAUDE.md's workspace bullet states the UNSCOPED universal again: "
         f"{violation.group(0)!r}. Only a `--release`/`--gc` refusal carries a `code`; a CREATE "
-        f'refusal is `{{"error": …}}` + exit 1 and carries none. Name the channel BEFORE the word '
-        f'"refusal" — "every `--release`/`--gc` refusal …", or "on create every refusal …" for a '
-        f"claim about the other side; naming it only later in the sentence does not count, since "
-        f"the sentence this pin exists to forbid did exactly that. Or, if the CODE really did "
-        f"change, change the code and tests/unit/test_workspace_cmd.py's channel pin FIRST, then "
-        f"this prose"
+        f'refusal is `{{"error": …}}` + exit 1 and carries none. Name the channel anywhere from '
+        f"the start of that sentence through the `code` clause itself — \"every `--release`/`--gc` "
+        f'refusal …", "every refusal on the `--release`/`--gc` path carries a `code`", or "on '
+        f'create every refusal …" for a claim about the other side. What does NOT count is naming '
+        f"it only AFTER `code`: the sentence this pin exists to forbid did exactly that (\"…carries "
+        f"a machine-readable `code`, and `--gc` GRADES them…\"). Or, if the CODE really did change, "
+        f"change the code and tests/unit/test_workspace_cmd.py's channel pin FIRST, then this prose"
     )
     assert '{"error"' in bullet, (
         'CLAUDE.md\'s workspace bullet no longer shows what a CREATE refusal looks like '
