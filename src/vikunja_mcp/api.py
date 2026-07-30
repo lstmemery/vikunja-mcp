@@ -286,7 +286,40 @@ class VikunjaAPI:
             body, headers = self._req(
                 "GET", path, params={**(params or {}), "page": page}, with_headers=True
             )
+            # A 200 whose body is not a list is read as NO ROWS, not as an error, because that is
+            # how an empty list actually arrives: `_req` returns None for an empty body, and a Go
+            # nil slice marshals to `null` (`view_tasks` normalizes the same way, `... or []`).
+            # The normalization is load-bearing, not defensive — MEASURED with `items = body`: a
+            # page `{"message": ...}` is truthy, so the loop below walks the dict's KEYS and merges
+            # the string "message" into the result as a row (VMCP-116).
             items = body if isinstance(body, list) else []
+            # AN EARLY-OUT, AND ONLY THAT — it does not outrank `x-pagination-total-pages`, and
+            # nothing at this line could: the header reaches the stop rule at the bottom only ANDed
+            # with `added_new`, so a page that brings no NEW row ends the read whatever the header
+            # claims, and an empty page brings none. MEASURED (VMCP-116, real httpx over the card's
+            # exact shape — page1=5 rows, page2=[], page3=5 rows, every response stating 3 pages):
+            # delete these two lines and the answer is unchanged, 5 rows in 2 requests, whole unit
+            # suite green. The card's own mutation (`not items and not header_more`) is inert for
+            # that same reason. The rule this is a fast path for is broader than "empty" anyway —
+            # a page of pure REPEATS adds nothing either, and that is what stops a `?page=`-
+            # ignoring endpoint after 2 requests.
+            #
+            # KEPT DELIBERATELY, as the flat twin of view_tasks' choice (VMCP-103's
+            # test_a_page_filtered_down_to_nothing_still_ends_the_read): an all-filtered window and
+            # an exhausted list are the same observation, and offset pagination over a stable list
+            # makes the empty page the NORMAL terminating shape. ONE half of the board's reasoning
+            # does NOT carry over — "keep paging through empties has no bound at all" — since here
+            # the header would bound it. What replaces it is worse than an absent bound: that bound
+            # would belong to the SERVER, and this is the header `_total_pages` documents as
+            # measured wrong in BOTH directions on this very version. `added_new` is the only stop
+            # that comes from the DATA (the row set is finite, so a read that must add a row per
+            # page cannot outrun it). MEASURED on the views/buckets shape 2.3.0 really serves —
+            # whole list every page, `?page=` ignored, total-pages OVER-reported — a header allowed
+            # to carry the read past a page that added nothing runs to the server's own page count:
+            # 41+ requests where this reader spends 2, with the unproven-page ceiling never firing
+            # because every page is FULL. That is VMCP-116's option (b), and it is refused as a
+            # design: it would mean relaxing THAT conjunct and charging empty pages to
+            # `unproven_pages` before this break — never a change to this line.
             if not items:
                 break
             # snapshotted BEFORE this page is folded into `longest_page`: a page may not be used

@@ -1202,3 +1202,61 @@ def test_a_server_serving_MORE_than_it_stated_still_reads_the_list_whole():
 
     assert [x["id"] for x in api.labels()] == list(range(1, 13))     # mutant: [1..9]
     assert seen == [1, 2, 3]                                         # mutant: [1, 2]
+
+
+# --- VMCP-116 (589): a page with NO ROWS ends a flat read, header or no header -------------------
+#
+# The card read `if not items: break` as the one place where something silently outranks
+# `x-pagination-total-pages`, whose own helper says it is "NEVER a stop signal". MEASURED on the
+# card's exact shape (real httpx over real api.py — page1=5 rows, page2 empty, page3=5 rows, every
+# response stating 3 pages): nothing outranks the header there, because the header never stands
+# alone. It reaches the stop rule only ANDed with `added_new`, and an empty page adds nothing.
+# Hence, each mutation applied alone with __pycache__ cleared:
+#
+#   delete `if not items: break` entirely        => NO behaviour change at all (5 rows in 2
+#                                                   requests, byte-identical on five shapes) and
+#                                                   the whole unit suite still 600 passed
+#   the card's own `not items and not header_more`
+#                                                => the same, inert for the same reason
+#
+# So the green suite the card reported was a NO-OP, not a coverage gap — worth recording, because
+# "the mutation stayed green" is normally evidence of the opposite. What is genuinely unpinned is
+# the BEHAVIOUR, and reaching it takes both spellings of the one rule at once: skip the early-out
+# on an empty page AND let that page keep the read going. That is the card's option (b), refused
+# in api.py for a measured reason (it hands the loop's bound to a header this very server
+# over-reports), and this test is what makes the refusal fail loudly if someone implements it.
+# It also pins the `else []` normalization, which is the other half of option (b) — see below.
+
+@pytest.mark.parametrize("body, what", [
+    ([], "an empty list"),
+    (None, "a JSON null — how an empty list reaches this client at all"),
+    ({"message": "not a list"}, "a 200 whose body is not a list"),
+])
+def test_a_page_with_no_rows_ends_a_flat_read_even_when_the_header_says_there_is_more(body, what):
+    """The flat twin of test_a_page_filtered_down_to_nothing_still_ends_the_read (VMCP-103), and
+    the same LIMIT stated for the other reader: rows behind a page that came back with nothing are
+    not fetched, even though the header says there is another page. An empty window and an
+    exhausted list are the same observation, and for offset pagination over a stable list the empty
+    page is the ordinary way a read ends.
+
+    All three bodies are the SAME observation to this reader on purpose: `_req` hands back None for
+    an empty response body, a Go nil slice marshals to `null`, and only an object is a genuine
+    protocol violation — treating any of them as an error would break the ordinary empty read.
+
+    TWO mutations kill this, and neither is the line the card named:
+      * option (b), faithfully implemented — `empty = not items`, skip the early-out while
+        `_total_pages(headers) > page`, and add `or empty` to the `added_new` conjunct: the read
+        goes on to page 3 and returns 10 rows in 4 requests. Note it does NOT break
+        test_an_endpoint_that_ignores_page_terminates_without_duplicating_rows, whose server never
+        serves an empty page — this test is the only thing standing in front of it.
+      * `items = body` (drop the `else []`): a non-list body is truthy, so the loop walks the
+        dict's KEYS and merges the string "message" as a row.
+    Neither can hang: `_flat` carries the harness cap (VMCP-119's trap)."""
+    api, seen = _flat({
+        1: [{"id": i} for i in range(1, 6)],        # full at the stated page size
+        2: body,                                    # nothing came back — the read ends HERE
+        3: [{"id": i} for i in range(6, 11)],       # never asked for
+    }, page_size=5, total_pages=3)                  # ... though the header insists it exists
+
+    assert [x["id"] for x in api.labels()] == [1, 2, 3, 4, 5], what     # mutant: [1..10]
+    assert seen == [1, 2], what                                        # mutant: [1, 2, 3, 4]
