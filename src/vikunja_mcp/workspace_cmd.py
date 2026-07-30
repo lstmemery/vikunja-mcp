@@ -31,7 +31,21 @@ BUILD_BRANCH = "task/{task_id}"
 _NAME_RE = re.compile(r"^(task|review)-(\d+)$")
 _ROLE_BY_PREFIX = {"task": "build", "review": "review"}
 
-# WHY EVERY REFUSAL CARRIES A CODE (VMCP-68). `--gc` has to grade its own refusals — routine vs
+# WHY A `--release`/`--gc` REFUSAL CARRIES A CODE (VMCP-68), AND A CREATE REFUSAL DOES NOT
+# (VMCP-110). This header used to read "WHY EVERY REFUSAL CARRIES A CODE" and was false of the
+# create path in the same breath as its own body, which scopes the justification to `--gc`. Say the
+# scope in the title: two later documents copied the universal out of here and had to be corrected.
+# The codes below are produced ONLY by `_release_locked` and `gc_workspaces`. `_ensure_locked`
+# refuses by RAISING `WorkspaceError`, which `run_workspace`'s catch-all renders as `{"error": …}`
+# + exit 1 — no `code` key, on purpose: a code exists to feed a GRADER (`_keep_is_expected`, the
+# only one in this package), and an orchestrator's answer to EVERY create refusal is the same
+# single branch (SKILL.md's «Не завелось — цикл НЕ роняем»: degrade to one slot, keep draining).
+# And it could not be made universal anyway — that catch-all covers an OPEN set (a non-repo, a
+# malformed toml, a `ReadDeadlineExceeded`, an OSError), so a code there would be present-SOMETIMES,
+# which is worse to parse than absent-always. Pinned both ways by
+# test_the_two_refusal_channels_are_not_interchangeable; change the split and the docs move with it.
+#
+# `--gc` has to grade its own refusals — routine vs
 # "a human should look" (see _keep_is_expected) — and the only other thing a refusal carries is
 # `reason`, which is PROSE: human-facing, deliberately reworded whenever a message turns out to
 # mislead (the half-created diagnosis was reworded exactly that way). Grading on a substring of it

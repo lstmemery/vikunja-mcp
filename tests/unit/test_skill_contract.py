@@ -1574,3 +1574,119 @@ def test_the_cross_session_boundary_names_the_fix_and_not_only_the_symptom():
     assert "в блоке `env` файла `.claude/settings.json`" in flat, \
         "the bullet no longer says WHERE the variable goes (the `env` block of a project " \
         "`.claude/settings.json`) — the bare path also occurs in the sentence after it"
+
+
+def _claude_workspace_bullet(text: str) -> str:
+    """CLAUDE.md's `workspace_cmd.py` architecture bullet — where the refusal-channel split lives.
+
+    Scoped to the one bullet for the reason every slicer in this module records: `code`,
+    `--release`, `--gc` and `exit 1` all occur elsewhere in CLAUDE.md (the `claimable_cmd.py`
+    bullet is entirely about a JSON line and an exit-code split; the dogfood section drives
+    `workspace <id>`), so a whole-file scan could not tell "the split is still stated HERE, where
+    an author editing this module will meet it" from "those tokens survive somewhere in the file".
+
+    The end anchor is the next TOP-LEVEL bullet (`\\n- \\``), not the name of the bullet that
+    happens to follow today: continuation lines are indented two spaces, so only a real sibling
+    bullet can end the slice, and reordering the architecture list cannot silently widen it.
+    """
+    start = text.find("- `src/vikunja_mcp/workspace_cmd.py`")
+    assert start != -1, (
+        "CLAUDE.md no longer opens its `workspace_cmd.py` bullet where this pin can find it. If "
+        "the bullet was legitimately renamed, move this anchor — do not delete the check"
+    )
+    end = text.find("\n- `", start + 1)
+    assert end != -1, "the workspace bullet no longer ends where the next architecture bullet begins"
+    bullet = text[start:end]
+    assert 0 < len(bullet) < len(text), \
+        "the workspace slice is not a proper subset of CLAUDE.md"
+    assert "claimable_cmd.py" not in bullet, "the slice swallowed the bullet BEFORE it"
+    assert "process rules for agents" not in bullet, "the slice swallowed the bullet AFTER it"
+    return bullet
+
+
+# "every … refusal … code" with nothing naming the RELEASE side in between: the universal claim
+# 580 removed. The `code` clause is what makes this usable — MEASURED, the correct bullet says
+# "every refusal" twice on purpose (once quoted, to forbid the phrase; once as "on create every
+# refusal has the same answer", which is the scoped truth), so a bare every/refusal scan would be
+# red on the text it is meant to bless. `[^.!?]` keeps each match inside one sentence.
+_UNSCOPED_CODE_UNIVERSAL = re.compile(
+    r"(?i)\bevery\b(?P<gap>[^.!?]{0,32}?)\brefusals?\b[^.!?]{0,72}?\bcode\b"
+)
+# the same claim, correctly scoped: the `code` is attributed to the release/gc channel
+_SCOPED_CODE_CLAIM = re.compile(r"`--release`/`--gc`[^.!?]{0,160}?\bcode\b")
+
+
+def test_the_claude_md_workspace_bullet_keeps_the_code_claim_scoped():
+    """VMCP-110 (580): CLAUDE.md's workspace bullet used to state "Every refusal carries a
+    machine-readable `code`" — a universal that is FALSE of the create channel, which refuses by
+    raising and comes back as `{"error": …}` + exit 1 with no `code` at all. The behaviour is pinned
+    in tests/unit/test_workspace_cmd.py::test_the_two_refusal_channels_are_not_interchangeable; this
+    is the PROSE half, and it is the half that actually propagated: two later documents copied the
+    universal out of this bullet (workspace_cmd.py's own CODE_* header and the plan doc), and a
+    third would have.
+
+    Why prose needs its own net here rather than review alone: this bullet is the standing brief
+    every agent working in this repo reads before touching the module, so a false universal in it
+    does not just sit there — it gets IMPLEMENTED. The plausible "fix" for a reader who believes it
+    is to add a `code` to the create path, which is precisely the change 580 weighed and rejected
+    (a code exists to feed `_keep_is_expected`, the only grader in the package; on create every
+    refusal has the same answer, and the catch-all covers an OPEN set so a create-side code could
+    only ever be present-SOMETIMES — worse to parse than absent-always).
+
+    Three clauses are pinned, deliberately as ANCHORS rather than as sentences, because the failure
+    mode is not deletion but re-wording that quietly re-generalises:
+      * NO unscoped universal survives — the claim is caught by its SHAPE ("every … refusal …
+        code" inside one sentence, with nothing naming `--release`/`--gc` in the gap), so a reflow
+        or a synonym for "carries" cannot walk past it.
+      * the CREATE channel is stated at all: its literal payload token and its exit code. A bullet
+        that merely stops saying "every" would satisfy the first clause while leaving the reader
+        with no idea what a create refusal looks like — which is the state that produced the drift.
+      * the `code` is ATTRIBUTED to `--release`/`--gc`, not left floating. `--release`/`--gc` as a
+        PAIR occurs exactly once in this file (measured), so this cannot pass on an unrelated
+        mention.
+
+    NOT pinned: the justification prose (the open-set argument, the "no consumer" argument). Those
+    are review's job per this module's docstring, and pinning them would turn a legitimate
+    re-wording of the rationale into a red test.
+
+    MUTATION-CHECKED (`__pycache__` cleared between rounds, each round confirmed to select exactly
+    1 test, CLAUDE.md restored from a COPY — never `git checkout --`): control PASS; restore the old
+    "Every refusal carries a machine-readable `code`, and `--gc` GRADES them…" sentence in place of
+    the scoped one -> FAIL, quoting the match; delete the whole create-channel paragraph -> FAIL on
+    the `{"error"` clause; rename the bullet so the slicer's anchor misses -> FAIL loudly from the
+    slicer, not a vacuous pass; widen the end anchor to the next `##` -> FAIL from the swallow
+    guard.
+
+    The vacuity question was then asked PROPERLY, because "the slicer can't miss" is not the same
+    claim as "a miss can't pass": with the slice replaced by the WHOLE file AND the subset/swallow
+    guards deleted AND the create paragraph gone, this test PASSES. That is not hypothetical —
+    measured in CLAUDE.md, `{"error"` also occurs in the `server.py` bullet and `exit 1` in a later
+    section, so both positive clauses have somewhere else to land. The `0 < len(bullet) < len(text)`
+    guard is what stands between this test and that vacuous pass; it is load-bearing, not ceremony.
+    """
+    bullet = _claude_workspace_bullet(_claude_md_text())
+    flat = _flat(bullet)
+
+    violation = _UNSCOPED_CODE_UNIVERSAL.search(flat)
+    # the message is evaluated only when the assert FAILS, so .group() is safe here
+    assert violation is None, (
+        f"CLAUDE.md's workspace bullet states the UNSCOPED universal again: "
+        f"{violation.group(0)!r}. Only a `--release`/`--gc` refusal carries a `code`; a CREATE "
+        f'refusal is `{{"error": …}}` + exit 1 and carries none. Scope the sentence (say "every '
+        f'`--release`/`--gc` refusal") — or, if the CODE really did change, change the code and '
+        f"tests/unit/test_workspace_cmd.py's channel pin FIRST, then this prose"
+    )
+    assert '{"error"' in bullet, (
+        'CLAUDE.md\'s workspace bullet no longer shows what a CREATE refusal looks like '
+        '(`{"error": …}`). Without it the bullet says only what `--release`/`--gc` do, and the '
+        'next reader re-generalises that to both channels — which is how 580 happened'
+    )
+    assert "exit 1" in flat, (
+        "CLAUDE.md's workspace bullet no longer states the create channel's exit code. On create "
+        "the EXIT CODE is the whole machine-readable verdict — dropping it is dropping the "
+        "contract, not a detail"
+    )
+    assert _SCOPED_CODE_CLAIM.search(flat), (
+        "CLAUDE.md's workspace bullet no longer attributes the machine-readable `code` to the "
+        "`--release`/`--gc` channel. An unattributed `code` sentence reads as universal again"
+    )

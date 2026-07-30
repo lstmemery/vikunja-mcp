@@ -150,8 +150,11 @@ docker rm -f vikunja-test
   normal place for a per-task agent, and where the gitignored `.vikunja-mcp.env` does not
   exist. Safety invariant taken from hgdev-acp's reaper: push OK → remove, push FAIL → KEEP
   (dirty, unpushed, or reachable-from-no-ref ⇒ reported, never destroyed).
-  Housekeeping is never how an agent's work disappears. Every refusal carries a machine-readable
-  `code`, and `--gc` GRADES them into two lists (`_keep_is_expected`): `kept` = a human should
+  Housekeeping is never how an agent's work disappears. **Only ONE of the two refusal channels is
+  coded, and the split is deliberate — do not restate it as "every refusal".** A `--release`/`--gc`
+  refusal is exit 0 + `released: false` + a machine-readable `code` beside the prose `reason` ("the
+  tool RAN and is protecting your work"), and `--gc` GRADES those codes into two lists
+  (`_keep_is_expected`): `kept` = a human should
   look, `expected` = the two routine states that used to keep `kept` permanently non-empty — a
   parked Your Call card's unsaved work (hence `Workflow.parked_task_ids`, off the same board
   fetch) and a review tree's in-tree commit. Routine is a property of the guard AND the board AND
@@ -165,6 +168,19 @@ docker rm -f vikunja-test
   work. An unknown code lands in `kept`: noisy beats quiet. A `released`
   entry can still need action — #517's `branch_deleted: false` + `warning` (the tree went, the
   branch leaked), which is why the rulebook says read `kept` AND scan `released`.
+  A CREATE refusal is the OTHER channel and carries no `code` at all — `{"error": …}` + exit 1,
+  "the tool could NOT do the work" — measured over every one of them (half-created, detached-build,
+  the review `--at` pin, an occupied path, each argument-combination refusal). That is a design
+  decision, not an oversight to tidy up (#580 weighed making it uniform and rejected it). A `code`
+  exists to feed a GRADER, and `_keep_is_expected` is the only grader there is; on create every
+  refusal has the same answer — SKILL.md's «Не завелось — цикл НЕ роняем»: degrade to one slot,
+  never stop the loop — so a create-side code would be a public value, spelled in SKILL.md and
+  pinned by tests, with no consumer. Nor could "every" be made true there: the `{"error"}` line is
+  rendered by a catch-all over an OPEN set (a non-repo, a malformed toml, a git timeout, an
+  OSError), so a code could only ever be present-SOMETIMES — worse to parse than absent-always,
+  since `payload["code"]` would then pass every test and `KeyError` in production. On create the
+  EXIT CODE is the whole machine-readable verdict, and SKILL.md tells agents to branch on that
+  split, so blurring it costs more than the uniformity buys.
 - `src/vikunja_mcp/skills/tracker/SKILL.md` — process rules for agents
   (queue discipline, orchestrator-dispatches-subagents, report format,
   independent review of EVERY task and not just bugs («Независимое ревью

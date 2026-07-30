@@ -1096,6 +1096,109 @@ def test_gc_reports_a_half_created_tree_and_keeps_sweeping(repo, tracker, monkey
     assert half.is_dir()
 
 
+# --- VMCP-110 (580): the two refusal CHANNELS are different shapes, and both ends need a net ---
+
+def test_the_two_refusal_channels_are_not_interchangeable(repo, monkeypatch, capsys):
+    """`workspace` refuses in two deliberately DIFFERENT shapes, and this pins both ends at once.
+
+    CREATE refuses by RAISING; `run_workspace`'s catch-all renders that as one `{"error": …}` line
+    and exit 1 — with NO `code` key. `--release`/`--gc` refuse by RETURNING: exit 0,
+    `released: false`, and a machine-readable `code` beside the prose `reason`. Three documents had
+    copied that second half out as the universal "every refusal carries a machine-readable `code`",
+    which is simply false of the create half; 580 weighed making it uniform and re-ratified the
+    split instead (see the CODE_* header in workspace_cmd.py for why a create-side code would have
+    no consumer and could only ever be present-SOMETIMES). A re-ratified split needs a net in BOTH
+    directions, so ONE state is driven through BOTH entry points here — same tree, same tick.
+
+    The create half is asserted as a WHOLE KEY SET on purpose. The existing create test
+    (`test_run_workspace_error_is_one_json_line_exit_1`) only checks `"WorkspaceError" in
+    err["error"]`, with no whole-dict equality anywhere — so a `code` key appearing beside it would
+    leave every existing test in this file green, which is exactly how someone could quietly make
+    the OLD universal claim true and nobody would learn of it. `"code" not in payload` would not do
+    either: it names the one key we happen to fear today, and the release channel is pinned by whole
+    dict (`test_run_workspace_release_of_missing_tree_is_exit_0`) for the same reason.
+
+    MUTATION-CHECKED (`__pycache__` cleared between rounds, each round confirmed to select exactly
+    1 test, workspace_cmd.py restored from a COPY — never `git checkout --`, since this card's edits
+    are uncommitted and siblings are live in neighbouring worktrees): control PASS; give
+    `run_workspace`'s catch-all a `"code"` beside its `"error"` (the plausible "tidy-up" that makes
+    the OLD universal claim true) -> FAIL on the create key set; delete `"code": CODE_HALF_CREATED`
+    from `_release_locked`'s half-created refusal -> FAIL on the release half.
+
+    And the size of the gap was measured, not assumed: under that first mutation the ENTIRE
+    pre-existing suite — all 582 tests, this file's own create test included — stays GREEN. Someone
+    could have made the false universal true and no test in this repo would have said a word.
+    """
+    path = _half_created_tree(repo, monkeypatch)          # ONE state both channels can see
+    monkeypatch.chdir(repo)
+
+    assert run_workspace(["42"]) == 1, "a create refusal must be a CLI failure — exit 1"
+    created = json.loads(capsys.readouterr().out.strip())
+    assert set(created) == {"error"}, (
+        f"the CREATE channel grew keys {sorted(set(created) - {'error'})}. If a `code` was added "
+        f"here on purpose, that is the split changing: update the CODE_* header in "
+        f"workspace_cmd.py and CLAUDE.md's workspace bullet with it, and say what consumer grades "
+        f"it — do not just widen this assertion"
+    )
+    assert "WorkspaceError" in created["error"] and "HALF-CREATED" in created["error"]
+
+    assert run_workspace(["--release", "42"]) == 0, (
+        "a --release refusal is a NEGATIVE VERDICT, not a CLI failure: the command RAN"
+    )
+    released = json.loads(capsys.readouterr().out.strip())
+    assert released["released"] is False
+    # .get, not [] — an ABSENT code is the likelier regression of the two, and a bare KeyError
+    # would swallow the message that says what to do about it
+    assert released.get("code") == workspace_cmd.CODE_HALF_CREATED, (
+        f"the --release channel came back with code {released.get('code')!r} for a state it "
+        f"refuses as half-created. `--gc`'s _keep_is_expected grades on this key: an absent or "
+        f"unknown code lands in `kept`, i.e. it tells a human to go and look at a tree the tool "
+        f"already understands"
+    )
+    assert set(released) == {"released", "task_id", "role", "path", "code", "reason"}, (
+        f"the RELEASE channel's key set moved to {sorted(released)}; SKILL.md tells agents to "
+        f"branch on this JSON line, so a key appearing or vanishing has to fail somewhere"
+    )
+    assert path.is_dir()                                  # neither channel destroyed the evidence
+
+
+def test_no_create_path_refusal_carries_a_code(repo, monkeypatch, capsys):
+    """The BREADTH of the create half, swept cheaply. The claim above was wrong in ONE direction
+    only, so pinning a single create refusal would leave every OTHER one free to grow a `code` and
+    re-open the drift — and "measured over every one of them" is what CLAUDE.md now says out loud.
+
+    `_half_created_tree` is deliberately not repeated here: it costs a real ~2 s `worktree add`
+    timeout and the test above already drives that state through both channels. Everything below
+    reuses a fixture this file already builds for another reason, or costs nothing at all.
+
+    MUTATION-CHECKED alongside the test above: give `run_workspace`'s catch-all a `"code"` -> FAIL,
+    naming the first refusal that grew one ("the detached build tree refusal came back as
+    ['code', 'error']").
+    """
+    monkeypatch.chdir(repo)
+    _interrupted_rebase_build_tree(repo)                       # 42: detached BUILD tree (VMCP-86)
+    _path, _pinned, sha2 = _poisoned_review_tree(repo)         # 7: review tree pinned at sha1
+    squatter = worktree_root(repo) / "task-99"                 # 99: occupied, not a worktree
+    squatter.mkdir(parents=True, exist_ok=True)
+    (squatter / "precious.txt").write_text("do not clobber\n")
+
+    refusals = {
+        "detached build tree": ["42"],
+        "review tree pinned at another sha": ["7", "--role", "review", "--at", sha2],
+        "occupied path": ["99"],
+        "task id beside --release": ["42", "--release", "9"],
+        "--at without --role review": ["42", "--at", sha2],
+    }
+    for what, argv in refusals.items():
+        assert run_workspace(argv) == 1, f"the {what} refusal stopped being exit 1"
+        payload = json.loads(capsys.readouterr().out.strip())  # readouterr DRAINS: once per call
+        assert set(payload) == {"error"}, (
+            f"the {what} refusal came back as {sorted(payload)} — the create channel is "
+            f"`{{\"error\"}}` and exit 1, with the exit code as the whole machine-readable "
+            f"verdict. See test_the_two_refusal_channels_are_not_interchangeable"
+        )
+
+
 # --- final whole-branch review, Minor 9: a broken config must surface, not relocate trees ---
 
 def test_a_malformed_repo_toml_is_not_swallowed_into_the_default_root(repo):

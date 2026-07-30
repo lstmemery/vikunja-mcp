@@ -859,7 +859,9 @@ Create `src/vikunja_mcp/workspace_cmd.py`:
 # fails there is the ONE window where the tree is already gone, so raising made both callers lie:
 # `--release` reported an error and exit 1 for work that had SUCCEEDED, and `--gc` reported
 # `released: false`, which SKILL.md teaches as "PROTECTION: your unsaved work is still in there".
-# It predates everything else too: the `code:` key on every refusal (#516), the half-created
+# It predates everything else too: the `code:` key on every `--release`/`--gc` refusal (#516 —
+# scoped deliberately, see VMCP-110: a CREATE refusal is `{"error": …}` + exit 1 and carries no
+# `code`, there and in the live module), the half-created
 # (`locked initializing`) guard in both ensure and release, the detached-HEAD reachability guard,
 # the review-tree pin refusal, `_check_role`, `_main_worktree` canonicalisation, `_git_inspect`
 # (VMCP-90), and the git timeouts. Live: src/vikunja_mcp/workspace_cmd.py — read it, never this.
