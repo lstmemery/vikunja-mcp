@@ -66,9 +66,14 @@ def worktree_root(root: Path) -> Path:
         except Exception:  # noqa: BLE001 — no tracker config is fine; create/release need none
             configured = None
     if configured:
-        path = Path(configured)
-        return path if path.is_absolute() else (root / path).resolve()
-    return root.parent / f"{root.name}.worktrees"
+        # .resolve() ALWAYS, even when `configured` is already absolute: `_find` compares
+        # this path against `git worktree list --porcelain`, which prints the REALPATH. A
+        # symlinked root (the macOS `/tmp` class of path, or a `/srv`→`/mnt` layout) would
+        # otherwise never match — the resume-after-crash path breaks (a live tree reads as
+        # "not registered" and gets refused-as-clobber) and release reports a false
+        # "no worktree", leaking the tree forever.
+        return (root / configured).resolve()
+    return (root.parent / f"{root.name}.worktrees").resolve()
 
 
 def default_base(root: Path) -> str:
@@ -133,7 +138,16 @@ def _find(root: Path, task_id: int, role: str) -> dict | None:
     return None
 
 
+def _check_role(role: str) -> None:
+    """The CLI is protected by argparse `choices`; the Python API the pump (and Task 4's
+    gc_workspaces) calls directly is not — an unchecked role would silently branch build/
+    review logic on `role == "build"` with anything else falling into "review"."""
+    if role not in ("build", "review"):
+        raise WorkspaceError(f"unknown role {role!r} — must be 'build' or 'review'")
+
+
 def _ensure_locked(root: Path, task_id: int, role: str, at: str | None) -> dict:
+    _check_role(role)
     _git("worktree", "prune", cwd=root)
     _git("fetch", "origin", cwd=root)
     wt_root = worktree_root(root)
@@ -158,7 +172,10 @@ def _ensure_locked(root: Path, task_id: int, role: str, at: str | None) -> dict:
         _git("worktree", "add", "--detach", str(path), at or base, cwd=root)
         return {
             "role": "review", "task_id": task_id, "path": str(path),
-            "branch": None, "detached": _git("rev-parse", "HEAD", cwd=path), "created": True,
+            # "head", NOT "detached" — list_worktrees's "detached" is a BOOL (git's own
+            # porcelain vocabulary); this is a SHA. Two producers must never reuse one key
+            # for two different meanings (it "worked" only because a hex string is truthy).
+            "branch": None, "head": _git("rev-parse", "HEAD", cwd=path), "created": True,
         }
 
     branch = BUILD_BRANCH.format(task_id=task_id)
@@ -175,6 +192,7 @@ def _ensure_locked(root: Path, task_id: int, role: str, at: str | None) -> dict:
 
 
 def _release_locked(root: Path, task_id: int, role: str) -> dict:
+    _check_role(role)
     _git("worktree", "prune", cwd=root)
     wt = _find(root, task_id, role)
     if wt is None:
@@ -185,11 +203,19 @@ def _release_locked(root: Path, task_id: int, role: str) -> dict:
     if dirty:
         return {"released": False, "task_id": task_id, "role": role, "path": str(path),
                 "reason": f"working tree is dirty ({len(dirty.splitlines())} entries)"}
-    base = f"origin/{default_base(root)}"
-    unpushed = _git("log", "--oneline", f"{base}..HEAD", cwd=path)
-    if unpushed:
-        return {"released": False, "task_id": task_id, "role": role, "path": str(path),
-                "reason": f"{len(unpushed.splitlines())} commit(s) not on {base}"}
+    # a review tree is DETACHED and holds no branch of its own (wt["branch"] is None) — its
+    # commit is reachable from wherever `at` pointed regardless of what happens to this tree,
+    # so nothing is ever lost by removing it. The unpushed-commits guard exists to protect a
+    # task/<id> BRANCH's unique history; applying it here only leaks review trees forever
+    # (a review is routinely pinned at a build branch's tip, which is BY DEFINITION not yet
+    # on origin/main). Skip it for a review tree; keep the dirty check above for both roles —
+    # uncommitted edits there are still someone's work.
+    if wt["branch"] is not None:
+        base = f"origin/{default_base(root)}"
+        unpushed = _git("log", "--oneline", f"{base}..HEAD", cwd=path)
+        if unpushed:
+            return {"released": False, "task_id": task_id, "role": role, "path": str(path),
+                    "reason": f"{len(unpushed.splitlines())} commit(s) not on {base}"}
     _git("worktree", "remove", str(path), cwd=root)
     if wt["branch"]:
         _git("branch", "-D", wt["branch"], cwd=root)

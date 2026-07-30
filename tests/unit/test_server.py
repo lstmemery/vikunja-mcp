@@ -573,6 +573,22 @@ def test_main_dispatches_claimable_subcommand(monkeypatch):
     assert calls == []
 
 
+def test_main_dispatches_workspace_subcommand(monkeypatch):
+    """`vikunja-mcp workspace` exits with run_workspace's code — and does so WITHOUT the
+    artifact self-heal or the stdio run loop, for the same reasons as claimable: the pump
+    calls this per task, so it must not touch ~/.claude and must start fast."""
+    calls = []
+    monkeypatch.setattr("vikunja_mcp.workspace_cmd.run_workspace", lambda argv: 7)
+    monkeypatch.setattr(server, "_self_heal_installed_artifacts", lambda: calls.append("heal"))
+    monkeypatch.setattr(server.mcp, "run", lambda: calls.append("run"))
+
+    with pytest.raises(SystemExit) as exc:
+        server.main(["workspace", "42"])
+
+    assert exc.value.code == 7
+    assert calls == []
+
+
 def test_server_self_heals_on_start_before_the_run_loop(monkeypatch):
     """The server refreshes installed agent artifacts on start, and BEFORE the blocking
     stdio run loop — so a `stable` rollout reaches SKILL.md + hook as automatically as code."""
