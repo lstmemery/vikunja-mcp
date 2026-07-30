@@ -389,6 +389,76 @@ def test_gc_keeps_a_review_tree_while_the_card_is_in_review(repo, tracker):
     assert path.exists()
 
 
+def test_gc_keeps_a_quiesced_review_tree_only_because_its_card_is_in_review(repo, tracker):
+    """The BOARD is what keeps a reviewer's tree, not the clock.
+
+    This is the promise SKILL.md makes to a reviewer in plain words — while the card sits in
+    Review the sweep will not touch your worktree, however long it has stood without a single
+    write — and until now nothing tested it. The sibling directly above does not: its tree is
+    created milliseconds before the sweep, so the GRACE WINDOW alone explains the skip and the
+    role-keyed liveness carries no weight in that fixture at all. MEASURED three times as
+    siblings landed underneath (f891add, 7742d07, 4fe44e4 — 2026-07-30/31), the count moving
+    with the suite and the verdict never: make review trees never alive by role (`if task_id in
+    (set() if role == "review" else alive[role])`) and the whole PRE-EXISTING unit suite stays
+    GREEN — 613 then 628 passed, including all 109 of this file's and 563's source-ORDER pin in
+    test_skill_contract.py, which reads the token `alive[role]` and cannot see what it now
+    contains — while a 31-minute-quiet review tree with its card in Review is REAPED and its
+    directory is gone. With this test present it is the only red in the repository.
+
+    So ROLE has to be the only thing left explaining the outcome. Both trees below are review
+    trees, both at the SAME age (quiesced past `_REAP_GRACE_SECONDS`), both clean and pushed,
+    both swept in ONE call: the single difference is where their card sits. The control is
+    additionally ALIVE as a build task, which pins that liveness is keyed on the ROLE rather
+    than on "this id is somewhere on the board" — and that is not a contrived state, it is
+    exactly what a `needs_work` verdict leaves behind.
+
+    The second half is that verdict, i.e. what 563 could only state as prose: nothing moves but
+    the board, and the next sweep takes the same tree away.
+    """
+    api, wf = tracker
+    head = _git(repo, "rev-parse", "HEAD")
+
+    reviewing = api.add_task("under review", "Queue")          # card IN Review -> tree lives
+    wf.claim(reviewing["id"])
+    wf.advance(reviewing["id"], to="build", spec="approach")
+    wf.advance(reviewing["id"], to="review", worklog="done", evidence="abc1234")
+
+    bounced = api.add_task("already back in build", "Queue")   # card NOT in Review -> tree dies
+    wf.claim(bounced["id"])
+    wf.advance(bounced["id"], to="build", spec="approach")     # alive as BUILD, never as REVIEW
+
+    live = Path(ensure_workspace(reviewing["id"], role="review", at=head, cwd=repo)["path"])
+    dead = Path(ensure_workspace(bounced["id"], role="review", at=head, cwd=repo)["path"])
+    _quiesce(live)                                             # both aged identically, and past
+    _quiesce(dead)                                             # the window, before ONE sweep
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert [r["task_id"] for r in res["released"]] == [bounced["id"]]
+    assert not dead.exists()
+    assert live.exists()
+    assert res["kept"] == [] and res["expected"] == []         # a live tree is skipped silently
+
+    # Second half: the reviewer's own verdict moves the card out of Review and nothing else
+    # moves — same tree, same mtimes, same sweep call. First say out loud that the tree really
+    # is still quiet, so a future sweep that started WRITING in the trees it keeps (the VMCP-90
+    # regression, from the other side) cannot quietly turn the reap below into a grace-window
+    # artefact. `_last_activity` reads the index through `_git_inspect`, which takes no optional
+    # locks, so asking the question does not itself disturb the answer.
+    quiet_for = time.time() - workspace_cmd._last_activity(live)
+    assert quiet_for >= workspace_cmd._REAP_GRACE_SECONDS, (
+        f"the kept review tree stopped reading as quiet ({quiet_for:.0f}s) — something wrote in "
+        f"it during the first sweep, so the reap below would prove the clock, not the board"
+    )
+
+    wf.review_task(reviewing["id"], verdict="needs_work", report="repro'd; fix misses the cause")
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert [r["task_id"] for r in res["released"]] == [reviewing["id"]]
+    assert not live.exists()
+
+
 def test_gc_never_reaps_unpushed_work_and_reports_it(repo, tracker):
     """The orphan of a crashed agent that got as far as committing: dead on the board, but
     its commits are the whole reason we keep it. GC must REPORT, not destroy."""
