@@ -15,6 +15,9 @@ import inspect
 import re
 from importlib.resources import files
 
+import pytest
+
+from tests.unit.fakes import FakeAPI
 from vikunja_mcp import config, server, workflow, workspace_cmd
 
 
@@ -181,6 +184,79 @@ def test_the_recipe_verifies_the_evidence_sha_actually_landed_on_main():
         "the recipe no longer proves the evidence sha EXISTS (git cat-file -e)"
     assert 'git merge-base --is-ancestor "<sha>" origin/main' in recipe, \
         "the recipe no longer proves the evidence sha is ON the main branch (merge-base)"
+
+
+def _tick_step_3(text: str) -> str:
+    """The orchestrator tick's step 3 — the step that verifies a returning agent's evidence sha.
+
+    Scoped to its own list item, like `_integration_recipe` and `_gc_section`: `review_task` and
+    `call_human` are named all over the rulebook, so a whole-file substring could not tell "step 3
+    still prescribes this" from "some other section mentions the tool"."""
+    m = re.search(r"\n  3\. Агент вернулся с итогом(.*?)\n  4\. ", text, re.S)
+    assert m, "the orchestrator tick's step 3 is no longer where this pin can find it"
+    return m.group(1)
+
+
+def test_the_evidence_mismatch_escalation_is_one_the_orchestrator_can_execute():
+    """VMCP-77 (526), rework — the pin the FIRST pass of this card needed and did not have.
+
+    That pass told the orchestrator to call `call_human` when a returning agent's evidence sha
+    fails verification. At that moment the card is in Review (the returning agent's contract is
+    that it already called `advance(to='review')`), and `call_human` is gated to ACTIVE_STAGES =
+    Design/Build — so the escalation for the failure branch the card itself created could not run.
+    A rule naming behaviour the tools do not have is exactly what this module exists to catch, and
+    it went out anyway because the advice was WRITTEN rather than RUN.
+
+    So this pin does not compare strings alone: it drives the real `Workflow` through the state
+    step 3 is actually in and executes the prescribed escalation end to end — the refusal that
+    motivates the rule, the `review_task` bounce that replaces it, the pump picking the card back
+    up, and the fallback that only becomes legal once the card is in Build. Change either gate and
+    the rulebook's clause stops being executable; this goes red before it ships to every consumer.
+
+    MUTATION-CHECKED (`__pycache__` cleared between rounds, each run confirmed to select exactly
+    1 test): control PASS; add "Review" to ACTIVE_STAGES -> FAIL; make review_task move the card
+    anywhere but Build -> FAIL; drop `review_task`/`needs_work` from step 3 -> FAIL; revert the
+    clause to the `call_human` wording this card was returned for -> FAIL; rename step 3's opening
+    words so the slice cannot find it -> FAIL (loudly, with its own message, never silently green).
+
+    Deliberately NOT pinned: the wording of the reasoning around the clause, and the two rules no
+    gate can carry (never `verdict='approve'` from the pump; the bounced card re-occupies a WIP
+    slot). `review_task(approve)` from here executes fine — it is forbidden by the rulebook, not
+    by the code, and pinning prose is review's job, per this module's docstring."""
+    step3 = _tick_step_3(_skill_text())
+    assert "review_task(" in step3 and "needs_work" in step3, \
+        "tick step 3 no longer names the escalation that works from Review (review_task/needs_work)"
+    assert hasattr(workflow.Workflow, "review_task"), "the escalation names a tool that is gone"
+
+    api = FakeAPI(buckets=workflow.STAGES)
+    wf = workflow.Workflow(api, project_id=3)
+    task_id = api.add_task("its evidence sha never landed", "Queue")["id"]
+    wf.claim(task_id)
+    wf.advance(task_id, to="build", spec="…")
+    wf.advance(task_id, to="review", worklog="…", evidence="0" * 40)
+    assert api.stage_of(task_id) == "Review", "step 3 sees a card in Review — precondition"
+
+    # 1. why the rule cannot say `call_human` here
+    with pytest.raises(workflow.WorkflowError, match="Design/Build"):
+        wf.call_human(task_id, "the reported evidence sha is not an ancestor of origin/main")
+
+    # 2. what it says instead — and it moves the card somewhere an agent can work again
+    bounced = wf.review_task(
+        task_id, verdict="needs_work",
+        report="evidence sha not on origin/main (merge-base --is-ancestor -> 1); not reviewed",
+    )
+    assert bounced["moved_to"] == "Build" and api.stage_of(task_id) == "Build"
+    assert workflow.LABEL_REVIEW_FAILED in [
+        label["title"] for label in api.get_task(task_id).get("labels") or []
+    ]
+
+    # 3. the pump gets it back on its own — no human needed to un-strand it
+    nxt = wf.next_task()
+    assert nxt["resume"] is True and nxt["stage"] == "Build"
+    assert nxt["task"]["id"] == task_id
+
+    # 4. and only NOW is the human channel open, for the agent that cannot re-push
+    assert wf.call_human(task_id, "cannot re-push")["moved_to"] == "Your Call"
 
 
 def _gc_section(text: str) -> str:

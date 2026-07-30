@@ -313,6 +313,27 @@ verifying *someone else's* sha does, or a landed commit fails exactly like a
 fabricated one. Same two commands guard the reviewer's `--at`, which validates
 that the sha exists but not that it is on `main`.
 
+**When that guard fires, the escalation has to be one the orchestrator can
+actually execute from where it stands** — and at step 3 it stands on a card in
+**Review**, because the returning agent's own contract is that it already called
+`advance(to='review')`. 526's first pass said "call `call_human` on that card";
+`call_human` is gated to `ACTIVE_STAGES = ("Design", "Build")` and refuses
+(`call_human works only from Design/Build; task is in Review`), so the escalation
+for the failure branch this very section creates could not run — the reason the
+card came back for rework. Commenting and leaving the card in Review is no better:
+`next_task`'s review-offer branch skips cards assigned to the caller, which in a
+solo setup is every card the pump produced, so nothing surfaces it again and it
+strands silently. The channel that does work from Review is `review_task(<id>,
+verdict='needs_work', report=…)` — no ownership gate, stage gate satisfied — which
+labels `review-failed`, keeps the assignee and moves the card to **Build**, where
+`next_task` hands it straight back as `resume: true` and the ordinary resume-agent
+rule applies. All five steps were run against the real `Workflow` before being
+written down. Two constraints belong to the *rule*, because no gate carries them:
+`approve` from the orchestrator is never legitimate (the gate would allow it — this
+is a mechanical refusal of unverifiable evidence, not a verdict on code), and the
+returning card re-occupies a WIP slot, which is correct, since it is active work
+again.
+
 A rebase conflict is resolved by the agent itself (it holds the task's context);
 if it cannot, `call_human` — and the worktree survives, because `--release`
 refuses to delete unpushed work. After `advance(to='review')` the agent calls
@@ -603,6 +624,18 @@ the two exit codes are diagnoses rather than a redundant pair; and `git push
 origin HEAD:main` **does** update the local `origin/main`, so the fetch this card
 suggested is needed only when the sha is not your own — the case where a landed
 commit otherwise reads exactly like a fabricated one.)*
+
+*(And one correction to 526's own worklog, measured rather than argued: it claimed
+that splitting the recipe's prose into three paragraphs shrank the merge surface for
+the in-flight VMCP-81 (531), which rewrites the same block. `git merge-file` against
+the shared base says otherwise — **2 conflict hunks with the split, 2 without** — so
+the split moved the conflict, it did not reduce it. What actually protected the merge
+is the other half of that claim, and it held when 531 landed first: these two lines
+sit strictly **after** the push line and touch none of the three places the retry
+ceiling is stated, so 531's resolver could take its own fence rewrite (now an `&&`
+chain, ceiling 6) and re-append them verbatim — and the fence-scoped pin made that
+re-append mandatory instead of optional. Placement plus a pin, not paragraphing.
+Do not budget for a merge benefit from prose layout.)*
 
 *(Honest note on method: my own first pass mistyped an abbreviated sha and got
 `fatal: Not a valid object name` — a wrong guess at an abbreviation is
