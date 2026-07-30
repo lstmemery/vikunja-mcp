@@ -1,5 +1,21 @@
 # Parallel Worktree Drain Implementation Plan
 
+> ## ⛔ HISTORICAL DOCUMENT — DO NOT COPY CODE OUT OF IT
+>
+> This is the record of how the parallel-worktree-drain branch landed on 2026-07-29. **Every
+> fenced block below quotes the code, tests, rulebook and config AS THEY WERE WRITTEN THAT DAY.
+> No fence in this document is a current contract, and a good number of them teach one the
+> project has since deleted.** Read the SOURCE for what a thing should say today; read this only
+> for WHY it was built that way.
+>
+> Fences known to be stale carry a `SUPERSEDED … DO NOT COPY` marker on their FIRST LINE, INSIDE
+> the fence, in that fence's own comment syntax — so the warning travels with the text you paste,
+> which a note sitting outside the fence does not. **The markers are not exhaustive**: an
+> unmarked block means "nobody has checked it", never "verified current". Two sweeps have now
+> re-read this file (tracker #517, then #541, which enumerated all 48 fences and marked sixteen
+> more that #517 had missed — including `workspace_cmd.py`'s own pre-#517 `_release_locked`).
+> Assume a third will find something too.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Let one agent identity drain up to `wip_limit` tracker tasks concurrently, each per-task agent and each reviewer isolated in its own git worktree.
@@ -17,7 +33,7 @@
 - `uv run pytest tests/unit -q` must be green at the end of every task.
 - The `vikunja-mcp claimable` cross-repo contract is **frozen**: keys `claimable`/`kind`/`task_id`, exit 0 = ran / 1 = failed, and a closed 7-value `kind` enum (`queue|resume|stuck_claim|review|empty|starving|cycle`). Adding a `kind` breaks hgdev-acp's hub **and has an inverted rollout order** — do not add one in this plan.
 - `wip_limit` is committed team policy: read **only** from the repo `.vikunja-mcp.toml`, never from env. `worktree_root` is a machine-local path and therefore **does** take an env override (`VIKUNJA_WORKTREE_ROOT`).
-- ~~Ships inert: with no `wip_limit` set, every behaviour must be byte-for-byte what it is today. Existing tests must not need edits (except where a task says so explicitly).~~ **SUPERSEDED on 2026-07-30 by tracker #524: an unset `wip_limit` means 3, so the gate is live everywhere** (rationale and what was traded away: `…-drain-design.md`, Goals). This plan is a historical record of how the branch landed, so **every fenced block below quotes the code and tests AS THEY WERE WRITTEN THAT DAY, not as they are now — read the source, never this document, for the current contract.** Blocks known to teach a contract that no longer exists carry a `SUPERSEDED … DO NOT COPY` marker on their FIRST LINE, inside the fence, in that fence's own comment syntax. That placement is the point and it replaces the enumeration this banner used to carry (tracker #517, VMCP-79): a list of stale snippets sitting OUTSIDE the fences protects nobody who copies from INSIDE one, and it silently under-covered the two blocks that produced this fix. Treat the markers as non-exhaustive all the same — an unmarked block is "nobody has checked it", never "verified current".
+- ~~Ships inert: with no `wip_limit` set, every behaviour must be byte-for-byte what it is today. Existing tests must not need edits (except where a task says so explicitly).~~ **SUPERSEDED on 2026-07-30 by tracker #524: an unset `wip_limit` means 3, so the gate is live everywhere** (rationale and what was traded away: `…-drain-design.md`, Goals). That supersession is what turned this plan into a historical record — the consequence for the whole document is stated once, in the banner under the title: no fence here is a current contract, and the stale ones are marked from the INSIDE (tracker #517, VMCP-79, replacing an enumeration that sat outside the fences and so protected nobody who copied from inside one; tracker #541 then swept all 48 fences and marked sixteen more, which is exactly why that banner tells you the markers are not exhaustive).
 - `skills/tracker/SKILL.md` is a **rulebook that ships in the wheel** and self-heals onto every consumer on MCP server start. It must never name repo-specific commands (no `uv run pytest`) — only concepts.
 - Comment the **why** of each gate in the surrounding file's style (this codebase comments densely, mixing Russian and English; match the file you are editing).
 - One task = one commit on `main`, `type(scope): summary`, with the `Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>` trailer.
@@ -459,6 +475,13 @@ In `src/vikunja_mcp/workflow.py`, change the signature and insert the accounting
 ```
 
 ```python
+        # SUPERSEDED by tracker #524 (and #517) — HISTORICAL, DO NOT COPY. The `wip` payload below
+        # still carries the UNLIMITED shape (`"limit": limit` where limit may be None, and
+        # `"free": None if limit is None else …`). #524 deleted it: `_effective_wip_limit()`
+        # returns `int`, so `limit` and `free` are ALWAYS numbers and no caller may reintroduce a
+        # None branch. The `exclude` comment is pre-#517 too — the live one records WHICH branches
+        # consult the set (and why the free-queue branch does not).
+        # Live: src/vikunja_mcp/workflow.py, next_task().
         mine = self._my_active_tasks(raw)
         # parallel drain: `exclude` names the tasks the CALLER already has a live
         # agent on. The tracker cannot know sub-agent liveness — that is a fact of the harness,
@@ -560,6 +583,10 @@ Match the module's existing imports (`FakeAPI`, `STAGES`, `Workflow`, `classify_
 In `src/vikunja_mcp/server.py`, change the `next_task` tool:
 
 ```python
+# SUPERSEDED — HISTORICAL, DO NOT COPY. `@mcp.tool()` no longer decorates anything in server.py:
+# tool registration is DEFERRED (`@_mcp_tool` remembers the function, `_server()` registers it
+# later) so the CLI paths — `workspace`, `claimable`, `setup`, `--version` — stop paying the SDK
+# import. Pasting this back decorates at import time again. Live: src/vikunja_mcp/server.py.
 @mcp.tool()
 @_tool
 def next_task(exclude: list[int] | None = None) -> dict:
@@ -570,6 +597,11 @@ and pass it through: `return _wf().next_task(exclude=exclude)`.
 Add to the docstring (it is agent-facing UX copy — keep it prescriptive):
 
 ```
+    SUPERSEDED by tracker #524 — HISTORICAL, DO NOT COPY. (This block is prose destined for a
+    Python docstring, so its "own comment syntax" is none at all — the marker is a plain line.)
+    The live docstring says of wip: "limit and free are always numbers, never null" — the whole
+    point of #524. Pasting this over it drops exactly that. Live: server.py, the next_task tool.
+
     PARALLEL DRAIN: pass `exclude` = the ids of tasks you ALREADY have a live agent on, so
     they are not handed back and dispatched twice. They still occupy their WIP slot. Every
     result carries wip: {active, limit, free}. free == 0 comes back as task:null PLUS
@@ -665,6 +697,14 @@ Run: `uv run pytest tests/unit/test_config.py -k worktree_root -v` → PASS.
 Create `tests/unit/test_workspace_cmd.py`:
 
 ```python
+# SUPERSEDED — HISTORICAL, DO NOT COPY. The twelve test BODIES below still match the shipped
+# module; its HEADER does not, and the difference is a real review finding. The live `repo`
+# fixture takes `monkeypatch` and starts with `monkeypatch.delenv(ENV_WORKTREE_ROOT,
+# raising=False)`: once the pump exports VIKUNJA_WORKTREE_ROOT machine-wide (the point of this
+# whole feature), a suite run without that line is steered at the AMBIENT worktree root and
+# leaves litter there that outlives the run. The import block has also grown a great deal
+# (gc_workspaces, run_workspace, ReadDeadlineExceeded, VikunjaAPI, FakeAPI, …).
+# Live: tests/unit/test_workspace_cmd.py.
 """`vikunja-mcp workspace` against REAL git in tmp_path (a local origin, no network).
 
 A fake would share this module's model of git and prove nothing about the one behaviour that
@@ -812,6 +852,17 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'vikunja_mcp.workspace_
 Create `src/vikunja_mcp/workspace_cmd.py`:
 
 ```python
+# SUPERSEDED — HISTORICAL, DO NOT COPY. By trackers #517, #516 (VMCP-68), VMCP-71, VMCP-72 and
+# VMCP-90. This is workspace_cmd.py as first written, and it is the most dangerous block in this
+# document: `_release_locked` below still ends with a BARE `_git("branch", "-D", …)` followed by
+# `return {"released": True, …}` — the exact bug tracker #517 exists to remove. A `branch -D` that
+# fails there is the ONE window where the tree is already gone, so raising made both callers lie:
+# `--release` reported an error and exit 1 for work that had SUCCEEDED, and `--gc` reported
+# `released: false`, which SKILL.md teaches as "PROTECTION: your unsaved work is still in there".
+# It predates everything else too: the `code:` key on every refusal (#516), the half-created
+# (`locked initializing`) guard in both ensure and release, the detached-HEAD reachability guard,
+# the review-tree pin refusal, `_check_role`, `_main_worktree` canonicalisation, `_git_inspect`
+# (VMCP-90), and the git timeouts. Live: src/vikunja_mcp/workspace_cmd.py — read it, never this.
 """`vikunja-mcp workspace` — per-task git worktrees for the parallel drain.
 
 THE ONLY MODULE IN THIS PACKAGE THAT RUNS GIT. server.py / workflow.py / api.py stay git-free
@@ -1145,6 +1196,13 @@ Run: `uv run pytest tests/unit/test_workflow_wip.py -k task_ids -v` → FAIL (`A
 In `src/vikunja_mcp/workflow.py`, next to `_my_active_tasks`:
 
 ```python
+    # SUPERSEDED — HISTORICAL, DO NOT COPY. Both accessors now take `board: list[dict] | None =
+    # None` and default to `liveness_board()`, so ONE view_tasks fetch serves a whole `--gc`
+    # sweep (review Important 4) instead of two exhaustive-adjacent ones per tick. `--gc` calls
+    # them as `active_task_ids(board=board)` / `review_task_ids(board=board)`, which these
+    # signatures reject outright, and `review_task_ids`' own `_board(require_titles={"Review"})`
+    # below is the second fetch the shared board exists to remove.
+    # Live: src/vikunja_mcp/workflow.py.
     def active_task_ids(self) -> list[int]:
         """Ids of tasks in an ACTIVE stage (Design/Build) assigned to me — the live BUILD set.
 
@@ -1172,6 +1230,13 @@ Run: `uv run pytest tests/unit/test_workflow_wip.py -k task_ids -v` → PASS.
 Append to `tests/unit/test_workspace_cmd.py`:
 
 ```python
+# SUPERSEDED — HISTORICAL, DO NOT COPY. By VMCP-71 (the grace window) and #516/VMCP-68 (the
+# three-list report). These tests do not merely read stale: as written they FAIL against the shipped
+# code. A tree created milliseconds ago is YOUNG, so `--gc` defers it silently, in NEITHER list,
+# and reaps nothing — every live reap-or-`kept` test first calls a `_quiesce()` helper that
+# back-dates the tree's grace markers (and does it AFTER the last git call in the tree, since a
+# commit rewrites the index). `gc_workspaces` also returns a third list, `expected`, that nothing
+# here accounts for. Live: tests/unit/test_workspace_cmd.py.
 from tests.unit.fakes import FakeAPI
 from vikunja_mcp.workflow import STAGES, Workflow
 from vikunja_mcp.workspace_cmd import gc_workspaces
@@ -1243,6 +1308,13 @@ Run: `uv run pytest tests/unit/test_workspace_cmd.py -k gc -v` → FAIL (`Import
 Add to `src/vikunja_mcp/workspace_cmd.py`:
 
 ```python
+# SUPERSEDED by tracker #516 (VMCP-68) — HISTORICAL, DO NOT COPY. `gc_workspaces` returns THREE
+# lists now — `{"released", "kept", "expected"}` — and the two-list shape below is precisely what
+# made `kept` never empty: the routine refusals (a Your Call card's unsaved work, a review tree's
+# in-tree commit) had nowhere else to go, and a signal that is never empty stops being read. This
+# version also predates the self-tree guard, the grace window (VMCP-71), the bounded liveness read
+# (VMCP-72, `_read_liveness` + `_ReadDeadline`), the `_build_workflow(root)` signature and the
+# shared `liveness_board()` fetch. Live: src/vikunja_mcp/workspace_cmd.py.
 def _parse_workspace_name(name: str) -> tuple[str, int] | None:
     match = _NAME_RE.match(name)
     if match is None:
@@ -1304,6 +1376,10 @@ Add `--gc` to `run_workspace`:
 and, as the FIRST branch of the dispatch chain:
 
 ```python
+# SUPERSEDED — HISTORICAL, DO NOT COPY. The live dispatch REFUSES the combinations this chain
+# silently accepts: `--gc` with a task id or `--release`, and `--gc --role/--at` (it sweeps both
+# roles, at no ref). A quietly dropped argument on a CLI a pump drives unattended is how a
+# reviewer ends up in a tree it never asked for. Live: workspace_cmd.py, run_workspace().
         if args.gc:
             result = gc_workspaces()
         elif args.release is not None:
@@ -1323,6 +1399,12 @@ In `gc_workspaces`, temporarily replace `alive` with `{"build": set(), "review":
 Create `tests/integration/test_workspace_gc.py`:
 
 ```python
+# SUPERSEDED — HISTORICAL, DO NOT COPY. A sketch that never shipped as written, and the prose
+# under this fence said so at the time: there is no `workflow`/`api` fixture pair and no
+# `add_task_to_bucket_stage` helper in tests/integration/conftest.py. The live test mirrors
+# test_sequence_gate.py — a module-scoped fixture that reconciles an isolated project, mints a
+# SCOPED token for agent1 and moves a boss-owned card into Review, so the subject under test is
+# the scoped-token read `--gc` actually performs. Live: tests/integration/test_workspace_gc.py.
 """`review_task_ids` against a REAL Vikunja board — the one part of --gc the fake cannot
 prove, because it depends on the live view_tasks/bucket shape rather than on our mirror of it."""
 
@@ -1371,6 +1453,15 @@ Everything so far is inert machinery. This task is what makes an agent use it �
 Append to `tests/unit/test_skill_contract.py`:
 
 ```python
+# SUPERSEDED — HISTORICAL, DO NOT COPY. Rounds 1 and 2 of the branch review replaced exactly
+# these assertions, because they were theatre: `"exclude" in workflow_src` is satisfied by an
+# unrelated comment ("parenttask is deliberately excluded") and `"wip_limit" in workflow_src` by
+# the method name `_effective_wip_limit`, so both stayed green through the very rename they claim
+# to catch — and the repo-toml KEY the rulebook cites lives in config.py, which this version
+# never reads. The live pins anchor on `exclude: list[int]` in BOTH workflow.py and server.py
+# (the pump calls the TOOL, not the method) and on `repo.get("wip_limit")` in config.py; the
+# second test was renamed and its docstring corrects the "crashed agents' trees" inversion.
+# Live: tests/unit/test_skill_contract.py.
 def test_the_parallel_drain_rules_cite_real_signals():
     """The rulebook self-heals onto every consumer with no review gate of its own, so a rule
     naming a signal the code does not emit would reach every agent everywhere. Pin the tokens."""
@@ -1416,6 +1507,14 @@ Replace the bullet **«Дренаж последовательный, не па�
 Insert a new section right after «Непрерывная работа (loop)»:
 
 ```markdown
+<!-- SUPERSEDED — HISTORICAL, DO NOT COPY INTO SKILL.md. Step 1 below is INVERTED, and the
+     round-2 review caught the same inversion in a test docstring: `--gc` does NOT reap "деревья
+     от упавших агентов" — a crashed agent's task is still in Design/Build assigned to it, so
+     liveness deliberately SPARES that tree; it is exactly what the resume agent comes back to.
+     What gets reaped is a tree whose work has LEFT the board. The live section is also several
+     times longer: the three-list report (`released`/`kept`/`expected`) and how to act on each,
+     `code` values, excluding a card whose `claim` refused, `--release`'s `released: false`
+     protection vs a real error, and the "free slots GET FILLED" rule. Read SKILL.md itself. -->
 ## Параллельный дренаж (когда `wip.limit > 1`)
 
 - **Тик оркестратора:**
@@ -1449,6 +1548,13 @@ In «Следы работы», replace the bullet «**Коммит+пуш — �
     на одноразовой ветке `task/<id>`, поэтому пушить надо ЯВНО в главную ветку:
 
     ```sh
+    # SUPERSEDED by VMCP-77 (526) — HISTORICAL, DO NOT COPY. Its own marker, because this fence
+    # is NESTED inside the markdown one above: the copy-paste target is THIS block, and the outer
+    # marker does not travel with it. The live recipe chains fetch+rebase+re-verify+push with
+    # `&&` (a red criterion must never reach a push, and the race window shrinks to machine
+    # time), allows SIX rounds not three, and — the whole point of 526 — does not stop at
+    # `git rev-parse HEAD`, which only PRINTS the local HEAD: it then proves the sha landed with
+    # `git cat-file -e "<sha>^{commit}"` and `git merge-base --is-ancestor "<sha>" origin/main`.
     git add <файлы этой задачи>
     git commit -m "type(scope): … (tracker #N)"
     git fetch origin && git rebase origin/main
@@ -1480,6 +1586,11 @@ In «Следы работы», replace the bullet «**Коммит+пуш — �
 Append to the `decompose` bullet:
 
 ```markdown
+<!-- SUPERSEDED — HISTORICAL, DO NOT COPY INTO SKILL.md. Nothing below is false; it is simply
+     WEAKER than the rule that shipped, so pasting it over the live bullet is a regression. The
+     live one leads with what `ordered=False` MEANS ("не «порядок неважен», а «эти подзадачи
+     можно строить ОДНОВРЕМЕННО, разными агентами в разных деревьях»") and states that at
+     wip.limit > 1 the orchestrator will do exactly that. Read SKILL.md itself. -->
   **При параллельном дренаже `ordered` — не косметика.** `ordered=False` означает «эти
   подзадачи можно строить ОДНОВРЕМЕННО», и оркестратор именно так и поступит. Сомневаешься,
   трогают ли они один и тот же код — ставь `ordered=True`: цепочка отпускает следующую
@@ -1497,6 +1608,12 @@ Expected: PASS (including the pre-existing pins — check none broke).
 In the Architecture list, extend the `config.py` bullet to name the two new keys, and add a new bullet after `claimable_cmd.py`:
 
 ```markdown
+<!-- SUPERSEDED — HISTORICAL, DO NOT COPY INTO CLAUDE.md. "Create/release need neither token nor
+     network" is the exact claim the live bullet stops to correct: create is NOT offline — it runs
+     `git fetch origin`. The live bullet also names the accessors and the ONE shared
+     `liveness_board()` fetch behind `--gc`, and the `_main_worktree` canonicalisation every entry
+     point does so create/release/gc agree on paths when invoked from inside a linked tree.
+     Read CLAUDE.md itself. -->
 - `src/vikunja_mcp/workspace_cmd.py` — `vikunja-mcp workspace`: per-task git worktrees for
   the parallel drain (`wip_limit > 1`). **The ONLY module in the package that runs git** —
   `server.py`/`workflow.py`/`api.py` stay git-free by rule, not by accident. `git worktree add`
@@ -1542,6 +1659,11 @@ Tests share the implementation's model of the world. This repo has already paid 
 Replace the commented-out `enforce_single_wip` note in `.vikunja-mcp.toml` with:
 
 ```toml
+# SUPERSEDED by tracker #524 — HISTORICAL, DO NOT COPY. This repo's .vikunja-mcp.toml now commits
+# wip_limit = 3, and an ABSENT key means 3 as well (config.DEFAULT_WIP_LIMIT) rather than "no
+# gate" — so pasting this back NARROWS the dogfood drain, and "2, not more, on purpose" is no
+# longer the project's reasoning (the live comment frames the cost as integration, not compute).
+# Live: .vikunja-mcp.toml.
 wip_limit = 2   # parallel drain: two per-task agents at a time, each in its own worktree
                 # (vikunja-mcp workspace). 2, not more, on purpose — it bounds the blast
                 # radius of two unrelated tasks landing on main in the same minute.
