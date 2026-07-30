@@ -841,11 +841,14 @@ def test_a_local_git_call_keeps_the_generous_ceiling(repo, monkeypatch):
     resolved: list[tuple[str, float]] = []
     real_run_git = workspace_cmd._run_git
 
-    def recording_run_git(args, cwd, timeout):
+    # the double mirrors `_run_git`'s signature EXACTLY, `env_extra` included (VMCP-90 added it):
+    # a wrapper that drops a parameter the real one grew turns every caller of the new form into a
+    # TypeError, which is a loud failure but in the wrong file.
+    def recording_run_git(args, cwd, timeout, env_extra=None):
         resolved.append((
             " ".join(args), workspace_cmd._GIT_TIMEOUT if timeout is None else timeout
         ))
-        return real_run_git(args, cwd, timeout)
+        return real_run_git(args, cwd, timeout, env_extra)
 
     monkeypatch.setattr(workspace_cmd, "_run_git", recording_run_git)
     res = ensure_workspace(42, cwd=repo)          # the real create path still works end to end
@@ -1436,9 +1439,9 @@ def test_the_main_worktree_lookup_runs_git_once_however_often_it_is_asked(repo, 
     seen = []
     real = workspace_cmd._run_git
 
-    def counting(args, cwd, timeout):
+    def counting(args, cwd, timeout, env_extra=None):
         seen.append(tuple(args))
-        return real(args, cwd, timeout)
+        return real(args, cwd, timeout, env_extra)
 
     monkeypatch.setattr(workspace_cmd, "_run_git", counting)
 
@@ -1465,10 +1468,10 @@ def _fail_branch_delete(monkeypatch):
     by the time this fires."""
     real = workspace_cmd._run_git
 
-    def selective(args, cwd, timeout):
+    def selective(args, cwd, timeout, env_extra=None):
         if args[:2] == ("branch", "-D"):
             raise WorkspaceError(f"git {' '.join(args)} failed: simulated ref-store failure")
-        return real(args, cwd, timeout)
+        return real(args, cwd, timeout, env_extra)
 
     monkeypatch.setattr(workspace_cmd, "_run_git", selective)
 
@@ -1888,3 +1891,87 @@ def test_gc_keeps_every_live_tree_when_the_servers_pages_are_smaller_than_the_gu
     for task_id, path in trees.items():
         assert path.is_dir(), f"{why}: live tree for {task_id} was destroyed"
         assert _git(repo, "branch", "--list", f"task/{task_id}").strip()
+
+
+# --- VMCP-90 (545): gc's own inspection is not the tree's activity ---
+#
+# The interaction between VMCP-71 (the grace window) and VMCP-68 (`kept` means "a human should
+# look"): inspecting a tree meant running `git status` in it, that rewrites the index, and the next
+# sweep read its own footprint as an agent's and skipped the tree silently. MEASURED before the
+# fix, three consecutive sweeps over the same quiesced trees: sweep 1 `kept=[unreachable-head,
+# unpushed, half-created]`, sweeps 2 and 3 `kept=[half-created]` — a standing alarm absent from
+# ~29 of every 30 minutes of ticks. These pin BOTH directions, because getting it wrong the other
+# way (a window that no longer defers to a real write) destroys a working directory under a
+# running agent, which is far worse than a delayed alarm.
+
+def test_gc_reports_a_standing_alarm_on_every_consecutive_sweep(repo, tracker):
+    """THE defect. Quiesced ONCE, then swept three times back to back with nothing else touching
+    the tree: the only writer between sweeps is gc itself, so the entry must appear every time.
+
+    Two trees, because the split was diagnostic: `unpushed` is decided by a guard gc reaches
+    THROUGH `git status`, `half-created` before any git call in the tree at all — before the fix
+    the first vanished after sweep 1 and the second did not. Make `_git_inspect` a plain `_git`
+    again and this goes red on sweep 2."""
+    api, wf = tracker
+    unpushed = _unpushed_build_tree(repo, 42)
+    half = Path(ensure_workspace(99, cwd=repo)["path"])
+    common = Path(_git(repo, "rev-parse", "--git-common-dir"))
+    if not common.is_absolute():
+        common = (repo / common).resolve()
+    (common / "worktrees" / half.name / "locked").write_text(workspace_cmd._LOCK_INITIALIZING)
+    _quiesce(half)
+
+    sweeps = [
+        sorted((e["task_id"], e["code"]) for e in gc_workspaces(cwd=repo, workflow=wf)["kept"])
+        for _ in range(3)
+    ]
+
+    assert sweeps == [[(42, workspace_cmd.CODE_UNPUSHED),
+                       (99, workspace_cmd.CODE_HALF_CREATED)]] * 3
+    assert unpushed.is_dir() and half.is_dir()          # reported, never removed
+
+
+def test_gcs_own_sweep_leaves_the_grace_markers_untouched(repo, tracker):
+    """The mechanism, pinned directly rather than through its consequence: a whole sweep over a
+    tree it refuses must leave BOTH markers `_last_activity` reads exactly as it found them.
+
+    Cheap net for the next guard added to `_release_locked` — `git diff` refreshes the index the
+    same way `git status` does, so a new inspection wired through plain `_git` fails here, in one
+    line, instead of quietly restoring the cadence bug two releases later."""
+    api, wf = tracker
+    path = _unpushed_build_tree(repo, 42)
+    before = [m.stat().st_mtime_ns for m in _grace_markers(path)]
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert [k["code"] for k in res["kept"]] == [workspace_cmd.CODE_UNPUSHED]   # it DID inspect
+    assert [m.stat().st_mtime_ns for m in _grace_markers(path)] == before
+
+
+def test_gc_still_defers_to_a_real_write_in_a_tree_it_has_already_inspected(repo, tracker):
+    """THE INVARIANT, in the direction that destroys work if it is wrong. A tree gc has already
+    inspected once must still read as YOUNG the moment something real writes in it — otherwise the
+    fix above trades a late alarm for a working directory vanishing under a running agent.
+
+    Constructed so only the window stands between the tree and removal: sweep 1 refuses it
+    (`unpushed`), then the agent — still standing in it between `advance(to='review')` and
+    `--release` — pushes, which satisfies the last guard, and runs the `git status` SKILL.md's own
+    recipe has it run. The directory is aged back afterwards so the INDEX is the only fresh marker
+    left, i.e. the one an hour-old tree really has. Sweep 2 must skip it silently, in neither list.
+    Drop the index from `_last_activity` and this does not merely fail — the tree is destroyed."""
+    api, wf = tracker
+    path = _unpushed_build_tree(repo, 42)
+    first = gc_workspaces(cwd=repo, workflow=wf)
+    assert [(k["task_id"], k["code"]) for k in first["kept"]] == [(42, workspace_cmd.CODE_UNPUSHED)]
+
+    _git(path, "push", "origin", "HEAD:main")           # every release guard now passes
+    tree_dir, _index = _grace_markers(path)
+    old = time.time() - workspace_cmd._REAP_GRACE_SECONDS - 60
+    os.utime(tree_dir, (old, old))
+    _git(path, "status", "--porcelain")                 # the agent's own call: it DOES take the lock
+    os.utime(tree_dir, (old, old))                      # ...so the index is the only fresh marker
+
+    second = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert second == {"released": [], "kept": [], "expected": []}
+    assert path.is_dir() and (path / "feature.txt").exists()

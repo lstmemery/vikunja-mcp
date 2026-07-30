@@ -279,9 +279,10 @@ class _ReadDeadline:
 
 
 def _run_git(
-    args: tuple[str, ...], cwd: Path | None, timeout: float | None
+    args: tuple[str, ...], cwd: Path | None, timeout: float | None,
+    env_extra: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
-    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", **(env_extra or {})}
     limit = _GIT_TIMEOUT if timeout is None else timeout
     try:
         return subprocess.run(
@@ -295,8 +296,11 @@ def _run_git(
         raise WorkspaceError(f"git {' '.join(args)} timed out after {limit:.0f}s") from None
 
 
-def _git(*args: str, cwd: Path | None = None, timeout: float | None = None) -> str:
-    proc = _run_git(args, cwd, timeout)
+def _git(
+    *args: str, cwd: Path | None = None, timeout: float | None = None,
+    env_extra: dict[str, str] | None = None,
+) -> str:
+    proc = _run_git(args, cwd, timeout, env_extra)
     if proc.returncode != 0:
         detail = proc.stderr.strip() or proc.stdout.strip()
         raise WorkspaceError(f"git {' '.join(args)} failed: {detail}")
@@ -305,6 +309,44 @@ def _git(*args: str, cwd: Path | None = None, timeout: float | None = None) -> s
 
 def _git_ok(*args: str, cwd: Path | None = None) -> bool:
     return _run_git(args, cwd, None).returncode == 0
+
+
+# THE ONE WAY THIS MODULE LOOKS INSIDE A WORKTREE IT MAY NOT WRITE TO (VMCP-90), and what it buys
+# is the ENVIRONMENT, not tidiness. `git status --porcelain` REWRITES the index every time, even in
+# a clean tree (measured, git 2.50.1): it writes the refreshed stat cache back. `_last_activity`
+# reads that index mtime, so the sweep's own inspection used to be indistinguishable from an
+# agent's footprint — the tree gc had just refused read as freshly touched on the NEXT sweep and
+# was skipped by the grace window, silently, in NEITHER list. MEASURED over consecutive real
+# sweeps: sweep 1 reported `kept=[unreachable-head, unpushed, half-created]`, sweeps 2 and 3
+# reported only `half-created` (the refusals decided BEFORE any git call in the tree). So a
+# standing alarm — the list that means "a human should look", which the pump reads EVERY tick —
+# was absent from ~29 of every 30 minutes. Nothing was lost (re-ageing the markers brought every
+# entry straight back); the signal was merely unreliable exactly when it mattered.
+#
+# GIT_OPTIONAL_LOCKS=0 is git's own switch for this ("prevent `git status` from refreshing the
+# index as a side effect"), and it is the right SHAPE because it never has to tell gc's writes from
+# anyone else's: gc simply stops writing. An agent's or a human's `git status`/`add`/`commit` in
+# the tree does not set it and still bumps the index (measured), so the window keeps reading the
+# one thing it exists to read — somebody may still be standing in this tree. The alternatives all
+# had to draw that distinction after the fact: restoring the mtimes after a refusal blindly rewinds
+# a commit an agent made DURING the inspection (a linked worktree's commit takes no lock of ours),
+# and dropping the index from `_last_activity` deletes the only fresh marker an hour-old tree has.
+#
+# THE ENV VAR AND NOT `--no-optional-locks`, which git documents as equivalent: a git older than
+# 2.15 does not know the FLAG and would fail the inspection outright — every dead tree turning into
+# a `release-error`, i.e. a broken reaper traded for a delayed alarm — while it simply ignores an
+# env var it never learned and degrades to the old cadence. Fail toward the old bug, never toward a
+# new failure.
+#
+# ONE HELPER, so the rule is "gc never writes inside a tree it is inspecting" rather than "remember
+# the flag at each call site". `status` is the only call that writes TODAY (`log`, `rev-parse` and
+# `rev-parse --git-path` measured clean), but `git diff` refreshes the index the same way, so the
+# next guard someone adds is covered by construction. COST: none measurable — the skipped
+# write-back IS the difference. A 4000-file tree, clean and with 400 files modified: 21.8-21.9 ms
+# without the write-back vs 22.0-22.2 ms with it.
+def _git_inspect(*args: str, cwd: Path) -> str:
+    """`_git` for a call that merely LOOKS at a worktree — read the note above before adding one."""
+    return _git(*args, cwd=cwd, env_extra={"GIT_OPTIONAL_LOCKS": "0"})
 
 
 def repo_root(cwd: Path | None = None) -> Path:
@@ -604,12 +646,15 @@ def _last_activity(wt_path: Path) -> float | None:
         git writes one, which is also why `git status` there reports every tracked file as a staged
         deletion — so each marker is stat'ed independently and a missing one simply does not vote.
 
-    MEASURED on git 2.50.1, and load-bearing when reading the caller: `git status --porcelain`
-    REWRITES the index every single time, even in a clean tree — so gc's own inspection bumps this
-    marker. That can only make a tree look YOUNGER, i.e. keep it, and a genuinely reapable tree is
-    REMOVED by the same sweep that inspects it; so the taint can only re-delay a tree some guard is
-    already keeping (dirty, unpushed, half-created), whose `kept` line then reports about once per
-    grace window instead of every tick. Quieter, never a lost verdict.
+    MEASURED on git 2.50.1, and the reason every git call the sweep makes inside a tree goes
+    through `_git_inspect`: `git status --porcelain` REWRITES the index every single time, even in
+    a clean tree. Until VMCP-90 that made gc's own inspection indistinguishable from an agent's
+    footprint here — a tree gc had just refused read as freshly touched on the next sweep and was
+    skipped by the window, silently, so a standing `kept` line surfaced about once per window
+    instead of every tick. gc now takes no optional locks, so a fresh mtime on either marker means
+    what it says: somebody OTHER than the sweep wrote here. Both markers stay — the fix is that gc
+    stopped writing, NOT that this function stopped looking (dropping the index would blind it to
+    exactly the hour-old tree whose only fresh footprint is the commit it just made).
 
     COST, since the sweep holds the repo-wide flock throughout: two stats and one local `rev-parse`
     per DEAD tree — live trees short-circuit before this is ever called — against a board read the
@@ -617,7 +662,7 @@ def _last_activity(wt_path: Path) -> float | None:
     """
     candidates = [wt_path]
     try:
-        index = Path(_git("rev-parse", "--git-path", "index", cwd=wt_path))
+        index = Path(_git_inspect("rev-parse", "--git-path", "index", cwd=wt_path))
         candidates.append(index if index.is_absolute() else wt_path / index)
     except (WorkspaceError, OSError):
         # OSError as well as WorkspaceError: with cwd pointing at a directory that no longer
@@ -666,7 +711,9 @@ def _release_locked(root: Path, task_id: int, role: str) -> dict:
                 "reason": f"half-created worktree (git's own `locked {_LOCK_INITIALIZING}` "
                           f"marker from a killed `worktree add`) — needs a human: "
                           f"`git worktree unlock {path} && git worktree remove -f -f {path}`"}
-    dirty = _git("status", "--porcelain", cwd=path)
+    # _git_inspect, not _git: this is a READ of a tree we may end up refusing to touch, and it must
+    # not leave a footprint the grace window will later mistake for an agent's (VMCP-90).
+    dirty = _git_inspect("status", "--porcelain", cwd=path)
     if dirty:
         return {"released": False, "task_id": task_id, "role": role, "path": str(path),
                 "code": CODE_DIRTY,
@@ -675,7 +722,7 @@ def _release_locked(root: Path, task_id: int, role: str) -> dict:
         # a task/<id> BRANCH's unique history is only safe once it's on origin — the
         # unpushed-commits guard.
         base = f"origin/{default_base(root)}"
-        unpushed = _git("log", "--oneline", f"{base}..HEAD", cwd=path)
+        unpushed = _git_inspect("log", "--oneline", f"{base}..HEAD", cwd=path)
         if unpushed:
             return {"released": False, "task_id": task_id, "role": role, "path": str(path),
                     "code": CODE_UNPUSHED,
@@ -699,7 +746,7 @@ def _release_locked(root: Path, task_id: int, role: str) -> dict:
         # same shape (`origin/base..HEAD` also only ever looks at HEAD, and `branch -D`
         # finishes off whatever the branch no longer points at): "HEAD is the work" is a bound
         # of the whole module, not an oversight in this guard alone.
-        head = _git("rev-parse", "HEAD", cwd=path)
+        head = _git_inspect("rev-parse", "HEAD", cwd=path)
         reachable = _git("for-each-ref", "--contains", head, "--format=%(refname)", cwd=root)
         if not reachable:
             return {"released": False, "task_id": task_id, "role": role, "path": str(path),
@@ -976,17 +1023,24 @@ def gc_workspaces(cwd: Path | None = None, workflow=None) -> dict:
     inspect.
 
     THE CADENCE THAT COMES OUT OF THAT COMPOSITION, measured across consecutive sweeps rather than
-    reasoned about, because a report is read tick by tick: inspecting a tree means running
-    `git status` INSIDE it, and that rewrites its index — so a tree this sweep refused reads as
-    freshly touched on the next one and VMCP-71 skips it, silently, until the window elapses. A
-    standing refusal gc got as far as inspecting (`dirty`, `unpushed`, `unreachable-head`)
-    therefore reappears about once per `_REAP_GRACE_SECONDS`, not on every tick; refusals decided
-    BEFORE any git call in the tree (`half-created`, `self-tree`) are reported on every tick.
-    Nothing is lost either way — re-measured, the entry comes back on the first sweep past the
-    window — but it means an empty `kept` on ONE tick is "nothing to look at this tick", not "no
-    tree needs a human". SKILL.md says so in those words, and the alternative (not letting gc's
-    own inspection count as activity) is filed as its own card rather than made a fifth change to
-    this function.
+    reasoned about, because a report is read tick by tick: a standing refusal is reported on EVERY
+    tick, so an empty `kept` means what VMCP-68 built it to mean. It did NOT use to: inspecting a
+    tree means running `git status` inside it, that rewrites the index, and the next sweep then
+    read the tree as freshly touched and skipped it as young — so `dirty` / `unpushed` /
+    `unreachable-head` surfaced about once per `_REAP_GRACE_SECONDS` while refusals decided BEFORE
+    any git call in the tree (`half-created`, `self-tree`) came every tick. VMCP-90 closed that at
+    the source: gc's own inspection takes no optional locks (`_git_inspect`), so it is not a write
+    and cannot pass for activity.
+
+    AND IT CANNOT WIDEN THE REAPER, which is the direction that would have mattered: gc reaches
+    `git status` only inside `_release_locked`, which then either REMOVES the tree (nothing
+    survives to carry a taint) or REFUSES it — so the taint only ever lived on a tree some guard
+    was already keeping, and no refusal depends on age. Dropping it therefore changes what is
+    REPORTED, never what is removed: a tree gc now re-inspects every tick is one that has been
+    quiet for a full window of SOMEBODY ELSE's activity, which is exactly the window's own
+    promise. Both directions are pinned —
+    test_gc_reports_a_standing_alarm_on_every_consecutive_sweep and
+    test_gc_still_defers_to_a_real_write_in_a_tree_it_has_already_inspected.
 
     VMCP-72: the read under the lock is bounded OVERALL, not just per request
     (`_READ_DEADLINE_SECONDS`) — its request count grows with the board, so a per-request bound
