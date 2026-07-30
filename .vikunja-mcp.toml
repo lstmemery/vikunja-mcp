@@ -2,6 +2,9 @@
 url = "https://tracker.zz.hgdev.com"
 project_id = 10
 project = "vikunja-mcp"
-wip_limit = 2   # parallel drain: two per-task agents at a time, each in its own worktree
-                # (vikunja-mcp workspace). 2, not more, on purpose — it bounds the blast
-                # radius of two unrelated tasks landing on main in the same minute.
+wip_limit = 3   # parallel drain: three per-task agents at a time, each in its own worktree
+                # (vikunja-mcp workspace). The cost of a wider limit is integration, not
+                # compute: every finished task pushes to main with fetch+rebase+re-verify,
+                # so N in flight means more rebases and more chances that two unrelated
+                # tasks touch one module in the same minute. Undeclared file overlap is
+                # caught at integration time, not predicted — see the design spec.
