@@ -219,6 +219,25 @@ class Workflow:
             if my_id in self._assignee_ids(t)
         ]
 
+    def active_task_ids(self) -> list[int]:
+        """Ids of tasks in an ACTIVE stage (Design/Build) assigned to me — the live BUILD set.
+
+        Public on purpose: `vikunja-mcp workspace --gc` needs it to tell a crashed agent's
+        orphaned worktree from a live one, and that boundary deserves a real interface rather
+        than a CLI reaching into _my_active_tasks."""
+        return [t["id"] for _stage, t in self._my_active_tasks()]
+
+    def review_task_ids(self) -> list[int]:
+        """Ids of every task sitting in Review — the live REVIEW set.
+
+        Deliberately NOT filtered by assignee: a reviewer works on someone ELSE's card, so
+        ownership would reap the tree out from under a running review."""
+        board = self._board(require_titles=frozenset({"Review"}))
+        return [
+            t["id"] for bucket in board if bucket["title"] == "Review"
+            for t in (bucket.get("tasks") or [])
+        ]
+
     def _effective_wip_limit(self) -> int | None:
         """How many active tasks this token may hold. None = no limit.
 

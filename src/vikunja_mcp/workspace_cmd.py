@@ -49,13 +49,33 @@ def repo_root(cwd: Path | None = None) -> Path:
     return Path(_git("rev-parse", "--show-toplevel", cwd=cwd))
 
 
+def _main_worktree(root: Path) -> Path:
+    """Resolve `root` (the toplevel of ANY worktree — main OR linked) to the repo's MAIN
+    worktree. Task 4 correction: `git rev-parse --show-toplevel`, run from INSIDE a linked
+    worktree (the normal place for a per-task agent to be sitting, per SKILL.md), returns
+    THAT worktree's own toplevel — not the main repo's. `worktree_root` derives its default
+    sibling directory from the repo's name (`<repo>.worktrees`), so feeding it an unresolved
+    linked-worktree root would compute a NESTED, wrong path — every real tree would then fail
+    the "is this one of ours" parent check, and `--gc` would silently reap nothing while still
+    reporting success. `git worktree list --porcelain` always lists the main worktree FIRST,
+    from any linked tree (verified against real git), so it is the single source of truth.
+    `.resolve()` because git already prints realpaths (Task 3 round-1 fix) and callers compare
+    Path equality, not strings."""
+    return list_worktrees(root)[0]["path"].resolve()
+
+
 def worktree_root(root: Path) -> Path:
     """Where per-task trees live. Default: a SIBLING of the repo, never inside it — inside,
-    pytest collection, ruff and `git add -A` would all sweep them up."""
+    pytest collection, ruff and `git add -A` would all sweep them up.
+
+    `root` is canonicalised to the MAIN worktree first (see `_main_worktree`) so create,
+    release and gc can never disagree about where trees live just because one of them happened
+    to be invoked from inside a linked tree."""
     import os
 
     from vikunja_mcp.config import ENV_WORKTREE_ROOT, load_config
 
+    root = _main_worktree(root)
     # env FIRST, on purpose: create/release need no tracker config at all, and load_config
     # RAISES without url/project_id — reading it first would throw away a perfectly good
     # VIKUNJA_WORKTREE_ROOT in any repo that is not tracker-configured.
@@ -256,15 +276,80 @@ def release_workspace(task_id: int, role: str = "build", cwd: Path | None = None
         return _release_locked(root, task_id, role)
 
 
+def _parse_workspace_name(name: str) -> tuple[str, int] | None:
+    match = _NAME_RE.match(name)
+    if match is None:
+        return None
+    return _ROLE_BY_PREFIX[match.group(1)], int(match.group(2))
+
+
+def _build_workflow():
+    from vikunja_mcp.api import VikunjaAPI
+    from vikunja_mcp.config import load_config
+    from vikunja_mcp.workflow import Workflow
+
+    cfg = load_config()
+    return Workflow(VikunjaAPI(cfg.url, cfg.token), cfg.project_id)
+
+
+def gc_workspaces(cwd: Path | None = None, workflow=None) -> dict:
+    """Reap worktrees whose task is no longer alive on the board.
+
+    THE tracker-aware operation, and the reason this module ships with the tracker: a crashed
+    agent leaves a tree behind, and nothing but the board can say whether the task behind it is
+    still being worked. Liveness differs by role and must not be conflated — a BUILD tree is
+    alive while its task is in Design/Build assigned to me, a REVIEW tree while its card is in
+    Review (any assignee — a reviewer works on someone ELSE's card, so filtering by ownership
+    would reap the tree out from under a running review). Read-only against the tracker, same
+    class as `claimable`.
+
+    The safety guards of release still apply: a dead task whose tree holds unpushed commits or
+    a dirty working tree is KEPT and REPORTED, never destroyed — `--gc` runs on every
+    orchestrator tick, unattended, so this is the one place a mistake is not a red test but an
+    agent's work silently destroyed while nobody is watching.
+
+    `cwd` may be INSIDE a linked worktree (the normal place for a per-task agent to run this
+    from, per SKILL.md) — `root` below is whatever toplevel that resolves to, and every path
+    derivation from it (`worktree_root`) canonicalises to the MAIN worktree internally, so the
+    "is this one of ours" check below never disagrees with create/release about where trees
+    live regardless of where --gc itself was invoked.
+    """
+    root = repo_root(cwd)
+    wf = workflow if workflow is not None else _build_workflow()
+    alive = {"build": set(wf.active_task_ids()), "review": set(wf.review_task_ids())}
+    wt_root = worktree_root(root)
+
+    released, kept = [], []
+    # ONE lock for the whole sweep: _repo_lock is not reentrant, so call the _locked core, never
+    # the public release_workspace wrapper (that would deadlock on its own flock).
+    with _repo_lock(root):
+        for wt in list_worktrees(root):
+            if wt["path"].parent != wt_root:
+                continue                       # not ours — never touch a hand-made worktree
+            parsed = _parse_workspace_name(wt["path"].name)
+            if parsed is None:
+                continue
+            role, task_id = parsed
+            if task_id in alive[role]:
+                continue
+            result = _release_locked(root, task_id, role)
+            (released if result["released"] else kept).append(result)
+    return {"released": released, "kept": kept}
+
+
 def run_workspace(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="vikunja-mcp workspace")
     parser.add_argument("task_id", nargs="?", type=int, help="create a workspace for this task")
     parser.add_argument("--role", choices=("build", "review"), default="build")
     parser.add_argument("--at", help="review role: the ref to check out (default origin/<main>)")
     parser.add_argument("--release", type=int, metavar="TASK_ID")
+    parser.add_argument("--gc", action="store_true",
+                         help="reap worktrees whose task is no longer alive on the board")
     try:
         args = parser.parse_args(argv)
-        if args.release is not None:
+        if args.gc:
+            result = gc_workspaces()
+        elif args.release is not None:
             result = release_workspace(args.release, role=args.role)
         elif args.task_id is not None:
             result = ensure_workspace(args.task_id, role=args.role, at=args.at)

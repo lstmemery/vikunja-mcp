@@ -158,3 +158,25 @@ def test_excluded_stuck_queue_task_is_not_handed_back():
     res = wf.next_task(exclude=[stuck["id"]])
     assert res["task"] is None
     assert "resume" not in res
+
+
+# --- liveness accessors: what workspace --gc asks the tracker ---
+
+def test_active_task_ids_lists_my_design_and_build_tasks():
+    api, wf = _env()
+    first = _hold(api, wf, "designing")
+    second = _hold(api, wf, "building")
+    wf.advance(second["id"], to="build", spec="approach")
+    api.add_task("someone else's queue item", "Queue")
+    assert sorted(wf.active_task_ids()) == sorted([first["id"], second["id"]])
+
+
+def test_review_task_ids_includes_cards_i_do_not_own():
+    """A review tree is alive while the CARD is in Review — the reviewer is never its
+    assignee, so keying this off ownership would reap a running reviewer's tree."""
+    api, wf = _env()
+    mine = _hold(api, wf, "mine")
+    wf.advance(mine["id"], to="build", spec="approach")
+    wf.advance(mine["id"], to="review", worklog="done", evidence="abc1234")
+    theirs = api.add_task("theirs", "Review")
+    assert sorted(wf.review_task_ids()) == sorted([mine["id"], theirs["id"]])

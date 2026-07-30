@@ -9,10 +9,13 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit.fakes import FakeAPI
 from vikunja_mcp.config import ENV_WORKTREE_ROOT
+from vikunja_mcp.workflow import STAGES, Workflow
 from vikunja_mcp.workspace_cmd import (
     WorkspaceError,
     ensure_workspace,
+    gc_workspaces,
     list_worktrees,
     release_workspace,
     run_workspace,
@@ -295,3 +298,85 @@ def test_run_workspace_role_and_at_plumb_through_the_cli(repo, monkeypatch, caps
     out = json.loads(capsys.readouterr().out.strip())
     assert out["role"] == "review" and out["head"] == head
     assert Path(out["path"]).name == "review-42"
+
+
+# --- Task 4: workspace --gc — reap orphaned trees using tracker liveness ---
+
+@pytest.fixture
+def tracker():
+    api = FakeAPI(buckets=STAGES)
+    return api, Workflow(api, project_id=3)
+
+
+def test_gc_reaps_a_tree_whose_task_is_no_longer_active(repo, tracker):
+    api, wf = tracker
+    path = Path(ensure_workspace(42, cwd=repo)["path"])          # nothing on the board -> dead
+    res = gc_workspaces(cwd=repo, workflow=wf)
+    assert [r["task_id"] for r in res["released"]] == [42]
+    assert not path.exists()
+
+
+def test_gc_keeps_a_tree_whose_task_is_still_in_build(repo, tracker):
+    api, wf = tracker
+    task = api.add_task("live work", "Queue")
+    wf.claim(task["id"])
+    path = Path(ensure_workspace(task["id"], cwd=repo)["path"])
+    res = gc_workspaces(cwd=repo, workflow=wf)
+    assert res["released"] == []
+    assert path.exists()
+
+
+def test_gc_keeps_a_review_tree_while_the_card_is_in_review(repo, tracker):
+    api, wf = tracker
+    task = api.add_task("under review", "Review")
+    head = _git(repo, "rev-parse", "HEAD")
+    path = Path(ensure_workspace(task["id"], role="review", at=head, cwd=repo)["path"])
+    res = gc_workspaces(cwd=repo, workflow=wf)
+    assert res["released"] == []
+    assert path.exists()
+
+
+def test_gc_never_reaps_unpushed_work_and_reports_it(repo, tracker):
+    """The orphan of a crashed agent that got as far as committing: dead on the board, but
+    its commits are the whole reason we keep it. GC must REPORT, not destroy."""
+    api, wf = tracker
+    path = Path(ensure_workspace(42, cwd=repo)["path"])
+    (path / "feature.txt").write_text("real work\n")
+    _git(path, "add", "feature.txt")
+    _git(path, "commit", "-m", "crashed mid-task")
+    res = gc_workspaces(cwd=repo, workflow=wf)
+    assert res["released"] == []
+    assert [k["task_id"] for k in res["kept"]] == [42]
+    assert "commit" in res["kept"][0]["reason"]
+    assert path.exists()
+
+
+def test_gc_ignores_directories_that_are_not_task_worktrees(repo, tracker):
+    api, wf = tracker
+    stray = repo.parent / "unrelated"
+    stray.mkdir()
+    _git(repo, "worktree", "add", str(stray), "-b", "unrelated-branch")
+    res = gc_workspaces(cwd=repo, workflow=wf)
+    assert res["released"] == [] and res["kept"] == []
+    assert stray.exists()
+
+
+def test_gc_from_inside_a_linked_worktree_still_reaps(repo, tracker):
+    """Correction A: `repo_root(cwd)` (via `git rev-parse --show-toplevel`) returns the
+    LINKED worktree's own toplevel when invoked from inside one, not the main repo's — the
+    normal case once SKILL.md has per-task agents working inside their own tree. If
+    gc_workspaces derived `worktree_root` from that unresolved root, every entry would fail
+    the "is this one of ours" parent check and --gc would silently reap nothing while still
+    reporting success. Run the sweep with cwd INSIDE a live tree and prove a DIFFERENT,
+    dead-on-the-board tree still gets reaped."""
+    api, wf = tracker
+    task = api.add_task("live work", "Queue")
+    wf.claim(task["id"])
+    live_path = Path(ensure_workspace(task["id"], cwd=repo)["path"])
+    dead_path = Path(ensure_workspace(42, cwd=repo)["path"])      # nothing on the board -> dead
+
+    res = gc_workspaces(cwd=live_path, workflow=wf)               # invoked FROM the live tree
+
+    assert [r["task_id"] for r in res["released"]] == [42]
+    assert not dead_path.exists()
+    assert live_path.exists()                                     # the live tree survives too
