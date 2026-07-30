@@ -244,17 +244,51 @@ def test_review_task_ids_includes_cards_i_do_not_own():
     assert sorted(wf.review_task_ids()) == sorted([mine["id"], theirs["id"]])
 
 
-def test_a_shared_liveness_board_serves_both_accessors_with_one_fetch():
-    """Review finding (Important 4): gc_workspaces calls both accessors every tick — on
+def test_parked_task_ids_lists_your_call_cards_and_nothing_else():
+    """VMCP-68: NOT a liveness set — a parked card's tree is dead on purpose. `workspace --gc`
+    reads it to GRADE its refusals: the same "unpushed commits" refusal is routine while a human
+    still owes the card an answer, and an alarm anywhere else. So it must name exactly the Your
+    Call column: an active task of mine and a card in Review must not leak into it."""
+    api, wf = _env()
+    parked = _hold(api, wf, "waiting on a human")
+    wf.call_human(parked["id"], "which option do you want?")
+    _hold(api, wf, "still mine, still active")
+    api.add_task("under review", "Review")
+    assert wf.parked_task_ids() == [parked["id"]]
+
+
+def test_your_call_is_paged_exhaustively_on_the_liveness_board():
+    """The truncation this set would otherwise die of: `require_titles` decides which buckets keep
+    the pagination loop going, and a parked id left on an unread page reads as NOT parked — gc then
+    grades a routine refusal as an alarm, quietly, and only on boards busy enough to fill a page.
+    Squeeze the fake's page size to 1 (it mirrors the real client: non-required buckets are
+    truncated to their first page) and require the SECOND parked card to still come back."""
+    api, wf = _env()
+    first = _hold(api, wf, "parked first")
+    wf.call_human(first["id"], "?")
+    second = _hold(api, wf, "parked second")
+    wf.call_human(second["id"], "?")
+    api.page_size = 1
+    assert sorted(wf.parked_task_ids()) == sorted([first["id"], second["id"]])
+
+
+def test_a_shared_liveness_board_serves_every_accessor_with_one_fetch():
+    """Review finding (Important 4): gc_workspaces calls these accessors every tick — on
     FakeAPI's own view_tasks_calls counter, prove one liveness_board() fetch is enough for
-    both, matching the #43 discipline next_task already follows for its own board reads."""
+    all of them, matching the #43 discipline next_task already follows for its own board reads.
+    VMCP-68 added the third (parked_task_ids); it must ride the same fetch, since the whole read
+    happens INSIDE the repo-wide flock every other agent's --release queues behind."""
     api, wf = _env()
     first = _hold(api, wf, "designing")
+    parked = _hold(api, wf, "waiting on a human")
+    wf.call_human(parked["id"], "which option?")
     api.add_task("under review", "Review")
     board = wf.liveness_board()
     calls_before = api.view_tasks_calls
     active = wf.active_task_ids(board=board)
     reviewing = wf.review_task_ids(board=board)
+    waiting = wf.parked_task_ids(board=board)
     assert api.view_tasks_calls == calls_before          # NO extra fetch when a board is passed
     assert active == [first["id"]]
     assert len(reviewing) == 1
+    assert waiting == [parked["id"]]

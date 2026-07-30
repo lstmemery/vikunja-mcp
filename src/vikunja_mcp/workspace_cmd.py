@@ -30,6 +30,22 @@ BUILD_BRANCH = "task/{task_id}"
 _NAME_RE = re.compile(r"^(task|review)-(\d+)$")
 _ROLE_BY_PREFIX = {"task": "build", "review": "review"}
 
+# WHY EVERY REFUSAL CARRIES A CODE (VMCP-68). `--gc` has to grade its own refusals — routine vs
+# "a human should look" (see _keep_is_expected) — and the only other thing a refusal carries is
+# `reason`, which is PROSE: human-facing, deliberately reworded whenever a message turns out to
+# mislead (the half-created diagnosis was reworded exactly that way). Grading on a substring of it
+# would make every future rewording a silent reclassification. So the classification keys on these,
+# and the prose stays free to change. Public, unprefixed, and asserted against SKILL.md by
+# tests/unit/test_skill_contract.py: they are part of the CLI's JSON line, which the rulebook tells
+# agents to read, so a value change here must drag the rulebook along.
+CODE_NO_WORKTREE = "no-worktree"
+CODE_HALF_CREATED = "half-created"
+CODE_DIRTY = "dirty"
+CODE_UNPUSHED = "unpushed"
+CODE_UNREACHABLE_HEAD = "unreachable-head"
+CODE_SELF_TREE = "self-tree"          # --gc only: the tree gc itself is standing in
+CODE_RELEASE_ERROR = "release-error"  # --gc only: _release_locked raised, sweep continued
+
 # Review Important 2: EVERY git call in this module can run while `_repo_lock` is HELD (the
 # network one — `git fetch origin` in _ensure_locked — provably does, before the idempotency
 # early-return), so a call that blocks forever does not merely hang ITS caller: it wedges every
@@ -475,7 +491,8 @@ def _release_locked(root: Path, task_id: int, role: str) -> dict:
         # absent) path is still informative: it says WHERE a worktree for this task would be.
         name = (BUILD_NAME if role == "build" else REVIEW_NAME).format(task_id=task_id)
         return {"released": False, "task_id": task_id, "role": role,
-                "path": str(worktree_root(root) / name), "reason": "no worktree for this task"}
+                "path": str(worktree_root(root) / name), "code": CODE_NO_WORKTREE,
+                "reason": "no worktree for this task"}
     path = wt["path"]
     if wt["lock_reason"] == _LOCK_INITIALIZING:
         # The OUTCOME here is unchanged — a half-created tree was already kept, on every tick,
@@ -491,12 +508,14 @@ def _release_locked(root: Path, task_id: int, role: str) -> dict:
         # already correct and specific, and swallowing it into a synthesised reason would replace
         # git's report with our guess about it.
         return {"released": False, "task_id": task_id, "role": role, "path": str(path),
+                "code": CODE_HALF_CREATED,
                 "reason": f"half-created worktree (git's own `locked {_LOCK_INITIALIZING}` "
                           f"marker from a killed `worktree add`) — needs a human: "
                           f"`git worktree unlock {path} && git worktree remove -f -f {path}`"}
     dirty = _git("status", "--porcelain", cwd=path)
     if dirty:
         return {"released": False, "task_id": task_id, "role": role, "path": str(path),
+                "code": CODE_DIRTY,
                 "reason": f"working tree is dirty ({len(dirty.splitlines())} entries)"}
     if wt["branch"] is not None:
         # a task/<id> BRANCH's unique history is only safe once it's on origin — the
@@ -505,6 +524,7 @@ def _release_locked(root: Path, task_id: int, role: str) -> dict:
         unpushed = _git("log", "--oneline", f"{base}..HEAD", cwd=path)
         if unpushed:
             return {"released": False, "task_id": task_id, "role": role, "path": str(path),
+                    "code": CODE_UNPUSHED,
                     "reason": f"{len(unpushed.splitlines())} commit(s) not on {base}"}
     else:
         # a review tree is DETACHED — it holds no branch, so the guard above cannot apply —
@@ -529,6 +549,7 @@ def _release_locked(root: Path, task_id: int, role: str) -> dict:
         reachable = _git("for-each-ref", "--contains", head, "--format=%(refname)", cwd=root)
         if not reachable:
             return {"released": False, "task_id": task_id, "role": role, "path": str(path),
+                    "code": CODE_UNREACHABLE_HEAD,
                     "reason": f"detached HEAD {head} is reachable from no ref"}
     _git("worktree", "remove", str(path), cwd=root)
     if wt["branch"]:
@@ -601,6 +622,42 @@ def _build_workflow(root: Path):
     )
 
 
+# THE GRADING POLICY (VMCP-68), and the two-part shape is the point: expectedness is a property of
+# the guard AND of the board, never of the guard alone.
+#   * _EXPECTED_WHEN_PARKED — the two guards that protect ORDINARY in-progress work. Both are
+#     routine while the task's card waits in Your Call: `call_human` parks the card the moment a
+#     rebase conflicts (dirty) or a push is rejected (unpushed), which is exactly when the tree
+#     holds unsaved work, and it stays that way for HOURS until a human answers. The card is
+#     already the human's signal; a `kept` line every tick adds nothing. The SAME two refusals on
+#     a card that is NOT parked mean work nobody is coming back for — that one has to shout.
+#   * _EXPECTED_ALWAYS — a detached review tree holding an in-tree commit. Permanent by
+#     construction (the reachability guard rightly refuses to release it and `--gc` cannot reap
+#     it), so it is the entry that would otherwise make `kept` non-empty FOREVER. SKILL.md's
+#     answer is the fix, and it is a rule for the reviewer, not a chore for the human: write the
+#     verdict as a tracker comment, never as a commit in the tree.
+# Neither set contains CODE_HALF_CREATED, CODE_SELF_TREE, CODE_RELEASE_ERROR or CODE_NO_WORKTREE:
+# a parked card must not launder a broken tool state. A half-created tree needs a human with two
+# git commands whether or not its card is parked, and the other three describe gc itself, not the
+# work in the tree.
+_EXPECTED_WHEN_PARKED = frozenset({CODE_DIRTY, CODE_UNPUSHED})
+_EXPECTED_ALWAYS = frozenset({CODE_UNREACHABLE_HEAD})
+
+
+def _keep_is_expected(entry: dict, parked: set[int]) -> bool:
+    """Is this refusal the routine state of a healthy board (-> `expected`), or something a human
+    should look at (-> `kept`)?
+
+    Fails toward SHOUTING, and that direction is deliberate: a code that is unknown here — a new
+    guard, a renamed constant, a reason produced by something that never learned to set `code` —
+    is UNEXPECTED, so it lands in `kept`. Wrong-and-noisy costs a human one glance; wrong-and-quiet
+    is how the never-read signal this split exists to fix comes back in a new guise.
+    """
+    code = entry.get("code")
+    if code in _EXPECTED_ALWAYS:
+        return True
+    return code in _EXPECTED_WHEN_PARKED and entry["task_id"] in parked
+
+
 def gc_workspaces(cwd: Path | None = None, workflow=None) -> dict:
     """Reap worktrees whose task is no longer alive on the board.
 
@@ -639,13 +696,31 @@ def gc_workspaces(cwd: Path | None = None, workflow=None) -> dict:
     `_last_activity`). That is the same overlap seen from the other side: a task leaves Build at
     `advance(to='review')` and a card leaves Review at a `needs_work` verdict, both while the
     agent that did it is still standing in the tree.
+
+    VMCP-68: the refusals are reported in TWO lists, because "a human should look" and "expected,
+    no action" were one list and the routine states never let it be empty — a Your Call card's
+    unsaved work (every tick for hours) and a review tree's in-tree commit (forever). `kept` is
+    now only the first kind, so EMPTY means nothing to read; `expected` is the second kind, kept
+    and reported (nothing is hidden, and nothing is removed either — every entry still carries
+    `released: false`) but not worth a look. The grading is `_keep_is_expected`, keyed on each
+    refusal's `code` plus the board's parked set, and it fails toward `kept`. Round 2's fix to the
+    live self-tree was this same failure in an earlier guise: whatever is added here later, the
+    test to write is "on a healthy board, `kept` is empty".
+
+    The two compose in one direction only, and it is the right one: a tree skipped as YOUNG never
+    reaches a release guard, so it produces no refusal to grade and appears in NEITHER list —
+    `expected` is for a refusal that WAS made and is routine, never for a tree gc declined to
+    inspect. The one interaction worth knowing when reading a report: gc's own `git status`
+    rewrites a tree's index, so an inspected-and-kept tree looks young on the next tick and is
+    skipped — a standing entry (either list) therefore reappears about once per grace window
+    rather than every tick.
     """
     here = repo_root(cwd).resolve()
     root = _main_worktree(here)
     wf = workflow if workflow is not None else _build_workflow(root)
     wt_root = worktree_root(root)
 
-    released, kept = [], []
+    released, kept, expected = [], [], []
     # ONE lock for the whole sweep: _repo_lock is not reentrant, so call the _locked core, never
     # the public release_workspace wrapper (that would deadlock on its own flock).
     with _repo_lock(root):
@@ -658,6 +733,9 @@ def gc_workspaces(cwd: Path | None = None, workflow=None) -> dict:
         board = wf.liveness_board()
         alive = {"build": set(wf.active_task_ids(board=board)),
                  "review": set(wf.review_task_ids(board=board))}
+        # NOT a liveness set (a parked card's tree is dead, deliberately) — it only GRADES the
+        # refusals below, off the same single fetch. See _keep_is_expected.
+        parked = set(wf.parked_task_ids(board=board))
         for wt in list_worktrees(root):
             if wt["path"].parent != wt_root:
                 # not ours — skip a hand-made worktree. Review Minor 12a: this guard is NOT
@@ -690,10 +768,15 @@ def gc_workspaces(cwd: Path | None = None, workflow=None) -> dict:
                 continue
             if wt["path"] == here:
                 # Critical 2's guard: never reap the tree gc itself is running from — reached
-                # only once the tree is ALREADY known dead (see above).
+                # only once the tree is ALREADY known dead (see above), and BEFORE the grace
+                # window below (see its own note on why that order is the deliberate one).
+                #
+                # Straight into `kept`, never graded (VMCP-68): this refusal is about gc's own
+                # invocation site, so no board state can make it routine — CODE_SELF_TREE is in
+                # neither expected set. Same for the exception below.
                 kept.append({
                     "released": False, "task_id": task_id, "role": role,
-                    "path": str(wt["path"]),
+                    "path": str(wt["path"]), "code": CODE_SELF_TREE,
                     "reason": "gc was invoked from inside this worktree — refusing to remove it",
                 })
                 continue
@@ -729,11 +812,15 @@ def gc_workspaces(cwd: Path | None = None, workflow=None) -> dict:
                 # trees. Report it exactly like any other refusal and keep going.
                 kept.append({
                     "released": False, "task_id": task_id, "role": role,
-                    "path": str(wt["path"]), "reason": f"{e.__class__.__name__}: {e}",
+                    "path": str(wt["path"]), "code": CODE_RELEASE_ERROR,
+                    "reason": f"{e.__class__.__name__}: {e}",
                 })
                 continue
-            (released if result["released"] else kept).append(result)
-    return {"released": released, "kept": kept}
+            if result["released"]:
+                released.append(result)
+            else:
+                (expected if _keep_is_expected(result, parked) else kept).append(result)
+    return {"released": released, "kept": kept, "expected": expected}
 
 
 def run_workspace(argv: list[str]) -> int:

@@ -221,14 +221,22 @@ class Workflow:
         ]
 
     def liveness_board(self) -> list[dict]:
-        """The one board read that covers BOTH liveness sets `workspace --gc` needs.
+        """The one board read that covers every set `workspace --gc` needs.
 
         Review finding (Important 4): active_task_ids/review_task_ids used to each call _board
         separately — two exhaustive-adjacent fetches per gc sweep, on a path that runs on
         EVERY orchestrator tick, more often than next_task's own #43-fixed single fetch. Pass
         this board's result into both accessors (their `board` param) so one call to
-        view_tasks serves the whole sweep, same discipline as next_task's raw/resolve_full."""
-        return self._board(require_titles=frozenset({*ACTIVE_STAGES, "Review"}))
+        view_tasks serves the whole sweep, same discipline as next_task's raw/resolve_full.
+
+        "Your Call" is in the required titles for `parked_task_ids` (VMCP-68) — NOT for liveness:
+        a parked card's tree is dead by design, and that is the whole point. It has to be
+        EXHAUSTIVE and not just "whatever the first page happened to carry", because a parked id
+        that pagination truncated away reads as not-parked, i.e. gc grades a routine refusal as
+        an alarm — the exact never-empty-signal failure this set exists to fix. The cost is one
+        extra page fetch only on a board whose Your Call is itself full (page_size cards a human
+        has yet to answer), unlike the unbounded Done/Backlog #43 deliberately leaves out."""
+        return self._board(require_titles=frozenset({*ACTIVE_STAGES, "Review", "Your Call"}))
 
     def active_task_ids(self, board: list[dict] | None = None) -> list[int]:
         """Ids of tasks in an ACTIVE stage (Design/Build) assigned to me — the live BUILD set.
@@ -250,6 +258,25 @@ class Workflow:
         raw = self.liveness_board() if board is None else board
         return [
             t["id"] for bucket in raw if bucket["title"] == "Review"
+            for t in (bucket.get("tasks") or [])
+        ]
+
+    def parked_task_ids(self, board: list[dict] | None = None) -> list[int]:
+        """Ids of every task parked in Your Call. NOT a liveness set — the opposite of one.
+
+        `workspace --gc` reads it to GRADE its own report (VMCP-68), never to spare a tree: a
+        dead build tree that still holds uncommitted or unpushed work is the routine, no-action
+        state while its card waits for a human (call_human parks the card and keeps the assignee,
+        so the human already has the signal, and it clears when they answer), and the very same
+        refusal on a card that is anywhere else is work nobody is coming back for. One refusal,
+        two meanings, and only the board can tell them apart.
+
+        Deliberately NOT filtered by assignee, like review_task_ids: a `task-<id>` worktree only
+        ever exists for a task we worked on, so ownership would buy no precision and cost a
+        `_me()` fetch. Pass a pre-fetched board (`liveness_board()`) to share its one fetch."""
+        raw = self.liveness_board() if board is None else board
+        return [
+            t["id"] for bucket in raw if bucket["title"] == "Your Call"
             for t in (bucket.get("tasks") or [])
         ]
 

@@ -267,13 +267,18 @@ def test_run_workspace_release_of_missing_tree_is_exit_0(repo, monkeypatch, caps
     """A refusal is a NEGATIVE VERDICT, not a CLI failure: the command RAN, exit 0.
 
     Task 4 review (Minor): "path" now names WHERE a worktree for this task would have been —
-    even a "nothing to release" verdict must be actionable, not just a bare task id."""
+    even a "nothing to release" verdict must be actionable, not just a bare task id.
+
+    VMCP-68: and it carries a machine-readable `code` beside the prose `reason`, asserted here by
+    WHOLE-DICT equality on purpose — the JSON line is a contract SKILL.md tells agents to branch
+    on, so a key silently appearing or vanishing has to fail somewhere."""
     monkeypatch.chdir(repo)
     code = run_workspace(["--release", "999"])
     assert code == 0
     out = json.loads(capsys.readouterr().out.strip())
     assert out == {"released": False, "task_id": 999, "role": "build",
                    "path": str(repo.parent / "work.worktrees" / "task-999"),
+                   "code": workspace_cmd.CODE_NO_WORKTREE,
                    "reason": "no worktree for this task"}
 
 
@@ -541,6 +546,9 @@ def test_gc_reads_liveness_under_the_lock(repo, tracker):
         def review_task_ids(self, board=None):
             return wf.review_task_ids(board=board)
 
+        def parked_task_ids(self, board=None):
+            return wf.parked_task_ids(board=board)
+
     gc_workspaces(cwd=repo, workflow=ProbingWorkflow())
 
 
@@ -553,12 +561,11 @@ def test_run_workspace_gc_dispatches_to_gc_workspaces(monkeypatch, capsys, tmp_p
     that moment "safe because gc_workspaces never really runs" stops being true. The isolation
     must be structural (an inert cwd), not incidental (a mock that happens to intercept it)."""
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(
-        "vikunja_mcp.workspace_cmd.gc_workspaces", lambda: {"released": [], "kept": []}
-    )
+    empty = {"released": [], "kept": [], "expected": []}     # VMCP-68: the real three-list shape
+    monkeypatch.setattr("vikunja_mcp.workspace_cmd.gc_workspaces", lambda: empty)
     code = run_workspace(["--gc"])
     assert code == 0
-    assert json.loads(capsys.readouterr().out.strip()) == {"released": [], "kept": []}
+    assert json.loads(capsys.readouterr().out.strip()) == empty
 
 
 def test_run_workspace_gc_combined_with_a_task_id_is_refused(monkeypatch, capsys, tmp_path):
@@ -1213,3 +1220,138 @@ def test_gc_does_not_skip_forever_on_an_mtime_in_the_future(repo, tracker):
 
     assert [r["task_id"] for r in res["released"]] == [42]
     assert not path.exists()
+# --- VMCP-68 (516): `--gc` grades its refusals, so `kept` is only what a human should look at ---
+#
+# Every test here `_quiesce`s its tree, and that is the ORDER these two changes compose in: VMCP-71
+# skips a young dead tree before any guard runs, so it produces no refusal to grade and lands in
+# NEITHER list. `expected` is for a refusal that WAS made and is routine — never for a tree gc
+# declined to inspect. Skip the quiesce and these tests go red on empty lists, loudly.
+
+def _unpushed_build_tree(repo, task_id):
+    """A dead build tree every release guard rightly refuses to remove: it holds a commit that is
+    not on origin/main. This is what an agent leaves behind when its push was rejected or its
+    rebase went sideways — and NOTHING about the tree itself says whether that is routine or
+    alarming. Only the board does, which is the whole point of the grading."""
+    path = Path(ensure_workspace(task_id, cwd=repo)["path"])
+    (path / "feature.txt").write_text("real work\n")
+    _git(path, "add", "feature.txt")
+    _git(path, "commit", "-m", "work in progress")
+    _quiesce(path)                       # after the commit: it rewrites the index
+    return path
+
+
+def _parked(api, wf, title="waiting on a human"):
+    """A card in Your Call with its assignee kept — what `call_human` leaves behind."""
+    task = api.add_task(title, "Queue")
+    wf.claim(task["id"])
+    wf.call_human(task["id"], "the rebase conflicted — which side wins?")
+    return task
+
+
+def test_gc_reports_a_parked_cards_unpushed_commit_as_expected_not_as_kept(repo, tracker):
+    """THE case that made `kept` never-empty: an agent hits a conflict, calls `call_human`, and its
+    card sits in Your Call for HOURS. The tree is dead by liveness the moment the card leaves
+    Build, and its unpushed commit is exactly what the guard must refuse to destroy — so the sweep
+    reported it on every single tick, and a signal that is never empty stops being read.
+
+    Still reported (nothing hidden) and still not removed (`released: false`) — just not in the
+    list SKILL.md tells a human to read."""
+    api, wf = tracker
+    task = _parked(api, wf)
+    path = _unpushed_build_tree(repo, task["id"])
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert res["kept"] == []                                  # nothing for a human to look at
+    assert [e["task_id"] for e in res["expected"]] == [task["id"]]
+    assert res["expected"][0]["code"] == workspace_cmd.CODE_UNPUSHED
+    assert res["expected"][0]["released"] is False             # reported, NOT removed
+    assert path.exists()
+
+
+def test_gc_still_shouts_about_an_unpushed_commit_when_the_card_is_not_parked(repo, tracker):
+    """The mirror image, and why the grading needs the BOARD and not just the guard's identity:
+    the very same refusal on a card nobody parked is work no agent is coming back for. Here the
+    task was returned to Backlog (`return_task`) with its commits still in the tree."""
+    api, wf = tracker
+    task = api.add_task("abandoned mid-flight", "Queue")
+    wf.claim(task["id"])
+    path = _unpushed_build_tree(repo, task["id"])
+    wf.return_task(task["id"], "the upstream service is down")     # -> Backlog, NOT parked
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert res["expected"] == []
+    assert [k["task_id"] for k in res["kept"]] == [task["id"]]
+    assert res["kept"][0]["code"] == workspace_cmd.CODE_UNPUSHED
+    assert path.exists()
+
+
+def test_gc_reports_a_parked_cards_dirty_tree_as_expected_too(repo, tracker):
+    """The dirty half of the same state, which SKILL.md names explicitly: `call_human` is what an
+    agent calls WHEN a rebase conflicts, and a conflicted rebase leaves the tree dirty rather than
+    merely unpushed. Grading only `unpushed` would have left the noisier of the two shouting."""
+    api, wf = tracker
+    task = _parked(api, wf)
+    path = Path(ensure_workspace(task["id"], cwd=repo)["path"])
+    (path / "README.md").write_text("<<<<<<< HEAD\nhalf-resolved conflict\n")
+    _quiesce(path)
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert res["kept"] == []
+    assert [e["code"] for e in res["expected"]] == [workspace_cmd.CODE_DIRTY]
+    assert path.exists()
+
+
+def test_gc_reports_a_review_trees_in_tree_commit_as_expected_forever(repo, tracker):
+    """The other routine state, and the permanent one: a reviewer committed notes INSIDE its
+    detached tree, so the reachability guard refuses to release it and `--gc` cannot reap it —
+    there is no board state that ever clears this, which is exactly why it must not sit in the
+    list a human is told to read. Expected regardless of any parked card (its card is in Done
+    here); SKILL.md's fix is the reviewer's rule, not a chore for the human."""
+    api, wf = tracker
+    api.add_task("reviewed and done", "Done")             # task 7's card has LEFT Review -> dead
+    path, pinned, _sha2 = _poisoned_review_tree(repo)     # review-7, holds an in-tree commit
+    _quiesce(path)
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert res["kept"] == []
+    assert [e["task_id"] for e in res["expected"]] == [7]
+    assert res["expected"][0]["code"] == workspace_cmd.CODE_UNREACHABLE_HEAD
+    assert _git(path, "rev-parse", "HEAD") == pinned       # and the commit is still there
+
+
+def test_a_parked_card_never_launders_a_half_created_tree_into_expected(repo, tracker, monkeypatch):
+    """The boundary of "parked ⇒ routine": it applies to the two guards that protect ORDINARY
+    in-progress work, never to a broken tool state. A half-created tree (git's own `locked
+    initializing` from a killed `worktree add`) needs a human with two git commands whether or not
+    its card happens to be parked — grade it quiet and the one refusal nobody else can resolve
+    disappears from the only list anybody reads."""
+    api, wf = tracker
+    task = _parked(api, wf)
+    half = _half_created_tree(repo, monkeypatch, task_id=task["id"])
+    _quiesce(half)          # the orphaned smudge child keeps writing — quiesce LAST, then sweep
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert res["expected"] == []
+    assert [k["code"] for k in res["kept"]] == [workspace_cmd.CODE_HALF_CREATED]
+
+
+def test_a_parked_card_past_the_first_page_is_still_graded_as_parked(repo, tracker):
+    """`liveness_board` must page Your Call EXHAUSTIVELY (it is in require_titles), because a
+    parked id that pagination truncated away reads as NOT parked — and gc then grades a routine
+    refusal as an alarm, quietly, and only on the boards busy enough to fill a page. Squeeze the
+    fake's page size to 1 so the card under test sits past the first page of Your Call."""
+    api, wf = tracker
+    api.page_size = 1
+    _parked(api, wf, title="parked earlier, fills page 1")
+    task = _parked(api, wf, title="parked second, past the page")
+    _unpushed_build_tree(repo, task["id"])
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert res["kept"] == []
+    assert [e["task_id"] for e in res["expected"]] == [task["id"]]

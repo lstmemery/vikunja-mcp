@@ -14,7 +14,7 @@ stale on either side.
 import inspect
 from importlib.resources import files
 
-from vikunja_mcp import config, server, workflow
+from vikunja_mcp import config, server, workflow, workspace_cmd
 
 
 def _skill_text() -> str:
@@ -135,6 +135,35 @@ def test_the_integration_recipe_pushes_to_the_main_branch_and_names_gc():
     text = _skill_text()
     assert "git push origin HEAD:main" in text, "the explicit push-to-main refspec vanished"
     assert "workspace --gc" in text, "the tick no longer reaps dead worktrees (workspace --gc)"
+
+
+def test_the_gc_report_split_the_skill_teaches_is_the_one_the_code_produces():
+    """VMCP-68: `--gc` reports its refusals in TWO lists — `kept` ("a human should look") and
+    `expected` ("routine, no action") — and the rulebook is what tells the pump which one to read.
+    That makes the list name and every `code` it cites part of the same auto-propagating contract as
+    the signal keys above: rename or re-value one in workspace_cmd.py and every agent keeps reading
+    a list, or matching a code, that no longer exists — silently, since a missing key just reads as
+    "nothing to look at".
+
+    Anchored on the CONSTANTS rather than on literals repeated here, so a changed VALUE fails until
+    the rulebook is updated with it. `expected` is anchored inside gc_workspaces' own source, not
+    the module's: the module-level word appears in comments and helper names, so a bare
+    module-wide substring would stay green through the very rename it claims to catch."""
+    text = _skill_text()
+    gc_src = inspect.getsource(workspace_cmd.gc_workspaces)
+    assert '"expected": expected' in gc_src, \
+        "SKILL.md tells the pump to read `expected` but gc_workspaces stopped returning that list"
+    assert "`expected`" in text, "SKILL.md no longer names the `expected` list --gc returns"
+    for code in (
+        workspace_cmd.CODE_DIRTY,             # kept, or expected while the card is parked
+        workspace_cmd.CODE_UNPUSHED,          # the Your Call state that made `kept` never-empty
+        workspace_cmd.CODE_UNREACHABLE_HEAD,  # the review-notes state that made it never-empty
+        workspace_cmd.CODE_HALF_CREATED,      # never expected: only a human can clear it
+        workspace_cmd.CODE_SELF_TREE,
+        workspace_cmd.CODE_RELEASE_ERROR,
+        workspace_cmd.CODE_NO_WORKTREE,       # cited by the --release recipe, same JSON line
+    ):
+        assert code in text, f"refusal code {code!r} is no longer explained in SKILL.md"
 
 
 def test_empty_queue_wakeup_interval_is_pinned():

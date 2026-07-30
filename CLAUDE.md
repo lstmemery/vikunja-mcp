@@ -127,8 +127,12 @@ docker rm -f vikunja-test
   release / gc agree on paths and config even when invoked from INSIDE a linked tree — the
   normal place for a per-task agent, and where the gitignored `.vikunja-mcp.env` does not
   exist. Safety invariant taken from hgdev-acp's reaper: push OK → remove, push FAIL → KEEP
-  (dirty, unpushed, or reachable-from-no-ref ⇒ reported in `kept`, never destroyed).
-  Housekeeping is never how an agent's work disappears.
+  (dirty, unpushed, or reachable-from-no-ref ⇒ reported, never destroyed).
+  Housekeeping is never how an agent's work disappears. Every refusal carries a machine-readable
+  `code`, and `--gc` GRADES them into two lists (`_keep_is_expected`): `kept` = a human should
+  look, `expected` = the two routine states that used to keep `kept` permanently non-empty — a
+  parked Your Call card's unsaved work (hence `Workflow.parked_task_ids`, off the same board
+  fetch) and a review tree's in-tree commit. An unknown code lands in `kept`: noisy beats quiet.
 - `src/vikunja_mcp/skills/tracker/SKILL.md` — process rules for agents
   (queue discipline, orchestrator-dispatches-subagents, report format,
   independent bug review, and — when `wip.limit > 1` — the parallel drain:
