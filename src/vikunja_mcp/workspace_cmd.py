@@ -20,6 +20,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -76,6 +77,42 @@ _GIT_NET_TIMEOUT = 120.0
 # on the lock's PRESENCE (any file-content heuristic would pass in phase two) and a message that
 # does not promise which phase the reader is looking at.
 _LOCK_INITIALIZING = "initializing"
+
+# THE GRACE WINDOW (VMCP-71). `--gc` runs at tick start from the MAIN checkout, and a build tree is
+# alive only while its task sits in Design/Build assigned to me — so the tree reads DEAD the instant
+# its agent calls `advance(to='review')`, while that agent is still standing in it and has not yet
+# called `--release`. Nothing else catches that overlap: the self-guard in gc_workspaces only covers
+# a `--gc` invoked from INSIDE the tree, and `git push origin HEAD:main` moves the LOCAL
+# `origin/main` ref, so the unpushed guard passes and the tree is removed with its branch. Under a
+# parallel drain the overlap is the NORM — background agents outlive the orchestrator's turn — and
+# the review side has the mirror case: `review_task(verdict='needs_work')` moves the card Review->
+# Build, so a reviewer's tree dies the moment it files that verdict. Nothing is DESTROYED (only
+# clean, fully-pushed trees are removed, and that work is already on main); the cost is a working
+# directory vanishing under a running turn, which surfaces as confusing tool errors while an agent
+# composes its report.
+#
+# WHY A CLOCK AND NOT A FACT. The semantically exact signal would be a held flock, and an LLM
+# sub-agent holds no process across tool calls, so there is nothing to hold it. REJECTED (recorded
+# so it is not re-proposed): treating a build tree as alive while its card sits in Review — a card
+# waits in Review until a HUMAN moves it to Done, which would suspend the reaper indefinitely and
+# defeat the module's purpose.
+#
+# WHY 30 MINUTES — derived from the window it must cover, not picked. That window is (last
+# filesystem write inside the tree) -> (`--release`). By SKILL.md's own integration recipe the last
+# write is the rebase / re-run of the done criteria just before `git push origin HEAD:main`; after
+# it come the push, `git rev-parse HEAD`, the model turn that composes and calls
+# `advance(to='review')` with the full work report (the largest single term: a long report with
+# extended thinking, possibly a harness-retried API error), and the model turn that calls
+# `--release`. Three to four LLM tool-call turns: 1-3 min typical, ~10-15 min pathological. 30 min is
+# ~2x that pathological estimate and ~3 ticks of a `/loop 10m`. Rounded UP on purpose, because the
+# costs are asymmetric: a dead tree lingering extra sweeps costs one directory on disk for at most
+# this window plus a tick, blocks nothing (tree names are per task+role and `_find` reuses an
+# existing one) and cannot delay a CRASHED agent's tree (that task is still in Design/Build, i.e.
+# still alive, so this window never sees it) — while a window too short reintroduces the race
+# itself. Deliberately a constant and not a config key: it is a bound on agent latency, not a
+# per-repo preference, and SKILL.md keeps telling agents not to rely on their tree surviving
+# `advance` at all — this is a backstop, not a promise.
+_REAP_GRACE_SECONDS = 30 * 60
 
 
 class WorkspaceError(Exception):
@@ -378,6 +415,56 @@ def _ensure_locked(root: Path, task_id: int, role: str, at: str | None) -> dict:
     }
 
 
+def _last_activity(wt_path: Path) -> float | None:
+    """Newest mtime of the two footprints a WORKING agent leaves in a worktree — the input to the
+    grace window (`_REAP_GRACE_SECONDS`). None when NEITHER can be read, which the caller must
+    treat as "no opinion" and fall through to the ordinary guards: a directory that is already
+    gone has nobody standing in it, and a silent skip that can never expire would leak a tree
+    with no report at all.
+
+      * the worktree DIRECTORY — entries created or removed at its top level (a new file, the
+        `.pytest_cache` a verification run drops) and `git worktree add` itself, so a
+        just-created tree is young by construction. Nothing gc does touches it.
+      * its INDEX — every `git add`/`commit`/`rebase`, which is the footprint that matters here:
+        a task cannot reach Review without a commit, so this is what is fresh at the moment the
+        tree starts reading dead. Asked for BY NAME (`rev-parse --git-path index`) rather than
+        assembled from the basename: git derives `.git/worktrees/<n>` from the directory name and
+        disambiguates collisions itself, so that mapping is git's to know, not ours to guess.
+        MEASURED: it may not EXIST — a half-created tree (`locked initializing`) is killed before
+        git writes one, which is also why `git status` there reports every tracked file as a staged
+        deletion — so each marker is stat'ed independently and a missing one simply does not vote.
+
+    MEASURED on git 2.50.1, and load-bearing when reading the caller: `git status --porcelain`
+    REWRITES the index every single time, even in a clean tree — so gc's own inspection bumps this
+    marker. That can only make a tree look YOUNGER, i.e. keep it, and a genuinely reapable tree is
+    REMOVED by the same sweep that inspects it; so the taint can only re-delay a tree some guard is
+    already keeping (dirty, unpushed, half-created), whose `kept` line then reports about once per
+    grace window instead of every tick. Quieter, never a lost verdict.
+
+    COST, since the sweep holds the repo-wide flock throughout: two stats and one local `rev-parse`
+    per DEAD tree — live trees short-circuit before this is ever called — against a board read the
+    same lock already covers.
+    """
+    candidates = [wt_path]
+    try:
+        index = Path(_git("rev-parse", "--git-path", "index", cwd=wt_path))
+        candidates.append(index if index.is_absolute() else wt_path / index)
+    except (WorkspaceError, OSError):
+        # OSError as well as WorkspaceError: with cwd pointing at a directory that no longer
+        # exists, subprocess.run raises a bare FileNotFoundError that `_git` cannot convert (it
+        # only ever inspects `returncode`). Such an entry IS still listed — git refuses to prune a
+        # LOCKED one — so this is reachable, and the directory mtime below fails the same way.
+        pass
+    newest: float | None = None
+    for candidate in candidates:
+        try:
+            mtime = candidate.stat().st_mtime
+        except OSError:
+            continue
+        newest = mtime if newest is None else max(newest, mtime)
+    return newest
+
+
 def _release_locked(root: Path, task_id: int, role: str) -> dict:
     _check_role(role)
     _git("worktree", "prune", cwd=root)
@@ -545,6 +632,13 @@ def gc_workspaces(cwd: Path | None = None, workflow=None) -> dict:
     mainline: --gc runs every tick from inside the agent's own tree) is just another live tree
     and produces no entry in either list; only a self-tree that is ALSO dead reaches this
     guard and gets refused-and-reported, which is the one case a human actually needs to see.
+
+    VMCP-71: the self-guard above covers only a --gc invoked from INSIDE the tree, and the pump
+    invokes it from the MAIN checkout — so a dead tree that was TOUCHED moments ago is skipped
+    too, silently and in neither list, and reaped on a later sweep (`_REAP_GRACE_SECONDS`,
+    `_last_activity`). That is the same overlap seen from the other side: a task leaves Build at
+    `advance(to='review')` and a card leaves Review at a `needs_work` verdict, both while the
+    agent that did it is still standing in the tree.
     """
     here = repo_root(cwd).resolve()
     root = _main_worktree(here)
@@ -602,6 +696,30 @@ def gc_workspaces(cwd: Path | None = None, workflow=None) -> dict:
                     "path": str(wt["path"]),
                     "reason": "gc was invoked from inside this worktree — refusing to remove it",
                 })
+                continue
+            last = _last_activity(wt["path"])
+            if last is not None and 0 <= time.time() - last < _REAP_GRACE_SECONDS:
+                # VMCP-71's grace window: this tree is dead but was touched moments ago, so its
+                # agent may still be standing in it between `advance(to='review')` and
+                # `--release`. Defer to a later sweep — the reap is postponed, never cancelled.
+                #
+                # SILENTLY, in NEITHER list, deliberately: `kept` means "a human should look", and
+                # a tree that is merely YOUNG is not that. A previous round already had to fix
+                # `kept` becoming never-empty; the pump's every tick would otherwise carry an
+                # entry for every tree that finished in the last half hour.
+                #
+                # AFTER the self-guard above, also deliberately: "gc was invoked from inside this
+                # worktree" is the stronger and more specific statement about the same tree (that
+                # one KNOWS a process is there, this one only suspects it), and being young must
+                # not silence a report a human can act on. Pinned by
+                # test_gc_from_inside_a_dead_tree_completes_the_whole_sweep, whose self-tree is
+                # left young precisely so this ordering cannot be flipped unnoticed.
+                #
+                # `0 <=` bounds the window BELOW as well as above: an mtime in the FUTURE (clock
+                # skew, a restored backup, an unpacked archive) would otherwise read as young on
+                # every sweep forever, and this skip is silent — the one combination that leaks a
+                # tree with nothing to notice. Out-of-window in either direction falls through to
+                # the release guards, which still refuse to destroy anything that holds work.
                 continue
             try:
                 result = _release_locked(root, task_id, role)

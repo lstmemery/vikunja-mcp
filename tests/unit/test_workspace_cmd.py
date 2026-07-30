@@ -317,9 +317,44 @@ def tracker():
     return api, Workflow(api, project_id=3)
 
 
+def _grace_markers(tree: Path) -> list[Path]:
+    """The mtimes VMCP-71's grace window reads, derived the way production derives them (git owns
+    the `.git/worktrees/<n>` naming, so ask it rather than assemble the path)."""
+    index = Path(_git(tree, "rev-parse", "--git-path", "index"))
+    return [tree, index if index.is_absolute() else tree / index]
+
+
+def _quiesce(tree: Path) -> None:
+    """Age every marker so a DEAD tree reads as "gone quiet" and is eligible for the reaper NOW.
+
+    VMCP-71 gave `--gc` a grace window: a dead tree touched within `_REAP_GRACE_SECONDS` is
+    skipped, silently, so its agent cannot have its cwd removed between `advance(to='review')`
+    and `--release`. Every test below that asserts a REAP (or a `kept` line, which is also a
+    verdict only reached past the window) works on a tree created milliseconds earlier, so it has
+    to say out loud that the tree has gone quiet. Call this AFTER the last git call in the tree —
+    a commit or a `git status` rewrites the index and un-quiesces it.
+    """
+    old = time.time() - workspace_cmd._REAP_GRACE_SECONDS - 60
+    for target in _grace_markers(tree):
+        if target.exists():
+            # MEASURED: a half-created tree (`locked initializing`) has no index FILE at all — the
+            # kill lands before git writes one, which is also why `git status` there reports every
+            # tracked file as a staged deletion. Production stats each marker independently for
+            # exactly this reason; the helper must not assume both exist either.
+            os.utime(target, (old, old))
+    # Self-check against PRODUCTION's own reader, so that a helper which stops covering a marker
+    # fails here, legibly, instead of turning every reap assertion below into a silent skip.
+    quiet_for = time.time() - workspace_cmd._last_activity(tree)
+    assert quiet_for >= workspace_cmd._REAP_GRACE_SECONDS, (
+        f"{tree} still reads as active ({quiet_for:.0f}s) — _grace_markers is missing a marker "
+        f"that _last_activity looks at"
+    )
+
+
 def test_gc_reaps_a_tree_whose_task_is_no_longer_active(repo, tracker):
     api, wf = tracker
     path = Path(ensure_workspace(42, cwd=repo)["path"])          # nothing on the board -> dead
+    _quiesce(path)
     res = gc_workspaces(cwd=repo, workflow=wf)
     assert [r["task_id"] for r in res["released"]] == [42]
     assert not path.exists()
@@ -353,6 +388,7 @@ def test_gc_never_reaps_unpushed_work_and_reports_it(repo, tracker):
     (path / "feature.txt").write_text("real work\n")
     _git(path, "add", "feature.txt")
     _git(path, "commit", "-m", "crashed mid-task")
+    _quiesce(path)                                    # after the commit: it rewrites the index
     res = gc_workspaces(cwd=repo, workflow=wf)
     assert res["released"] == []
     assert [k["task_id"] for k in res["kept"]] == [42]
@@ -383,6 +419,7 @@ def test_gc_from_inside_a_linked_worktree_still_reaps(repo, tracker):
     wf.claim(task["id"])
     live_path = Path(ensure_workspace(task["id"], cwd=repo)["path"])
     dead_path = Path(ensure_workspace(42, cwd=repo)["path"])      # nothing on the board -> dead
+    _quiesce(dead_path)
 
     res = gc_workspaces(cwd=live_path, workflow=wf)               # invoked FROM the live tree
 
@@ -413,10 +450,17 @@ def test_gc_from_inside_a_dead_tree_completes_the_whole_sweep(repo, tracker):
     dead — an agent calls advance(to='review') and then runs its next --gc tick before it
     gets around to releasing itself, or just never does. Must not remove the tree gc is
     itself standing in (that is the process's shell cwd disappearing underneath it, not
-    merely 'a red test'), and must not abort the sweep before reaping the OTHER dead tree."""
+    merely 'a red test'), and must not abort the sweep before reaping the OTHER dead tree.
+
+    VMCP-71: the self tree is left YOUNG on purpose, so this test also pins the guard ORDER — the
+    self-guard must run BEFORE the grace window. Flip them and a dead-and-young self tree is
+    skipped silently, `kept` comes back empty, and this goes red. That order is the deliberate
+    one: this guard KNOWS a process is standing in the tree, the window only suspects it, so the
+    report a human can act on must win."""
     api, wf = tracker
     self_path = Path(ensure_workspace(42, cwd=repo)["path"])     # dead, and cwd is INSIDE it
     other_path = Path(ensure_workspace(43, cwd=repo)["path"])    # also dead, different tree
+    _quiesce(other_path)
 
     res = gc_workspaces(cwd=self_path, workflow=wf)
 
@@ -457,6 +501,8 @@ def test_gc_isolates_a_release_failure_and_keeps_sweeping_the_rest(repo, tracker
     locked_path = Path(ensure_workspace(42, cwd=repo)["path"])   # dead, clean, pushed
     _git(repo, "worktree", "lock", str(locked_path))
     other_path = Path(ensure_workspace(43, cwd=repo)["path"])    # also dead
+    _quiesce(locked_path)
+    _quiesce(other_path)
 
     res = gc_workspaces(cwd=repo, workflow=wf)
 
@@ -588,6 +634,7 @@ def test_gc_reaps_a_review_tree_once_the_card_leaves_review(repo, tracker):
     task = api.add_task("reviewed and done", "Done")        # already past Review
     head = _git(repo, "rev-parse", "HEAD")
     path = Path(ensure_workspace(task["id"], role="review", at=head, cwd=repo)["path"])
+    _quiesce(path)
 
     res = gc_workspaces(cwd=repo, workflow=wf)
 
@@ -598,13 +645,19 @@ def test_gc_reaps_a_review_tree_once_the_card_leaves_review(repo, tracker):
 def test_gc_reaps_a_build_tree_once_its_task_reaches_review(repo, tracker):
     """Minor: the everyday build-side reap — the agent finished and advanced its OWN task to
     Review. The BUILD tree is now dead and must be reaped; it must not be kept just because
-    the task still exists somewhere on the board."""
+    the task still exists somewhere on the board.
+
+    VMCP-71 added the one qualifier: reaped once the tree has gone QUIET. Same board state,
+    without the `_quiesce`, is
+    test_gc_skips_a_dead_tree_whose_agent_may_still_be_standing_in_it below — the two are the
+    same case at two ages, and together they are the whole of the grace window."""
     api, wf = tracker
     task = api.add_task("moved to review", "Queue")
     wf.claim(task["id"])
     path = Path(ensure_workspace(task["id"], cwd=repo)["path"])
     wf.advance(task["id"], to="build", spec="approach")
     wf.advance(task["id"], to="review", worklog="done", evidence="abc1234")
+    _quiesce(path)
 
     res = gc_workspaces(cwd=repo, workflow=wf)
 
@@ -1014,6 +1067,8 @@ def test_gc_reports_a_half_created_tree_and_keeps_sweeping(repo, tracker, monkey
     api, wf = tracker
     half = _half_created_tree(repo, monkeypatch)
     other = Path(ensure_workspace(43, cwd=repo)["path"])          # dead, clean, pushed
+    _quiesce(half)          # the orphaned smudge child keeps writing — quiesce LAST, then sweep
+    _quiesce(other)
 
     res = gc_workspaces(cwd=repo, workflow=wf)
 
@@ -1048,3 +1103,113 @@ def test_a_repo_with_no_tracker_config_still_falls_back_silently(repo):
     """The other direction, and the reason the try/except exists at all: create and release need
     no tracker config whatsoever, so ConfigError alone must stay swallowed."""
     assert worktree_root(repo) == repo.parent / "work.worktrees"
+
+
+# --- VMCP-71 (519): a grace window, so a sweep cannot pull a tree out from under its own agent ---
+
+def _advanced_to_review(repo, api, wf):
+    """The exact race state: a claimed task whose agent has just called `advance(to='review')`.
+    Its build tree is now DEAD by liveness (alive = Design/Build assigned to me) and is clean and
+    fully pushed, so every release guard passes — the tree IS removable, and the only thing that
+    should stop the reaper is how recently the agent touched it. Returns (task_id, path)."""
+    task = api.add_task("just advanced to review", "Queue")
+    wf.claim(task["id"])
+    path = Path(ensure_workspace(task["id"], cwd=repo)["path"])
+    wf.advance(task["id"], to="build", spec="approach")
+    wf.advance(task["id"], to="review", worklog="done", evidence="abc1234")
+    return task["id"], path
+
+
+def test_gc_skips_a_dead_tree_whose_agent_may_still_be_standing_in_it(repo, tracker):
+    """THE race, mechanically closed. `--gc` runs at tick start from the MAIN checkout, so the
+    self-guard cannot help, and `git push origin HEAD:main` moved the local `origin/main`, so the
+    unpushed guard cannot either: before the grace window this tree was removed WITH its branch
+    while its agent stood in it, on its way from `advance(to='review')` to `--release`.
+
+    Asserted absent from BOTH lists, not merely surviving: `kept` means "a human should look", and
+    a tree that is only YOUNG is not that. And swept alongside a quiet dead sibling that IS
+    reaped, because the skip must be per-tree — deferring one tree may not cost the sweep its
+    other verdicts. (test_gc_reaps_a_build_tree_once_its_task_reaches_review is this same tree
+    once it goes quiet.)"""
+    api, wf = tracker
+    task_id, young = _advanced_to_review(repo, api, wf)      # touched milliseconds ago
+    quiet = Path(ensure_workspace(44, cwd=repo)["path"])     # dead too, but long since idle
+    _quiesce(quiet)
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert [r["task_id"] for r in res["released"]] == [44] and not quiet.exists()
+    assert res["kept"] == []                                     # young is NOT "look at this"
+    assert young.is_dir() and (young / "README.md").exists()
+    assert _git(repo, "branch", "--list", f"task/{task_id}")     # the branch survives too
+
+
+def test_gc_grace_window_sees_a_commit_in_an_old_tree_through_the_index(repo, tracker):
+    """The realistic shape of the race, and the reason the INDEX is one of the two markers: a
+    tree the agent has worked in for an hour has a stale DIRECTORY mtime (nothing is created at
+    its top level while files are merely edited), and the only fresh footprint at the moment the
+    task leaves Build is the commit it left in the index.
+
+    Constructed, not simulated: commit inside the tree and push it, so the tree stays clean and
+    fully pushed (i.e. genuinely reapable — a skip is distinguishable from a guard's keep), then
+    age ONLY the directory. Drop the index from `_last_activity` and this goes red."""
+    api, wf = tracker
+    _task_id, path = _advanced_to_review(repo, api, wf)
+    (path / "feature.txt").write_text("the work\n")
+    _git(path, "add", "feature.txt")
+    _git(path, "commit", "-m", "the task's one commit")
+    _git(path, "push", "origin", "HEAD:main")                    # local origin/main moves with it
+    old = time.time() - workspace_cmd._REAP_GRACE_SECONDS - 60
+    os.utime(path, (old, old))                                   # an hour-old working directory
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert res["released"] == [] and res["kept"] == []
+    assert path.is_dir() and (path / "feature.txt").exists()
+
+
+def test_gc_grace_window_sees_top_level_churn_through_the_directory(repo, tracker):
+    """The other marker, pinned on its own: an agent whose last GIT call is old but that is
+    demonstrably still working — a verification run dropping an ignored artifact at the tree root
+    (`.pytest_cache` and friends) bumps the directory while touching no index.
+
+    Kept genuinely clean via the common `info/exclude`, so `git status --porcelain` stays empty
+    and the tree really is reapable. Drop the worktree directory from `_last_activity` and this
+    goes red — that half is also the only signal left when the index cannot be resolved at all."""
+    api, wf = tracker
+    _task_id, path = _advanced_to_review(repo, api, wf)
+    common = Path(_git(repo, "rev-parse", "--git-common-dir"))
+    if not common.is_absolute():
+        common = (repo / common).resolve()
+    (common / "info").mkdir(exist_ok=True)
+    (common / "info" / "exclude").write_text(".pytest_cache/\n")
+    tree_dir, index = _grace_markers(path)
+    old = time.time() - workspace_cmd._REAP_GRACE_SECONDS - 60
+    os.utime(index, (old, old))
+    (path / ".pytest_cache").mkdir()                    # ignored: the tree stays CLEAN...
+    assert _git(path, "status", "--porcelain") == ""
+    os.utime(index, (old, old))                         # ...but that status just rewrote the index
+    assert tree_dir.stat().st_mtime > index.stat().st_mtime      # the state this test is about
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert res["released"] == [] and res["kept"] == []
+    assert path.is_dir()
+
+
+def test_gc_does_not_skip_forever_on_an_mtime_in_the_future(repo, tracker):
+    """The window is bounded BELOW as well as above. A timestamp in the future — clock skew, a
+    restored backup, an unpacked archive — would otherwise read as "younger than N" on every
+    sweep for as long as it lasts, and this skip is SILENT: the one combination that leaks a tree
+    with nothing anywhere to notice. Anything outside the window falls through to the ordinary
+    release guards, which still refuse to destroy work. Drop the `0 <=` and this goes red."""
+    api, wf = tracker
+    path = Path(ensure_workspace(42, cwd=repo)["path"])           # dead: nothing on the board
+    ahead = time.time() + 86_400
+    for marker in _grace_markers(path):
+        os.utime(marker, (ahead, ahead))
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert [r["task_id"] for r in res["released"]] == [42]
+    assert not path.exists()
