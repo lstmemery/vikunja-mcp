@@ -3,6 +3,7 @@
 A fake would share this module's model of git and prove nothing about the one behaviour that
 matters: that housekeeping can never destroy an agent's unpushed work.
 """
+import fcntl
 import json
 import subprocess
 from pathlib import Path
@@ -259,12 +260,16 @@ def test_release_workspace_rejects_an_unknown_role(repo):
 # --- review round 1, Finding 3: the CLI entry point + dispatch are a contract, not a demo ---
 
 def test_run_workspace_release_of_missing_tree_is_exit_0(repo, monkeypatch, capsys):
-    """A refusal is a NEGATIVE VERDICT, not a CLI failure: the command RAN, exit 0."""
+    """A refusal is a NEGATIVE VERDICT, not a CLI failure: the command RAN, exit 0.
+
+    Task 4 review (Minor): "path" now names WHERE a worktree for this task would have been —
+    even a "nothing to release" verdict must be actionable, not just a bare task id."""
     monkeypatch.chdir(repo)
     code = run_workspace(["--release", "999"])
     assert code == 0
     out = json.loads(capsys.readouterr().out.strip())
     assert out == {"released": False, "task_id": 999, "role": "build",
+                   "path": str(repo.parent / "work.worktrees" / "task-999"),
                    "reason": "no worktree for this task"}
 
 
@@ -380,3 +385,197 @@ def test_gc_from_inside_a_linked_worktree_still_reaps(repo, tracker):
     assert [r["task_id"] for r in res["released"]] == [42]
     assert not dead_path.exists()
     assert live_path.exists()                                     # the live tree survives too
+
+
+# --- Task 4 review, round 1: Criticals ---
+
+def test_release_from_inside_its_own_tree_succeeds_and_leaves_no_dangling_branch(repo):
+    """Critical 1 repro: an agent's own 'I'm done, release me' call runs with cwd INSIDE the
+    tree being released — SKILL.md's normal shape, not a corner case. Before the fix this
+    raised a bare FileNotFoundError: `git worktree remove` SUCCEEDS even when its own
+    subprocess cwd is the directory being removed (verified against real git), but the very
+    next call, `git branch -D ... cwd=root`, needs `root` to still EXIST — and `root` was the
+    just-deleted tree. The tree vanished (the real work had actually completed) while the CLI
+    reported exit 1 and the branch leaked forever."""
+    path = Path(ensure_workspace(42, cwd=repo)["path"])
+    res = release_workspace(42, cwd=path)                # cwd IS the tree being released
+    assert res["released"] is True
+    assert not path.exists()
+    assert "task/42" not in _git(repo, "branch", "--list", "task/42")
+
+
+def test_gc_from_inside_a_dead_tree_completes_the_whole_sweep(repo, tracker):
+    """Critical 2 repro: --gc invoked from inside a worktree whose OWN task has also gone
+    dead — an agent calls advance(to='review') and then runs its next --gc tick before it
+    gets around to releasing itself, or just never does. Must not remove the tree gc is
+    itself standing in (that is the process's shell cwd disappearing underneath it, not
+    merely 'a red test'), and must not abort the sweep before reaping the OTHER dead tree."""
+    api, wf = tracker
+    self_path = Path(ensure_workspace(42, cwd=repo)["path"])     # dead, and cwd is INSIDE it
+    other_path = Path(ensure_workspace(43, cwd=repo)["path"])    # also dead, different tree
+
+    res = gc_workspaces(cwd=self_path, workflow=wf)
+
+    assert [r["task_id"] for r in res["released"]] == [43]
+    assert not other_path.exists()
+    assert [k["task_id"] for k in res["kept"]] == [42]
+    assert "invoked from inside" in res["kept"][0]["reason"]
+    assert self_path.exists()
+
+
+# --- Task 4 review, round 1: Importants ---
+
+def test_gc_isolates_a_release_failure_and_keeps_sweeping_the_rest(repo, tracker):
+    """Important 3: one bad tree must not abort the whole sweep and discard every verdict
+    already decided for the OTHERS. `git worktree lock` gives a REAL, non-contrived
+    WorkspaceError (git refuses to remove a locked tree without --force) on an otherwise
+    dead, clean, pushed tree — not a mocked failure standing in for an untested branch."""
+    api, wf = tracker
+    locked_path = Path(ensure_workspace(42, cwd=repo)["path"])   # dead, clean, pushed
+    _git(repo, "worktree", "lock", str(locked_path))
+    other_path = Path(ensure_workspace(43, cwd=repo)["path"])    # also dead
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert [r["task_id"] for r in res["released"]] == [43]
+    assert not other_path.exists()
+    assert [k["task_id"] for k in res["kept"]] == [42]
+    assert "WorkspaceError" in res["kept"][0]["reason"]
+    assert locked_path.exists()
+
+
+def test_gc_reads_liveness_under_the_lock(repo, tracker):
+    """Important 5: the liveness READ must happen INSIDE _repo_lock, not before it, or a task
+    claimed (and its tree created — that call takes the SAME lock) between the read and the
+    reap races the sweep: the fresh tree is clean and pushed, every guard passes, and it is
+    destroyed under a just-dispatched agent. Proven the other way round: a probing Workflow
+    tries a NON-BLOCKING second flock on gc's own lock file from inside liveness_board() — if
+    the sweep already holds the lock at that point, the probe must fail with
+    BlockingIOError (flock is per-open-file-description: even the SAME process contends with
+    itself on a second, separately-opened fd)."""
+    api, wf = tracker
+    common = Path(_git(repo, "rev-parse", "--git-common-dir"))
+    if not common.is_absolute():
+        common = (repo / common).resolve()
+    lock_path = common / "vikunja-mcp-worktree.lock"
+
+    class ProbingWorkflow:
+        def liveness_board(self):
+            with open(lock_path, "w") as fh:
+                with pytest.raises(BlockingIOError):
+                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return wf.liveness_board()
+
+        def active_task_ids(self, board=None):
+            return wf.active_task_ids(board=board)
+
+        def review_task_ids(self, board=None):
+            return wf.review_task_ids(board=board)
+
+    gc_workspaces(cwd=repo, workflow=ProbingWorkflow())
+
+
+def test_run_workspace_gc_dispatches_to_gc_workspaces(monkeypatch, capsys):
+    """Important 6: Task 3 established run_workspace's dispatch as a TESTED contract; --gc
+    must not be the one branch that only ever ran by hand."""
+    monkeypatch.setattr(
+        "vikunja_mcp.workspace_cmd.gc_workspaces", lambda: {"released": [], "kept": []}
+    )
+    code = run_workspace(["--gc"])
+    assert code == 0
+    assert json.loads(capsys.readouterr().out.strip()) == {"released": [], "kept": []}
+
+
+def test_run_workspace_gc_combined_with_a_task_id_is_refused(monkeypatch, capsys):
+    """Important 6: argparse alone lets `42 --gc` through and --gc silently wins, ignoring
+    the task id the caller plainly meant to act on — that must be an explicit error."""
+    calls = []
+    monkeypatch.setattr("vikunja_mcp.workspace_cmd.gc_workspaces", lambda: calls.append(1))
+    code = run_workspace(["42", "--gc"])
+    assert code == 1
+    assert not calls
+    err = json.loads(capsys.readouterr().out.strip())
+    assert "cannot be combined" in err["error"]
+
+
+def test_run_workspace_gc_combined_with_release_is_refused(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr("vikunja_mcp.workspace_cmd.gc_workspaces", lambda: calls.append(1))
+    code = run_workspace(["--release", "9", "--gc"])
+    assert code == 1
+    assert not calls
+    err = json.loads(capsys.readouterr().out.strip())
+    assert "cannot be combined" in err["error"]
+
+
+def test_build_workflow_resolves_config_from_the_given_root(repo, monkeypatch):
+    """Important 6 / Minor: gc_workspaces's only production path (workflow=None) must resolve
+    config FROM the main worktree it was given, not the process's ambient cwd —
+    `.vikunja-mcp.env` (the token) lives beside `.vikunja-mcp.toml` in the repo, found by
+    config.py's own walk-up from `cwd`; a linked worktree has neither file."""
+    from vikunja_mcp import config as config_mod
+    from vikunja_mcp.workspace_cmd import _build_workflow
+
+    seen = {}
+
+    def fake_load_config(cwd=None, environ=None):
+        seen["cwd"] = cwd
+        return config_mod.Config(url="http://example.invalid", token="t", project_id=7)
+
+    monkeypatch.setattr(config_mod, "load_config", fake_load_config)
+    wf = _build_workflow(repo)
+    assert seen["cwd"] == repo
+    assert wf.project_id == 7
+
+
+# --- Task 4 review, round 1: Minors ---
+
+def test_gc_ignores_a_stray_dir_under_the_root_not_named_like_a_task(repo, tracker):
+    """Minor: a directory that lives INSIDE the workspace root (passes the parent check) but
+    whose name doesn't match task-<id>/review-<id> must be SKIPPED, not crash the sweep.
+    (test_gc_ignores_directories_that_are_not_task_worktrees above places its stray OUTSIDE
+    the root, so it never reaches `_parse_workspace_name` at all — this is the sibling case
+    that actually exercises the `parsed is None` branch.)"""
+    api, wf = tracker
+    ensure_workspace(1, cwd=repo)                          # anything, just to create wt_root
+    wt_root = worktree_root(repo)
+    hotfix = wt_root / "hotfix"
+    _git(repo, "worktree", "add", str(hotfix), "-b", "hotfix-branch")
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert hotfix.exists()
+    assert not any(k.get("path") == str(hotfix) for k in res["kept"])
+    assert not any(r.get("path") == str(hotfix) for r in res["released"])
+
+
+def test_gc_reaps_a_review_tree_once_the_card_leaves_review(repo, tracker):
+    """Minor: the everyday review-side reap — nothing crashed, review just finished and the
+    card moved on. test_gc_keeps_a_review_tree_while_the_card_is_in_review above only proves
+    the KEEP side; this proves the matching REAP side actually fires."""
+    api, wf = tracker
+    task = api.add_task("reviewed and done", "Done")        # already past Review
+    head = _git(repo, "rev-parse", "HEAD")
+    path = Path(ensure_workspace(task["id"], role="review", at=head, cwd=repo)["path"])
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert [r["task_id"] for r in res["released"]] == [task["id"]]
+    assert not path.exists()
+
+
+def test_gc_reaps_a_build_tree_once_its_task_reaches_review(repo, tracker):
+    """Minor: the everyday build-side reap — the agent finished and advanced its OWN task to
+    Review. The BUILD tree is now dead and must be reaped; it must not be kept just because
+    the task still exists somewhere on the board."""
+    api, wf = tracker
+    task = api.add_task("moved to review", "Queue")
+    wf.claim(task["id"])
+    path = Path(ensure_workspace(task["id"], cwd=repo)["path"])
+    wf.advance(task["id"], to="build", spec="approach")
+    wf.advance(task["id"], to="review", worklog="done", evidence="abc1234")
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert [r["task_id"] for r in res["released"]] == [task["id"]]
+    assert not path.exists()

@@ -180,3 +180,19 @@ def test_review_task_ids_includes_cards_i_do_not_own():
     wf.advance(mine["id"], to="review", worklog="done", evidence="abc1234")
     theirs = api.add_task("theirs", "Review")
     assert sorted(wf.review_task_ids()) == sorted([mine["id"], theirs["id"]])
+
+
+def test_a_shared_liveness_board_serves_both_accessors_with_one_fetch():
+    """Review finding (Important 4): gc_workspaces calls both accessors every tick — on
+    FakeAPI's own view_tasks_calls counter, prove one liveness_board() fetch is enough for
+    both, matching the #43 discipline next_task already follows for its own board reads."""
+    api, wf = _env()
+    first = _hold(api, wf, "designing")
+    api.add_task("under review", "Review")
+    board = wf.liveness_board()
+    calls_before = api.view_tasks_calls
+    active = wf.active_task_ids(board=board)
+    reviewing = wf.review_task_ids(board=board)
+    assert api.view_tasks_calls == calls_before          # NO extra fetch when a board is passed
+    assert active == [first["id"]]
+    assert len(reviewing) == 1

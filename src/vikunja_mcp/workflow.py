@@ -219,22 +219,36 @@ class Workflow:
             if my_id in self._assignee_ids(t)
         ]
 
-    def active_task_ids(self) -> list[int]:
+    def liveness_board(self) -> list[dict]:
+        """The one board read that covers BOTH liveness sets `workspace --gc` needs.
+
+        Review finding (Important 4): active_task_ids/review_task_ids used to each call _board
+        separately — two exhaustive-adjacent fetches per gc sweep, on a path that runs on
+        EVERY orchestrator tick, more often than next_task's own #43-fixed single fetch. Pass
+        this board's result into both accessors (their `board` param) so one call to
+        view_tasks serves the whole sweep, same discipline as next_task's raw/resolve_full."""
+        return self._board(require_titles=frozenset({*ACTIVE_STAGES, "Review"}))
+
+    def active_task_ids(self, board: list[dict] | None = None) -> list[int]:
         """Ids of tasks in an ACTIVE stage (Design/Build) assigned to me — the live BUILD set.
 
         Public on purpose: `vikunja-mcp workspace --gc` needs it to tell a crashed agent's
         orphaned worktree from a live one, and that boundary deserves a real interface rather
-        than a CLI reaching into _my_active_tasks."""
-        return [t["id"] for _stage, t in self._my_active_tasks()]
+        than a CLI reaching into _my_active_tasks. Pass a pre-fetched board (`liveness_board()`)
+        to share one fetch with `review_task_ids`; omit it to fetch on its own."""
+        raw = self.liveness_board() if board is None else board
+        return [t["id"] for _stage, t in self._my_active_tasks(raw)]
 
-    def review_task_ids(self) -> list[int]:
+    def review_task_ids(self, board: list[dict] | None = None) -> list[int]:
         """Ids of every task sitting in Review — the live REVIEW set.
 
         Deliberately NOT filtered by assignee: a reviewer works on someone ELSE's card, so
-        ownership would reap the tree out from under a running review."""
-        board = self._board(require_titles=frozenset({"Review"}))
+        ownership would reap the tree out from under a running review. Pass a pre-fetched
+        board (`liveness_board()`) to share one fetch with `active_task_ids`; omit it to fetch
+        on its own."""
+        raw = self.liveness_board() if board is None else board
         return [
-            t["id"] for bucket in board if bucket["title"] == "Review"
+            t["id"] for bucket in raw if bucket["title"] == "Review"
             for t in (bucket.get("tasks") or [])
         ]
 

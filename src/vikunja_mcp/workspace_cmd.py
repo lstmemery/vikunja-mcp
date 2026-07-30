@@ -216,8 +216,12 @@ def _release_locked(root: Path, task_id: int, role: str) -> dict:
     _git("worktree", "prune", cwd=root)
     wt = _find(root, task_id, role)
     if wt is None:
+        # Review Minor: every OTHER refusal below carries "path" — a human reading `kept`
+        # needs a location to act on even when there is nothing to remove. The expected (but
+        # absent) path is still informative: it says WHERE a worktree for this task would be.
+        name = (BUILD_NAME if role == "build" else REVIEW_NAME).format(task_id=task_id)
         return {"released": False, "task_id": task_id, "role": role,
-                "reason": "no worktree for this task"}
+                "path": str(worktree_root(root) / name), "reason": "no worktree for this task"}
     path = wt["path"]
     dirty = _git("status", "--porcelain", cwd=path)
     if dirty:
@@ -265,13 +269,26 @@ def _release_locked(root: Path, task_id: int, role: str) -> dict:
 def ensure_workspace(
     task_id: int, role: str = "build", at: str | None = None, cwd: Path | None = None
 ) -> dict:
-    root = repo_root(cwd)
+    # Review Critical 1: canonicalise to the MAIN worktree HERE, once, so every `cwd=root` git
+    # call inside _ensure_locked/_release_locked runs against a directory that is never itself
+    # a tree being created/removed — see _main_worktree and release_workspace below for why.
+    root = _main_worktree(repo_root(cwd))
     with _repo_lock(root):
         return _ensure_locked(root, task_id, role, at)
 
 
 def release_workspace(task_id: int, role: str = "build", cwd: Path | None = None) -> dict:
-    root = repo_root(cwd)
+    # Review Critical 1: an agent's own "I'm done, release me" call runs with cwd INSIDE the
+    # very tree being released (the normal case per SKILL.md). Left uncanonicalised, `root`
+    # would equal the tree's own path, and `_release_locked`'s `git worktree remove` (which
+    # SUCCEEDS even when its subprocess cwd is the directory being removed — verified against
+    # real git) would be immediately followed by `git branch -D ... cwd=root`, whose Python
+    # subprocess.run(cwd=root) needs `root` to still EXIST — root having just been deleted
+    # raises a bare FileNotFoundError that `_git` cannot convert (it only inspects
+    # `returncode`), the branch leaks, and the CLI reports exit 1 for an operation that had
+    # actually already succeeded. Canonicalising to the MAIN worktree (which is never the tree
+    # being released) makes `root` a stable directory for the whole call.
+    root = _main_worktree(repo_root(cwd))
     with _repo_lock(root):
         return _release_locked(root, task_id, role)
 
@@ -283,12 +300,17 @@ def _parse_workspace_name(name: str) -> tuple[str, int] | None:
     return _ROLE_BY_PREFIX[match.group(1)], int(match.group(2))
 
 
-def _build_workflow():
+def _build_workflow(root: Path):
+    # Review Minor: `cwd=root` (the MAIN worktree — see gc_workspaces) is load-bearing, not
+    # decorative. `.vikunja-mcp.env` (the token) sits BESIDE `.vikunja-mcp.toml` in the repo,
+    # found by config.py's own walk-up from `cwd` — a linked worktree has neither file, so
+    # `load_config()` with no cwd would silently miss them whenever gc runs from inside one
+    # (the normal invocation site per SKILL.md), and fall through to env/user config or raise.
     from vikunja_mcp.api import VikunjaAPI
     from vikunja_mcp.config import load_config
     from vikunja_mcp.workflow import Workflow
 
-    cfg = load_config()
+    cfg = load_config(cwd=root)
     return Workflow(VikunjaAPI(cfg.url, cfg.token), cfg.project_id)
 
 
@@ -309,30 +331,65 @@ def gc_workspaces(cwd: Path | None = None, workflow=None) -> dict:
     agent's work silently destroyed while nobody is watching.
 
     `cwd` may be INSIDE a linked worktree (the normal place for a per-task agent to run this
-    from, per SKILL.md) — `root` below is whatever toplevel that resolves to, and every path
-    derivation from it (`worktree_root`) canonicalises to the MAIN worktree internally, so the
-    "is this one of ours" check below never disagrees with create/release about where trees
-    live regardless of where --gc itself was invoked.
+    from, per SKILL.md) — `here` below is exactly that tree's toplevel (or the main repo's, if
+    invoked from there), and `root` canonicalises it to the MAIN worktree so every path
+    derivation (`worktree_root`, `_build_workflow`'s config lookup) agrees with create/release
+    regardless of where --gc itself was invoked (review Critical 1's fix, applied here too).
+
+    Review Critical 2: `here` is ALSO never reaped, even if its own task reads as dead — a task
+    leaves Build the instant its agent calls `advance(to='review')`, and that agent is very
+    often still sitting in the tree afterwards (about to release it itself, or simply running
+    its next --gc tick before it gets there). Destroying the directory a live process is
+    standing in is not "a red test", it is that process's shell cwd vanishing underneath it —
+    worse than any of the guards below, which only ever refuse a DIFFERENT tree.
     """
-    root = repo_root(cwd)
-    wf = workflow if workflow is not None else _build_workflow()
-    alive = {"build": set(wf.active_task_ids()), "review": set(wf.review_task_ids())}
+    here = repo_root(cwd).resolve()
+    root = _main_worktree(here)
+    wf = workflow if workflow is not None else _build_workflow(root)
     wt_root = worktree_root(root)
 
     released, kept = [], []
     # ONE lock for the whole sweep: _repo_lock is not reentrant, so call the _locked core, never
     # the public release_workspace wrapper (that would deadlock on its own flock).
     with _repo_lock(root):
+        # Review Important 5: the liveness READ must happen INSIDE the lock. Taken before it,
+        # a task could be claimed and its tree created between the read and the reap (that
+        # `ensure_workspace` call serialises against the SWEEP via the same flock, but not
+        # against a liveness snapshot taken before the flock was even acquired) — the fresh
+        # tree is clean and pushed, so every guard below passes and it is destroyed out from
+        # under a just-dispatched agent. One board fetch serves both sets (Important 4).
+        board = wf.liveness_board()
+        alive = {"build": set(wf.active_task_ids(board=board)),
+                 "review": set(wf.review_task_ids(board=board))}
         for wt in list_worktrees(root):
             if wt["path"].parent != wt_root:
                 continue                       # not ours — never touch a hand-made worktree
             parsed = _parse_workspace_name(wt["path"].name)
             if parsed is None:
-                continue
+                continue                       # under our root but not task-<id>/review-<id>
             role, task_id = parsed
+            if wt["path"] == here:
+                # Critical 2's guard: never reap the tree gc itself is running from, alive or
+                # not — see the docstring above.
+                kept.append({
+                    "released": False, "task_id": task_id, "role": role,
+                    "path": str(wt["path"]),
+                    "reason": "gc was invoked from inside this worktree — refusing to remove it",
+                })
+                continue
             if task_id in alive[role]:
                 continue
-            result = _release_locked(root, task_id, role)
+            try:
+                result = _release_locked(root, task_id, role)
+            except Exception as e:  # noqa: BLE001 — Important 3: one bad tree (locked, a race,
+                # a permission error — anything _git surfaces as WorkspaceError, or worse) must
+                # never abort the sweep and discard every verdict already decided for the OTHER
+                # trees. Report it exactly like any other refusal and keep going.
+                kept.append({
+                    "released": False, "task_id": task_id, "role": role,
+                    "path": str(wt["path"]), "reason": f"{e.__class__.__name__}: {e}",
+                })
+                continue
             (released if result["released"] else kept).append(result)
     return {"released": released, "kept": kept}
 
@@ -348,6 +405,11 @@ def run_workspace(argv: list[str]) -> int:
     try:
         args = parser.parse_args(argv)
         if args.gc:
+            # Review Important 6: argparse alone allows `42 --gc` and `--release 9 --gc`
+            # through — an explicit refusal beats a --gc branch that silently wins and
+            # ignores the other argument the caller plainly meant to act on.
+            if args.task_id is not None or args.release is not None:
+                raise WorkspaceError("--gc cannot be combined with a task id or --release")
             result = gc_workspaces()
         elif args.release is not None:
             result = release_workspace(args.release, role=args.role)
