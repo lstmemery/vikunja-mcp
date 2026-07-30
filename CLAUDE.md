@@ -10,11 +10,12 @@ tracker — NOT a CRUD wrapper. The pipeline and its gates ARE the product:
 ```
 Backlog → Queue → Design → Build → Review → [human] → Done
                      ↕        ↕
-                  Your Call              (+ independent bug review in Review)
+                  Your Call         (+ independent review of EVERY task in Review)
 ```
 
-10 agent tools (`next_task`, `claim`, `get_task`, `comment`, `advance`,
-`call_human`, `return_task`, `decompose`, `file_task`, `review_task`); agents
+12 agent tools (`next_task`, `claim`, `get_task`, `comment`, `advance`,
+`call_human`, `return_task`, `decompose`, `file_task`, `review_task`,
+`attach_file`, `download_attachment`); agents
 can never move a task to Done — that transition is human-only by design. Gates are
 guardrails for agents; the real security boundary is the scoped API token.
 
@@ -22,7 +23,7 @@ guardrails for agents; the real security boundary is the scoped API token.
 
 ```bash
 uv sync                                   # env (Python 3.11+, uv)
-uv run pytest tests/unit -q               # 69 unit tests (FakeAPI, MockTransport)
+uv run pytest tests/unit -q               # 520 unit tests (FakeAPI, MockTransport)
 uv run ruff check .                       # lint (line-length 100)
 uv run vikunja-mcp --version              # smoke
 uv run vikunja-mcp claimable              # one JSON line: is there claimable work for this
@@ -63,17 +64,27 @@ docker rm -f vikunja-test
   read-modify-write; kanban view updates must always send
   `bucket_configuration_mode="manual"` + `position` + `title` + `view_kind`
   or the board loses its columns; board fetch paginates per bucket
-  (page size read from `/info`'s `max_items_per_page`, `_PAGE_SIZE_FALLBACK`
-  when unavailable, dedupe page overlap by bucket+task id, then GLOBALLY by
+  (page size read from `/info`'s `max_items_per_page`; when the server never says, the
+  size is UNKNOWN — **never guessed** — and the loop pages until no NEW task arrives in
+  the required buckets; dedupe page overlap by bucket+task id, then GLOBALLY by
   task id keeping the last-seen bucket so a task moved mid-pagination lands once).
+  There is deliberately no fallback constant: a guessed size (the old
+  `_PAGE_SIZE_FALLBACK` = 50) silently TRUNCATED the board on an instance whose real
+  limit was smaller, and a truncated board told `--gc` a live task was gone — so it
+  reaped a live worktree (tracker #543). "Unknown" must stay unknown.
 - `src/vikunja_mcp/workflow.py` — the product rules: stages, gates,
   assign-then-verify claim (with self-heal), review offering (verdict vs
   worklog timestamps), comment markers `[claim] [spec] [worklog] [нужен
   человек] [blocked] [decompose] [review] [attach]` plus mutually-exclusive verdict
-  labels `reviewed`/`review-failed` (push-review of bug fixes:
-  `advance(to='review')` nudges `review_needed` and resets `review-failed`).
+  labels `reviewed`/`review-failed` (push-review of EVERY task, not just bug fixes —
+  tracker #117: `advance(to='review')` nudges `review_needed` + `review_kind`
+  (`'bug'`|`'change'`, the reviewer's rubric) for any card WITHOUT the `epic` label,
+  and resets a stale `reviewed`/`review-failed`). An epic container is the lone
+  exception: its code lives in its children, each reviewed on its own advance.
   Behavior changes belong here, with a unit test per gate.
-- `src/vikunja_mcp/server.py` — thin FastMCP wiring; `_tool` decorator
+- `src/vikunja_mcp/server.py` — thin `MCPServer` wiring (the mcp 2.0 SDK; FastMCP is
+  gone — `version=` is passed explicitly because `MCPServer` defaults it to `""`, where
+  FastMCP used to report the SDK's own); `_tool` decorator
   converts `WorkflowError/ConfigError/VikunjaError/httpx.HTTPError` into
   `{"error": ...}` tool results (never crashes the stdio server). Tool
   docstrings are agent-facing rules — treat them as UX copy, keep them
@@ -208,8 +219,9 @@ here: the orchestrator is a thin pump — `next_task` → claim → dispatch ONE
 per-task agent for the WHOLE task → drain next. That agent owns the whole
 lifecycle (`get_task` → spec/`advance(to='build')` → implement, possibly spawning
 its own sub-agents → commit+push → `advance(to='review')`); the orchestrator does
-no task content itself. Bugs get independent agent review (orchestrator dispatches
-a sibling reviewer). Whenever the effective limit exceeds 1 — this repo's `.vikunja-mcp.toml`
+no task content itself. EVERY task reaching Review gets independent agent review, not
+just bugs (orchestrator dispatches a sibling reviewer; only an `epic` container is
+exempt). Whenever the effective limit exceeds 1 — this repo's `.vikunja-mcp.toml`
 says `wip_limit = 3` explicitly, and a project that says nothing gets the same 3 by default
 (tracker #524) — the same pump keeps several per-task agents in flight at once, up to the
 limit `next_task` reports in its `wip` payload, each in its OWN worktree from
@@ -239,8 +251,9 @@ human isn't at the console; after asking it keeps draining, and the human answer
 and moves the card back so the loop resumes.
 Each task lands as its own commit on `main`, pushed at `advance(to='review')`
 time (`… (tracker #N)`, `evidence` = the sha) — a completed task commits and
-pushes itself, and that green push auto-releases a patch (CI bumps both version
-files, tags `vX.Y.Z`, and moves `stable` — no separate release task for patches;
+pushes itself, and that green push auto-releases a patch (CI bumps ALL THREE version
+files — `pyproject.toml`, `src/vikunja_mcp/__init__.py`, `uv.lock`'s self-entry —
+tags `vX.Y.Z`, and moves `stable` — no separate release task for patches;
 see the Releases section). The repo
 is PUBLIC — this repo's own token is supplied via the repo-local
 `.vikunja-mcp.env` (sits next to `.vikunja-mcp.toml`, gitignored), never
