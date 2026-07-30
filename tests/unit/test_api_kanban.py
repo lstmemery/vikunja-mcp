@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from tests.unit.test_api import make_api
-from vikunja_mcp.api import _UNKNOWN_PAGE_SIZE_MAX_PAGES as MAX_DEGRADED_PAGES
+from vikunja_mcp.api import _MAX_UNPROVEN_PAGES as MAX_UNPROVEN_PAGES
 from vikunja_mcp.api import VikunjaError
 
 
@@ -63,7 +63,10 @@ def test_view_tasks_merges_paginated_buckets():
 
     api = make_api(handler)
     board = api.view_tasks(3, 11)
-    assert calls == [1, 2]                        # остановились по "меньше page size", без page=3
+    # VMCP-103: the SHORT page 2 no longer ends the read — a page shorter than max_items_per_page
+    # is not proof the bucket is exhausted, so page 3 is asked for and its "nothing new" is what
+    # stops the loop. That one confirming request is the whole cost of the fix.
+    assert calls == [1, 2, 3]
     assert len(board) == 1
     ids = [t["id"] for t in board[0]["tasks"]]
     assert sorted(ids) == list(range(1, 61))       # все 60 смёржены, ничего не потеряно
@@ -151,7 +154,13 @@ def test_view_tasks_require_titles_skips_unbounded_bucket():
     """#43 (next_task latency): view_tasks(require_titles=...) names which bucket TITLES' full
     pages drive pagination. An unbounded Done bucket that keeps returning full pages must NOT
     keep the loop going once the REQUIRED buckets are exhausted — so next_task stops after its
-    working stages instead of rescanning the whole ever-growing Done on every call."""
+    working stages instead of rescanning the whole ever-growing Done on every call.
+
+    VMCP-103 rebalanced WHERE that stop lands, and this is the honest picture of it: Queue's own
+    page 1 was short, which is no longer proof Queue is done, so ONE confirming page is spent —
+    and Done rides along on it. What #43 exists to prevent still holds and is what this pins:
+    Done keeps offering full pages for six of them and the loop takes exactly one, then stops the
+    moment Queue comes back empty. Bounded by the REQUIRED buckets, not by Done's length."""
     calls = []
 
     def handler(request):
@@ -160,8 +169,8 @@ def test_view_tasks_require_titles_skips_unbounded_bucket():
         page = int(request.url.params.get("page", "1"))
         calls.append(page)
         queue = [{"id": 1, "title": "q"}] if page == 1 else []            # exhausted on page 1
-        done = ([{"id": 100 + i, "title": f"d{i}"} for i in range(50)]    # full page (would page on)
-                if page == 1 else [{"id": 999, "title": "tail"}] if page == 2 else [])
+        done = ([{"id": 100 * page + i, "title": f"d{i}"} for i in range(50)]   # unbounded: 6 pages
+                if page <= 6 else [])
         return httpx.Response(200, json=[
             {"id": 4, "title": "Queue", "tasks": queue},
             {"id": 9, "title": "Done", "tasks": done},
@@ -169,11 +178,10 @@ def test_view_tasks_require_titles_skips_unbounded_bucket():
 
     api = make_api(handler)
     board = api.view_tasks(3, 11, require_titles={"Queue"})
-    assert calls == [1]                              # stopped: only Done had a full page, not required
+    assert calls == [1, 2]                           # one confirming page, NOT a walk through Done
     by_title = {b["title"]: [t["id"] for t in b["tasks"]] for b in board}
     assert by_title["Queue"] == [1]                  # required bucket complete
-    assert 999 not in by_title["Done"]               # Done NOT exhaustively paged (page-2 tail skipped)
-    assert len(by_title["Done"]) == 50               # only Done's first page came along — harmless
+    assert len(by_title["Done"]) == 100              # 2 of Done's 6 pages — it never drove the loop
 
 
 def test_view_tasks_require_titles_none_still_exhausts_all():
@@ -197,23 +205,35 @@ def test_view_tasks_require_titles_none_still_exhausts_all():
 
     api = make_api(handler)
     board = api.view_tasks(3, 11)                     # no require_titles -> exhaustive (unchanged)
-    assert calls == [1, 2]                            # Done's full page DID drive paging
+    assert calls == [1, 2, 3]                         # Done's full page DID drive paging (+VMCP-103's
+                                                      # confirming page after the short tail)
     by_title = {b["title"]: [t["id"] for t in b["tasks"]] for b in board}
     assert 999 in by_title["Done"]                   # Done fully paged to its tail
 
 
-def test_view_tasks_single_page_unchanged():
+def test_view_tasks_single_page_costs_one_confirming_request():
+    """THE PRICE OF VMCP-103, on the cheapest board there is, pinned rather than described: a
+    board that fits in one page used to cost ONE request and now costs TWO. The confirming page
+    is not slack — a one-task page and a page filtered down to one task are the same observation,
+    and asking again is the only thing that tells them apart. The board it returns is unchanged.
+
+    (`claimable` pays this per hgdev-acp poll tick, at the ~0.25 s/request measured in api.py's
+    `_MAX_UNPROVEN_PAGES` note. It is one page per READ, not per bucket, and an EMPTY required
+    bucket pays nothing — see the two require_titles tests.)"""
+    pages = []
+
     def handler(request):
         if request.url.path.endswith("/info"):
             return httpx.Response(200, json={"max_items_per_page": 50})
-        assert request.url.params.get("page") == "1"
-        return httpx.Response(
-            200, json=[{"id": 4, "title": "Queue", "tasks": [{"id": 1, "title": "only"}]}]
-        )
+        page = int(request.url.params.get("page", "1"))
+        pages.append(page)
+        tasks = [{"id": 1, "title": "only"}] if page == 1 else []
+        return httpx.Response(200, json=[{"id": 4, "title": "Queue", "tasks": tasks}])
 
     api = make_api(handler)
     board = api.view_tasks(3, 11)
     assert board == [{"id": 4, "title": "Queue", "tasks": [{"id": 1, "title": "only"}]}]
+    assert pages == [1, 2]                            # exactly one extra, and it stops there
 
 
 def test_view_tasks_page_size_from_info_drives_pagination():
@@ -442,7 +462,7 @@ def test_share_project_idempotent():
 # RAISES. A short board is indistinguishable from tasks that are genuinely gone, and that
 # indistinguishability is what ends in `--gc` reaping a live worktree.
 
-def _tracker(handler, *, info_status=503, page_size=50, harness_cap=3 * MAX_DEGRADED_PAGES):
+def _tracker(handler, *, info_status=503, page_size=50, harness_cap=3 * MAX_UNPROVEN_PAGES):
     """A real client over `handler`, with /info answering `info_status` (503 = the degraded path).
 
     The HARNESS CAP is what makes these tests honest about a loop that does not terminate: remove
@@ -496,14 +516,14 @@ def test_view_tasks_raises_instead_of_paging_forever_on_an_unknown_page_size():
     with pytest.raises(VikunjaError) as exc:
         api.view_tasks(3, 11)
     assert exc.value.status == 508
-    assert len(pages) == MAX_DEGRADED_PAGES          # the ceiling'th request is the LAST one sent
+    assert len(pages) == MAX_UNPROVEN_PAGES          # the ceiling'th request is the LAST one sent
     # the message is the only thing a human gets, and it must name the thing to fix
     assert "max_items_per_page" in exc.value.message and "/info" in exc.value.message
 
 
 @pytest.mark.parametrize("n_tasks, why", [
-    (50 * (MAX_DEGRADED_PAGES - 1), "just under the ceiling: read WHOLE, not truncated"),
-    (50 * (MAX_DEGRADED_PAGES + 1), "over it: RAISED, and still not truncated"),
+    (50 * (MAX_UNPROVEN_PAGES - 1), "just under the ceiling: read WHOLE, not truncated"),
+    (50 * (MAX_UNPROVEN_PAGES + 1), "over it: RAISED, and still not truncated"),
 ])
 def test_an_honest_large_board_on_the_degraded_path(n_tasks, why):
     """What a consumer with a genuinely large board experiences, on both sides of the bound —
@@ -516,29 +536,31 @@ def test_an_honest_large_board_on_the_degraded_path(n_tasks, why):
     ids = list(range(1, n_tasks + 1))
     api, pages = _tracker(_offset_pages({"Build": ids}, 50))
 
-    if n_tasks < 50 * MAX_DEGRADED_PAGES:
+    if n_tasks < 50 * MAX_UNPROVEN_PAGES:
         board = api.view_tasks(3, 11)
         assert sorted(t["id"] for t in board[0]["tasks"]) == ids, why
-        assert len(pages) == MAX_DEGRADED_PAGES              # 119 full pages + the empty stop
+        assert len(pages) == MAX_UNPROVEN_PAGES              # 119 full pages + the empty stop
     else:
         with pytest.raises(VikunjaError) as exc:
             api.view_tasks(3, 11)
         assert exc.value.status == 508, why
 
 
-def test_the_ceiling_is_the_degraded_branch_only():
-    """The KNOWN branch keeps its old contract: its page count is already tied to a page size the
-    SERVER stated, so a board far past the degraded ceiling must still read WHOLE on a healthy
-    /info. Drop `page_size is None` from the guard and this goes red — which is the point: the
-    ceiling must never turn a big board on the HEALTHY path into an error (VMCP-89: the healthy
-    path pays nothing)."""
-    ids = list(range(1, 50 * (MAX_DEGRADED_PAGES + 40) + 1))         # 8 000 tasks = 160 pages
+def test_pages_the_stated_page_size_justifies_cost_the_ceiling_nothing():
+    """A board far past the ceiling in PAGES must still read WHOLE on a healthy /info — an honest
+    8 000-task board is not an error. VMCP-103 is what makes this a live assertion rather than a
+    tautology: the ceiling used to skip the known branch entirely, and now it applies everywhere,
+    counting only the pages `max_items_per_page` did NOT account for. Here every page comes back
+    full at the stated 50, so 160 of the 161 requests are justified and the budget is barely
+    touched. Make the counter unconditional (drop the `stated_full_required` guard) and this goes
+    red at request 121, which is the regression the guard exists to prevent."""
+    ids = list(range(1, 50 * (MAX_UNPROVEN_PAGES + 40) + 1))         # 8 000 tasks = 160 pages
     api, pages = _tracker(_offset_pages({"Build": ids}, 50), info_status=200, page_size=50)
 
     board = api.view_tasks(3, 11)
 
     assert sorted(t["id"] for t in board[0]["tasks"]) == ids
-    assert len(pages) == MAX_DEGRADED_PAGES + 41                     # 160 full + 1 empty
+    assert len(pages) == MAX_UNPROVEN_PAGES + 41                     # 160 full + 1 empty
 
 
 @pytest.mark.parametrize("info_status, why", [
@@ -565,6 +587,31 @@ def test_a_required_bucket_repeating_a_full_window_no_longer_truncates(info_stat
 
     by_title = {b["title"]: sorted(t["id"] for t in b["tasks"]) for b in board}
     assert by_title["Build"] == [1, 2, 3, 4, 5, 6], why
+    assert len(pages) == 4
+
+
+def test_a_required_bucket_repeating_a_window_SHORTER_than_the_stated_size():
+    """VMCP-92's repeat-window edge, moved onto the HEALTHY branch — and the one shape that pins
+    the `min(stated, served)` cap rather than the rule around it. Build re-serves its window of 3
+    while /info states 5, so the window is short by the STATED measure but exactly full by the
+    PROVEN one; Done keeps adding, so "no new required task" alone cannot save the read.
+
+    Compare the threshold against the stated 5 instead of `min(5, longest served)` and Build comes
+    back [1,2,3]: the repeat looks short, nothing new arrived in Build, and the read ends three
+    tasks early — on a healthy /info, which is the whole complaint of this card."""
+    def handler(request):
+        page = int(request.url.params.get("page", 1))
+        build = {1: [1, 2, 3], 2: [1, 2, 3], 3: [4, 5, 6]}.get(page, [])
+        return httpx.Response(200, json=[
+            {"id": 4, "title": "Build", "tasks": [{"id": i} for i in build]},
+            {"id": 9, "title": "Done", "tasks": [{"id": 900 + page}] if page <= 6 else []},
+        ])
+
+    api, pages = _tracker(handler, info_status=200, page_size=5)      # STATED 5, never served
+    board = api.view_tasks(3, 11, require_titles={"Build"})
+
+    by_title = {b["title"]: sorted(t["id"] for t in b["tasks"]) for b in board}
+    assert by_title["Build"] == [1, 2, 3, 4, 5, 6]
     assert len(pages) == 4
 
 
@@ -689,12 +736,17 @@ def test_the_degraded_read_never_loses_a_task_the_healthy_read_saw():
     assert checked == 60 * 4            # every board, every bucket — no silently skipped round
 
 
-def test_an_unbounded_non_required_bucket_does_not_drag_the_degraded_loop():
+@pytest.mark.parametrize("info_status", [503, 200])
+def test_an_unbounded_non_required_bucket_does_not_drag_the_loop(info_status):
     """#43's latency win has to survive on this branch too, and it is the reason the "could still
     be full" test ignores EMPTY pages: with the required bucket exhausted and a Done that keeps
     returning full pages, the read must stop at once. An empty page is not evidence of a full one
     — drop that guard and the very first page of an empty Queue reads as "maybe full" (nothing is
-    longer than nothing yet) and the loop pays for a walk through Done."""
+    longer than nothing yet) and the loop pays for a walk through Done.
+
+    Both /info states since VMCP-103 gave them one rule: this is the case where the confirming
+    page that fix costs is NOT paid, and #43's win is exactly why. An empty required bucket has
+    nothing to confirm."""
     def handler(request):
         page = int(request.url.params.get("page", 1))
         return httpx.Response(200, json=[
@@ -703,8 +755,149 @@ def test_an_unbounded_non_required_bucket_does_not_drag_the_degraded_loop():
                 {"id": 100 * page + i} for i in range(50)] if page <= 5 else []},
         ])
 
-    api, pages = _tracker(handler)
+    api, pages = _tracker(handler, info_status=info_status)
     board = api.view_tasks(3, 11, require_titles={"Queue"})
 
     assert len(pages) == 1
     assert {b["title"]: len(b["tasks"]) for b in board} == {"Queue": 0, "Done": 50}
+
+
+# --- VMCP-103 (562): a SHORT NON-FINAL page, and the end of the two-branch asymmetry -----------
+#
+# VMCP-89/92 deleted "a short page proves the bucket is complete" from the DEGRADED branch and
+# left it standing on the HEALTHY one, where `saw_full_page` compared against the size /info
+# STATED. Since "len >= stated" implies "len >= longest served", the degraded rule kept reading
+# everywhere the known rule did and in shapes it did not — so after 548 the read with a BROKEN
+# /info was strictly more robust than the read with a healthy one. Backwards, and the one shape
+# neither parity sweep could see: both only ever modelled honest servers whose pages are full
+# until the last, and on those the two rules agree.
+#
+# The tests below model a server that serves a SHORT NON-FINAL page — the shape a view that
+# paginates the unfiltered set and filters afterwards hands back. Probed against a real Vikunja
+# 2.3.0 (container, max_items_per_page=5) it could NOT be produced: request-level `filter=`, a
+# saved filter on the view, `s=` search and done-tasks-auto-moving-to-Done all push the filter
+# into SQL and keep every page full until the last. Not reproduced is not impossible, and the
+# asymmetry needs no trigger to be wrong.
+
+def _short_non_final_pages(pages_by_title):
+    """A server whose pages are what SURVIVED a filter: window p of a bucket advanced by the page
+    size as usual, but only `pages_by_title[title][p-1]` rows came back."""
+    def handler(request):
+        page = int(request.url.params.get("page", 1))
+        return httpx.Response(200, json=[
+            {"id": 4 + i, "title": title,
+             "tasks": [{"id": tid} for tid in (served[page - 1] if page <= len(served) else [])]}
+            for i, (title, served) in enumerate(pages_by_title.items())
+        ])
+    return handler
+
+
+@pytest.mark.parametrize("info_status, why", [
+    (503, "the control: the degraded read already survived this"),
+    (200, "THE DEFECT: the healthy read stopped at page 1 and lost 3..9"),
+])
+def test_a_short_non_final_page_does_not_truncate_the_healthy_read(info_status, why):
+    """THE card's measurement, as a test. /info states max_items_per_page=5 and the one required
+    bucket serves page1=[1,2] (short by accident), page2=[3,4,5,6,7], page3=[8,9].
+
+    MEASURED before the fix, on this exact server: the HEALTHY row stopped after ONE request with
+    Build[1,2] — 3..9 silently gone — while the DEGRADED row spent 4 requests and returned
+    Build[1..9] whole. Both rows must now read the board whole, in the same 4 requests.
+
+    Not cosmetic: `workspace --gc` builds its liveness set from this read, and a board short of a
+    task is indistinguishable from a task that is gone. That is how VMCP-89 reaped two LIVE
+    worktrees (`released: [804, 805]`, both trees still on disk)."""
+    api, pages = _tracker(_short_non_final_pages({"Build": [[1, 2], [3, 4, 5, 6, 7], [8, 9]]}),
+                          info_status=info_status, page_size=5)
+
+    board = api.view_tasks(3, 11, require_titles={"Build"})
+
+    assert sorted(t["id"] for t in board[0]["tasks"]) == list(range(1, 10)), why
+    assert len(pages) == 4              # 3 pages with content + the one that brings nothing new
+
+
+def test_the_healthy_read_never_loses_a_task_a_server_serves_short():
+    """The sweep the existing two could not be: 60 randomized boards whose pages are SHORT of the
+    stated page size at random — never full until the last, which is the only thing the old
+    `_offset_pages` sweeps ever modelled.
+
+    Two assertions, and the second is the one this card exists for: every required bucket comes
+    back COMPLETE, and the healthy read equals the degraded read BUCKET FOR BUCKET — not merely
+    "is a subset of". After VMCP-103 there is one rule, so /info's health may change what the
+    ceiling permits but never what the board contains."""
+    rng = random.Random(20260731)
+    checked = 0
+    for _ in range(60):
+        page_size = rng.choice([2, 3, 5, 20, 50])
+        served, next_id = {}, 1
+        for title in ("Queue", "Build", "Review", "Done"):
+            # 1..8 pages, each SHORT of page_size (>=1 so no bucket goes silent mid-stream — an
+            # all-filtered page is indistinguishable from an exhausted one, see the test below)
+            served[title] = []
+            for _ in range(rng.randint(1, 8)):
+                n = rng.randint(1, max(1, page_size - 1))
+                served[title].append(list(range(next_id, next_id + n)))
+                next_id += n
+        require = rng.choice([None, {"Build", "Review"}, {"Queue", "Build", "Review"}])
+
+        boards = {}
+        for info_status in (200, 503):
+            api, _pages = _tracker(_short_non_final_pages(served),
+                                   info_status=info_status, page_size=page_size)
+            boards[info_status] = {b["title"]: sorted(t["id"] for t in b["tasks"])
+                                   for b in api.view_tasks(3, 11, require_titles=require)}
+
+        for title, healthy in boards[200].items():
+            assert healthy == boards[503].get(title, []), (title, page_size, require)
+            if require is None or title in require:
+                whole = sorted(t for pg in served[title] for t in pg)
+                assert healthy == whole, (title, page_size, require)
+            checked += 1
+    assert checked == 60 * 4            # every board, every bucket — no silently skipped round
+
+
+@pytest.mark.parametrize("info_status", [200, 503])
+def test_a_read_that_never_fills_a_page_raises_instead_of_returning_a_short_board(info_status):
+    """The bound on the new clause, and it is the same one on both /info states now. A server
+    that keeps adding ONE new required task per page never fills a page, so nothing ever justifies
+    the requests: the read stops at `_MAX_UNPROVEN_PAGES` and stops by RAISING — the direction the
+    whole module is built on, since a short board is what `--gc` turns into a reaped worktree.
+
+    The healthy row is the new one, and before VMCP-103 it did not raise: it TRUNCATED after one
+    request, on a healthy /info, exactly as the card measured. The message has to say which of the
+    two states the human is in, because the fix differs."""
+    def handler(request):
+        page = int(request.url.params.get("page", 1))
+        return httpx.Response(200, json=[
+            {"id": 4, "title": "Build", "tasks": [{"id": 1000 + page}]},
+        ])
+
+    api, pages = _tracker(handler, info_status=info_status, page_size=50)
+    with pytest.raises(VikunjaError) as exc:
+        api.view_tasks(3, 11)
+
+    assert exc.value.status == 508
+    assert len(pages) == MAX_UNPROVEN_PAGES          # the ceiling'th request is the LAST one sent
+    assert "max_items_per_page" in exc.value.message and "/info" in exc.value.message
+    if info_status == 200:
+        assert "max_items_per_page=50" in exc.value.message      # names what the server CLAIMED
+
+
+@pytest.mark.parametrize("info_status", [200, 503])
+def test_a_page_filtered_down_to_nothing_still_ends_the_read(info_status):
+    """The LIMIT of this design, pinned rather than left for someone to discover. A page on which
+    a required bucket returns NOTHING ends the read even if a later page would have had content:
+    an all-filtered window and an exhausted bucket are the same observation, and the only rule
+    that could tell them apart — keep paging through empties — has no bound at all and would undo
+    #43's latency win (an empty required bucket would walk the whole of Done).
+
+    So the guarantee this module offers is precisely: no required bucket is cut off while it is
+    still PRODUCING. Both /info states share the limit, which is the point — it is a property of
+    the one rule, not of the branch."""
+    api, pages = _tracker(_short_non_final_pages({"Build": [[1, 2], [], [8, 9]]}),
+                          info_status=info_status, page_size=5)
+
+    board = api.view_tasks(3, 11, require_titles={"Build"})
+
+    assert sorted(t["id"] for t in board[0]["tasks"]) == [1, 2]      # 8,9 past the empty window
+    assert len(pages) == 2

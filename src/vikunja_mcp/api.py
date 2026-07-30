@@ -14,14 +14,21 @@ class VikunjaError(Exception):
         super().__init__(f"Vikunja API {status}: {message}")
 
 
-# VMCP-92: the request ceiling of the DEGRADED (unknown page size) read — see the long note above
-# `_page_size`. DERIVED, not picked: `workspace_cmd._READ_DEADLINE_SECONDS` (30 s) is the budget a
-# human already decided a WHOLE tracker read may take, and the VMCP-72 comment MEASURED the healthy
-# read against the real tracker at four requests in 0.89-1.10 s, i.e. ~0.25 s/request. 30 / 0.25 =
-# 120, so the callers with NO deadline (next_task/claim/advance/setup) get, in requests, the
-# containment `--gc` already has in seconds — and machine-independently, since it comes from a
-# configured budget and a measured rate rather than from a loopback page count.
-_UNKNOWN_PAGE_SIZE_MAX_PAGES = 120
+# VMCP-92: the request ceiling of a board read the server's own stated page size does not justify
+# — see the long note above `_page_size`. DERIVED, not picked: `workspace_cmd._READ_DEADLINE_
+# SECONDS` (30 s) is the budget a human already decided a WHOLE tracker read may take, and the
+# VMCP-72 comment MEASURED the healthy read against the real tracker at four requests in
+# 0.89-1.10 s, i.e. ~0.25 s/request. 30 / 0.25 = 120, so the callers with NO deadline
+# (next_task/claim/advance/setup) get, in requests, the containment `--gc` already has in seconds —
+# and machine-independently, since it comes from a configured budget and a measured rate rather
+# than from a loopback page count.
+#
+# VMCP-103 renamed it from `_UNKNOWN_PAGE_SIZE_MAX_PAGES`: it is no longer the DEGRADED branch's
+# ceiling, it is every read's, counted over the pages `max_items_per_page` did NOT account for. An
+# unknown page size justifies nothing, so a degraded read spends the budget page by page exactly
+# as before; a healthy read spends it only on pages where no required bucket came back full, which
+# is why an honest 8 000-task board still reads whole in 161 requests.
+_MAX_UNPROVEN_PAGES = 120
 
 
 def canonical_base_url(base_url: str) -> str:
@@ -316,7 +323,7 @@ class VikunjaAPI:
     # `_fetch_page_size` cannot swallow it — but next_task/claim/advance/setup have no deadline
     # and would hang forever.
     #
-    # So this branch now (a) issues at most `_UNKNOWN_PAGE_SIZE_MAX_PAGES` requests and (b) on
+    # So this branch now (a) issues at most `_MAX_UNPROVEN_PAGES` requests and (b) on
     # hitting that ceiling RAISES, returning nothing. Raising is the whole point, not a detail: a
     # truncated board is indistinguishable from one whose tasks are genuinely gone, and that
     # indistinguishability is what ends in `--gc` reaping a LIVE worktree. Every caller's failure
@@ -341,6 +348,64 @@ class VikunjaAPI:
     # — the degraded read costs one extra page and that page carries extra Done/Backlog tasks).
     # A server that ignores `?page=` entirely still stops after two requests, exactly as before:
     # its repeat brings nothing new ANYWHERE, and this clause needs a new task somewhere to run on.
+    #
+    # VMCP-103 — AND THAT WAS ONLY HALF THE JOB: THE DEGRADED READ WAS LEFT STRICTLY MORE ROBUST
+    # THAN THE HEALTHY ONE. The two rules were never symmetric — "len >= S" IMPLIES "len >= L", so
+    # the degraded rule kept reading everywhere the known rule did AND in shapes it did not.
+    # VMCP-89/92 spent two cards deleting "a short page proves the bucket is complete" from the
+    # degraded branch and left it standing on the healthy one, where `saw_full_page` took a page
+    # SHORT of the STATED size as proof of exhaustion. MEASURED (real httpx, real api.py): /info
+    # stating max_items_per_page=5 and one required Build serving page1=[1,2] (short by accident),
+    # page2=[3,4,5,6,7], page3=[8,9] — the HEALTHY read stopped after ONE request with Build[1,2],
+    # silently losing 3..9, while the DEGRADED read spent 4 requests and returned Build[1..9]
+    # whole. Backwards, and invisible to both parity sweeps, which only ever modelled honest
+    # servers whose pages are full until the last one.
+    #
+    # So there is ONE stop rule now and the branch is gone. "Could this page still be full?" is
+    # answered against `min(size STATED, longest page SERVED)` — full by EITHER measure — which
+    # makes the surviving rule a superset of both old ones by construction. That it had to be the
+    # DEGRADED rule is forced, not preferred: to stop being the weaker of the two, the known rule
+    # has to IMPLY the degraded one, and the weakest rule implying it is that rule itself. Every
+    # cheaper variant leaves some shape where /info being DOWN reads more of the board than /info
+    # being healthy. (Measured on the same server: keeping only the fullness half, without "a new
+    # required task arrived", returns Build[1..7] — still short by two.)
+    #
+    # THE COST IS REAL AND IS NOT HIDDEN: one extra request per `view_tasks` call whenever a
+    # required bucket brought a NEW task on the last page that had content — the smallest board
+    # goes from 1 request to 2 (~0.25 s at the rate measured below). It is unavoidable rather than
+    # sloppy: a short page and a filtered page are the same observation, and only asking for one
+    # more page tells them apart. It is bounded and FLAT — one page per READ, not per bucket — and
+    # it is not paid at all when the required buckets come back EMPTY, which is what keeps #43's
+    # require_titles win intact (an exhausted Queue beside an unbounded Done still stops at page 1).
+    #
+    # AND THE STATED PAGE SIZE STILL EARNS ITS KEEP — AS A BUDGET, NOT AS AN ORACLE. Nothing
+    # bounds `added_new_required` on its own, so the ceiling VMCP-92 gave the degraded read now
+    # covers both, counted over the pages the STATED size did NOT justify: a page on which some
+    # required bucket came back full at `max_items_per_page` is the server delivering at the rate
+    # it advertised, and it costs nothing. An honest 8 000-task board therefore still reads whole
+    # in 161 requests (161 justified pages), while a server that never fills a page is cut off at
+    # `_MAX_UNPROVEN_PAGES` — and cut off by RAISING, never by returning the short board.
+    #
+    # NOT chosen: (a) `x-pagination-total-pages` as a free stop signal — MEASURED against a real
+    # Vikunja 2.3.0: on this endpoint those headers describe the BUCKET list (result-count 3,
+    # total-pages 1) while the bucket behind them held 3 pages of tasks, so the header is not
+    # merely useless here, it is WRONG. (b) A `strict=` flag so that only `--gc` pays the extra
+    # page: that moves the asymmetry from "/info up vs down" to "caller remembered vs forgot", and
+    # `_find_task`/claim read a truncated board as "no such task" on a card that is right there.
+    # (c) The flat ceiling on both branches: an honest 8 000-task board would become an error, and
+    # `require_titles=None` (claim/setup) makes an ever-growing Done a required bucket. (d) A
+    # progress bound (pages <= ceil(seen/page_size)+K): it would break exactly the
+    # filter-after-paginate shape it exists to survive, filtering being slow delivery relative to
+    # the window.
+    #
+    # HONEST ABOUT THE TRIGGER: a short non-final page could NOT be produced against Vikunja 2.3.0.
+    # Request-level `filter=`, a saved filter on the view, `s=` search, and done tasks auto-moving
+    # into the Done bucket all push the filter into SQL, so every page comes back full until the
+    # last (probed on a container with max_items_per_page=5). The mechanism the card suspected —
+    # paginate the unfiltered set, filter afterwards — is NOT reproduced here, which is not the
+    # same as proven impossible (a proxy, a later version, or a Typesense-backed search hydrating
+    # ids from the DB would all have that shape). What does not depend on settling that is the
+    # asymmetry itself: the healthy path must not be the fragile one.
     def _page_size(self) -> int | None:
         if not self._page_size_resolved:
             self._page_size_cache = self._fetch_page_size()
@@ -379,10 +444,13 @@ class VikunjaAPI:
                                             # because the page size is one server-wide setting, and
                                             # a HIGHER proven bound is a TIGHTER "could still be
                                             # full" test — never a looser one, since it stays <= the
-                                            # real size. Only used when that size is unknown.
+                                            # real size. VMCP-103: used on EVERY read, capped by the
+                                            # stated size when there is one.
+        unproven_pages = 0                  # VMCP-103: pages already spent that `max_items_per_page`
+                                            # did NOT account for — the only ones the ceiling counts.
         page = 1
         while True:
-            if page_size is None and page > _UNKNOWN_PAGE_SIZE_MAX_PAGES:
+            if unproven_pages >= _MAX_UNPROVEN_PAGES:
                 # VMCP-92: NOT sent, and NOTHING returned — see the note above `_page_size`. The
                 # message has to be self-explaining: it is the only thing a human gets, and the
                 # thing it names (/info) is the thing that actually needs fixing.
@@ -394,39 +462,51 @@ class VikunjaAPI:
                 # synthesized the way `kanban_view` synthesizes its 404; it collides with nothing,
                 # since the only status-sensitive sites are 403/404 in file_task and 401's token
                 # reload, and being raised HERE rather than by `_req` it is never retried.
+                stated = (
+                    "This client could not read max_items_per_page from /info, so it cannot tell "
+                    "a full page from a short one at all."
+                    if page_size is None else
+                    f"/info states max_items_per_page={page_size}, but no page of a required "
+                    f"bucket ever reached it, and a page SHORT of the stated size is no proof "
+                    f"that bucket is exhausted (VMCP-103) — so the stated size bounds nothing "
+                    f"here."
+                )
                 raise VikunjaError(508, (
-                    f"the board never finished paging: "
-                    f"{_UNKNOWN_PAGE_SIZE_MAX_PAGES} requests to /projects/{project_id}/views/"
-                    f"{view_id}/tasks and the server was STILL adding tasks. This client could "
-                    f"not read max_items_per_page from /info, so it cannot tell a full page from "
-                    f"a short one and has no page-count bound of its own. NOTHING is returned "
-                    f"rather than a partial board: a truncated board is indistinguishable from "
-                    f"tasks that are genuinely gone, and `workspace --gc` reaps worktrees from "
-                    f"exactly this read (VMCP-89). Fix /info so it reports max_items_per_page — "
-                    f"then this read is bounded by the page size again — or fix the view's "
-                    f"pagination if /info is healthy and it is `?page=` that never converges."
+                    f"the board never finished paging: {_MAX_UNPROVEN_PAGES} requests to "
+                    f"/projects/{project_id}/views/{view_id}/tasks that the server's own page "
+                    f"size did not account for, and it was STILL adding tasks. {stated} NOTHING "
+                    f"is returned rather than a partial board: a truncated board is "
+                    f"indistinguishable from tasks that are genuinely gone, and `workspace --gc` "
+                    f"reaps worktrees from exactly this read (VMCP-89). Fix /info so it reports "
+                    f"max_items_per_page — pages that FILL it cost this budget nothing — or fix "
+                    f"the view's pagination if it is `?page=` that never converges."
                 ))
             buckets = self._req(
                 "GET", f"/projects/{project_id}/views/{view_id}/tasks", params={"page": page}
             ) or []
             if not buckets:
                 break
-            saw_full_page = False
+            stated_full_required = False
             maybe_full_required = False
             added_new = False
             added_new_required = False
-            proven_size = longest_page      # snapshot: the could-be-full comparison must not
-                                            # depend on the ORDER the server listed its buckets in
+            # The "could this page still be full?" threshold, snapshotted BEFORE the page so the
+            # answer cannot depend on the ORDER the server listed its buckets in. It is the longest
+            # page the server has PROVEN it can serve, capped by the size it STATED — i.e. a page
+            # counts as possibly-full if it is full by EITHER measure, which is what makes this one
+            # rule a superset of the two it replaced (VMCP-103).
+            could_be_full = longest_page if page_size is None else min(page_size, longest_page)
             for bucket in buckets:
                 bid = bucket["id"]
                 dest = merged.setdefault(bid, {**bucket, "tasks": []})
                 ids = seen.setdefault(bid, set())
                 tasks = bucket.get("tasks") or []
                 required = require_titles is None or bucket.get("title") in require_titles
-                if page_size is not None and len(tasks) >= page_size and required:
-                    saw_full_page = True
-                if page_size is None and required and tasks and len(tasks) >= proven_size:
-                    maybe_full_required = True   # can't rule out a full page -> can't call it done
+                if required and tasks:
+                    if len(tasks) >= could_be_full:
+                        maybe_full_required = True  # can't rule out a full page -> can't call it done
+                    if page_size is not None and len(tasks) >= page_size:
+                        stated_full_required = True     # the server delivered at its OWN stated rate
                 longest_page = max(longest_page, len(tasks))
                 for task in tasks:
                     owner[task["id"]] = bid          # последнее вхождение выигрывает (см. дедуп ниже)
@@ -435,15 +515,17 @@ class VikunjaAPI:
                         dest["tasks"].append(task)
                         added_new = True
                         added_new_required = added_new_required or required
-            # UNKNOWN page size: a short page proves nothing, so a page that brought a NEW task to
-            # a REQUIRED bucket keeps the loop going (required-only on purpose — counting any
-            # bucket would let an unbounded Done/Backlog drag the loop through itself, the very
-            # cost #43's require_titles exists to avoid), and so does the known-size fullness rule
-            # read against the longest page the server has PROVEN it can serve (VMCP-92).
-            if page_size is None:
-                keep_going = added_new_required or (maybe_full_required and added_new)
-            else:
-                keep_going = saw_full_page and added_new
+            # A short page proves NOTHING about a bucket being exhausted — whatever /info said —
+            # so the loop stops on facts about the DATA: it keeps going while a page brought a NEW
+            # task to a REQUIRED bucket (required-only on purpose: counting any bucket would let an
+            # unbounded Done/Backlog drag the loop through itself, the very cost #43's
+            # require_titles exists to avoid), and while a required bucket returned a page that
+            # could still be full (VMCP-92's repeat-window edge, which "nothing new" alone misses).
+            # ONE rule for both branches since VMCP-103 — see the long note above `_page_size` for
+            # why the healthy path had to adopt the degraded one rather than the other way round.
+            keep_going = added_new_required or (maybe_full_required and added_new)
+            if not stated_full_required:
+                unproven_pages += 1         # this page was not justified by max_items_per_page
             if not keep_going:
                 break
             page += 1

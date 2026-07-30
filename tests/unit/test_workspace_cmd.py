@@ -16,7 +16,7 @@ import pytest
 
 from tests.unit.fakes import FakeAPI
 from vikunja_mcp import workspace_cmd
-from vikunja_mcp.api import _UNKNOWN_PAGE_SIZE_MAX_PAGES as MAX_DEGRADED_PAGES
+from vikunja_mcp.api import _MAX_UNPROVEN_PAGES as MAX_UNPROVEN_PAGES
 from vikunja_mcp.api import VikunjaAPI, VikunjaError
 from vikunja_mcp.config import ENV_WORKTREE_ROOT
 from vikunja_mcp.workflow import STAGES, Workflow
@@ -1868,18 +1868,20 @@ def test_the_liveness_read_costs_one_more_request_per_page_of_a_human_drained_co
     to Done or answers it. So a per-request bound cannot bound the hold: it multiplies.
 
     Measured against the real tracker at 4 requests / ~1 s; modelled here at 3 s per request so
-    the arithmetic is visible."""
+    the arithmetic is visible. (Since VMCP-103 every board read also spends ONE confirming page
+    past its last page with content — a short page stopped proving a bucket is exhausted — so the
+    counts here are the old ones plus that flat one, on both boards.)"""
     clock, sent, attempted = _FakeClock(), [], []
     wf = _workflow_on(_slow_board_client(clock, 3.0, sent, attempted, review=41, your_call=5))
     _read(wf)
-    assert len(sent) == 4 and clock.t == pytest.approx(12.0)      # today's board
+    assert len(sent) == 5 and clock.t == pytest.approx(15.0)      # today's board (+1 confirming)
 
     for column in ({"review": 140}, {"your_call": 140}):          # EITHER one drives it
         clock, sent, attempted = _FakeClock(), [], []
         wf = _workflow_on(_slow_board_client(clock, 3.0, sent, attempted, **column))
         _read(wf)
-        assert len(sent) == 6, f"{column}: {sent}"
-        assert clock.t == pytest.approx(18.0), f"{column} held the lock {clock.t}s"
+        assert len(sent) == 7, f"{column}: {sent}"
+        assert clock.t == pytest.approx(21.0), f"{column} held the lock {clock.t}s"
 
 
 def test_the_sweep_read_is_bounded_overall_not_only_per_request():
@@ -1893,7 +1895,7 @@ def test_the_sweep_read_is_bounded_overall_not_only_per_request():
     clock, sent, attempted = _FakeClock(), [], []
     wf = _workflow_on(_slow_board_client(clock, per_request, sent, attempted, your_call=140))
     _read(wf)
-    assert len(sent) == 6 and clock.t == pytest.approx(6 * per_request)   # 60s of held lock
+    assert len(sent) == 7 and clock.t == pytest.approx(7 * per_request)   # 70s of held lock
 
     clock, sent, attempted = _FakeClock(), [], []
     deadline = workspace_cmd._ReadDeadline(budget, now=clock)
@@ -2173,7 +2175,7 @@ def test_gc_keeps_every_tree_when_the_degraded_board_read_hits_its_ceiling(repo)
             return httpx.Response(200, json=[{"id": 7, "view_kind": "kanban", "title": "Kanban"}])
         page = int(request.url.params.get("page", 1))
         sent.append(page)
-        if len(sent) > 3 * MAX_DEGRADED_PAGES:      # the loop does not terminate -> fail LOUDLY
+        if len(sent) > 3 * MAX_UNPROVEN_PAGES:      # the loop does not terminate -> fail LOUDLY
             raise RuntimeError("the liveness read paged past three times the ceiling")
         return httpx.Response(200, json=[
             {"id": 2, "title": "Build",
@@ -2188,7 +2190,7 @@ def test_gc_keeps_every_tree_when_the_degraded_board_read_hits_its_ceiling(repo)
         gc_workspaces(cwd=repo, workflow=wf)
 
     assert "never finished paging" in exc.value.message
-    assert len(sent) == MAX_DEGRADED_PAGES
+    assert len(sent) == MAX_UNPROVEN_PAGES
     for task_id, path in trees.items():
         assert path.is_dir(), f"live tree for {task_id} was destroyed"
         assert _git(repo, "branch", "--list", f"task/{task_id}").strip()
