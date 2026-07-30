@@ -184,6 +184,16 @@ triggers itself, so it never pushes twice in a row and can cost an agent at most
 one round. That bound is what sizes SKILL.md's integration ceiling at 6 rounds
 (2·(`wip_limit`−1) mechanical losses + 1); see "Отбитый пуш — это НОРМА" there.
 
+**Never let the literal ci-skip marker into a commit MESSAGE — quoting counts.**
+Writing *about* the release is the trap: the marker is matched anywhere in the
+message, body and code spans included, so a commit that merely quotes the bump
+commit's subject cancels its own CI run — and does so silently. The push
+succeeds, both evidence-sha checks pass, and the task looks landed, but there is
+no run, no auto-release, and the change never reaches `stable`, i.e. never
+reaches consumers. Name the marker descriptively in messages (in a *file* the
+literal is harmless), and after pushing confirm a run actually EXISTS for your
+sha (`gh run list`) — "no run" and "green run" look identical from git.
+
 Manual procedure remains for:
 - **Rollback**: `git branch -f stable vX.Y.Z && git push -f origin stable`
   onto an older, known-good tag. `stable` moves ONLY to tagged, CI-green commits.
