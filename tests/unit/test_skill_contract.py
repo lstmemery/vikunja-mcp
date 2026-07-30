@@ -9,7 +9,9 @@ it. These tests pin the MECHANICAL subset of the contract — every code token t
 must still resolve in workflow.py, and every real stage must be documented. They deliberately do
 NOT check semantic correctness (whether a rule is right) — that is what independent review,
 widened to every change in #117, is for; this is only the net that catches a cited token going
-stale on either side.
+stale on either side. One test below also reads the repo's own CLAUDE.md, because the integration
+retry ceiling is DERIVED in both files and two independent copies of one derivation are exactly
+what drifts apart.
 """
 import ast
 import inspect
@@ -772,6 +774,217 @@ def test_the_integration_retry_ceiling_is_pinned():
     for old in ("ещё круг, до 3)", "до 3 кругов", "отбило 3 раза подряд"):
         assert old not in text, \
             f"the reverted 3-round ceiling is back in SKILL.md ({old!r}) — see this test's docstring"
+
+
+def _claude_md_text() -> str:
+    """The repo's own CLAUDE.md — the SECOND, independent copy of the retry-ceiling derivation.
+
+    Read off the working tree via `parents[2]`, the same way the freshness pin above reaches
+    `SKILL_SOURCE_PATH`, and NOT through `importlib.resources`: CLAUDE.md is not packaged, it is a
+    repo file, so its absence means the checkout is not what this suite assumes rather than a
+    packaging change — asserted, so that case says so instead of surfacing as an OSError."""
+    path = Path(__file__).resolve().parents[2] / "CLAUDE.md"
+    assert path.is_file(), "CLAUDE.md is gone from the repo root — this pin has nothing to read"
+    return path.read_text(encoding="utf-8")
+
+
+def _claude_ceiling_paragraph(text: str) -> str:
+    """CLAUDE.md's one paragraph that derives the integration retry ceiling.
+
+    Sliced to that paragraph like `_gc_section` / `_drain_width_section` slice SKILL.md, and for
+    the same measured reason: `wip_limit`, the default 3 and the words `2 ×` all appear elsewhere
+    in this file (the config bullet states the default and its precedence, the dogfood section
+    states this repo's own limit), so a whole-file scan could not tell "the derivation is still
+    stated" from "those numbers survive somewhere". Width is asserted, not assumed — a slice that
+    silently widened to the whole file would restore exactly the weakness it exists to remove."""
+    start = text.find("**That bump commit is also a racer")
+    assert start != -1, (
+        "CLAUDE.md no longer opens its retry-ceiling paragraph where this pin can find it. If the "
+        "paragraph was legitimately reworded, move this anchor — do not delete the check"
+    )
+    end = text.find("\n\n", start)
+    assert end != -1, "the ceiling paragraph no longer ends where the next paragraph begins"
+    paragraph = text[start:end]
+    assert 0 < len(paragraph) < len(text), "the ceiling slice is not a proper subset of CLAUDE.md"
+    assert "ci-skip marker" not in paragraph, \
+        "the slice swallowed the following paragraph — the prose it exists to exclude"
+    return paragraph
+
+
+def _ceiling_derivation_section(text: str) -> str:
+    """SKILL.md's «Откуда потолок» bullet — the rulebook's own copy of the same derivation.
+
+    Scoped to the one bullet, like `_two_returns_rule`: the neighbouring bullets talk about the
+    ceiling too (the escalation bullet spends it, the race-diagnosis bullet decides whether a
+    round is owed at all), and `не назвал — **бери 6**` puts a bare 6 in a THIRD place, so a
+    whole-file number hunt would mix the derivation's numbers with numbers that are not it."""
+    start = text.find("- **Откуда потолок и почему он")
+    assert start != -1, (
+        "SKILL.md no longer opens its «Откуда потолок» derivation where this pin can find it. If "
+        "the bullet was legitimately reworded, move this anchor — do not delete the check"
+    )
+    end = text.find("\n  - **", start + 1)
+    assert end != -1, "the derivation bullet no longer ends where the next bullet begins"
+    section = text[start:end]
+    assert 0 < len(section) < len(text), "the derivation slice is not a proper subset of SKILL.md"
+    assert "Достиг потолка" not in section, "the slice swallowed the escalation bullet after it"
+    return section
+
+
+def test_the_ceiling_numbers_in_both_files_re_derive_from_their_own_formula():
+    """VMCP-98 (556): the test above pins the rulebook's three OPERATIVE `2 × wip.limit` sites as
+    STRINGS, which is all a string can do — it never evaluates them. Two gaps follow from that, and
+    card 556 was filed for one of them: CLAUDE.md carries a SECOND, independent write-up of the same
+    derivation (the release section's "that bump commit is also a racer" paragraph), and nothing in
+    this repo reads CLAUDE.md at all — measured while writing this test, `grep -rn "CLAUDE.md"
+    tests/ scripts/` returned only prose mentions inside docstrings. So the copy that actually
+    DRIFTED had no mechanical net whatever, and the numbers each file states about its own formula
+    (5 vs 6 at the default, 2 / 8 / 10 at limits 1 / 4 / 5) had none either.
+
+    What drifted is worth stating precisely, because it is subtle and it will recur: the paragraph
+    quoted the WORST MECHANICAL RUN where the CEILING belongs. Those are two different quantities of
+    one derivation — at `wip_limit = N` the worst purely mechanical run is 2·(N−1)+1 rounds
+    (2·(N−1) sibling+bump losses, plus the trailing bump of the landing that beat you to the
+    `fetch`), and the ceiling must sit STRICTLY ABOVE it or it fires on arithmetic, giving 2 × N. At
+    the default 3 they read 5 and 6 — adjacent, both plausible, and indistinguishable by eye. That
+    is why this pin RE-DERIVES rather than matches: a substring pin on "6" would be satisfied by the
+    very confusion the card is about, since 6 is also a correct number elsewhere in the same
+    sentence. A number you cannot reproduce from the formula printed next to it must fail.
+
+    So each file is parsed for what it claims about itself and the claims are recomputed in Python:
+    every stated (limit → ceiling) pair against `2 × limit`, the stated worst run against
+    `2 × (default − 1) + 1`, and the strictly-above step BETWEEN them — the step whose absence was
+    the defect. The default the prose reasons about is anchored on `config.DEFAULT_WIP_LIMIT`, the
+    one code fact in this rule (tracker #524 made an unset `wip_limit` mean 3, not "no gate"), so
+    re-valuing it drags both documents along instead of leaving them quietly describing a default
+    the code stopped having. Finally the two tables are compared AS WHOLE MAPPINGS — deliberately
+    not "where they overlap", the form review MEASURED useless: the per-file re-derivations already
+    force each table to {n: 2n} on its own, so agreeing VALUES at a shared limit are implied, and
+    an overlap-scoped comparison therefore cannot fail for any input while missing the divergence
+    that IS possible — one file's table narrowing. Dropping `10 at 5` from CLAUDE.md while the
+    shipped rulebook kept it passed green under that weaker form. Neither file's internal
+    consistency can see the other going its own way; only the whole-mapping comparison can.
+
+    The parsed pair COUNT is asserted before anything loops over it. Without that, a regex that
+    stopped matching — a re-wrap, a reworded table — would make "every stated ceiling is correct"
+    pass over an EMPTY set, i.e. go green precisely when the prose moved out from under the pin.
+    That is the vacuous-pin failure mode this module has measured before (see `_calls_in`), and it
+    is the one a numeric pin is most exposed to.
+
+    Deliberately OUT of scope, and NOT pinned here — forward-compat note: the brief-less fallback
+    sentence (`не назвал — **бери 6**`) and the empty-range race diagnosis. Card 559 is open against
+    that exact fallback sentence, and a pin laid over prose another card is about to rewrite is a
+    merge conflict dressed as a test. The fallback's bare 6 is also not a derivation — it is the
+    default's instance quoted for an agent whose brief carried no limit — so re-deriving it would
+    assert a different rule than this test's. `test_the_integration_retry_ceiling_is_pinned` above
+    keeps its own string pin on it; this test stays off it.
+
+    MUTATION-CHECKED (`__pycache__` cleared between rounds, each run confirmed to select exactly 1
+    test, both files restored to a clean `git diff` after): control PASS; CLAUDE.md's ceiling at the
+    default 6 -> 5, i.e. card 556's original defect re-committed -> FAIL; CLAUDE.md's `8 at 4` ->
+    `6 at 4`, the wider-drain case card 550 exists for -> FAIL; SKILL.md's `при 4 — 8` -> `при 4 —
+    6` -> FAIL; SKILL.md's worst run at the default 5 -> 6, collapsing the two distinct numbers into
+    one -> FAIL on the worst-run derivation; delete CLAUDE.md's ceiling paragraph outright -> FAIL
+    from the slicer, with its own message, never a confusing crash or a silent green. Added in
+    review, by CONSTRUCTING the divergence rather than reading the diff: drop `, 10 at 5` from
+    CLAUDE.md's table and leave SKILL.md's `при 5 — 10` -> FAIL on the cross-file mapping. That
+    round is the reason the cross-file half is shaped the way it is — it was GREEN before."""
+    def re_derive(where: str, default: int, worst: int, ceilings: dict[int, int]) -> None:
+        assert default == config.DEFAULT_WIP_LIMIT, (
+            f"{where} derives the ceiling at a default wip_limit of {default}, but "
+            f"config.DEFAULT_WIP_LIMIT is {config.DEFAULT_WIP_LIMIT} — the prose reasons about a "
+            f"default the code no longer has"
+        )
+        assert len(ceilings) >= 3, (
+            f"{where}: only {len(ceilings)} (limit -> ceiling) pair(s) parsed out of the table it "
+            f"states, so every arithmetic check below would be near-vacuous. A legitimate reword "
+            f"means updating this pin's regex, not deleting the check"
+        )
+        assert worst == 2 * (default - 1) + 1, (
+            f"{where} states a worst purely mechanical run of {worst} at wip_limit {default}, but "
+            f"its own cited formula 2·(N−1)+1 gives {2 * (default - 1) + 1}"
+        )
+        assert default in ceilings, (
+            f"{where} states a worst run at wip_limit {default} but no ceiling for that limit, so "
+            f"the two numbers this card is about can no longer be compared at all"
+        )
+        # ordered BEFORE the table loop on purpose: both fire on a bad ceiling at the default, and
+        # this one names what actually went wrong the first time (see the docstring) instead of
+        # reporting it as an arbitrary arithmetic slip
+        assert worst < ceilings[default], (
+            f"{where}: the ceiling at wip_limit {default} is {ceilings[default]}, which is NOT "
+            f"strictly above the worst mechanical run of {worst}. That is card 556 exactly — the "
+            f"worst run quoted where the ceiling belongs sends an agent to a human on arithmetic"
+        )
+        for limit, ceiling in sorted(ceilings.items()):
+            assert ceiling == 2 * limit, (
+                f"{where} states a ceiling of {ceiling} at wip_limit {limit}, but the formula it "
+                f"cites in the same breath, 2 × wip_limit, gives {2 * limit}. Fix the number; if "
+                f"the FORMULA itself changed, change it in BOTH files and here"
+            )
+
+    # --- CLAUDE.md: the release section's racer paragraph
+    claude = _flat(_claude_ceiling_paragraph(_claude_md_text()))
+    worst_match = re.search(r"\*\*(\d+)\*\* at the default (\d+)", claude)
+    assert worst_match, (
+        "CLAUDE.md's ceiling paragraph no longer states the worst MECHANICAL run at the default "
+        "limit in a shape this pin can read. Reword freely — but update this regex, do not drop it"
+    )
+    claude_worst, claude_default = int(worst_match.group(1)), int(worst_match.group(2))
+    table = re.search(r"the ceiling is \*\*`2 × wip_limit`\*\*:(.*?)\.", claude)
+    assert table, (
+        "CLAUDE.md no longer follows its ceiling formula with the (limit -> ceiling) table this "
+        "pin re-derives. Reword freely — but update this regex, do not delete the check"
+    )
+    claude_ceilings: dict[int, int] = {}
+    for entry in table.group(1).split(","):
+        numbers = re.findall(r"\d+", entry)
+        assert len(numbers) == 2, (
+            f"CLAUDE.md's ceiling-table entry {entry.strip()!r} is not the '<ceiling> at <limit>' "
+            f"shape this pin parses; update the regex rather than removing the arithmetic check"
+        )
+        claude_ceilings[int(numbers[1])] = int(numbers[0])
+    re_derive("CLAUDE.md's ceiling paragraph", claude_default, claude_worst, claude_ceilings)
+
+    # --- SKILL.md: «Откуда потолок», the same derivation written for agents
+    skill = _flat(_ceiling_derivation_section(_skill_text()))
+    default_match = re.search(
+        r"При дефолтном лимите (\d+) худший механический прогон равен (\d+), "
+        r"а потолок — \*\*(\d+)\*\*",
+        skill,
+    )
+    assert default_match, (
+        "SKILL.md's «Откуда потолок» no longer states the worst run AND the ceiling at the default "
+        "limit in a shape this pin can read. Reword freely — but update this regex, do not drop it"
+    )
+    skill_default, skill_worst = int(default_match.group(1)), int(default_match.group(2))
+    skill_ceilings = {skill_default: int(default_match.group(3))}
+    narrow = re.search(r"при лимите (\d+) потолок (\d+)", skill)
+    assert narrow, (
+        "SKILL.md's «Откуда потолок» no longer states the sequential case (limit 1), the instance "
+        "that proves the rule is a formula and not the default's constant; update this regex"
+    )
+    skill_ceilings[int(narrow.group(1))] = int(narrow.group(2))
+    for limit, ceiling in re.findall(r"при (\d+) — (\d+)", skill):
+        skill_ceilings[int(limit)] = int(ceiling)
+    re_derive("SKILL.md's «Откуда потолок»", skill_default, skill_worst, skill_ceilings)
+
+    # --- and the two copies of one derivation must tabulate the SAME rule.
+    # Compared as WHOLE mappings, not "where they overlap", which is the form review measured
+    # useless: both re_derive calls above force each dict to {n: 2n} INDEPENDENTLY, so equal
+    # VALUES at a shared limit are already implied and a per-limit value loop could not fail for
+    # any input. What is NOT implied is the KEY SET — one file's table narrowing away from the
+    # other — and that is a real divergence: dropping `10 at 5` from CLAUDE.md while the shipped
+    # rulebook keeps it passed GREEN under the overlap-only comparison this replaced. Hence one
+    # assertion that can actually fire, instead of a loop that cannot.
+    assert claude_ceilings == skill_ceilings, (
+        f"CLAUDE.md and SKILL.md no longer state the same (limit -> ceiling) table: CLAUDE.md has "
+        f"{sorted(claude_ceilings.items())}, SKILL.md has {sorted(skill_ceilings.items())} — "
+        f"limits only one of them tabulates: {sorted(set(claude_ceilings) ^ set(skill_ceilings))}. "
+        f"Only SKILL.md self-heals onto every consumer, so a table that narrows on one side leaves "
+        f"agents and maintainers reading different rules; restore the missing rows, or move BOTH "
+        f"copies together (and this pin's regexes with them)"
+    )
 
 
 def _shared_resources_section(text: str) -> str:
