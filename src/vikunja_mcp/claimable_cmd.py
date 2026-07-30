@@ -42,8 +42,16 @@ def classify_next(result: dict) -> dict:
     Claimable == a task is offered at all; `kind` names WHICH of next_task's branches
     offered it, so the hub can log/branch without re-deriving the rules. The flag
     precedence mirrors next_task's own result shapes: a review offer carries review:true,
-    a resume carries resume:true + stage (stage 'Queue' means a STUCK claim — assigned
-    but never moved — not an active task), the free queue carries resume:false + task.
+    a resume carries resume:true, the free queue carries resume:false + task.
+
+    ⚠ `stage` is on EVERY task-bearing result now (all four: free queue and stuck claim both
+    say 'Queue', an active task says Design/Build, a review offer says 'Review' — SKILL.md's
+    tick branches on it uniformly). So `stage` alone does NOT identify a shape, and the check
+    below must stay INSIDE the resume-truthy branch: it separates a stuck claim from an active
+    task and NOTHING else. Hoisted out, a free-queue result (resume:false, stage 'Queue')
+    would classify as "stuck_claim" — a hub-visible kind change on the most common branch
+    there is. Pinned from both sides: test_claimable_cmd (this shape keeps kind "queue") and
+    workflow.py's own comment at the free-queue return.
     task:null is the not-claimable family, where the additive discriminators cycle/
     starving distinguish a wedged board from a genuinely empty queue (all three are
     'don't launch an agent', but they are NOT the same thing to a human).

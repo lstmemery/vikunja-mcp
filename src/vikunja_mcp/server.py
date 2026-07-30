@@ -232,7 +232,8 @@ def next_task(exclude: list[int] | None = None) -> dict:
     and not your own (review_kind names the rubric: 'bug' or 'change'), (4) the top FREE
     task in Queue. Never hands out a task assigned to someone else — those are "for humans".
     Leaves Backlog, blocked, and epic containers (label epic — a container, not a unit of
-    work) alone. One task at a time.
+    work) alone. One task at a time BY DEFAULT — up to wip.limit at once where a wip_limit is
+    configured (see PARALLEL DRAIN below); the `wip` payload, never a guess, says which.
     Among your active tasks, one that is a predecessor of another of your active tasks is
     handed back first (finish the unblocking rework before its successor), overriding priority.
     A free task whose predecessor
@@ -269,10 +270,12 @@ def claim(task_id: int) -> dict:
     tasks or ones already assigned to you; one assigned to someone else is "for humans"
     and claim won't hand it over. Also refused outside Queue and on a lost race (call
     next_task then). An epic container (label epic) is refused too — it's a container, not a
-    unit of work; its evidence lives in its children, so work on those. If the single-WIP
-    policy is enabled (enforce_single_wip in the repo toml, off by default), claim also
-    refuses while you already have an active Design/Build task — finish it or return_task
-    it first."""
+    unit of work; its evidence lives in its children, so work on those. Where the repo toml
+    sets a WIP policy (wip_limit = N, or the legacy enforce_single_wip = true meaning N=1;
+    unset by default = no gate), claim also refuses once you already hold N active
+    Design/Build tasks — "WIP limit reached (N/N) — you already hold #… Finish one (advance
+    to Review) or return_task it before claiming another". next_task's `wip` payload reports
+    the same limit and how many slots are free."""
     return _wf().claim(task_id)
 
 

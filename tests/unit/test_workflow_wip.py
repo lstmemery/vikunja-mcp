@@ -163,13 +163,18 @@ def test_excluded_stuck_queue_task_is_not_handed_back():
 # --- the `stage` payload invariant the rulebook's tick branches on ---
 
 def test_every_task_bearing_next_task_result_carries_its_stage():
-    """SKILL.md's parallel tick decides "claim or not" by `stage` (Queue -> claim, even when
-    resume is true, because that finishes a partial claim; Design/Build -> already yours). That
-    rule is only writable if EVERY branch that hands back a task says which stage it came from.
-    Two branches used to omit it — the free queue and the review offer — and the free queue is
-    the most common branch there is, so the rulebook's discriminator was missing exactly where it
-    mattered and the rule got written wrong twice (rounds 2 and 3 of review). Cover all four
-    task-bearing shapes in ONE test so a new branch cannot quietly reintroduce the gap."""
+    """SKILL.md decides "claim or not" by `stage` (Queue -> claim, even when resume is true,
+    because that finishes a partial claim; Design/Build -> already yours). That rule is only
+    writable if EVERY branch that hands back a task says which stage it came from. Two branches
+    used to omit it — the free queue and the review offer — and the free queue is the most common
+    branch there is, so the rulebook's discriminator was missing exactly where it mattered and the
+    rule got written wrong twice (rounds 2 and 3 of review).
+
+    Scope, stated honestly: this walks the four task-bearing shapes that exist TODAY (free queue,
+    stuck claim, active task, review offer) and fails if any of them drops `stage`. It is an
+    enumeration, not a guarantee — a FIFTH branch added later without `stage` would not fail
+    here, because nothing enforces the invariant structurally. Extend this test when you add a
+    branch; that obligation is the whole point of keeping all four in one place."""
     api, wf = _env(wip_limit=3)
 
     free = api.add_task("free", "Queue")
