@@ -77,7 +77,12 @@ docker rm -f vikunja-test
   converts `WorkflowError/ConfigError/VikunjaError/httpx.HTTPError` into
   `{"error": ...}` tool results (never crashes the stdio server). Tool
   docstrings are agent-facing rules — treat them as UX copy, keep them
-  prescriptive (when to call, not just what it does).
+  prescriptive (when to call, not just what it does). **The MCP SDK is imported
+  LAZILY** (`_server()`, the lone import site; `@_mcp_tool` only collects the 12
+  tools, `_server()` registers them when the stdio server is actually built) —
+  never move it back to module scope: `claimable`/`workspace`/`setup`/
+  `install-skill`/`--version` don't speak MCP and would pay ~0.43s of SDK import
+  each, worst on `claimable`, which hgdev-acp spawns per poll tick.
 - `src/vikunja_mcp/setup_cmd.py` — `vikunja-mcp setup` (idempotent board
   reconcile: canonical buckets + ORDER via positions, `Todo→Queue` /
   `Doing→Build` migration, shares) and `install-skill` (copies the packaged

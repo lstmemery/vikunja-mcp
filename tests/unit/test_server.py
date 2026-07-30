@@ -1,4 +1,7 @@
 import asyncio
+import json
+import subprocess
+import sys
 
 import httpx
 
@@ -587,6 +590,84 @@ def test_main_dispatches_workspace_subcommand(monkeypatch):
 
     assert exc.value.code == 7
     assert calls == []
+
+
+# --- tracker #521: the MCP SDK must stay OFF every non-MCP CLI path -----------------------------
+# server.py used to build MCPServer at module scope, so every subcommand routed through main()
+# paid the full SDK import (107 mcp-rooted modules; MCPServer.__init__ also calls
+# logging.basicConfig). `claimable` pays it worst — hgdev-acp's loop spawns it per poll tick.
+# This has to be probed in a SUBPROCESS: pytest itself imports the SDK long before this module
+# runs (the tools/list test above builds the real server), so an in-process `"mcp" in sys.modules`
+# assertion could never fail. The probe reports which mcp-rooted modules are loaded after each
+# non-MCP path, and after touching server.mcp — the last one must be NON-empty, or the test would
+# be passing simply because the SDK is unimportable.
+_LAZY_IMPORT_PROBE = """
+import asyncio, contextlib, io, json, sys
+
+
+def mcp_modules():
+    return sorted(m for m in sys.modules if m == "mcp" or m.startswith("mcp."))
+
+
+import vikunja_mcp.server as server
+seen = {"import vikunja_mcp.server": mcp_modules()}
+
+# Stub the subcommand bodies (not the dispatch): the paths must be walked for real, but without
+# a tracker, a config or a write into ~/.claude. main() re-imports each on entry, so these land.
+import vikunja_mcp.claimable_cmd, vikunja_mcp.setup_cmd, vikunja_mcp.workspace_cmd
+vikunja_mcp.claimable_cmd.run_claimable = lambda: 0
+vikunja_mcp.workspace_cmd.run_workspace = lambda argv: 0
+vikunja_mcp.setup_cmd.run_setup = lambda argv: 0
+vikunja_mcp.setup_cmd.install_skill = lambda: None
+
+for argv in (["--version"], ["setup"], ["install-skill"], ["claimable"], ["workspace", "1"]):
+    with contextlib.redirect_stdout(io.StringIO()):
+        with contextlib.suppress(SystemExit):
+            server.main(argv=argv)
+    seen["main(%r)" % argv] = mcp_modules()
+
+tools = sorted(t.name for t in asyncio.run(server.mcp.list_tools()))
+seen["touched server.mcp"] = mcp_modules()
+print(json.dumps({"seen": seen, "tools": tools}))
+"""
+
+
+def test_no_non_mcp_cli_path_imports_the_mcp_sdk():
+    """#521: --version / setup / install-skill / claimable / workspace must all run with ZERO
+    mcp-rooted modules loaded; only touching the server (server.mcp / _server()) may import the
+    SDK — and when it does, all 12 tools are still registered by the deferred registry.
+    RED if the module-level `from mcp.server import MCPServer` / `mcp = MCPServer(...)` comes back
+    (verified by reintroducing it: every path then reports ~107 mcp modules)."""
+    probe = subprocess.run(
+        [sys.executable, "-c", _LAZY_IMPORT_PROBE],
+        capture_output=True, text=True, timeout=180,
+    )
+    assert probe.returncode == 0, probe.stderr
+    data = json.loads(probe.stdout.strip().splitlines()[-1])
+
+    for path, modules in data["seen"].items():
+        if path == "touched server.mcp":
+            continue
+        assert modules == [], f"{path} imported the MCP SDK: {modules[:5]}... ({len(modules)})"
+    # The negative assertions above are only meaningful if the SDK CAN be imported at all:
+    assert data["seen"]["touched server.mcp"], "the lazy build imported no SDK — probe is vacuous"
+    assert len(data["tools"]) == 12, data["tools"]
+
+
+def test_the_lazy_server_is_a_single_cached_instance():
+    """`server.mcp` (module __getattr__) and `_server()` (what main() calls) MUST be the same
+    object, built once. If they diverged, main() would run a DIFFERENT server than the one a
+    caller configured or a test patched — e.g. the claimable/workspace dispatch tests below patch
+    server.mcp.run to prove it is never called."""
+    assert server._server() is server.mcp
+    assert server.mcp is server.mcp
+
+
+def test_module_getattr_still_refuses_unknown_attributes():
+    """The PEP 562 hook exists only to keep `mcp` lazy — everything else must still AttributeError
+    (a hook that quietly returned something for any name would hide typos in tests and callers)."""
+    with pytest.raises(AttributeError, match="no attribute 'nope'"):
+        server.nope
 
 
 def test_server_self_heals_on_start_before_the_run_loop(monkeypatch):

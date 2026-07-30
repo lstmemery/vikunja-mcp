@@ -3,7 +3,6 @@ import sys
 from functools import wraps
 
 import httpx
-from mcp.server import MCPServer
 
 from vikunja_mcp import __version__
 from vikunja_mcp.api import VikunjaAPI, VikunjaError, canonical_base_url
@@ -11,10 +10,67 @@ from vikunja_mcp.config import ConfigError, load_config
 from vikunja_mcp.notify import WebhookNotifier
 from vikunja_mcp.workflow import Workflow, WorkflowError
 
-# version= is not cosmetic: MCPServer defaults it to "", where FastMCP used to report the
-# SDK's own version — so a client's server list would show a blank. Report OURS, which is
-# what a human debugging a rollout of the moving `stable` channel actually needs to see.
-mcp = MCPServer("vikunja-tracker", version=__version__)
+# The MCP SDK is imported LAZILY — inside _server(), never at module scope (tracker #521).
+# EVERY subcommand routes through main(), but only ONE of them speaks MCP: `claimable`,
+# `workspace`, `setup`, `install-skill` and `--version` used to pay the whole SDK import
+# (107 mcp-rooted modules, dragging in pydantic / opentelemetry / httpx2 / truststore) for
+# a protocol they never touch. It hurts `claimable` most: hgdev-acp's repo-agent loop spawns
+# it on EVERY poll tick as its pre-launch idle check, and it does nothing but
+# Workflow.next_task(). Measured best-of-10 on one machine (mcp 2.0.0, py3.12):
+#   python -c "import vikunja_mcp.server"   0.511s -> 0.077s   (-0.43s, 6.6x)
+#   vikunja-mcp --version                   0.509s -> 0.076s
+#   vikunja-mcp workspace (usage)           0.520s -> 0.082s
+#   vikunja-mcp claimable (end-to-end)      1.867s -> 1.598s   (the rest is tracker round-trips)
+# A second, initially-unnoticed win: MCPServer.__init__ calls logging.basicConfig(level=INFO) —
+# a PROCESS-WIDE side effect the old module-level construction inflicted on every subcommand, so
+# `claimable` used to emit one httpx "HTTP Request: ..." INFO line per tracker call to stderr.
+# Building the server only on the stdio path drops those (stdout was and stays the ONE JSON line;
+# verified byte-for-byte). The stdio server still configures logging exactly as before, just at
+# build time instead of import time — nothing in between logs through `logging`.
+# The price of laziness: `@mcp.tool()` cannot decorate anything at import time, so tool
+# REGISTRATION is deferred too — _mcp_tool remembers the function, _server() registers the
+# collected list onto the server it builds. Definition order is preserved, so the wire order
+# of tools/list is unchanged.
+_DEFERRED_TOOLS: list = []
+
+
+def _mcp_tool(fn):
+    """Mark a function as an MCP tool WITHOUT importing the SDK — a drop-in for the old
+    `@mcp.tool()`, registered later by _server(). The SAME object reaches the SDK as before
+    (the _tool wrapper, carrying its functools.wraps metadata), so the generated schema,
+    name and description are byte-identical to the eager-registration ones."""
+    _DEFERRED_TOOLS.append(fn)
+    return fn
+
+
+_mcp_server = None
+
+
+def _server():
+    """The stdio MCPServer — built ON FIRST USE and cached. The lone import site of the MCP
+    SDK, which is precisely what keeps it off every non-MCP CLI path (see above)."""
+    global _mcp_server
+    if _mcp_server is None:
+        from mcp.server import MCPServer
+
+        # version= is not cosmetic: MCPServer defaults it to "", where FastMCP used to report
+        # the SDK's own version — so a client's server list would show a blank. Report OURS,
+        # what a human debugging a rollout of the moving `stable` channel needs to see.
+        _mcp_server = MCPServer("vikunja-tracker", version=__version__)
+        for fn in _DEFERRED_TOOLS:
+            _mcp_server.tool()(fn)
+    return _mcp_server
+
+
+def __getattr__(name: str):
+    """PEP 562: keep `server.mcp` working, now as a lazily-built attribute — tests and any
+    consumer doing `from vikunja_mcp.server import mcp` still get the real server, built on
+    the spot. Code INSIDE this module must call _server() instead: a module-level __getattr__
+    is not consulted for a plain global-name lookup, only for attribute access on the module."""
+    if name == "mcp":
+        return _server()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 # A 401 from Vikunja is a CREDENTIAL problem, not a transient one. TWO traps here, both learned
 # the expensive way (tracker #140):
@@ -226,7 +282,7 @@ def _tool(fn):
     return wrapper
 
 
-@mcp.tool()
+@_mcp_tool
 @_tool
 def next_task(exclude: list[int] | None = None) -> dict:
     """What to do next, in order: (1) YOUR active task (Design/Build, incl. one bounced
@@ -268,7 +324,7 @@ def next_task(exclude: list[int] | None = None) -> dict:
     return _wf().next_task(exclude=exclude)
 
 
-@mcp.tool()
+@_mcp_tool
 @_tool
 def claim(task_id: int) -> dict:
     """Take a task from Queue: assigns you and moves it to Design. You may take free
@@ -284,7 +340,7 @@ def claim(task_id: int) -> dict:
     return _wf().claim(task_id)
 
 
-@mcp.tool()
+@_mcp_tool
 @_tool
 def get_task(task_id: int) -> dict:
     """Task dossier: full (untruncated) description, stage, assignees, labels, related
@@ -294,7 +350,7 @@ def get_task(task_id: int) -> dict:
     return _wf().get_task(task_id)
 
 
-@mcp.tool()
+@_mcp_tool
 @_tool
 def download_attachment(task_id: int, attachment_id: int) -> dict:
     """Download a task attachment to a temp file and return its PATH — then Read the path to
@@ -305,7 +361,7 @@ def download_attachment(task_id: int, attachment_id: int) -> dict:
     return _wf().download_attachment(task_id, attachment_id)
 
 
-@mcp.tool()
+@_mcp_tool
 @_tool
 def attach_file(task_id: int, path: str, note: str | None = None) -> dict:
     """Attach a LOCAL file — typically a SCREENSHOT of the finished work — to a task, so a human
@@ -327,14 +383,14 @@ def attach_file(task_id: int, path: str, note: str | None = None) -> dict:
     return _wf().attach_file(task_id, path, note=note)
 
 
-@mcp.tool()
+@_mcp_tool
 @_tool
 def comment(task_id: int, text: str) -> dict:
     """A progress note: findings, decisions ('picked X over Y because Z')."""
     return _wf().comment(task_id, text)
 
 
-@mcp.tool()
+@_mcp_tool
 @_tool
 def advance(
     task_id: int, to: str,
@@ -358,7 +414,7 @@ def advance(
     )
 
 
-@mcp.tool()
+@_mcp_tool
 @_tool
 def review_task(task_id: int, verdict: str, report: str) -> dict:
     """Independent review of a task in Review (offered via next_task with review_kind). You
@@ -374,7 +430,7 @@ def review_task(task_id: int, verdict: str, report: str) -> dict:
     return _wf().review_task(task_id, verdict, report)
 
 
-@mcp.tool()
+@_mcp_tool
 @_tool
 def call_human(task_id: int, question: str) -> dict:
     """A question for the human — the ONLY channel (don't ask in the console: the
@@ -391,7 +447,7 @@ def call_human(task_id: int, question: str) -> dict:
     return _wf().call_human(task_id, question)
 
 
-@mcp.tool()
+@_mcp_tool
 @_tool
 def return_task(task_id: int, reason: str) -> dict:
     """Return a task because of an EXTERNAL block (no access/dependency/someone else's
@@ -400,7 +456,7 @@ def return_task(task_id: int, reason: str) -> dict:
     return _wf().return_task(task_id, reason)
 
 
-@mcp.tool()
+@_mcp_tool
 @_tool
 def decompose(task_id: int, subtasks: list[dict], ordered: bool = False) -> dict:
     """Break up YOUR large task (>~half a day of work) into >=2 subtasks:
@@ -413,7 +469,7 @@ def decompose(task_id: int, subtasks: list[dict], ordered: bool = False) -> dict
     return _wf().decompose(task_id, subtasks, ordered)
 
 
-@mcp.tool()
+@_mcp_tool
 @_tool
 def file_task(
     title: str, description: str = "", priority: int = 0,
@@ -451,6 +507,9 @@ def file_task(
 
 
 def main(argv: list[str] | None = None) -> None:
+    # Dispatch order is LOAD-BEARING and stays exactly as it was: every non-MCP subcommand
+    # returns/exits BEFORE _self_heal_installed_artifacts() and before _server(), which is
+    # what keeps them off ~/.claude AND (since #521 deferred the SDK import) off the MCP SDK.
     args = sys.argv[1:] if argv is None else argv
     if args and args[0] == "--version":
         print(f"vikunja-mcp {__version__}")
@@ -480,7 +539,7 @@ def main(argv: list[str] | None = None) -> None:
 
         raise SystemExit(run_workspace(args[1:]))
     _self_heal_installed_artifacts()
-    mcp.run()
+    _server().run()          # _server(), not the module global: builds + registers on demand
 
 
 def _self_heal_installed_artifacts() -> None:
