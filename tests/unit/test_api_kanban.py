@@ -1033,8 +1033,14 @@ def test_a_page_filtered_down_to_nothing_still_ends_the_read(info_status):
 
 def _flat(pages, *, page_size=5, total_pages=None, info_status=200,
           harness_cap=3 * MAX_UNPROVEN_PAGES):
-    """A server that answers ONE list endpoint out of `pages` ({page_no: [row, ...]}), with the
-    x-pagination-total-pages header real Vikunja sends on these endpoints.
+    """A server that answers ONE list endpoint out of `pages`, with the x-pagination-total-pages
+    header real Vikunja sends on these endpoints.
+
+    `pages` is either a mapping {page_no: [row, ...]} — every page it does not name is EMPTY, which
+    is how a finite list ends — or a CALLABLE page -> [row, ...] for a server that HAS no last page.
+    The callable form exists because a dict cannot express the shape the runaway-read tests are
+    about: `.get(page, [])` hands back an empty page eventually, and an empty page ends the read all
+    by itself (`if not items: break`), so a dict-backed server can never exercise the ceiling at all.
 
     The HARNESS CAP is the same honesty device `_tracker` uses: several of these shapes make the
     loop run forever if its termination guard is removed (a server that ignores `?page=` serves a
@@ -1051,7 +1057,8 @@ def _flat(pages, *, page_size=5, total_pages=None, info_status=200,
         if len(seen) > harness_cap:
             raise RuntimeError(f"the read issued more than {harness_cap} requests")
         headers = {} if total_pages is None else {"x-pagination-total-pages": str(total_pages)}
-        return httpx.Response(200, json=pages.get(page, []), headers=headers)
+        rows = pages(page) if callable(pages) else pages.get(page, [])
+        return httpx.Response(200, json=rows, headers=headers)
 
     return make_api(handler), seen
 
@@ -1198,19 +1205,48 @@ def test_a_list_that_never_finishes_paging_raises_instead_of_truncating():
     indistinguishable from rows that are genuinely gone, and absence is precisely what these
     callers act on (setup CREATES the project it cannot see). The server modelled here hands out
     one brand-new row per page and never fills one, so `max_items_per_page` justifies no page and
-    the whole budget is spent."""
-    def handler(request):
-        if request.url.path.endswith("/info"):
-            return httpx.Response(200, json={"max_items_per_page": 5})
-        page = int(request.url.params.get("page", "1"))
-        return httpx.Response(200, json=[{"id": page, "title": f"p{page}"}])
+    the whole budget is spent.
 
-    api = make_api(handler)
+    IT GOES THROUGH `_flat` FOR ITS HARNESS CAP, and that is the whole of VMCP-119 (594). This was
+    the ONE runaway-read test in this file built on a bare `make_api`, and a server with no last
+    page is exactly the fixture that cannot survive losing the guard it pins: MEASURED on the tree
+    before this card, ceiling -> `if False:`, __pycache__ cleared — this test produced NO RESULT AT
+    ALL, killed by SIGALRM at 60 s, while the identical mutation of the nested twin went RED in 5 s
+    (the first sweep that hit it blew a ten-minute tool timeout and left api.py mutated on disk).
+    A guard whose deletion HANGS is pinned in no way a reviewer or CI can use — a hang is
+    indistinguishable from a slow suite, and nothing in this repo bounds a pytest run. With the cap
+    the same mutation now FAILS, in 0.23 s of test time (1 s wall including interpreter start), on
+    `RuntimeError: the read issued more than 360 requests` at `GET /projects?page=361`.
+
+    THE CAP IS `_flat`'S OWN DEFAULT, 3 * MAX_UNPROVEN_PAGES = 360, deliberately NOT tuned down: the
+    correct read spends 120 requests here, so the cap sits at 3x what passing costs. A cap near the
+    real cost would be the other failure mode — it would fire on the shipped code and mask the very
+    ceiling it is bounding, which is why the number is a multiple of the budget rather than a
+    hand-picked one.
+
+    THE REQUEST COUNT IS PINNED TOO (same assert as the nested twin at
+    test_view_tasks_raises_instead_of_paging_forever_on_an_unknown_page_size). It separates
+    "stopped" from "stopped AT THE CEILING": the cap alone leaves `>=` -> `>` green here, because an
+    off-by-one ceiling still raises 508 with this exact message, one request later and 239 short of
+    the cap — MEASURED by deleting this line and running that mutation, which left this test PASSING.
+
+    TWO THINGS IT IS NOT, both measured rather than assumed. It is NOT the sole guard on that
+    mutation: `>=` -> `>` over the whole unit suite is 2 failed / 688 passed, and the other is
+    test_a_flat_list_that_dribbles_new_rows_forever_RAISES_instead_of_a_partial_list. That is worth
+    keeping anyway, because the two pin DIFFERENT numbers for the same budget — 120 here, 121 there
+    — and the gap IS the accounting rule: that server fills its first page, so `max_items_per_page`
+    justifies one request and the ceiling is reached one later; this one never fills a page at all,
+    so nothing is justified and the budget buys 120. And it does NOT pin the budget's VALUE: the
+    constant is imported from the code under test, so both sides of the assert move together if
+    _MAX_UNPROVEN_PAGES is edited. It pins WHERE the guard fires relative to the budget. No test in
+    this file claims the latter, and this one should not be read as doing so."""
+    api, seen = _flat(lambda page: [{"id": page, "title": f"p{page}"}], page_size=5)
 
     with pytest.raises(VikunjaError) as exc:
         api.projects()
     assert exc.value.status == 508
     assert "/projects" in exc.value.message and "NOTHING is returned" in exc.value.message
+    assert len(seen) == MAX_UNPROVEN_PAGES   # the ceiling'th request is the LAST one sent
 
 
 def test_neither_reader_takes_a_SHORT_page_for_an_exhausted_one():
@@ -1659,10 +1695,12 @@ def test_pages_the_stated_page_size_justifies_cost_a_flat_read_nothing():
 
     What it does NOT hold, stated so nobody reads more into it: the OPPOSITE direction of the same
     guard — never charging a page, so the ceiling can no longer stop a degraded read. That belongs
-    to test_a_list_that_never_finishes_paging_raises_instead_of_truncating, and VMCP-119 is the
-    open card that the mutation HANGS that test rather than failing it, because it is the one
-    runaway-read test built on a bare `make_api`. This one cannot hang whatever is mutated: `_flat`
-    carries the harness cap."""
+    to test_a_list_that_never_finishes_paging_raises_instead_of_truncating, which used to HANG on
+    that mutation rather than fail — it was the one runaway-read test in this file built on a bare
+    `make_api`. VMCP-119 (594) moved it onto `_flat` too, and MEASURED the direction this paragraph
+    hands off: `if page_size is None or len(items) < page_size:` -> `if False:`, so no page is ever
+    charged, is now RED there in ~1 s on the harness cap. Neither test can hang whatever is
+    mutated."""
     full_pages = MAX_UNPROVEN_PAGES + 40                    # 160 pages, far past the ceiling
     ids = list(range(1, 5 * full_pages + 1))                # 800 rows served 5 at a time
     api, seen = _flat({p: [{"id": i} for i in ids[(p - 1) * 5:p * 5]]
