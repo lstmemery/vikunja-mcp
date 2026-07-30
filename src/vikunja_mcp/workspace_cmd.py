@@ -827,17 +827,31 @@ def _build_workflow(root: Path) -> tuple:
 #     holds unsaved work, and it stays that way for HOURS until a human answers. The card is
 #     already the human's signal; a `kept` line every tick adds nothing. The SAME two refusals on
 #     a card that is NOT parked mean work nobody is coming back for — that one has to shout.
-#   * _EXPECTED_ALWAYS — a detached review tree holding an in-tree commit. Permanent by
+#   * _EXPECTED_IN_A_REVIEW_TREE — a detached REVIEW tree holding an in-tree commit. Permanent by
 #     construction (the reachability guard rightly refuses to release it and `--gc` cannot reap
 #     it), so it is the entry that would otherwise make `kept` non-empty FOREVER. SKILL.md's
 #     answer is the fix, and it is a rule for the reviewer, not a chore for the human: write the
 #     verdict as a tracker comment, never as a commit in the tree.
+#
+#     ROUND-2 REVIEW, and the reason this one is keyed on the ROLE and not on the code alone: the
+#     whole justification above is about a REVIEW tree, but `unreachable-head` is emitted by the
+#     detached branch of `_release_locked`, which a BUILD tree also reaches — the review's
+#     counter-case came straight out of this project's own integration recipe. CONSTRUCTED AND
+#     MEASURED: `git fetch origin && git rebase origin/main` interrupted mid-replay (a killed
+#     turn, this project's documented failure mode) leaves the build tree `git status`-CLEAN,
+#     DETACHED (`branch: None`), with the replayed commit reachable from no ref. Once the card
+#     leaves Build the tree is dead, so the sweep grades it — and graded on the code alone it was
+#     `expected`, i.e. filed under "do not look", forever, for a state ONLY a human can clear.
+#     That is the shape of CODE_HALF_CREATED, which is correctly never routine. So: routine in a
+#     review tree, an alarm in a build tree. This does NOT bring back the never-empty `kept` the
+#     split exists to fix — an interrupted rebase is an incident, not a state the pipeline
+#     produces on the happy path.
 # Neither set contains CODE_HALF_CREATED, CODE_SELF_TREE, CODE_RELEASE_ERROR or CODE_NO_WORKTREE:
 # a parked card must not launder a broken tool state. A half-created tree needs a human with two
 # git commands whether or not its card is parked, and the other three describe gc itself, not the
 # work in the tree.
 _EXPECTED_WHEN_PARKED = frozenset({CODE_DIRTY, CODE_UNPUSHED})
-_EXPECTED_ALWAYS = frozenset({CODE_UNREACHABLE_HEAD})
+_EXPECTED_IN_A_REVIEW_TREE = frozenset({CODE_UNREACHABLE_HEAD})
 
 
 def _keep_is_expected(entry: dict, parked: set[int]) -> bool:
@@ -848,10 +862,13 @@ def _keep_is_expected(entry: dict, parked: set[int]) -> bool:
     guard, a renamed constant, a reason produced by something that never learned to set `code` —
     is UNEXPECTED, so it lands in `kept`. Wrong-and-noisy costs a human one glance; wrong-and-quiet
     is how the never-read signal this split exists to fix comes back in a new guise.
+
+    Same direction on `role`: read with `.get`, so an entry that somehow carries no role fails the
+    review conjunct and shouts rather than KeyError-ing the sweep or being waved through.
     """
     code = entry.get("code")
-    if code in _EXPECTED_ALWAYS:
-        return True
+    if code in _EXPECTED_IN_A_REVIEW_TREE:
+        return entry.get("role") == "review"
     return code in _EXPECTED_WHEN_PARKED and entry["task_id"] in parked
 
 
@@ -948,17 +965,27 @@ def gc_workspaces(cwd: Path | None = None, workflow=None) -> dict:
     now only the first kind, so EMPTY means nothing to read; `expected` is the second kind, kept
     and reported (nothing is hidden, and nothing is removed either — every entry still carries
     `released: false`) but not worth a look. The grading is `_keep_is_expected`, keyed on each
-    refusal's `code` plus the board's parked set, and it fails toward `kept`. Round 2's fix to the
-    live self-tree was this same failure in an earlier guise: whatever is added here later, the
-    test to write is "on a healthy board, `kept` is empty".
+    refusal's `code`, its `role` and the board's parked set, and it fails toward `kept`. Round 2's
+    fix to the live self-tree was this same failure in an earlier guise: whatever is added here
+    later, the test to write is "on a healthy board, `kept` is empty".
 
     The two compose in one direction only, and it is the right one: a tree skipped as YOUNG never
     reaches a release guard, so it produces no refusal to grade and appears in NEITHER list —
     `expected` is for a refusal that WAS made and is routine, never for a tree gc declined to
-    inspect. The one interaction worth knowing when reading a report: gc's own `git status`
-    rewrites a tree's index, so an inspected-and-kept tree looks young on the next tick and is
-    skipped — a standing entry (either list) therefore reappears about once per grace window
-    rather than every tick.
+    inspect.
+
+    THE CADENCE THAT COMES OUT OF THAT COMPOSITION, measured across consecutive sweeps rather than
+    reasoned about, because a report is read tick by tick: inspecting a tree means running
+    `git status` INSIDE it, and that rewrites its index — so a tree this sweep refused reads as
+    freshly touched on the next one and VMCP-71 skips it, silently, until the window elapses. A
+    standing refusal gc got as far as inspecting (`dirty`, `unpushed`, `unreachable-head`)
+    therefore reappears about once per `_REAP_GRACE_SECONDS`, not on every tick; refusals decided
+    BEFORE any git call in the tree (`half-created`, `self-tree`) are reported on every tick.
+    Nothing is lost either way — re-measured, the entry comes back on the first sweep past the
+    window — but it means an empty `kept` on ONE tick is "nothing to look at this tick", not "no
+    tree needs a human". SKILL.md says so in those words, and the alternative (not letting gc's
+    own inspection count as activity) is filed as its own card rather than made a fifth change to
+    this function.
 
     VMCP-72: the read under the lock is bounded OVERALL, not just per request
     (`_READ_DEADLINE_SECONDS`) — its request count grows with the board, so a per-request bound

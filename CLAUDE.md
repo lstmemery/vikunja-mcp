@@ -132,7 +132,11 @@ docker rm -f vikunja-test
   `code`, and `--gc` GRADES them into two lists (`_keep_is_expected`): `kept` = a human should
   look, `expected` = the two routine states that used to keep `kept` permanently non-empty — a
   parked Your Call card's unsaved work (hence `Workflow.parked_task_ids`, off the same board
-  fetch) and a review tree's in-tree commit. An unknown code lands in `kept`: noisy beats quiet.
+  fetch) and a review tree's in-tree commit. Routine is a property of the guard AND the board AND
+  the ROLE: the same `unreachable-head` in a BUILD tree is an interrupted rebase, which only a
+  human can clear, so it shouts. An unknown code lands in `kept`: noisy beats quiet. A `released`
+  entry can still need action — #517's `branch_deleted: false` + `warning` (the tree went, the
+  branch leaked), which is why the rulebook says read `kept` AND scan `released`.
 - `src/vikunja_mcp/skills/tracker/SKILL.md` — process rules for agents
   (queue discipline, orchestrator-dispatches-subagents, report format,
   independent bug review, and — when `wip.limit > 1` — the parallel drain:

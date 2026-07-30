@@ -1315,7 +1315,11 @@ def test_gc_reports_a_review_trees_in_tree_commit_as_expected_forever(repo, trac
     detached tree, so the reachability guard refuses to release it and `--gc` cannot reap it —
     there is no board state that ever clears this, which is exactly why it must not sit in the
     list a human is told to read. Expected regardless of any parked card (its card is in Done
-    here); SKILL.md's fix is the reviewer's rule, not a chore for the human."""
+    here); SKILL.md's fix is the reviewer's rule, not a chore for the human.
+
+    The `role` assertion is half of the round-2 pin: this refusal is routine BECAUSE it is a
+    review tree, so the test that proves it must say which role it observed — its twin below
+    holds the same code to the opposite verdict in a build tree."""
     api, wf = tracker
     api.add_task("reviewed and done", "Done")             # task 7's card has LEFT Review -> dead
     path, pinned, _sha2 = _poisoned_review_tree(repo)     # review-7, holds an in-tree commit
@@ -1326,7 +1330,65 @@ def test_gc_reports_a_review_trees_in_tree_commit_as_expected_forever(repo, trac
     assert res["kept"] == []
     assert [e["task_id"] for e in res["expected"]] == [7]
     assert res["expected"][0]["code"] == workspace_cmd.CODE_UNREACHABLE_HEAD
+    assert res["expected"][0]["role"] == "review"
     assert _git(path, "rev-parse", "HEAD") == pinned       # and the commit is still there
+
+
+def _interrupted_rebase_build_tree(repo, task_id=42):
+    """CONSTRUCT the state, do not simulate it: a BUILD tree left mid-`git rebase origin/main`.
+
+    Straight out of this project's own integration recipe — every per-task agent runs
+    `git fetch origin && git rebase origin/main` before pushing, and a turn killed inside that
+    (session limit, API error) leaves exactly this. `--exec false` is only the KILLER here; what
+    the state IS gets asserted, not assumed: clean working tree, detached HEAD, and the replayed
+    commit reachable from no ref (`task/<id>` still points at the PRE-rebase commit, which is
+    also why the work itself is not at risk). Returns the tree path.
+    """
+    path = Path(ensure_workspace(task_id, cwd=repo)["path"])
+    (path / "feature.txt").write_text("real work\n")
+    _git(path, "add", "feature.txt")
+    _git(path, "commit", "-m", "work in progress")
+    before = _git(path, "rev-parse", "HEAD")
+
+    (repo / "sibling.txt").write_text("a sibling landed while we worked\n")
+    _git(repo, "add", "sibling.txt")
+    _git(repo, "commit", "-m", "sibling")
+    _git(repo, "push", "origin", "main")
+
+    _git(path, "fetch", "origin")
+    rebase = subprocess.run(["git", "rebase", "origin/main", "--exec", "false"],
+                            cwd=path, capture_output=True, text=True)
+    assert rebase.returncode != 0, "the rebase was meant to be INTERRUPTED, not to complete"
+
+    head = _git(path, "rev-parse", "HEAD")
+    assert _git(path, "status", "--porcelain") == "", "an interrupted rebase leaves a CLEAN tree"
+    assert [w for w in list_worktrees(repo) if w["path"] == path][0]["branch"] is None
+    assert head != before, "nothing was replayed — the fixture stopped before it did any work"
+    assert _git(repo, "for-each-ref", "--contains", head, "--format=%(refname)") == ""
+    _quiesce(path)                                        # after the rebase: it rewrites the index
+    return path
+
+
+def test_gc_shouts_about_a_build_tree_an_interrupted_rebase_left_detached(repo, tracker):
+    """ROUND-2 REVIEW, THE finding: `unreachable-head` used to be graded routine on the code alone,
+    on a justification (a reviewer's in-tree notes, above) that is entirely about REVIEW trees —
+    while the very same code is what a BUILD tree emits after an interrupted rebase.
+
+    Nothing about that is routine: the tree can never be released or reaped, only a human can
+    clear it, and grading it `expected` filed it under "do not look" FOREVER — the exact shape of
+    `half-created`, which this module correctly calls never-routine. Delete the `role` conjunct in
+    `_keep_is_expected` and this goes red on `kept == []`, quietly, which is the whole point."""
+    api, wf = tracker
+    api.add_task("its card has moved on", "Done")         # task 42 is no longer in Build -> dead
+    path = _interrupted_rebase_build_tree(repo)
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert res["expected"] == []                          # NOT filed under "no action needed"
+    assert [k["task_id"] for k in res["kept"]] == [42]
+    assert res["kept"][0]["code"] == workspace_cmd.CODE_UNREACHABLE_HEAD
+    assert res["kept"][0]["role"] == "build"
+    assert path.exists()                                  # and still refused, never destroyed
 
 
 def test_a_parked_card_never_launders_a_half_created_tree_into_expected(repo, tracker, monkeypatch):

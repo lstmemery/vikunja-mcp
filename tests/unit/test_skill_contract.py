@@ -137,6 +137,31 @@ def test_the_integration_recipe_pushes_to_the_main_branch_and_names_gc():
     assert "workspace --gc" in text, "the tick no longer reaps dead worktrees (workspace --gc)"
 
 
+def _gc_section(text: str) -> str:
+    """Just the `--gc` step of the orchestrator's tick, sliced out of the rulebook.
+
+    ROUND-2 REVIEW, Minor: the assertions below used to be `code in text` — a WHOLE-FILE substring
+    — and the rulebook explains these codes in TWO places, the `--gc` report and the `--release`
+    recipe. MEASURED: delete the `dirty`/`unpushed` explanation out of the gc section entirely and
+    the pin stayed green, because the release recipe's own prose still contains both words.
+    Re-valuing a constant did fail, as claimed, but a pin that catches a rename and not a deletion
+    guards the cheaper half of the risk. Scope it to the section that has to do the explaining.
+
+    Both anchors are asserted rather than assumed: a slice that silently becomes empty would turn
+    every assertion below red (loud, fine), but a slice that silently WIDENS to the whole file
+    would restore exactly the weakness this exists to remove — so the width is checked too.
+    """
+    start = text.find("  1. `vikunja-mcp workspace --gc`")
+    assert start != -1, "the orchestrator's tick no longer opens with the `workspace --gc` step"
+    end = text.find("\n  2. ", start)
+    assert end != -1, "the `--gc` step no longer ends where step 2 of the tick begins"
+    section = text[start:end]
+    assert 0 < len(section) < len(text), "the --gc slice is not a proper subset of SKILL.md"
+    assert "workspace --release <id>" not in section, \
+        "the slice swallowed the --release recipe — the very prose it exists to exclude"
+    return section
+
+
 def test_the_gc_report_split_the_skill_teaches_is_the_one_the_code_produces():
     """VMCP-68: `--gc` reports its refusals in TWO lists — `kept` ("a human should look") and
     `expected` ("routine, no action") — and the rulebook is what tells the pump which one to read.
@@ -146,24 +171,50 @@ def test_the_gc_report_split_the_skill_teaches_is_the_one_the_code_produces():
     "nothing to look at".
 
     Anchored on the CONSTANTS rather than on literals repeated here, so a changed VALUE fails until
-    the rulebook is updated with it. `expected` is anchored inside gc_workspaces' own source, not
-    the module's: the module-level word appears in comments and helper names, so a bare
-    module-wide substring would stay green through the very rename it claims to catch."""
+    the rulebook is updated with it — and scoped to the `--gc` section (see `_gc_section`), so
+    DELETING an explanation fails too instead of coasting on the `--release` recipe's prose.
+    `expected` is anchored inside gc_workspaces' own source, not the module's: the module-level
+    word appears in comments and helper names, so a bare module-wide substring would stay green
+    through the very rename it claims to catch."""
     text = _skill_text()
+    section = _gc_section(text)
     gc_src = inspect.getsource(workspace_cmd.gc_workspaces)
     assert '"expected": expected' in gc_src, \
         "SKILL.md tells the pump to read `expected` but gc_workspaces stopped returning that list"
-    assert "`expected`" in text, "SKILL.md no longer names the `expected` list --gc returns"
+    assert "`expected`" in section, "SKILL.md's --gc rule no longer names the `expected` list"
     for code in (
         workspace_cmd.CODE_DIRTY,             # kept, or expected while the card is parked
         workspace_cmd.CODE_UNPUSHED,          # the Your Call state that made `kept` never-empty
-        workspace_cmd.CODE_UNREACHABLE_HEAD,  # the review-notes state that made it never-empty
+        workspace_cmd.CODE_UNREACHABLE_HEAD,  # routine in a REVIEW tree, an alarm in a build one
         workspace_cmd.CODE_HALF_CREATED,      # never expected: only a human can clear it
         workspace_cmd.CODE_SELF_TREE,
         workspace_cmd.CODE_RELEASE_ERROR,
-        workspace_cmd.CODE_NO_WORKTREE,       # cited by the --release recipe, same JSON line
     ):
-        assert code in text, f"refusal code {code!r} is no longer explained in SKILL.md"
+        assert code in section, \
+            f"refusal code {code!r} is no longer explained in SKILL.md's --gc report rule"
+    assert workspace_cmd.CODE_NO_WORKTREE in text, \
+        "the --release recipe no longer explains the no-worktree refusal"
+
+
+def test_the_released_entrys_branch_leak_is_documented_where_agents_will_read_it():
+    """VMCP-… (542), the hole VMCP-68's own reading rule opened. #517 made the one failure mode of
+    a SUCCESSFUL release report itself honestly: `worktree remove` succeeded but `git branch -D`
+    did not, so the entry is `released: true` PLUS `branch_deleted: false` and a `warning` naming
+    the leaked branch. That entry therefore rides in `released` — the list VMCP-68's rule called
+    the one nobody needs to read — so a rule of "read `kept`, skip the rest" hides it and
+    `task/<id>` branches accumulate with nothing to notice.
+
+    Pinned on both sides for the usual reason (the rulebook self-heals onto every consumer with no
+    review gate): drop the keys in the code and the rulebook still teaches them; drop the prose and
+    the pump goes back to skipping the list they arrive in."""
+    text = _skill_text()
+    release_src = inspect.getsource(workspace_cmd._release_locked)
+    for key in ("branch_deleted", "warning"):
+        assert f'result["{key}"]' in release_src, \
+            f"_release_locked no longer reports {key!r} when the branch delete fails"
+        assert key in text, f"SKILL.md no longer tells agents about the {key!r} key"
+    assert "branch_deleted" in _gc_section(text), \
+        "the --gc reading rule stopped covering `branch_deleted` — a leaked branch is invisible"
 
 
 def test_empty_queue_wakeup_interval_is_pinned():
