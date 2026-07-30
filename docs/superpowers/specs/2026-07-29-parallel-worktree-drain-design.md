@@ -349,7 +349,7 @@ refuses to delete unpushed work. After `advance(to='review')` the agent calls
 | Not a git repo / no `origin` / git missing | `{"error": …}`, exit 1. The orchestrator does **not** kill the loop — it falls back to one slot in the main checkout, i.e. exactly today's behavior. |
 | `--release` refuses (dirty/unpushed) | The worktree stays; `--gc` reports it on the next tick so a human can see it. |
 | Rebase conflict | The agent resolves it, or `call_human`. Never force-push, never `--skip`. |
-| Push rejected repeatedly (>6 rounds — resized from 3, see "The retry ceiling, resized from measurement") | `call_human`; the card parks in **Your Call**, so the worktree reads DEAD to `--gc` — what keeps it is the unpushed work in it, not the stage. Cleaned up before asking (`rebase --abort`), it is clean and pushed and will be reaped mid-question; the agent re-runs `workspace <id>` after the human answers. |
+| Push rejected repeatedly (past the ceiling — `2 × wip_limit` rounds, 6 at the default 3; resized from 3, then generalised — see "The retry ceiling, resized from measurement" and "The ceiling generalised") | `call_human`; the card parks in **Your Call**, so the worktree reads DEAD to `--gc` — what keeps it is the unpushed work in it, not the stage. Cleaned up before asking (`rebase --abort`), it is clean and pushed and will be reaped mid-question; the agent re-runs `workspace <id>` after the human answers. |
 | Per-task agent crashes | The task stays active, its worktree keeps the work, and `workspace <id>` returns that same tree to the resume agent. Strictly better than today, where the diff sat in the shared checkout. |
 | No free slots *and* the free queue is gated | `wip_saturated` wins and is reported alone. `starving` describes a chain that cannot start; with zero slots that is not the actionable fact, and computing it would cost a board escalation for nothing. |
 
@@ -967,3 +967,61 @@ itself, a sibling stuck in its own push loop, a criteria run that has become
 flaky under rebase). The `call_human` question must carry that framing: what
 landed on each of the six rounds, and why it is not arithmetic — not "please
 push for me".
+
+## The ceiling generalised: a diagnosis plus a budget (2026-07-30, VMCP-94 (550))
+
+The section above is right and its arithmetic was re-verified link by link. What
+it left behind is that **the number is parameterised and the rule was not**: `6 =
+2·N` holds at `N = wip_limit = 3`, the value this repo measured, while SKILL.md
+pinned the literal 6 at three sites and argued only the *don't lower it*
+direction. A consumer running `wip_limit = 4` against an auto-releasing repo hits
+6 on arithmetic alone (worst mechanical run there is 2·3 + 1 = 7) — the exact
+failure VMCP-81 removed, moved one config step to the right. And it is not
+fixable downstream: SKILL.md is MANAGED, self-healing onto every consumer on MCP
+server start, so a local edit is overwritten, and there is no config key for a
+retry ceiling.
+
+The deeper point, though, is that the round count was carrying **two** jobs at
+once: *is this loss mechanical?* (a diagnosis) and *how much am I willing to
+spend?* (a budget). Only the second is a number. Splitting them:
+
+1. **Diagnosis — what won the race, not how often you lost.** On a rejected push,
+   `git fetch origin && git log --oneline HEAD..origin/main` names the winners
+   exactly (HEAD is your commit on the *old* base). **Empty means there was no
+   race at all** — protected branch, missing push rights, a pre-receive hook, the
+   wrong remote — and the next round loses identically while costing a full
+   criteria run; escalate immediately instead of spending the budget. Non-empty
+   is mechanics (a bot bump, a sibling's commit) and the round is honest. This
+   also closes a latent hole: the escalation sentence already demanded "what
+   landed on each round", which an agent that never looked cannot produce.
+2. **Budget — `2 × wip.limit`, read from config, not habit.** Same derivation as
+   above, stated as the formula: 2 at `wip_limit = 1`, 6 at 3, 8 at 4, 10 at 5.
+   The per-task agent does not call `next_task`, so the orchestrator (which sees
+   `wip` in every response) passes the limit in the dispatch brief; absent that,
+   the agent uses 6, i.e. today's behaviour at the default. Because the diagnosis
+   now decides whether a round was mechanical, the budget's exactness matters
+   less — which is precisely what makes it safe when reality exceeds the model
+   (humans pushing to main, several orchestrators).
+3. **Framing — the escalation carries the list.** "Reaching the ceiling means the
+   loop is not converging" is true only at the default limit; under a wider drain
+   pure mechanics can reach it. The count cannot distinguish the two, the list of
+   winners can, so the question to the human *is* that list.
+
+Rejected, with reasons: **(a)** keep the constant and tell consumers above the
+default to raise it — unactionable, per the MANAGED/self-healing property above;
+**(b)** formula with no fallback — the reader of the rule (the per-task agent)
+may not know the limit, and a rule with an unfillable variable is not executable;
+**(c)** have the per-task agent call `next_task` itself to read `wip` — read-only
+so mechanically safe, but it hands an implementer a queue card and the pump's
+branch logic, the role confusion the pump/agent split exists to prevent;
+**(d)** a `retry_ceiling` config key with code behind it — machinery for a prose
+rule nothing in code counts, and a second knob for a number derivable from
+`wip_limit`; **(e)** a time budget instead of rounds — the unit is unrelated to
+the cost of a round (a full criteria run, project-specific) and does not survive
+a killed turn; **(f)** close the card unchanged — the defect is real for any
+consumer at `wip_limit ≥ 4` and they cannot fix it locally.
+
+`test_skill_contract.py::test_the_integration_retry_ceiling_is_pinned` moved with
+the prose: same three sites, now pinning the formula's single spelling
+(`2 × wip.limit`), plus the diagnosis command and the brief-less fallback, and
+keeping the negative pins against the old 3-round spellings.

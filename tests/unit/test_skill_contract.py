@@ -439,44 +439,127 @@ def test_empty_queue_wakeup_interval_is_pinned():
     assert "600" in _skill_text(), "the empty-queue ScheduleWakeup interval (600s, #80) vanished"
 
 
-def test_the_integration_retry_ceiling_is_pinned():
-    """VMCP-81: how many `fetch → rebase → re-verify → push` rounds a per-task agent runs before
-    escalating via `call_human` is — like the wakeup interval above — a hand-set human number with
-    NO code counterpart: nothing in workflow.py counts rounds, so this test is the only thing that
-    can hold it. And it is DERIVED, not preferred. CI's auto-release pushes a `chore: vX.Y.Z [skip
-    ci]` bump after every green landing (measured 2026-07-30 on this repo's first live parallel
-    drain: 17 of the 46 commits that reached main that day were the bot's, arriving 37 s–2 m 55 s
-    behind the task commit, median 1 m 41 s), so a losing push is the EXPECTED outcome, not an edge
-    case — but that racer is BOUNDED: `[skip ci]` + GITHUB_TOKEN means it never triggers itself, so
-    it never pushes twice in a row and costs at most one round on its own. The ceiling must exceed
-    the worst purely MECHANICAL run, which at `wip_limit = N` is 2·(N−1) sibling+bump losses plus
-    the trailing bump of the landing that beat you to the `fetch` — 5 at the default limit of 3.
-    Hence 6 = 5 + 1: below it the loop is still converging, at it the loop provably is NOT.
+def _flat(text: str) -> str:
+    """SKILL.md with every run of whitespace collapsed to one space — for pinning PROSE phrases.
 
-    Why it needs a pin at all: the rulebook self-heals onto every consumer over the moving `stable`
-    branch with no per-consumer pin and no review gate (see this module's docstring), so a silent
-    walk-back ships to every agent everywhere. And the walk-back is the LIKELY edit, not a typo —
-    the old 3 was exactly the length of the commonest bad run (bump(A) → commit(B) → bump(B)), so
-    it reads as a sane-looking number to anyone re-tidying this prose without the derivation in
-    hand, while restoring it calls a human onto pure arithmetic at the moment the next round would
-    almost certainly have won.
+    A markdown paragraph's line breaks are cosmetic: re-wrapping one is a meaning-preserving edit
+    that must not turn a pin red, and the wrap can fall anywhere inside the phrase being pinned
+    (the parallel-drain sentence below already breaks mid-clause). Fenced recipes are matched RAW
+    instead (see `_integration_recipe`) — inside a fence a line break separates two commands, so
+    flattening one would let a pin match text that is no longer a runnable step."""
+    return re.sub(r"\s+", " ", text)
+
+
+def test_the_integration_retry_ceiling_is_pinned():
+    """VMCP-81, generalised by VMCP-94 (550): how many `fetch → rebase → re-verify → push` rounds a
+    per-task agent runs before escalating via `call_human` is — like the wakeup interval above — a
+    hand-set human number with NO code counterpart: nothing in workflow.py counts rounds, so this
+    test is the only thing that can hold it. And it is DERIVED, not preferred. CI's auto-release
+    pushes a `chore: vX.Y.Z [skip ci]` bump after every green landing (measured 2026-07-30 on this
+    repo's first live parallel drain: 17 of the 46 commits that reached main that day were the
+    bot's, arriving 37 s–2 m 55 s behind the task commit, median 1 m 41 s), so a losing push is the
+    EXPECTED outcome, not an edge case — but that racer is BOUNDED: `[skip ci]` + GITHUB_TOKEN means
+    it never triggers itself, so it never pushes twice in a row and costs at most one round on its
+    own. The ceiling must exceed the worst purely MECHANICAL run, which at `wip_limit = N` is 2·(N−1)
+    sibling+bump losses plus the trailing bump of the landing that beat you to the `fetch`, i.e.
+    2·(N−1)+1 — so the ceiling is **2 × N**, the smallest value strictly above it. 6 is only that
+    formula's N=3 instance (the default limit, which is this repo's own case), not the rule.
+
+    Why a formula and not "6, plus advice to raise it": the rulebook self-heals onto every consumer
+    over the moving `stable` branch, OVERWRITING local edits, with no per-consumer pin and no review
+    gate (see this module's docstring) — and there is no config key for a retry ceiling. So "raise
+    it if your limit is wider" is unactionable by construction: a consumer at `wip_limit = 4` (worst
+    mechanical run 7) cannot edit a pinned 6, it can only be shipped a rule that COMPUTES. The
+    variable therefore has to be one the agent already receives: `wip.limit`, from `next_task`'s
+    `wip` payload, which `with_wip` attaches to EVERY branch of the result — which is why the
+    rulebook can tell the orchestrator to carry the limit in its dispatch brief at all. That payload
+    is the one part of this rule that DOES have a code counterpart, so it is pinned on both sides:
+    rename the key or its `limit` field and this goes red, instead of leaving every agent computing
+    a ceiling from a field that no longer arrives.
+
+    The likely bad edit has moved. It used to be the walk-back to 3 (exactly the length of the
+    commonest bad run, bump(A) → commit(B) → bump(B), so it reads as a sane-looking number to anyone
+    re-tidying this prose without the derivation in hand, while calling a human onto pure arithmetic
+    at the moment the next round would almost certainly have won). Now it is RE-COLLAPSING the
+    formula into a constant — "it is always 6 here anyway" — which stays silently correct on this
+    repo, at the default limit, and is silently wrong everywhere the drain is wider: at 4 a pinned 6
+    escalates to a human on arithmetic alone. The three positive site pins below are all spelled
+    `2 × wip.limit`, so a re-collapse cannot pass them.
 
     Pinned in all three places that carry the RULE, not once against the whole file (see
     `_gc_section` on why a whole-file substring is the weak form of this): the parallel-drain
-    paragraph, the shell recipe's round count, and the escalation sentence that spends the ceiling
-    on `call_human`. Deleting any ONE of the three then fails instead of coasting on the others —
-    a recipe with no escalation sentence, or an escalation with no round count, is exactly the
-    half-stated rule an agent would fill in with its own guess. The negative half pins the EXACT
-    old spellings a revert brings back; a bare `"3" not in text` would be vacuous (`wip_limit`
-    defaults to 3 and the measurements above quote 3 min), and it would forbid the derivation
-    prose that has to name the number it replaced."""
+    paragraph, the shell recipe's round count (scoped to the fence, so a deletion cannot coast on
+    the prose that summarises it), and the escalation sentence that spends the ceiling on
+    `call_human`. Deleting any ONE of the three then fails instead of coasting on the others — a
+    recipe with no escalation sentence, or an escalation with no round count, is exactly the
+    half-stated rule an agent would fill in with its own guess.
+
+    Three further halves are pinned because without any one of them the rule stops being EXECUTABLE,
+    which is this module's actual subject:
+      * the DIAGNOSIS (`git log --oneline HEAD..origin/main`) and the `call_human` verdict it feeds.
+        A round is owed only for a race that was LOST; an empty range means there was no race at all
+        (protected branch, no push rights, pre-receive hook, wrong remote), where every further
+        round re-loses identically at the cost of a full criteria run. The COUNT cannot tell those
+        apart.
+      * what the escalation SAYS once the ceiling is spent: the question carries the LIST of what
+        won each round («N кругов подряд, вот что …»), not the count. This is pinned because the
+        sentence it replaced — "hitting 6 means the loop is NOT converging" — is short, confident,
+        and now FALSE above the default limit (under a wider drain, or with humans also pushing,
+        pure mechanics reaches the ceiling), which makes it exactly what a tidying editor restores.
+        With it back, an agent at `wip_limit >= 4` tells a human "the loop is broken" about pure
+        arithmetic, and hands over a (wrong) diagnosis instead of the evidence to make one. The `N`
+        is also the half the old spelling («шесть кругов подряд») cannot satisfy, so a PARTIAL
+        revert — new ceiling, old escalation — fails here rather than shipping.
+      * the brief-less FALLBACK to 6. `2 × wip.limit` with no limit in hand is an unfillable
+        variable; drop the fallback and an agent dispatched by a pump that did not name the limit
+        has no ceiling at all. Its mirror — the dispatch brief being told to carry the limit — is
+        pinned too: lose that and every agent silently falls back to the default forever, i.e. the
+        generalisation ships dead.
+
+    The negative half stays exactly as it was: the EXACT old 3-spellings a revert brings back. A
+    bare `"3" not in text` would be vacuous (`wip_limit` defaults to 3, the measurements quote
+    3 min) and would forbid the derivation prose that has to name the number it replaced — and for
+    the same reason there is deliberately NO blanket `"6" not in text`: 6 is still legitimately the
+    default instance and the fallback.
+
+    MUTATION-CHECKED (`__pycache__` cleared between rounds, each run confirmed to select exactly 1
+    test, SKILL.md restored to a clean `git diff` after): control PASS; re-collapse each of the
+    three `2 × wip.limit` sites to a bare 6 -> FAIL, one at a time, each on its own message; delete
+    the diagnosis command line from the fence -> FAIL; delete the fence's empty-range `call_human`
+    branch -> FAIL; revert the escalation to the count-only «шесть кругов подряд» spelling -> FAIL;
+    delete the `бери 6` fallback -> FAIL; drop `wip.limit` out of the dispatch brief -> FAIL; rename
+    the `wip` payload key in workflow.py -> FAIL."""
     text = _skill_text()
-    assert "ещё круг, до 6)" in text, \
-        "the parallel-drain rule no longer states the 6-round integration retry ceiling"
-    assert "до 6 кругов" in text, \
-        "the integration recipe's push step no longer states the 6-round retry ceiling"
-    assert "отбило 6 раз подряд" in text, \
-        "the escalation sentence no longer spends 6 rounds before call_human"
+    flat = _flat(text)
+    recipe = _integration_recipe(text)
+    src = _workflow_src()
+
+    # the three sites that carry the ceiling itself
+    assert "ещё круг, до `2 × wip.limit`)" in flat, \
+        "the parallel-drain rule no longer states the `2 × wip.limit` integration retry ceiling"
+    assert "до 2 × wip.limit кругов" in recipe, \
+        "the integration recipe's push step no longer states the `2 × wip.limit` retry ceiling"
+    assert "круги кончились (`2 × wip.limit`, см. «Откуда потолок»)" in flat, \
+        "the escalation sentence no longer spends the `2 × wip.limit` rounds before call_human"
+
+    # the diagnosis: a round is owed only for a race that was LOST, and the count cannot say
+    assert "git log --oneline HEAD..origin/main" in recipe, \
+        "the recipe no longer diagnoses WHO won the race before spending a round"
+    assert "call_human" in recipe, \
+        "the recipe no longer escalates straight away when the range is empty (no race at all)"
+    assert "«N кругов подряд, вот что" in flat, \
+        "the escalation asks with a COUNT again — the human needs the LIST of what won each round"
+
+    # the variable the formula reads, and the fallback for when the brief does not carry it
+    assert "`wip.limit` из ответа `next_task`" in flat, \
+        "the dispatch brief no longer carries wip.limit — every agent falls back to the default"
+    assert "не назвал — **бери 6**" in flat, \
+        "the brief-less fallback is gone — `2 × wip.limit` is then an unfillable variable"
+    assert 'result["wip"] = wip' in src, \
+        "SKILL.md computes the ceiling from next_task's `wip`, but with_wip stopped attaching it"
+    assert '"limit": limit' in src, \
+        "SKILL.md computes the ceiling from `wip.limit`, but the payload lost its `limit` field"
+
     for old in ("ещё круг, до 3)", "до 3 кругов", "отбило 3 раза подряд"):
         assert old not in text, \
             f"the reverted 3-round ceiling is back in SKILL.md ({old!r}) — see this test's docstring"

@@ -206,13 +206,27 @@ about two minutes of *any* landing — so under a parallel drain a rejected `git
 push origin HEAD:main` is the expected outcome, not an anomaly. The
 `GITHUB_TOKEN`/`[skip ci]` property above is what BOUNDS it: the release never
 triggers itself, so it never pushes twice in a row and can cost an agent at most
-one round. That bound is what sizes SKILL.md's integration ceiling at 6 rounds
-(2·(`wip_limit`−1) mechanical losses + 1); see "Отбитый пуш — это НОРМА" there.
+one round. That bound is what sizes SKILL.md's integration ceiling, and the
+ceiling is a FORMULA, not a constant. Two steps, and the second is the one that
+kept getting dropped: the worst purely MECHANICAL run at `wip_limit = N` is
+2·(N−1) + 1 rounds — **5** at the default 3 — and the ceiling must sit STRICTLY
+ABOVE that (otherwise it fires on arithmetic), i.e. one more round. So the
+ceiling is **`2 × wip_limit`**: 2 at limit 1, **6** at this repo's default 3, 8
+at 4, 10 at 5. The worst run and the ceiling are DIFFERENT numbers — quoting the
+first where the second belongs is what card 556 caught in this very paragraph.
+The rulebook self-heals onto every consumer and `wip_limit` is per-project, so a
+pinned constant would call a human onto pure arithmetic in any project running a
+wider drain (card 550). And the count is only the budget: what decides whether a
+lost round was mechanical at all is *what won the race* (`git log --oneline
+HEAD..origin/main` — empty means it was never a race, so retrying is futile and
+the agent escalates without spending the budget). See "Откуда потолок" there.
 
 **Never let the literal ci-skip marker into a commit MESSAGE — quoting counts.**
 Writing *about* the release is the trap: the marker is matched anywhere in the
 message, body and code spans included, so a commit that merely quotes the bump
-commit's subject cancels its own CI run — and does so silently. The push
+commit's subject cancels its own CI run — and does so silently. It is a family,
+not one spelling: GitHub also honours `[ci skip]`, `[no ci]`, `[skip actions]`,
+`[actions skip]` and a `skip-checks: true` trailer. The push
 succeeds, both evidence-sha checks pass, and the task looks landed, but there is
 no run, no auto-release, and the change never reaches `stable`, i.e. never
 reaches consumers. Name the marker descriptively in messages (in a *file* the

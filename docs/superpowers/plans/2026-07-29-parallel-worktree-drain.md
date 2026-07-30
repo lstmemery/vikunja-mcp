@@ -1552,7 +1552,8 @@ In «Следы работы», replace the bullet «**Коммит+пуш — �
     # is NESTED inside the markdown one above: the copy-paste target is THIS block, and the outer
     # marker does not travel with it. The live recipe chains fetch+rebase+re-verify+push with
     # `&&` (a red criterion must never reach a push, and the race window shrinks to machine
-    # time), allows SIX rounds not three, and — the whole point of 526 — does not stop at
+    # time), bounds retries at 2 × wip.limit rounds not three (six at the default limit, and
+    # only a round lost to an ACTUAL race counts — VMCP-94), and — the point of 526 — does not stop at
     # `git rev-parse HEAD`, which only PRINTS the local HEAD: it then proves the sha landed with
     # `git cat-file -e "<sha>^{commit}"` and `git merge-base --is-ancestor "<sha>" origin/main`.
     git add <файлы этой задачи>
