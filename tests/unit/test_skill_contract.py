@@ -14,7 +14,7 @@ stale on either side.
 import inspect
 from importlib.resources import files
 
-from vikunja_mcp import config, workflow
+from vikunja_mcp import config, server, workflow
 
 
 def _skill_text() -> str:
@@ -101,15 +101,22 @@ def test_the_parallel_drain_rules_cite_real_signals():
     `_effective_wip_limit` — while the thing SKILL.md actually cites, the repo-toml KEY, lives in
     config.py, which this test never read. Both would have stayed green through the very rename
     they claim to catch. Anchor each on the exact construct whose name the rulebook depends on:
-    next_task's parameter, and config.py's lookup of the toml key."""
+    next_task's parameter, and config.py's lookup of the toml key.
+
+    Round-2 review: `exclude` is anchored in BOTH modules. The pump does not call
+    Workflow.next_task — it calls the MCP TOOL (server.py), so a rename there alone would leave a
+    workflow-only pin green while every agent's `exclude=[…]` silently became an unknown kwarg."""
     text = _skill_text()
     src = _workflow_src()
     config_src = inspect.getsource(config)
+    server_src = inspect.getsource(server)
     for token in ("wip_saturated", "exclude", "wip_limit"):
         assert token in text, f"{token!r} is not documented in SKILL.md"
     assert "wip_saturated" in src, "SKILL.md keys off wip_saturated but workflow.py stopped emitting it"
     assert "exclude: list[int]" in src, \
-        "SKILL.md tells the pump to pass exclude=… but next_task no longer takes that parameter"
+        "SKILL.md tells the pump to pass exclude=… but Workflow.next_task lost that parameter"
+    assert "exclude: list[int]" in server_src, \
+        "SKILL.md tells the pump to pass exclude=… but the next_task TOOL lost that parameter"
     assert 'repo.get("wip_limit")' in config_src, \
         "SKILL.md names wip_limit as the repo-config key but config.py no longer reads that key"
 
@@ -119,8 +126,12 @@ def test_the_integration_recipe_pushes_to_the_main_branch_and_names_gc():
     branch, so a bare `git push` pushes that branch and leaves the main branch — and therefore the
     release pipeline — without the work, while every tool still reports success. The explicit
     refspec is the whole point of the integration recipe, so pin it verbatim. `workspace --gc` is
-    pinned for the mirror-image reason: without it every crashed agent's tree leaks forever, and
-    the only place that rule can live is the orchestrator's tick in this rulebook."""
+    pinned for the mirror-image reason: nothing else reaps a tree whose work has LEFT the board —
+    a task that reached Review/Done or went back to Backlog/Your Call, a card that left Review —
+    so without it those trees accumulate forever. (Round-2: NOT "crashed agents' trees", the
+    inversion this docstring used to state. A crashed agent's task stays in Design/Build assigned
+    to it, so liveness deliberately SPARES that tree — it is what the resume agent comes back to.)
+    The orchestrator's tick in this rulebook is the only place that rule can live."""
     text = _skill_text()
     assert "git push origin HEAD:main" in text, "the explicit push-to-main refspec vanished"
     assert "workspace --gc" in text, "the tick no longer reaps dead worktrees (workspace --gc)"
