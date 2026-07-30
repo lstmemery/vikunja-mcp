@@ -412,10 +412,14 @@ class Workflow:
         mine = self._my_active_tasks(raw)
         # parallel drain: `exclude` names the tasks the CALLER already has a live
         # agent on. The tracker cannot know sub-agent liveness — that is a fact of the harness,
-        # not of the board — so the pump states it. An excluded id is never OFFERED by any
-        # branch, but it still OCCUPIES its slot: it is real work in progress. On a fresh tick
-        # after a killed turn the set is empty and the abandoned task correctly resurfaces as
-        # resume (the crash-recovery path).
+        # not of the board — so the pump states it. It is consulted by the three branches that
+        # can offer an ALREADY-ASSIGNED task (resume / stuck-in-Queue / review offer); the
+        # free-queue branch never reads it and does not need to (see the note there: an excluded
+        # id is assigned to the caller, so its assignee filter already drops it). So `exclude` is
+        # NOT a queue filter — it never narrows WHICH free work is offered, and a caller learns
+        # nothing about the rest of the queue from passing it. An excluded id still OCCUPIES its
+        # slot, though: it is real work in progress. On a fresh tick after a killed turn the set
+        # is empty and the abandoned task correctly resurfaces as resume (the crash-recovery path).
         excluded = set(exclude or [])
         limit = self._effective_wip_limit()
         wip = {
