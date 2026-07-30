@@ -835,3 +835,92 @@ def test_next_task_offers_free_task_despite_off_board_gated_candidate(env):
     res = wf.next_task()
     assert res["resume"] is False
     assert res["task"]["id"] == free["id"]
+
+
+# --- the starving-tail message is the plain tail plus the retriage escalation, and nothing else
+# (VMCP-114 / #586) ---
+#
+# WHY THIS STRING AND NOT THE OTHER TEN. #586 measured it: an in-memory mutant appending a marker
+# clause to 14 next_task payload strings at once left the suite at 6 failed / 590 passed, and all
+# six failures belonged to the three already-pinned controls — 11 prose strings absorb a new clause
+# invisibly. Pinning all 11 byte-exact would be the wrong repair: a static literal is emitted in
+# exactly ONE state, so a clause inside it is a wording edit that shows up in the diff, and a
+# byte-pin on it breaks on every legitimate rewording (which teaches the next agent to weaken pins
+# to get green). What a static literal CANNOT do is emit a clause in a state the clause was not
+# written for. Conditionally ASSEMBLED prose can — and in next_task there are exactly two such
+# strings: the resume note (re-pinned by #570) and this one. This is the other half of that pair.
+#
+# WHAT IS ACTUALLY AT RISK HERE. The message carries TWO conditional pieces, both driven by
+# `stage == "Backlog"`: the per-blocker annotation inside the waiting line, and the trailing
+# escalation. Together they are the only place a human is told that a chain HEAD was returned to
+# Backlog and needs re-triage — SKILL.md's rule for a starving tail is "surface it so a human sees
+# the stalled chain", and that is the sentence they read. Lose it and the tail stalls unseen; emit
+# it unconditionally and every ordinary starving tail sends a human hunting for a return_task that
+# never happened.
+#
+# MEASURED, and this is the part worth remembering: the pre-existing guard
+# (`"re-triage" in res["message"].lower()`, test_next_task_returned_head_in_backlog_flags_retriage)
+# is satisfied by EITHER piece, so the two mutually mask each other's deletion. Deleting the
+# trailing escalation: 596 passed. Deleting the annotation: 596 passed. Emitting the escalation
+# unconditionally: 596 passed. Moving the escalation BEFORE the waiting list (+0 bytes of new
+# text): 596 passed. None of those four is visible to any substring assertion.
+#
+# THE SHAPE, and what was rejected. A differential over ONE changed attribute: the same board, the
+# same tasks, the same refs — the chain head simply moves Build -> Backlog. The left side is what
+# workflow.py renders in the retriage state; the right side is what it renders in the plain state,
+# transformed by the two literals THIS FILE owns. The sides therefore come from different places
+# and can genuinely disagree: an unconditional `message +=` lands after the escalation on the left
+# but before it on the right, so even a mutation present in both states fails the equality (and the
+# endswith anchor below catches it first). Rejected, for the reasons #570 recorded: importing the
+# clause text as constants from workflow.py (both sides on one source — a sentence written INTO the
+# constant moves both and stays green), and counting clauses by splitting on a marker (pins a naming
+# convention the code never promised).
+#
+# DELIBERATELY NOT PINNED: the base prose. Reading it from the sibling state instead of copying it
+# keeps a rewording of the shared sentence a one-file edit, and a clause inserted INSIDE the base
+# is by construction emitted in every state — a wording change, not a state-dependent hazard. The
+# endswith anchor is what stops an unconditional clause from hiding in the derived base.
+
+_IN_BUILD = "in 'Build'"
+_IN_BACKLOG = "in 'Backlog'"
+_RETRIAGE_ANNOTATION = " [sent back to Backlog via return_task — needs human re-triage]"
+# spelled with the count this env actually reaches (one waiting task): the clause interpolates it,
+# and pinning the RENDERED form keeps the breadcrumb honest, exactly as #570's clause literals do.
+_RETRIAGE_ESCALATION_1 = (
+    ". 1 of these are stalled behind a chain HEAD returned to Backlog (return_task) — a human "
+    "must re-triage the head before the tail can resume."
+)
+
+
+def test_the_starving_message_is_the_plain_tail_plus_the_retriage_escalation_and_nothing_else(env):
+    """The retriage escalation and its per-blocker annotation appear IF AND ONLY IF a blocker sits
+    in Backlog, in that position, and nothing else may follow the waiting list.
+
+    The two next_task calls differ in exactly one attribute — the chain head's stage — so every
+    other byte of the message is common to both and cancels out of the differential. `_move` is the
+    call return_task itself makes on a returned head (workflow.py:1313); the label it also adds is
+    irrelevant here, since the retriage condition reads the blocker's STAGE and nothing else."""
+    api, wf = env
+    head = api.add_task("chain head", "Build")
+    tail = api.add_task("tail", "Queue")
+    api.add_relation(tail["id"], head["id"], "follows")
+
+    plain = wf.next_task()
+    assert plain["starving"] is True and plain["needs_retriage"] is False
+    plain_msg = plain["message"]
+    # The anchor that keeps the differential honest (#570's `_clause_free_base` plays the same
+    # role): in the plain state the message ENDS with the rendered waiting line, so an
+    # unconditional clause appended anywhere after it moves this ending and fails right here
+    # instead of cancelling out of the equality below.
+    assert plain_msg.endswith(_IN_BUILD), plain_msg
+    assert plain_msg.count(_IN_BUILD) == 1, plain_msg
+    assert _RETRIAGE_ANNOTATION not in plain_msg, plain_msg
+
+    wf._move(head["id"], "Backlog")          # the one changed attribute — what return_task does
+
+    retriage = wf.next_task()
+    assert retriage["starving"] is True and retriage["needs_retriage"] is True
+    assert retriage["waiting_count"] == plain["waiting_count"] == 1
+    assert retriage["message"] == (
+        plain_msg.replace(_IN_BUILD, _IN_BACKLOG + _RETRIAGE_ANNOTATION) + _RETRIAGE_ESCALATION_1
+    ), retriage["message"]

@@ -1927,3 +1927,76 @@ def test_the_released_false_shorthand_never_teaches_only_the_protective_reading(
         assert code in degraded, \
             f"the shorthand no longer says which codes DO mean unsaved work ({code}) — " \
             f"'read the `code`' without the codes sends the reader to the wrong half"
+
+
+def _wip_saturated_bullet(text: str) -> str:
+    """The «`wip_saturated: true` — это НЕ пустая очередь» bullet — sliced to that one item.
+
+    Scoped like `_drain_width_section` / `_exclude_completeness_bullet`, for the same measured
+    reason: `wip_saturated`, `ScheduleWakeup` and «пустая очередь» each occur many times in this
+    rulebook, so a whole-file substring could not tell "the rule is still stated where the pump
+    reads the payload" from "the words survive somewhere else"."""
+    start = text.find("\n- **`wip_saturated: true` — это НЕ пустая очередь")
+    assert start != -1, \
+        "SKILL.md no longer tells the pump that wip_saturated is not an empty queue"
+    end = text.find("\n- **", start + 1)
+    assert end != -1, "the wip_saturated bullet no longer ends where the next one begins"
+    bullet = text[start:end]
+    assert 0 < len(bullet) < len(text), "the wip_saturated slice is not a proper subset of SKILL.md"
+    return bullet
+
+
+# The rulebook QUOTES this rendered phrase verbatim, numbers and all, and calls it the only place
+# in the payload where both numbers stand side by side in prose. Owned here as a literal and
+# asserted against BOTH sides below, so the three copies (this test, SKILL.md, workflow.py) cannot
+# drift apart in any direction — and none of the three can be edited into agreement with itself.
+_SATURATED_NUMBERS_4_OF_3 = "all 3 WIP slot(s) are busy (4 active)"
+
+
+def test_the_rulebook_quotes_the_saturated_message_and_the_payload_still_renders_it():
+    """SKILL.md makes two promises about the `wip_saturated` payload; nothing held either.
+
+    #586 measured the gap on both. (1) The message interpolates `limit` and `active`, and the
+    rulebook quotes the RENDERED pair — «all 3 WIP slot(s) are busy (4 active)» — as the one place
+    a pump can see an overshoot in prose (`free` saturates at 0 and cannot show it). Swapping the
+    two interpolations, so the payload reads "all 4 … (3 active)" and inverts the diagnosis, passed
+    the whole suite: 596 passed. (2) The same bullet's operative instruction is "do NOT
+    ScheduleWakeup — this is not an empty queue"; replacing the note with the string "no work right
+    now" also passed, 596 passed. The message's only guard was `"empty" not in message`
+    (test_workflow_wip), which pins a hazard word rather than a value, and the note had none at all.
+
+    Pinned as the VALUES and the IMPERATIVE, not as prose: the rest of both strings stays free to be
+    reworded, which is why this is not one of the byte-exact pins #586 deliberately refused to add
+    to the nine remaining static payload strings. Reaching wip_saturated at 4-of-3 also needs a
+    COMPLETE `exclude` — the resume branch is offered first — so this env is the exact state the
+    rulebook describes, not a convenient one."""
+    text = _skill_text()
+    bullet = _wip_saturated_bullet(text)
+    assert _SATURATED_NUMBERS_4_OF_3 in _flat(bullet), \
+        "SKILL.md no longer quotes the rendered number pair it calls the payload's only prose view"
+    assert "ScheduleWakeup" in bullet and "НЕ уступай ход" in bullet, \
+        "the rulebook no longer forbids idling the tick on a saturated board"
+
+    api = FakeAPI(buckets=workflow.STAGES)
+    wf = workflow.Workflow(api, project_id=3, wip_limit=3)
+
+    def claim_fresh(title):
+        task_id = api.add_task(title, "Queue")["id"]
+        wf.claim(task_id)
+        return task_id
+
+    bounced = claim_fresh("reviewed, then bounced")
+    wf.advance(bounced, to="build", spec="…")
+    wf.advance(bounced, to="review", worklog="…", evidence="0" * 40)
+    for n in range(3):                       # the pump refills the freed slot, as the tick does
+        claim_fresh(f"held {n}")
+    wf.review_task(bounced, verdict="needs_work", report="not yet")   # around the gate -> 4 of 3
+
+    res = wf.next_task(exclude=wf.active_task_ids())
+    assert res["task"] is None and res["wip_saturated"] is True, \
+        "a COMPLETE exclude no longer produces the saturation signal the rulebook promises"
+    assert res["wip"] == {"active": 4, "limit": 3, "free": 0}, \
+        "precondition: this must be the 4-of-3 state SKILL.md spells the quote with"
+
+    assert _SATURATED_NUMBERS_4_OF_3 in res["message"], res["message"]
+    assert "ScheduleWakeup" in res["note"] and "Do NOT claim" in res["note"], res["note"]
