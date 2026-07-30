@@ -557,12 +557,46 @@ class VikunjaAPI:
     # longest page it actually SERVED. That length is a PROVEN lower bound on the page size (the
     # server served it, so its page size is at least that) — evidence, never a guess, and the
     # difference from the hardcoded 50 VMCP-89 deleted. Because that bound L <= the real page size
-    # S, "len >= S" implies "len >= L": everything the KNOWN branch would keep reading the UNKNOWN
-    # branch keeps reading too, so the degraded read can never truncate where the healthy one does
-    # not. Verified over 60 randomized boards (required buckets identical, non-required a superset
-    # — the degraded read costs one extra page and that page carries extra Done/Backlog tasks).
-    # A server that ignores `?page=` entirely still stops after two requests, exactly as before:
-    # its repeat brings nothing new ANYWHERE, and this clause needs a new task somewhere to run on.
+    # S, "len >= S" implies "len >= L": everything a rule using the REAL size would keep reading,
+    # the UNKNOWN branch keeps reading too. Verified over 60 randomized boards (required buckets
+    # identical, non-required a superset — the degraded read costs one extra page and that page
+    # carries extra Done/Backlog tasks). A server that ignores `?page=` entirely still stops after
+    # two requests, exactly as before: its repeat brings nothing new ANYWHERE, and this clause
+    # needs a new task somewhere to run on.
+    #
+    # VMCP-124 (603) — AND THAT IS EXACTLY AS FAR AS THE ARGUMENT REACHES. It compares L against
+    # the REAL size S, while the HEALTHY reader uses the size /info STATED, and those are the same
+    # number only while the server never serves more than it states. It does: MEASURED on a real
+    # 2.3.0 with max_items_per_page=5, GET /projects/{id}/views serves TEN rows and .../buckets
+    # ELEVEN — the same self-description unreliability `_total_pages` documents, in the size field.
+    # Where stated < served the healthy bar min(stated, L) is LOWER than the degraded bar L, so the
+    # DEGRADED read is the stricter one and stops sooner: a strict SUBSET, the opposite of the
+    # direction this paragraph was long read as promising "by construction". MEASURED (/info states
+    # 5, page 1 serves 8, page 3 holds 9..11, page 2 a repeat window of w tasks): the degraded read
+    # loses 9,10,11 for every w < 8 — and THE HEALTHY READ LOSES THEM TOO for every w < 5. Both
+    # bars spell one and the same inference, "a required page shorter than the bar means that
+    # bucket is exhausted", so an over-serving server breaks BOTH; the healthy/degraded gap is a
+    # symptom of that, not a defect of the degraded branch.
+    #
+    # NOT fixed here, and the reason is this file's own history. With /info down `stated` could be
+    # any size >= 1, so the only degraded bar that restores the superset for EVERY server is "never
+    # infer shortness at all" (bar 0/1) — which re-splits the one rule VMCP-103 unified, and splits
+    # it the way 103 exists to have removed: strictly more robust with /info DOWN than with it up
+    # (on w < 5 above, a 0/1 degraded read returns the whole board while the healthy one truncates).
+    # Making BOTH bars 0/1 is sound and is the only fix that is, but it is a design change rather
+    # than a correction: it costs +1 request on every flat read (the honest last partial page ends
+    # the read today and would end it no longer), it turns a required bucket that repeats a
+    # non-empty window while any other bucket produces into a `_MAX_UNPROVEN_PAGES` RAISE instead
+    # of a board, and it deletes the stated operand VMCP-111 spent a card pinning. Tracked as
+    # VMCP-127 (608), which carries the full w-table and the four costs to measure first.
+    #
+    # THE TRIGGER IS DOUBLY UNOBSERVED, which is why that card is not urgent. Loss needs
+    # over-serving AND a later short NON-FINAL page in the SAME read (`longest_page` is a per-call
+    # local, so the 10 and the 11 above never leak into another read). The endpoints that over-serve
+    # are precisely the ones that IGNORE `?page=`, so their next page is a pure repeat that ends the
+    # read on `added_new` — MEASURED through this client against that container, /info up and /info
+    # down both return 10 views and 11 buckets in 4 requests, identically — and a short non-final
+    # page could not be produced on 2.3.0 at all (see "HONEST ABOUT THE TRIGGER" below).
     #
     # VMCP-103 — AND THAT WAS ONLY HALF THE JOB: THE DEGRADED READ WAS LEFT STRICTLY MORE ROBUST
     # THAN THE HEALTHY ONE. The two rules were never symmetric — "len >= S" IMPLIES "len >= L", so

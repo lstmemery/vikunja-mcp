@@ -494,6 +494,39 @@ def _tracker(handler, *, info_status=503, page_size=50, harness_cap=3 * MAX_UNPR
     return api, pages
 
 
+def _serving_lengths(handler, sink):
+    """Wrap a fixture server and record the length of every per-bucket page it hands back.
+
+    VMCP-124 (603): the ONE number both sweeps' `healthy == degraded` claim is conditional on. The
+    sweeps assert it (`assert max(sink) <= page_size`) rather than describing it, because the claim
+    they used to make in prose — a superset "by construction" — is FALSE the moment a server serves
+    a page LONGER than /info states. Silently extending a sweep's claimed reach past what it checks
+    is the exact failure that produced that prose; this makes it fail loudly instead.
+
+    KEEP BOTH CALL SITES EVEN THOUGH ONE LOOKS REDUNDANT — the two sweeps differ, and only a
+    mutation shows how. Each generator widened to over-serve, applied alone, __pycache__ cleared,
+    that sweep run alone:
+
+      `_short_non_final_pages`: n = randint(1, page_size + 3)   -> RED here, and GREEN with this
+                                                                  assert removed. Nothing else in
+                                                                  the suite sees it (582 measured
+                                                                  the same over 300 rounds).
+      `_offset_pages`: window cut at page_size + 3, and at + 1   -> RED here, and STILL RED with
+                                                                  this assert removed — that sweep's
+                                                                  own equality assert happens to
+                                                                  catch it on these seeds.
+
+    So on `_offset_pages` this is not the only guard; it is the one that fires FIRST, names the
+    cause instead of an inscrutable data mismatch, and is a property of the SCOPE rather than of an
+    outcome that another seed could hide."""
+    def wrapped(request):
+        response = handler(request)
+        for bucket in response.json():
+            sink.append(len(bucket.get("tasks") or []))
+        return response
+    return wrapped
+
+
 def _offset_pages(bucket_ids, page_size):
     """An HONEST Vikunja: page p of a bucket is its tasks at offsets [(p-1)*size, p*size)."""
     def handler(request):
@@ -716,15 +749,26 @@ def test_a_task_moving_buckets_mid_read_still_lands_once_on_the_degraded_path():
 
 
 def test_the_degraded_read_never_loses_a_task_the_healthy_read_saw():
-    """THE invariant of the whole branch, swept rather than argued: 60 randomized boards (page
-    sizes 1..50, bucket sizes across several page boundaries, all three require_titles shapes),
-    each read TWICE — once with /info healthy, once with it down.
+    """60 randomized boards (page sizes 1..50, bucket sizes across several page boundaries, all
+    three require_titles shapes), each read TWICE — once with /info healthy, once with it down —
+    over an HONEST server: `_offset_pages` never serves more rows than the size it states.
 
-    The degraded read is a SUPERSET by construction: its "could still be full" test uses the
-    longest page the server has PROVEN it can serve, which is <= the real page size, so every page
-    the known rule would fetch the unknown rule fetches too. On the buckets that drive paging the
-    two must therefore agree EXACTLY; elsewhere the degraded read may only ever have MORE (it
-    spends one extra page, and that page carries extra Done/Backlog tasks)."""
+    WITHIN THAT SCOPE the two reads must agree exactly on the buckets that drive paging, and the
+    degraded read may only ever have MORE elsewhere (it spends one extra page, and that page
+    carries extra Done/Backlog tasks). The reason is arithmetic, and the `assert max(served) <=
+    page_size` below is what keeps it applicable: while no page exceeds the stated size, `min(
+    stated, longest_served)` IS `longest_served`, so both /info states compute the very same bar.
+
+    IT IS NOT THE UNIVERSAL THIS DOCSTRING USED TO CLAIM. It said the degraded read is "a SUPERSET
+    by construction: its 'could still be full' test uses the longest page the server has PROVEN it
+    can serve, which is <= the real page size". Every clause of that is true and the conclusion
+    does not follow: the bound is <= the REAL page size, while the healthy reader uses the STATED
+    one, and VMCP-124 (603) MEASURED a real 2.3.0 serving 10 and 11 rows against a stated 5. Where
+    stated < served the healthy bar is the LOWER one, so the degraded read is the STRICTER of the
+    two and is a strict SUBSET — measured on 582's fixture, 2 requests and Build[1..8] against 4
+    and Build[1..11]. On that same server the healthy read truncates too, one repeat-window length
+    later, so it is the shared inference that breaks and not this branch; the api.py note above
+    `_page_size` carries the w-table and why neither bar is changed."""
     rng = random.Random(20260730)
     checked = 0
     for _ in range(60):
@@ -737,12 +781,15 @@ def test_the_degraded_read_never_loses_a_task_the_healthy_read_saw():
                 next_id += 1
         require = rng.choice([None, {"Build", "Review"}, {"Queue", "Build", "Review"}])
 
-        boards = {}
+        boards, served = {}, []
         for info_status in (200, 503):
-            api, _pages = _tracker(_offset_pages(stages, page_size),
+            api, _pages = _tracker(_serving_lengths(_offset_pages(stages, page_size), served),
                                    info_status=info_status, page_size=page_size)
             boards[info_status] = {b["title"]: sorted(t["id"] for t in b["tasks"])
                                    for b in api.view_tasks(3, 11, require_titles=require)}
+
+        # the scope of everything asserted below — see the docstring and `_serving_lengths`
+        assert max(served) <= page_size, (max(served), page_size, "server served MORE than stated")
 
         for title, healthy in boards[200].items():
             degraded = boards[503].get(title, [])
@@ -841,7 +888,17 @@ def test_the_healthy_read_never_loses_a_task_a_server_serves_short():
     Two assertions, and the second is the one this card exists for: every required bucket comes
     back COMPLETE, and the healthy read equals the degraded read BUCKET FOR BUCKET — not merely
     "is a subset of". After VMCP-103 there is one rule, so /info's health may change what the
-    ceiling permits but never what the board contains."""
+    ceiling permits but never what the board contains.
+
+    SCOPED, not universal, and VMCP-124 (603) is the correction: "one rule" collapses to one
+    NUMBER only while no page exceeds the stated size, which every page here does by construction
+    (`n <= page_size - 1`) and the `assert max(served_lengths) <= page_size` below keeps true. Let
+    a page overshoot the stated size and the two /info states compute DIFFERENT bars — the healthy
+    one min(stated, longest), the degraded one longest — and the equality asserted here is simply
+    false: 582's two constructed tests at the end of this file are that case, and widening this
+    generator is NOT how to reach it (measured there: 300 rounds with overshoot allowed, 300/300
+    still identical, because `_short_non_final_pages` never repeats a window and
+    `added_new_required` carries every read whatever the bar says)."""
     rng = random.Random(20260731)
     checked = 0
     for _ in range(60):
@@ -857,12 +914,16 @@ def test_the_healthy_read_never_loses_a_task_a_server_serves_short():
                 next_id += n
         require = rng.choice([None, {"Build", "Review"}, {"Queue", "Build", "Review"}])
 
-        boards = {}
+        boards, served_lengths = {}, []
         for info_status in (200, 503):
-            api, _pages = _tracker(_short_non_final_pages(served),
+            api, _pages = _tracker(_serving_lengths(_short_non_final_pages(served), served_lengths),
                                    info_status=info_status, page_size=page_size)
             boards[info_status] = {b["title"]: sorted(t["id"] for t in b["tasks"])
                                    for b in api.view_tasks(3, 11, require_titles=require)}
+
+        # the scope of everything asserted below — see the docstring and `_serving_lengths`
+        assert max(served_lengths) <= page_size, (max(served_lengths), page_size,
+                                                  "server served MORE than stated")
 
         for title, healthy in boards[200].items():
             assert healthy == boards[503].get(title, []), (title, page_size, require)
