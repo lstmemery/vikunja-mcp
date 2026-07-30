@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import time
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -703,27 +704,37 @@ def test_git_calls_do_not_inherit_a_blocking_stdin(repo, monkeypatch):
     assert out == expected
 
 
-def test_git_runs_with_terminal_prompts_disabled_and_keeps_the_callers_transport(repo, tmp_path):
+def test_git_runs_with_terminal_prompts_disabled_and_keeps_the_callers_transport(
+    repo, tmp_path, monkeypatch
+):
     """An https remote with no credential helper prompts on the terminal and waits forever.
     Proven by making git launch a stand-in for ssh that dumps the environment git handed it —
     which also pins the other half: a GIT_SSH_COMMAND the CALLER set must survive untouched (an
-    injected BatchMode default would override a configured `core.sshCommand` identity)."""
+    injected BatchMode default would override a configured `core.sshCommand` identity).
+
+    Both variables go through `monkeypatch`, like every other env-touching test in this file.
+    Raw `os.environ` assignment with `del` in a `finally` was worse than untidy here: `del`
+    DESTROYS an ambient GIT_SSH_COMMAND (this suite runs on developer boxes and on CI runners
+    that legitimately set it) instead of restoring it. And GIT_TERMINAL_PROMPT is now set to
+    "1" BEFORE the call on purpose: with it merely unset, the assertion below passed
+    spuriously on any machine exporting GIT_TERMINAL_PROMPT=0 — the child would report "0"
+    whether or not `_run_git` set anything. Seeded with the OPPOSITE value, the assertion pins
+    the property it names: `_run_git` OVERRIDES what the caller exported.
+    """
     dump = tmp_path / "git-env.txt"
     fake_ssh = tmp_path / "fake-ssh.sh"
     fake_ssh.write_text(f'#!/bin/sh\nenv > "{dump}"\nexit 1\n')
     fake_ssh.chmod(0o755)
-    os.environ["GIT_SSH_COMMAND"] = str(fake_ssh)
+    monkeypatch.setenv("GIT_SSH_COMMAND", str(fake_ssh))
+    monkeypatch.setenv("GIT_TERMINAL_PROMPT", "1")     # the ambient value the override must beat
     _git(repo, "remote", "set-url", "origin", "ssh://git@127.0.0.1/nowhere.git")
-    try:
-        with pytest.raises(WorkspaceError, match="failed"):
-            workspace_cmd._git("fetch", "origin", cwd=repo)
-    finally:
-        del os.environ["GIT_SSH_COMMAND"]
+    with pytest.raises(WorkspaceError, match="failed"):
+        workspace_cmd._git("fetch", "origin", cwd=repo)
 
     seen = dict(
         line.split("=", 1) for line in dump.read_text().splitlines() if "=" in line
     )
-    assert seen["GIT_TERMINAL_PROMPT"] == "0"
+    assert seen["GIT_TERMINAL_PROMPT"] == "0"          # NOT the "1" this process exported
     assert seen["GIT_SSH_COMMAND"] == str(fake_ssh)
 
 
@@ -750,14 +761,41 @@ def test_the_fetch_under_the_lock_times_out_instead_of_wedging_it_forever(
     assert time.monotonic() - started < 15        # not the 30s sleep, not the 600s ceiling
 
 
-def test_a_local_git_call_keeps_the_generous_ceiling(repo):
+def test_a_local_git_call_keeps_the_generous_ceiling(repo, monkeypatch):
     """The other direction of the two-bound split: killing a `worktree add` mid-checkout is
     destructive (git registers a "locked / initializing" entry BEFORE checking out, which
     `prune` will not drop and `_find` hands back as `created: false`), so local calls must NOT
-    inherit the network bound — a big checkout on a slow disk is slow, not hung."""
-    assert workspace_cmd._GIT_TIMEOUT >= 600
-    assert workspace_cmd._GIT_NET_TIMEOUT < workspace_cmd._GIT_TIMEOUT
-    ensure_workspace(42, cwd=repo)                # the real create path still works end to end
+    inherit the network bound — a big checkout on a slow disk is slow, not hung.
+
+    Asserting the two CONSTANTS proved nothing about that: `worktree add` handed
+    `timeout=_GIT_NET_TIMEOUT` tomorrow keeps a constants-only test green while reintroducing
+    exactly the destructive kill this bound exists to prevent. So pin it AT THE CALL SITES —
+    record the limit each git call actually resolves to (the same
+    `_GIT_TIMEOUT if timeout is None else timeout` the subprocess is handed) and check which
+    bound each one got. The recorder DELEGATES to the real `_run_git`, so this still drives the
+    real create path end to end: it observes, it does not stand in for anything.
+    """
+    resolved: list[tuple[str, float]] = []
+    real_run_git = workspace_cmd._run_git
+
+    def recording_run_git(args, cwd, timeout):
+        resolved.append((
+            " ".join(args), workspace_cmd._GIT_TIMEOUT if timeout is None else timeout
+        ))
+        return real_run_git(args, cwd, timeout)
+
+    monkeypatch.setattr(workspace_cmd, "_run_git", recording_run_git)
+    res = ensure_workspace(42, cwd=repo)          # the real create path still works end to end
+    assert res["created"] is True and (Path(res["path"]) / "README.md").exists()
+
+    ceiling, network = workspace_cmd._GIT_TIMEOUT, workspace_cmd._GIT_NET_TIMEOUT
+    assert ceiling >= 600 and network < ceiling            # the split itself, still worth pinning
+    adds = [limit for cmd, limit in resolved if cmd.startswith("worktree add")]
+    assert adds and set(adds) == {ceiling}                 # THE call site a kill corrupts
+    fetches = [limit for cmd, limit in resolved if cmd.startswith("fetch")]
+    assert fetches and set(fetches) == {network}           # the one call off this machine
+    # and no OTHER local call site quietly took the network bound either
+    assert {limit for cmd, limit in resolved if not cmd.startswith("fetch")} == {ceiling}
 
 
 # --- final whole-branch review, Important 3: the board read under the lock must be bounded ---
@@ -827,13 +865,28 @@ def test_run_workspace_still_accepts_the_legitimate_combinations(repo, monkeypat
     assert json.loads(capsys.readouterr().out.strip())["released"] is True
 
 
-def test_argparse_own_errors_still_exit_rather_than_print_json(monkeypatch, tmp_path):
-    """Minor 10: `except SystemExit: raise` was dead code (SystemExit is a BaseException, so the
-    `except Exception` below never caught it). Removing it changes nothing — pinned here so the
-    next reader does not have to re-derive that."""
+def test_argparse_own_errors_still_exit_rather_than_print_json(monkeypatch, tmp_path, capsys):
+    """Minor 10: argparse's own failures (`--role bogus`, `--help`) must keep ARGPARSE's
+    behaviour — exit, with argparse's own status and argparse's own message — and must never be
+    reshaped into this CLI's `{"error": …}` line + exit 1. What allows that is the handler being
+    `except Exception`: SystemExit is a BaseException and is not caught. (The
+    `except SystemExit: raise` clause that used to sit above it was dead by that same fact. Its
+    REMOVAL is unobservable by construction, so no test can pin it — which is why this one pins
+    the observable contract instead of claiming to pin the deletion.)
+
+    A bare `pytest.raises(SystemExit)` was too weak to be even that: a clause that prints the
+    JSON error line and THEN re-raises satisfies it, and that is precisely the failure this
+    test's name warns about. So assert the whole shape — argparse's exit status (2, never this
+    CLI's 1), NOTHING on stdout for a script to parse, and argparse's own diagnostic on stderr,
+    the last so the test cannot be satisfied by our own code exiting 2 by hand.
+    """
     monkeypatch.chdir(tmp_path)
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as excinfo:
         run_workspace(["42", "--role", "bogus"])
+    assert excinfo.value.code == 2                     # argparse's status, not this CLI's exit 1
+    out, err = capsys.readouterr()
+    assert out == ""                                   # no JSON line: nothing was swallowed
+    assert "invalid choice" in err and "bogus" in err  # argparse's own message, not ours
 
 
 # --- VMCP-66 (514): a killed `worktree add` leaves `locked initializing` — refuse, don't reuse ---
@@ -976,9 +1029,18 @@ def test_gc_reports_a_half_created_tree_and_keeps_sweeping(repo, tracker, monkey
 def test_a_malformed_repo_toml_is_not_swallowed_into_the_default_root(repo):
     """`except Exception` around load_config treated "this toml is broken" exactly like "there
     is no tracker config here" — and silently put the tree in the default sibling directory,
-    where a `worktree_root` the human meant to configure would never be looked for again."""
+    where a `worktree_root` the human meant to configure would never be looked for again.
+
+    Pinned by TYPE, not by a message substring: `pytest.raises(Exception, match="[Ee]xpected")`
+    accepts ANY exception whose text happens to contain "expected" — an unrelated AssertionError
+    or a git failure inside `worktree_root` would have read as this finding being fixed. And the
+    value the swallow used to return is spelled out first, so the test names the outcome it
+    excludes ("into the default root") instead of only "something raised".
+    """
+    swallowed_default = repo.parent / "work.worktrees"
+    assert worktree_root(repo) == swallowed_default            # where a swallow would put it
     (repo / ".vikunja-mcp.toml").write_text("[tracker\nurl = 'oops'\n")
-    with pytest.raises(Exception, match="[Ee]xpected"):        # tomllib.TOMLDecodeError
+    with pytest.raises(tomllib.TOMLDecodeError):
         worktree_root(repo)
 
 
