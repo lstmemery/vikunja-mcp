@@ -17,7 +17,7 @@
 - `uv run pytest tests/unit -q` must be green at the end of every task.
 - The `vikunja-mcp claimable` cross-repo contract is **frozen**: keys `claimable`/`kind`/`task_id`, exit 0 = ran / 1 = failed, and a closed 7-value `kind` enum (`queue|resume|stuck_claim|review|empty|starving|cycle`). Adding a `kind` breaks hgdev-acp's hub **and has an inverted rollout order** — do not add one in this plan.
 - `wip_limit` is committed team policy: read **only** from the repo `.vikunja-mcp.toml`, never from env. `worktree_root` is a machine-local path and therefore **does** take an env override (`VIKUNJA_WORKTREE_ROOT`).
-- ~~Ships inert: with no `wip_limit` set, every behaviour must be byte-for-byte what it is today. Existing tests must not need edits (except where a task says so explicitly).~~ **SUPERSEDED on 2026-07-30 by tracker #524: an unset `wip_limit` means 3, so the gate is live everywhere** (rationale and what was traded away: `…-drain-design.md`, Goals). This plan is a historical record of how the branch landed — the code and tests it quotes verbatim below (Task 1's `wip_limit` comment, its `< 1` refusal message, `test_wip_limit_defaults_to_none`, `test_wip_free_is_none_when_unlimited`, `_effective_wip_limit() -> int | None`) are the OLD contract; do not copy them back out of this document.
+- ~~Ships inert: with no `wip_limit` set, every behaviour must be byte-for-byte what it is today. Existing tests must not need edits (except where a task says so explicitly).~~ **SUPERSEDED on 2026-07-30 by tracker #524: an unset `wip_limit` means 3, so the gate is live everywhere** (rationale and what was traded away: `…-drain-design.md`, Goals). This plan is a historical record of how the branch landed, so **every fenced block below quotes the code and tests AS THEY WERE WRITTEN THAT DAY, not as they are now — read the source, never this document, for the current contract.** Blocks known to teach a contract that no longer exists carry a `SUPERSEDED … DO NOT COPY` marker on their FIRST LINE, inside the fence, in that fence's own comment syntax. That placement is the point and it replaces the enumeration this banner used to carry (tracker #517, VMCP-79): a list of stale snippets sitting OUTSIDE the fences protects nobody who copies from INSIDE one, and it silently under-covered the two blocks that produced this fix. Treat the markers as non-exhaustive all the same — an unmarked block is "nobody has checked it", never "verified current".
 - `skills/tracker/SKILL.md` is a **rulebook that ships in the wheel** and self-heals onto every consumer on MCP server start. It must never name repo-specific commands (no `uv run pytest`) — only concepts.
 - Comment the **why** of each gate in the surrounding file's style (this codebase comments densely, mixing Russian and English; match the file you are editing).
 - One task = one commit on `main`, `type(scope): summary`, with the `Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>` trailer.
@@ -62,6 +62,10 @@ Ships completely inert: with no `wip_limit` in the toml, `claim` behaves exactly
 Append to `tests/unit/test_config.py`:
 
 ```python
+# SUPERSEDED by tracker #524 — HISTORICAL, DO NOT COPY. `test_wip_limit_defaults_to_none` was
+# renamed to test_an_absent_wip_limit_stays_none_at_the_config_layer precisely because the NAME
+# taught "no wip_limit = no gate"; the assertion survived, the story around it did not. The live
+# tests are in tests/unit/test_config.py. See the banner at the top of this plan.
 # --- wip_limit: the parallel-drain slot count (committed in the toml, generalises #38) ---
 
 def test_wip_limit_defaults_to_none(tmp_path):
@@ -118,6 +122,9 @@ Expected: FAIL — `AttributeError: 'Config' object has no attribute 'wip_limit'
 In `src/vikunja_mcp/config.py`, add to the `Config` dataclass right after `enforce_single_wip`:
 
 ```python
+    # SUPERSEDED by tracker #524 — HISTORICAL, DO NOT COPY. The last comment line is false now:
+    # an unset key falls back to enforce_single_wip OR DEFAULT_WIP_LIMIT (= 3), never to
+    # "today's behavior byte-for-byte". Live version: src/vikunja_mcp/config.py.
     # how many tasks this token may hold in Design/Build AT ONCE — the parallel-drain slot
     # count, and the generalisation of enforce_single_wip (which is exactly wip_limit=1).
     # Committed TEAM POLICY of the same class: repo toml ONLY, never env, never a secret.
@@ -128,6 +135,9 @@ In `src/vikunja_mcp/config.py`, add to the `Config` dataclass right after `enfor
 In `load_config`, after the `project_id` parse and before the `return Config(...)`:
 
 ```python
+    # SUPERSEDED by tracker #524 — HISTORICAL, DO NOT COPY. The `< 1` refusal below ends with
+    # "omit the key entirely for no limit", which is now false and is pinned AGAINST by
+    # test_the_below_one_refusal_names_the_default_and_not_no_limit. Live: config.py.
     raw_limit = repo.get("wip_limit")
     wip_limit: int | None = None
     if raw_limit is not None:
@@ -153,6 +163,9 @@ Expected: PASS (5 tests).
 Create `tests/unit/test_workflow_wip.py`:
 
 ```python
+# SUPERSEDED by tracker #524 — HISTORICAL, DO NOT COPY. `test_no_limit_by_default_lets_a_second
+# _claim_through` below asserts the OPPOSITE of today's behaviour: an unconfigured consumer now
+# gets DEFAULT_WIP_LIMIT (= 3) slots, not unbounded ones. Live: tests/unit/test_workflow_wip.py.
 """The WIP slot gate — how many tasks one token may hold in Design/Build at once.
 
 wip_limit generalises the #38 single-WIP flag (enforce_single_wip == wip_limit 1) and is what
@@ -246,6 +259,8 @@ In `src/vikunja_mcp/workflow.py`, extend `__init__` (keep `enforce_single_wip` i
 and after the `enforce_single_wip` assignment:
 
 ```python
+        # SUPERSEDED by tracker #524 — HISTORICAL, DO NOT COPY. "so an unconfigured consumer is
+        # unchanged" is false: None now falls back to the legacy flag OR DEFAULT_WIP_LIMIT.
         # parallel drain: how many tasks may be active (Design/Build) at once. None -> fall
         # back to the legacy flag, so an unconfigured consumer is unchanged. See
         # _effective_wip_limit for the precedence.
@@ -255,6 +270,9 @@ and after the `enforce_single_wip` assignment:
 Add the resolver next to `_my_active_tasks`:
 
 ```python
+    # SUPERSEDED by tracker #524 (and #517) — HISTORICAL, DO NOT COPY. The signature is `-> int`
+    # now, there is no "None = no limit" branch at all, and the precedence lives in
+    # _wip_limit_with_origin(). Live: src/vikunja_mcp/workflow.py.
     def _effective_wip_limit(self) -> int | None:
         """How many active tasks this token may hold. None = no limit.
 
@@ -269,6 +287,9 @@ Add the resolver next to `_my_active_tasks`:
 Replace the `if self.enforce_single_wip:` block in `claim()` (currently `workflow.py:739-750`) with:
 
 ```python
+        # SUPERSEDED by tracker #524 (and #517) — HISTORICAL, DO NOT COPY. The `if limit is not
+        # None:` branch is gone (the limit is always a number), and the live refusal also names
+        # WHICH knob set it. Live: src/vikunja_mcp/workflow.py, claim().
         # WIP slot gate (generalises the #38 single-WIP flag): refuse a claim that would put
         # this token over its configured number of simultaneously active tasks. Reuse the board
         # snapshot claim already fetched — the old code called _my_active_tasks() with no board
@@ -355,6 +376,9 @@ Teaches `next_task` to serve a pump that has several agents in flight, without l
 Append to `tests/unit/test_workflow_wip.py`:
 
 ```python
+# SUPERSEDED by tracker #524 — HISTORICAL, DO NOT COPY. `test_wip_free_is_none_when_unlimited`
+# below pins a `wip` payload that can no longer occur: `limit`/`free` are ALWAYS numbers now.
+# Live: tests/unit/test_workflow_wip.py.
 # --- next_task in parallel mode: exclude + slot accounting ---
 
 def test_next_task_reports_wip_on_every_result():
@@ -1373,6 +1397,9 @@ Expected: FAIL — the tokens are not in SKILL.md yet.
 Replace the bullet **«Дренаж последовательный, не параллельный»** (in «Непрерывная работа (loop)») with:
 
 ```markdown
+<!-- SUPERSEDED by tracker #524 — HISTORICAL, DO NOT COPY INTO SKILL.md. `limit: null` cannot
+     reach an agent any more: _effective_wip_limit() returns int, and an unset wip_limit means 3.
+     The live wording is in SKILL.md itself; see the banner at the top of this plan. -->
 - **Ширина дренажа задаётся конфигом, а не тобой.** `next_task` в каждом ответе отдаёт
   `wip: {active, limit, free}`. `limit: null` или `1` — дренаж ПОСЛЕДОВАТЕЛЬНЫЙ: claim →
   задиспатчил пер-таск-агента → дождался, что он довёл задачу до Review → только тогда
@@ -1414,6 +1441,10 @@ Insert a new section right after «Непрерывная работа (loop)»:
 In «Следы работы», replace the bullet «**Коммит+пуш — часть перевода в Review**» body (keep the heading) so the recipe reads:
 
 ```markdown
+<!-- PARTLY WRONG — HISTORICAL, DO NOT COPY INTO SKILL.md. «задача остаётся в Build, worktree
+     никуда не денется» below is false: `call_human` moves the card to Your Call, which makes the
+     tree DEAD for `--gc`; only uncommitted/unpushed content keeps it. Full correction in the
+     blockquote right under this fence, and the fixed wording is in SKILL.md itself. -->
   - **Интеграция — это rebase + ПОВТОРНАЯ проверка + пуш, а не просто `git push`.** Ты сидишь
     на одноразовой ветке `task/<id>`, поэтому пушить надо ЯВНО в главную ветку:
 

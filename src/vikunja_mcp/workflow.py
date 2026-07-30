@@ -280,8 +280,9 @@ class Workflow:
             for t in (bucket.get("tasks") or [])
         ]
 
-    def _effective_wip_limit(self) -> int:
-        """How many active tasks this token may hold. ALWAYS a number — the gate is never off.
+    def _wip_limit_with_origin(self) -> tuple[int, str]:
+        """The slot count AND the breadcrumb saying which knob produced it, resolved by ONE
+        branch structure so the two can never disagree (tracker #517).
 
         Precedence: an explicit wip_limit is the truth; otherwise the legacy #38 flag means
         exactly 1; otherwise DEFAULT_WIP_LIMIT. Keeping both keys alive means an existing
@@ -290,10 +291,27 @@ class Workflow:
         There is deliberately no "unlimited" (tracker #524): an unset key used to return None
         = no gate, which contradicted the rulebook's «unset ⇒ SERIAL drain» and let a pump
         claim the whole Queue. Returning int, not int | None, is what makes that structural —
-        callers cannot reintroduce an unbounded branch by forgetting a None check."""
+        callers cannot reintroduce an unbounded branch by forgetting a None check.
+
+        The origin string exists because the refusal message lost its breadcrumb when #38's
+        `enforce_single_wip` stopped being the only knob: an agent hitting a surprising "WIP
+        limit reached" could no longer tell whether a human committed the number, whether the
+        legacy flag was still on, or whether nothing was configured at all — three different
+        next actions, and the third is not even a toml edit. Computed HERE rather than in a
+        sibling helper on purpose: a second copy of this if/elif is a lie waiting to happen,
+        and a message that names the wrong knob is worse than one that names none."""
         if self.wip_limit is not None:
-            return self.wip_limit
-        return 1 if self.enforce_single_wip else DEFAULT_WIP_LIMIT
+            return self.wip_limit, "the `wip_limit` key in the repo's .vikunja-mcp.toml"
+        if self.enforce_single_wip:
+            return 1, "`enforce_single_wip = true` in the repo's .vikunja-mcp.toml"
+        return DEFAULT_WIP_LIMIT, (
+            "the built-in default — the repo's .vikunja-mcp.toml sets no `wip_limit`"
+        )
+
+    def _effective_wip_limit(self) -> int:
+        """How many active tasks this token may hold. ALWAYS a number — the gate is never off.
+        Thin view over _wip_limit_with_origin, which owns the precedence."""
+        return self._wip_limit_with_origin()[0]
 
     def _find_task(self, task_id: int, board: list[dict] | None = None) -> tuple[dict, str]:
         for bucket in (board if board is not None else self._board()):
@@ -890,12 +908,16 @@ class Workflow:
         # _effective_wip_limit always yields a number (an unset wip_limit means DEFAULT_WIP_LIMIT,
         # tracker #524). Reuse the board snapshot claim already fetched — the old code called
         # _my_active_tasks() with no board and paid for a SECOND full board fetch per gated claim.
-        limit = self._effective_wip_limit()
+        limit, limit_origin = self._wip_limit_with_origin()
         active = self._my_active_tasks(board=board)
         if len(active) >= limit:
             names = ", ".join(f"#{t['id']}" for _stage, t in active)
+            # Name the KNOB, not just the number (tracker #517): a surprising refusal is the one
+            # moment an agent needs to find where the limit is set, and the origin sentence sits
+            # AFTER the "(n/m)" parens so the pins matching on that prefix keep working.
             raise WorkflowError(
                 f"WIP limit reached ({len(active)}/{limit}) — you already hold {names}. "
+                f"That number comes from {limit_origin}. "
                 f"Finish one (advance to Review) or return_task it before claiming another"
             )
         existing = task.get("assignees") or []

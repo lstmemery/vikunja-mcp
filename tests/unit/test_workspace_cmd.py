@@ -1355,3 +1355,110 @@ def test_a_parked_card_past_the_first_page_is_still_graded_as_parked(repo, track
 
     assert res["kept"] == []
     assert [e["task_id"] for e in res["expected"]] == [task["id"]]
+
+
+# --- VMCP-69 (517): the two behaviour leftovers of the parallel-drain branch ---
+
+def test_the_main_worktree_lookup_runs_git_once_however_often_it_is_asked(repo, monkeypatch):
+    """`worktree_root` is called from `_find`, from `_release_locked`'s not-found branch and once
+    per sweep, and each call used to spawn its own `git worktree list --porcelain`. Memoised on
+    `_main_worktree`, because that is where the subprocess is and the answer cannot change while
+    the process runs. Disable the lru_cache and this counts three listings instead of one."""
+    workspace_cmd._main_worktree.cache_clear()
+    seen = []
+    real = workspace_cmd._run_git
+
+    def counting(args, cwd, timeout):
+        seen.append(tuple(args))
+        return real(args, cwd, timeout)
+
+    monkeypatch.setattr(workspace_cmd, "_run_git", counting)
+
+    assert worktree_root(repo) == worktree_root(repo) == worktree_root(repo)
+
+    assert [c for c in seen if c[:2] == ("worktree", "list")] == [
+        ("worktree", "list", "--porcelain")
+    ]
+
+
+def test_the_env_override_is_not_frozen_by_that_memoisation(repo, monkeypatch):
+    """The cache is deliberately on `_main_worktree` and NOT on `worktree_root`: the latter reads
+    VIKUNJA_WORKTREE_ROOT and the repo toml, which callers (and this suite) change underneath it.
+    Move the cache up a level and this goes red — the second answer would still be the first."""
+    workspace_cmd._main_worktree.cache_clear()
+    first = worktree_root(repo)
+    monkeypatch.setenv(ENV_WORKTREE_ROOT, "elsewhere")
+    assert worktree_root(repo) == (repo / "elsewhere").resolve() != first
+
+
+def _fail_branch_delete(monkeypatch):
+    """Make `git branch -D` fail while everything else stays real git. The window is otherwise
+    unreachable on demand, and it is the whole point of the guard: the worktree is ALREADY gone
+    by the time this fires."""
+    real = workspace_cmd._run_git
+
+    def selective(args, cwd, timeout):
+        if args[:2] == ("branch", "-D"):
+            raise WorkspaceError(f"git {' '.join(args)} failed: simulated ref-store failure")
+        return real(args, cwd, timeout)
+
+    monkeypatch.setattr(workspace_cmd, "_run_git", selective)
+
+
+def test_a_branch_delete_failure_does_not_report_a_tree_that_is_already_gone(repo, monkeypatch):
+    """`worktree remove` succeeded, `branch -D` did not. Reporting `released: False` there is not
+    a neutral "it failed": SKILL.md teaches that field as "PROTECTION — your unsaved work is still
+    in the tree", so it sent a human to a directory git had just deleted. Say what happened."""
+    path = Path(ensure_workspace(42, cwd=repo)["path"])
+    _fail_branch_delete(monkeypatch)
+
+    res = release_workspace(42, cwd=repo)
+
+    assert res["released"] is True                       # the tree really is gone...
+    assert not path.exists()
+    assert res["branch_deleted"] is False                # ...and the branch really is not
+    assert "task/42" in res["warning"] and "branch -D" in res["warning"]
+    monkeypatch.undo()
+    assert "task/42" in _git(repo, "branch", "--list", "task/42")
+
+
+def test_a_leaked_branch_is_recoverable_by_the_ordinary_resume_path(repo, monkeypatch):
+    """Why `released: True` is honest rather than a shrug: a surviving `task/<id>` is the same
+    state a hand-deleted tree leaves, and `_ensure_locked` reattaches to it instead of recreating
+    it. Nothing is lost and no cleanup is required before the task can be worked again."""
+    ensure_workspace(42, cwd=repo)
+    _fail_branch_delete(monkeypatch)
+    release_workspace(42, cwd=repo)
+    monkeypatch.undo()
+
+    again = ensure_workspace(42, cwd=repo)
+
+    assert again["created"] is True and again["branch"] == "task/42"
+    assert Path(again["path"]).is_dir()
+
+
+def test_gc_files_a_branch_delete_failure_under_released_not_kept(repo, tracker, monkeypatch):
+    """The sweep's side of the same bug: the per-tree `except` recorded a `kept` entry whose
+    `path` no longer existed, and `kept` is the list SKILL.md tells the pump a human must read.
+    Fixed at the source, so the sweep needs no special case — and 516 is free to keep rewriting
+    that handler."""
+    _api, wf = tracker
+    path = Path(ensure_workspace(42, cwd=repo)["path"])       # dead: nothing on the board
+    _quiesce(path)                                            # past VMCP-71's grace window
+    _fail_branch_delete(monkeypatch)
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert [r["task_id"] for r in res["released"]] == [42]
+    assert res["kept"] == [] and res["expected"] == []      # not a refusal at all, so ungraded
+    assert res["released"][0]["branch_deleted"] is False
+    assert not path.exists()
+
+
+def test_a_clean_release_says_nothing_about_the_branch(repo):
+    """The failure keys are added ONLY on failure, so their ABSENCE is the success signal and no
+    existing consumer of a released entry has to learn a new field."""
+    ensure_workspace(42, cwd=repo)
+    res = release_workspace(42, cwd=repo)
+    assert res["released"] is True
+    assert "branch_deleted" not in res and "warning" not in res

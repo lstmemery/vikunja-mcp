@@ -16,6 +16,7 @@ Housekeeping must never be how an agent's work disappears.
 """
 import argparse
 import fcntl
+import functools
 import json
 import os
 import re
@@ -168,6 +169,7 @@ def repo_root(cwd: Path | None = None) -> Path:
     return Path(_git("rev-parse", "--show-toplevel", cwd=cwd))
 
 
+@functools.lru_cache(maxsize=None)
 def _main_worktree(root: Path) -> Path:
     """Resolve `root` (the toplevel of ANY worktree — main OR linked) to the repo's MAIN
     worktree. Task 4 correction: `git rev-parse --show-toplevel`, run from INSIDE a linked
@@ -179,7 +181,17 @@ def _main_worktree(root: Path) -> Path:
     reporting success. `git worktree list --porcelain` always lists the main worktree FIRST,
     from any linked tree (verified against real git), so it is the single source of truth.
     `.resolve()` because git already prints realpaths (Task 3 round-1 fix) and callers compare
-    Path equality, not strings."""
+    Path equality, not strings.
+
+    MEMOISED (tracker #517), and the cache is on THIS function rather than on `worktree_root`
+    deliberately. What costs anything here is the `git worktree list` SUBPROCESS, and the answer
+    it computes — which worktree of this repo is the main one — cannot change while a process
+    runs: `git worktree add/remove` append and drop LINKED entries, never the first one. What
+    `worktree_root` adds on top (VIKUNJA_WORKTREE_ROOT, then the repo toml) is exactly the part
+    that CAN change under a caller — the unit suite monkeypatches that env var per test — so
+    caching the composite would freeze an override and turn a passing suite into a lying one.
+    Unbounded because the key set is "toplevels this process has been handed", i.e. a handful.
+    `cache_clear()` is part of the surface a test may use; nothing in the product calls it."""
     return list_worktrees(root)[0]["path"].resolve()
 
 
@@ -552,10 +564,41 @@ def _release_locked(root: Path, task_id: int, role: str) -> dict:
                     "code": CODE_UNREACHABLE_HEAD,
                     "reason": f"detached HEAD {head} is reachable from no ref"}
     _git("worktree", "remove", str(path), cwd=root)
+    result = {"released": True, "task_id": task_id, "role": role,
+              "path": str(path), "branch": wt["branch"]}
     if wt["branch"]:
-        _git("branch", "-D", wt["branch"], cwd=root)
-    return {"released": True, "task_id": task_id, "role": role,
-            "path": str(path), "branch": wt["branch"]}
+        try:
+            _git("branch", "-D", wt["branch"], cwd=root)
+        except WorkspaceError as e:
+            # tracker #517. The ONE window in which this function can fail with the tree ALREADY
+            # GONE, and letting it raise made both callers lie about it in opposite directions:
+            # `--gc`'s except-handler recorded `released: False` with a `path` that no longer
+            # exists, and `--release` reported `{"error"}` + exit 1 for an operation that had
+            # already succeeded. `released: false` is not a neutral "it didn't work" either —
+            # SKILL.md teaches it as "PROTECTION: you still have unsaved work in there", and
+            # sending an agent to rescue work from a directory git just deleted is the worst of
+            # the available wrong answers.
+            #
+            # So report what actually happened: the tree IS released (every guard above passed,
+            # meaning it was clean and pushed — nothing was lost), and the BRANCH leaked. That
+            # leak is recoverable by construction, not a silent corruption: `_ensure_locked`
+            # reattaches a surviving `task/<id>` instead of recreating it, which is the same
+            # path a hand-deleted tree takes. Reported anyway, because a `branch -D` that fails
+            # here means something unexpected about the repo, and a human should get the one
+            # command that finishes the job.
+            #
+            # Keys added ONLY on failure, so their absence is the success signal and no existing
+            # consumer of the released entry has to learn a new field. WorkspaceError only: a
+            # bare OSError from a vanished cwd is a different bug and must not be laundered into
+            # "released with a warning".
+            result["branch_deleted"] = False
+            result["warning"] = (
+                f"worktree removed, but `git branch -D {wt['branch']}` failed ({e}) — the "
+                f"branch leaked. Nothing was lost (the tree was clean and pushed) and a later "
+                f"workspace call for task {task_id} will reattach to it; to finish the cleanup "
+                f"by hand: `git branch -D {wt['branch']}`"
+            )
+    return result
 
 
 def ensure_workspace(
@@ -748,9 +791,8 @@ def gc_workspaces(cwd: Path | None = None, workflow=None) -> dict:
                 # workspace tests stay green with the guard deleted, so nothing here pins it —
                 # the comment IS the pin. What the guard actually buys is the ABSENCE of that
                 # bogus `kept` entry — real value (the `kept` signal discipline in SKILL.md
-                # depends on it staying quiet), but not
-                # safety. Let `_release_locked` trust the enumerated path and this line becomes
-                # load-bearing overnight, silently.
+                # depends on it staying quiet), but not safety. Let `_release_locked` trust the
+                # enumerated path and this line becomes load-bearing overnight, silently.
                 continue
             parsed = _parse_workspace_name(wt["path"].name)
             if parsed is None:

@@ -292,3 +292,44 @@ def test_a_shared_liveness_board_serves_every_accessor_with_one_fetch():
     assert active == [first["id"]]
     assert len(reviewing) == 1
     assert waiting == [parked["id"]]
+
+
+# --- VMCP-69 (517): the refusal names WHICH knob set the limit ---
+
+@pytest.mark.parametrize("kwargs, holds, needle", [
+    ({"wip_limit": 1}, 1, "`wip_limit` key"),
+    ({"enforce_single_wip": True}, 1, "`enforce_single_wip = true`"),
+    ({}, DEFAULT_WIP_LIMIT, "built-in default"),
+])
+def test_the_refusal_names_the_knob_that_set_the_limit(kwargs, holds, needle):
+    """Three knobs can produce this refusal and they need three different next actions — edit a
+    number, drop a legacy flag, or add a key that is not there at all. The message named
+    `enforce_single_wip` back when that was the only one; since wip_limit it named nothing, so an
+    agent hitting a surprising "WIP limit reached" had no breadcrumb pointing at the toml.
+
+    Every case also asserts the toml is named, because "the default" is only actionable next to
+    the file you would set it in."""
+    api, wf = _env(**kwargs)
+    for n in range(holds):
+        _hold(api, wf, f"held {n}")
+    extra = api.add_task("one too many", "Queue")
+
+    with pytest.raises(WorkflowError) as err:
+        wf.claim(extra["id"])
+
+    assert needle in str(err.value)
+    assert ".vikunja-mcp.toml" in str(err.value)
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"wip_limit": 2}, {"enforce_single_wip": True}, {"enforce_single_wip": True, "wip_limit": 2},
+    {},
+])
+def test_the_breadcrumb_cannot_drift_from_the_number_it_explains(kwargs):
+    """A message naming the WRONG knob is worse than one naming none, and a second copy of the
+    precedence if/elif is exactly how that happens. So ONE method resolves both and
+    _effective_wip_limit is a view over it — split them again and this goes red."""
+    _api, wf = _env(**kwargs)
+    limit, origin = wf._wip_limit_with_origin()
+    assert limit == wf._effective_wip_limit()
+    assert origin
