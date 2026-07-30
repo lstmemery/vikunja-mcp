@@ -3,6 +3,49 @@
 Date: 2026-07-29
 Status: approved (brainstorming) → ready for implementation plan
 
+> ## 📐 DESIGN RECORD — still the authority for WHY, no longer a description of WHAT
+>
+> This is the design that produced the parallel-worktree drain: written 2026-07-29, landed
+> 2026-07-30. **Most of it is still true and still binding.** The forks it took, the options it
+> rejected and the reasons behind both are the authority no source file carries — read it to
+> find out *why* the drain is shaped this way, and do not weaken a decision here merely because
+> the code has grown past the sentence describing it. This is deliberately **not** the same
+> banner as its sibling implementation plan: that document is a dead record whose fences you
+> must not copy, this one is a live rationale whose *statements about the code* have aged.
+>
+> Where the shipped behaviour has moved, the passage is **marked in place — annotated, dated,
+> and naming the task that superseded it** — never rewritten to match. A design record whose
+> superseded decisions are silently corrected loses the only thing it is for: the ability to
+> tell what was *decided* from what was later *learned*. **The markers are not exhaustive**: an
+> unmarked passage means "nobody has checked it", never "verified current". Sweeps so far:
+> tracker #551, which found **eighteen** stale passages — thirteen of prose, plus the five
+> source-line citations below — where the card that ordered the sweep had named two. It also
+> re-verified five *open* findings as still open, which is the other half of the job: a sweep
+> that only marks is indistinguishable from a sweep that gave up. Assume a second will find more.
+>
+> Two narrower cautions:
+>
+> * **Exactly one fenced block here teaches a contract that no longer exists** — the integration
+>   recipe in §4, whose `max 6 rounds` was generalised to `2 × wip.limit` by tracker #550. It
+>   carries a marker on its FIRST LINE, INSIDE the fence, so the warning travels with anything
+>   pasted out of it. The other eleven fences are either **current** (the `[tracker]` toml block
+>   and the `workspace` usage block — both re-checked against the code and `--help` on
+>   2026-07-30) or **dated evidence** from the first live drain: transcripts of commands that
+>   were actually run, which are observations, not contracts to copy.
+> * **Every `workflow.py:<line>` citation in this document is stale** — all five of them
+>   (§Problem, §2 ×3, §"What I could not observe"). Each was **exact when written**, re-checked
+>   at its own authoring commit: `READY_STAGES` really was line 36, the rework-first ordering
+>   line 361, `claim`'s predecessor gate line 731. `workflow.py` has since gone 1471 → 1667
+>   lines, with the growth *above* each of them, so those three now sit at **37, 482 and 922**
+>   and every printed number points at unrelated code. Grep for the named *symbol* instead. Left
+>   as written rather than re-pointed: a line number is a citation that rots on the next commit,
+>   so re-pointing it would only reset the clock — which is also the reason not to add any more.
+>
+> Finally, **everything from "First live parallel drain" downward was APPENDED after the body**
+> (tracker #518, #531, #550, #532) and is therefore NEWER than what precedes it. Where an
+> appended section disagrees with the body, the appended one wins, and the ones that supersede a
+> passage above say which.
+
 ## Problem
 
 The drain is serial by design and by rule: SKILL.md says *«Дренаж
@@ -246,6 +289,17 @@ an acceptable failure mode. `--role` selects which of a task's two possible
 trees to release (default `build`); a review tree is detached and carries no
 branch, so only the `worktree remove` half applies to it.
 
+> **SUPERSEDED IN PART on 2026-07-30 (tracker #516) — the POLICY above is unchanged and still
+> binding; the PAYLOAD is not.** Every refusal now also carries a machine-readable `code`
+> alongside the human `reason`, and that key — never the prose — is what `--gc` grades on:
+> `dirty`, `unpushed`, `half-created`, `unreachable-head`, `detached-build`, `no-worktree`,
+> plus two that only `--gc` can produce (`self-tree`, `release-error`). Two of those refusals
+> did not exist when this was written: a build tree left DETACHED by an interrupted rebase
+> (`detached-build`, tracker #540) and a tree left `locked "initializing"` by a killed
+> `worktree add` (`half-created`, tracker #514). A `released: true` entry can also now carry
+> `branch_deleted: false` + `warning` — the tree went, the branch leaked (tracker #517). Read
+> `workspace_cmd.py`'s `CODE_*` constants for the current set.
+
 **`--gc` is the reason this lives in vikunja-mcp at all.** Enumerate worktrees
 under the root → parse the task id out of **both** naming shapes (`task-<id>`
 and `review-<id>`) → ask the tracker which tasks are still alive → release
@@ -259,8 +313,30 @@ while its task sits in Review. `Workflow` grows one thin public accessor for
 this (`active_task_ids()` / `review_task_ids()`) rather than the CLI reaching
 into `_my_active_tasks()` — the boundary stays a real interface.
 
+> **STILL THE DESIGN, but the sweep grew three parts this description does not have** (all
+> 2026-07-30). (1) It no longer "releases everything else": a dead tree whose own directory was
+> touched inside `_REAP_GRACE_SECONDS` (30 min) is skipped **silently, in neither output list**,
+> so a sweep cannot pull the rug from under an agent standing between `advance(to='review')` and
+> `--release` (tracker #519; the window keys on tree CREATION time and takes its max over
+> non-future markers, #534, and `--gc`'s own inspection was made to stop counting as tree
+> activity, #545). (2) The refusals it collects are **graded** into `kept` vs `expected` rather
+> than one list (#516 — see "Deferred follow-ups" item 8, which is where this came from). (3)
+> The tracker read is bounded as a WHOLE, not per request (#520 — item 4). The role-keyed
+> liveness rule itself is unchanged and still exactly right.
+>
+> One accessor became **four**: `liveness_board()` (the single shared fetch), plus
+> `active_task_ids()`, `review_task_ids()` and `parked_task_ids()` reading off it. `parked_*`
+> is *not* a liveness set — a parked card's tree is dead on purpose; it only grades refusals.
+
 It follows that **create and release never touch the tracker** — no token, no
 network, instant. Only `--gc` needs config.
+
+> **HALF TRUE AS WRITTEN, and the false half is this paragraph's own step 2 three paragraphs
+> up.** "Never touch the tracker" and "no token" hold and were the point. "No network, instant"
+> does not: create runs `git fetch origin` before every `worktree add`, deliberately — that is
+> what makes a new tree's base a *fresh* `origin/main`, the property the first live drain went
+> on to confirm. Only `--gc` needs tracker config; create is nonetheless an online, network-paced
+> command. CLAUDE.md states the corrected form.
 
 **Concurrency.** Two `worktree add` calls on one repo race. An `flock` on
 `<git-dir>/vikunja-mcp-worktree.lock` wraps create/release/gc — the same shape
@@ -303,6 +379,10 @@ fresh resume agent" rule picks them back up.
 in the main checkout. Integration recipe replaces today's plain push:
 
 ```sh
+# ⛔ SUPERSEDED 2026-07-30 (tracker #550) — DO NOT COPY THIS BLOCK. The ceiling is not a
+# ⛔ literal 6: it is 2 × wip.limit, and a rejected push must first be DIAGNOSED with
+# ⛔ `git fetch origin && git log --oneline HEAD..origin/main` (empty ⇒ no race at all —
+# ⛔ escalate NOW instead of spending the budget). Current recipe: SKILL.md, «Коммит+пуш».
 git add <files of this task>
 git commit -m "type(scope): … (tracker #N)"
 # one chain, not separate turns: `&&` refuses to push on red criteria, and it
@@ -314,6 +394,13 @@ git rev-parse HEAD                    # the CANDIDATE sha — read AFTER a succe
 git cat-file -e "<sha>^{commit}"                  # 0 = the commit exists; 128 = it does not
 git merge-base --is-ancestor "<sha>" origin/main  # 0 = it is REALLY on main; 1 = it is not
 ```
+
+> The marker sits **inside** the fence because that is the only place it travels with the text:
+> a warning in prose beside a code block does not get pasted. The rest of the recipe — the `&&`
+> chain, reading the sha only after a successful push, and the `cat-file`/`merge-base` pair — is
+> current and load-bearing; only the ceiling and the missing diagnosis step moved. Both changes
+> are argued in full in §"The ceiling generalised" at the end of this document, which is newer
+> than this section.
 
 "Done criteria" are the ones the orchestrator put in the dispatch brief (here:
 `uv run pytest tests/unit -q` + `uv run ruff check .`). SKILL.md ships to every
@@ -372,7 +459,7 @@ refuses to delete unpushed work. After `advance(to='review')` the agent calls
 | Failure | Behavior |
 |---|---|
 | Not a git repo / no `origin` / git missing | `{"error": …}`, exit 1. The orchestrator does **not** kill the loop — it falls back to one slot in the main checkout, i.e. exactly today's behavior. |
-| `--release` refuses (dirty/unpushed) | The worktree stays; `--gc` reports it on the next tick so a human can see it. |
+| `--release` refuses (dirty/unpushed) | The worktree stays; `--gc` reports it on the next tick so a human can see it. **(#516, 2026-07-30: that report is now GRADED. A refusal that is the routine state of a healthy board — a parked Your Call card's unpushed work, a review tree's in-tree commit — goes to `expected`; `kept` is reserved for "a human should look". The refusal also carries a `code`, which is what the grading keys on. The rulebook's instruction is to read `kept` AND scan `released` for `branch_deleted: false`.)** |
 | Rebase conflict | The agent resolves it, or `call_human`. Never force-push, never `--skip`. |
 | Push rejected repeatedly (past the ceiling — `2 × wip_limit` rounds, 6 at the default 3; resized from 3, then generalised — see "The retry ceiling, resized from measurement" and "The ceiling generalised") | `call_human`; the card parks in **Your Call**, so the worktree reads DEAD to `--gc` — what keeps it is the unpushed work in it, not the stage. Cleaned up before asking (`rebase --abort`), it is clean and pushed and will be reaped mid-question; the agent re-runs `workspace <id>` after the human answers. |
 | Per-task agent crashes | The task stays active, its worktree keeps the work, and `workspace <id>` returns that same tree to the resume agent. Strictly better than today, where the diff sat in the shared checkout. Two later exceptions, both in "Two ways a task comes back": a tree left DETACHED by an interrupted rebase is refused rather than handed back (VMCP-86), and a card bounced from Review after a landed push has no tree at all. |
@@ -421,6 +508,13 @@ Everything below was found by review, triaged as safe to carry, and deliberately
 NOT fixed before landing. Kept here because the SDD ledger that held them is
 scratch and does not survive; the git history alone would not preserve them.
 
+> **RE-CHECKED AGAINST THE CODE on 2026-07-30 (tracker #551).** Six of the eleven items have
+> since been implemented, closed, or partly overtaken; five were re-verified as still open. Each
+> item now carries its status as an appended line. **No item's original text was edited** — a
+> ledger of what was deferred is only worth keeping if it still says what was deferred, and a
+> closed finding rewritten into a fixed one destroys the record that it was ever knowingly
+> carried. Items with no status line below were not re-checked.
+
 **Highest value first:**
 
 1. **The live parallel drain has never run.** The plan named this the step that
@@ -434,17 +528,46 @@ scratch and does not survive; the git history alone would not preserve them.
    so it is not re-proposed): treating a build tree as alive while its card sits
    in Review would suspend the reaper indefinitely, since a card waits there for
    a human's Done.
+
+   > **IMPLEMENTED 2026-07-30 (tracker #519), close to the shape proposed here.**
+   > `_REAP_GRACE_SECONDS = 30 min`, and the skip is silent and in **neither** output list —
+   > `kept` means "a human should look", and a tree that is merely young is not that. The signal
+   > is the newest **non-future** mtime of two footprints, the worktree directory and its index
+   > (`_last_activity`), not the loose "dir/index mtime" of this sketch; two corrections came out
+   > of running it. #534: take the **max** over markers and ignore future ones, so one bad clock
+   > cannot pin a tree forever. #545: `--gc`'s own inspection stopped counting as activity —
+   > `git status --porcelain` rewrites the index even in a clean tree, so gc was renewing the
+   > window it was testing, and every sweep-visible git call now goes through `_git_inspect`.
+   > A known, deliberate hole (VMCP-84): a purely **read-only** review tree writes neither
+   > marker, so it is protected only for one window from its creation, not from its verdict. The
+   > **Rejected** note above still stands, and is still why the window is a clock and not a stage.
 3. **A killed local git call can manufacture an unrecoverable worktree.**
    `_GIT_TIMEOUT = 600` makes the `locked "initializing"` half-checkout reachable
    without an external killer, and nothing detects it: `_find` hands it back as
    `created: false` and it is dirty-forever, so release and gc keep and report it
    every tick. Hardening is one line — `list_worktrees` already parses the
    porcelain and currently ignores the `locked` key.
+
+   > **CLOSED 2026-07-30 (tracker #514).** `list_worktrees` now parses `locked`/`lock_reason`,
+   > `_ensure_locked` refuses on the lock's **presence** alone (any file-content heuristic would
+   > pass in phase two of the checkout), and the refusal carries `code: half-created` (constant
+   > named by #516) plus the two git commands a human needs to clear it. It was **not** one
+   > line: the estimate above underrated the "phase two looks perfectly fine" case.
 4. **The gc hold is bounded per request, not in total.** The tracker read sits
    inside the repo-wide flock by design (moving it out reopens a race where a
    tree created between the read and the reap is destroyed under a
    just-dispatched agent). It now uses a 10s/no-retry client, but total hold
    still scales with page count.
+
+   > **CLOSED 2026-07-30 (tracker #520).** `_READ_DEADLINE_SECONDS = 30` bounds the WHOLE read,
+   > enforced as an httpx request hook that refuses once the budget is spent and clamps the last
+   > request's own timeout so it cannot overshoot; `ReadDeadlineExceeded` is a `WorkspaceError`
+   > subclass precisely so neither api.py layer (`_fetch_page_size`'s except, `_req`'s retry) can
+   > swallow it, and the sweep abandons with the lock released and nothing inspected. The read is
+   > still inside the flock, for the reason this item gives. The *page count* term the item names
+   > was removed separately: #543 deleted the page-size **guess** (`_PAGE_SIZE_FALLBACK`) after a
+   > truncated board reaped live worktrees, and #548 bounded the resulting unknown-page-size path
+   > and made it **raise** rather than truncate.
 
 **Known bounds, accepted:**
 
@@ -458,12 +581,32 @@ scratch and does not survive; the git history alone would not preserve them.
 7. Two holes fail toward KEEP (safe, but the tree is unreapable): a sha reachable
    only from *another* worktree's detached HEAD, and a review tree whose only ref
    is later deleted or rebased away.
+
+   > **HALF SUPERSEDED 2026-07-30 (tracker #516); the fail-toward-KEEP direction is unchanged
+   > and still correct.** What moved is the *reporting*: `unreachable-head` in a **review** tree
+   > is now graded `expected` (routine — a reviewer committed notes inside a detached tree), while
+   > the identical code in a **build** tree stays in `kept`, because there it means an interrupted
+   > rebase that only a human can clear. Routine is a property of the guard AND the board AND the
+   > role, not of the code alone. Both trees are still unreapable; only the noise was fixed.
 8. `kept` is routinely non-empty in two expected states — a Your Call card with
    an unpushed commit (every tick until the human answers) and an unreleasable
    review tree (forever). Documented; a `reason`-based severity split would help.
+
+   > **CLOSED 2026-07-30 (tracker #516) — this item is what motivated the split.** It shipped as
+   > a **third list**: `--gc` returns `{"released", "kept", "expected"}`, graded by
+   > `_keep_is_expected` on the refusal's `code` (not its prose `reason`, which is why #516 added
+   > the code key) plus the board — `parked_task_ids()`, off the same single fetch — plus the
+   > tree's role. Exactly the two states named here are what `expected` absorbs. The grading fails
+   > toward SHOUTING: an unknown code lands in `kept`, because wrong-and-noisy costs a human one
+   > glance while wrong-and-quiet is how this very finding would come back in a new guise.
 9. Dormant in a single-identity setup: a saturated pump never sees pending review
    offers, and the pull-path review recipe needs a `get_task` to find the
    evidence sha (the offer payload carries none).
+
+> **Items 5, 6 and 9 re-verified 2026-07-30 (tracker #551): still open, and still accepted.**
+> The dirty guard is still `status --porcelain` with no `--ignored`; the HEAD-only bound is now
+> written down *in the code* as a deliberate module-wide property rather than a gap in one branch
+> (`_release_locked`, the detached branch); the single-identity dormancy is untouched.
 
 **Test hygiene:**
 
@@ -472,10 +615,21 @@ scratch and does not survive; the git history alone would not preserve them.
     passes spuriously on a machine exporting that variable. Two other pins cannot
     fail for the property they name (both honestly labelled), and one
     `pytest.raises` matcher would accept any exception containing "expected".
+
+    > **CLOSED 2026-07-30 (tracker #515), all four pins.** The env pair goes through
+    > `monkeypatch`, and `GIT_TERMINAL_PROMPT` is now seeded with the **opposite** value (`"1"`)
+    > before the call, so the assertion pins the override rather than an ambient `"0"`.
 11. The sweep's `parent != wt_root` guard is **not** load-bearing — deleting it
     left all workspace tests green, because `_release_locked` re-derives the
     canonical path. Commented in place; a refactor that lets `_release_locked`
     trust the enumerated path would silently lose the protection.
+
+    > **Re-verified 2026-07-30 (tracker #551): still open, and the comment is still the only
+    > pin.** Re-measured rather than re-read — the guard's condition was replaced with a constant
+    > false and `tests/unit/test_workspace_cmd.py` ran **107 passed**, so nothing in the suite
+    > pins it (the in-place comment records 59 tests from an earlier wave; the suite has grown,
+    > the conclusion has not). What the guard actually buys is the absence of a bogus `kept`
+    > entry, which matters more now that #516 made `kept` a signal a human is told to read.
 
 **Cosmetic:** this plan's fenced SKILL.md excerpt still quotes the pre-fix
 `call_human` wording with the correction outside the fence (an agent
@@ -484,6 +638,14 @@ re-executing that step would copy the fence); SKILL.md over-lists
 a comment line-wrap garble in `workspace_cmd.py`; `worktree_root` recomputation;
 a `kept` entry can name an already-removed tree; the WIP refusal message no
 longer says which knob set the limit.
+
+> **Four of those six are CLOSED (re-checked 2026-07-30, tracker #551).** The plan's `call_human`
+> fence now carries its correction *inside* the fence (#517, swept again by #541); SKILL.md no
+> longer lists «эпик-контейнер» among the refusals a tick can meet; a `kept` entry can no longer
+> name an already-removed tree — that window became `released: true` + `branch_deleted: false` +
+> `warning` (#517); and the WIP refusal now names the knob (`_wip_limit_with_origin`, #517), with
+> the origin sentence placed *after* the `(n/m)` parens so prefix-matching pins keep working. The
+> `workspace_cmd.py` comment garble and the `worktree_root` recomputation were not re-checked.
 
 ## First live parallel drain (2026-07-30)
 
