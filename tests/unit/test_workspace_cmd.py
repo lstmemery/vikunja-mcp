@@ -204,6 +204,16 @@ def test_release_of_a_review_tree_reachable_from_a_branch_is_allowed(repo):
     assert not Path(review["path"]).exists()
 
 
+def test_release_of_an_ordinary_review_tree_is_allowed(repo):
+    """The everyday path, not a corner case: a review tree at origin/main with nothing
+    committed inside it must RELEASE. Same code lines as Case A below, but this is the one
+    that will actually run thousands of times — worth pinning on its own."""
+    review = ensure_workspace(7, role="review", cwd=repo)   # at origin/main, untouched
+    res = release_workspace(7, role="review", cwd=repo)
+    assert res["released"] is True
+    assert not Path(review["path"]).exists()
+
+
 def test_release_of_a_review_tree_keeps_a_commit_made_inside_it(repo):
     """Case B — THE regression round 1 introduced: a reviewer can commit INSIDE a detached
     review tree (the dirty guard only catches uncommitted changes; a fresh commit makes the
@@ -222,7 +232,13 @@ def test_release_of_a_review_tree_keeps_a_commit_made_inside_it(repo):
 
     assert res["released"] is False and "reachable from no ref" in res["reason"]
     assert path.exists()
-    assert _git(repo, "rev-parse", sha) == sha        # the object genuinely survived
+    # NOT `rev-parse` — given a full 40-hex string, `rev-parse` echoes it back with exit 0
+    # WITHOUT checking the object actually exists (verified against real git: even after the
+    # object is truly gone — worktree remove + `reflog expire --expire-unreachable=now --all`
+    # + `gc --prune=now` — `rev-parse <sha>` still prints it back). `cat-file -e` is the one
+    # that actually looks the object up; `check=True` in the _git helper makes a missing
+    # object raise, so this line can genuinely fail.
+    _git(repo, "cat-file", "-e", f"{sha}^{{commit}}")
 
 
 # --- review round 1, Minor B: an unknown role must be refused, not silently coerced ---

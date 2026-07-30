@@ -223,6 +223,13 @@ def _release_locked(root: Path, task_id: int, role: str) -> dict:
         # that (task/<id> still names it, BY DEFINITION not yet on origin/main, which is why
         # the branch-history guard above must not run here); a commit made only inside this
         # detached tree is reachable from nothing and must be kept.
+        #
+        # KNOWN, DELIBERATE bound: this only inspects HEAD. A commit made and then moved off
+        # HEAD (`reset --hard HEAD~1`, `checkout --detach <older>`) is released and destroyed
+        # unseen. NOT a gap specific to this branch — the task/<id> path above has the exact
+        # same shape (`origin/base..HEAD` also only ever looks at HEAD, and `branch -D`
+        # finishes off whatever the branch no longer points at): "HEAD is the work" is a bound
+        # of the whole module, not an oversight in this guard alone.
         head = _git("rev-parse", "HEAD", cwd=path)
         reachable = _git("for-each-ref", "--contains", head, "--format=%(refname)", cwd=root)
         if not reachable:
