@@ -107,7 +107,8 @@ docker rm -f vikunja-test
   is already checked out, so each agent gets its own throwaway `task/<id>` branch and pushes
   with `git push origin HEAD:main` — "one task = one commit on main" and the CI auto-release
   survive untouched. Create (`<id>`, `--role review --at <sha>` for a detached review tree)
-  and `--release <id>` need neither token nor network; only `--gc` reads the tracker, because
+  and `--release <id>` need neither the tracker nor a token (create is not offline, though —
+  it runs `git fetch origin`); only `--gc` reads the tracker, because
   only the board can say whether the task behind an orphaned tree is still alive (build tree
   ⇔ Design/Build assigned to me via `Workflow.active_task_ids`, review tree ⇔ card in Review
   via `review_task_ids`, one shared `liveness_board()` fetch, read-only like `claimable`).

@@ -14,7 +14,7 @@ stale on either side.
 import inspect
 from importlib.resources import files
 
-from vikunja_mcp import workflow
+from vikunja_mcp import config, workflow
 
 
 def _skill_text() -> str:
@@ -90,16 +90,28 @@ def test_the_parallel_drain_rules_cite_real_signals():
     """The parallel drain (wip_limit > 1) is the first feature where the rulebook tells the pump to
     BRANCH on a payload key AND to shell out to a CLI — and the rulebook reaches every consumer by
     itself (see this module's docstring), with no per-consumer pin and no review gate. So pin both
-    directions of the three tokens the whole mode hangs off: named in SKILL.md, and still produced
-    by workflow.py. `wip_saturated` is the "wait, don't idle" discriminator, `exclude` the
+    directions of the three tokens the whole mode hangs off: named in SKILL.md, and still real in
+    the code. `wip_saturated` is the "wait, don't idle" discriminator, `exclude` the
     caller-maintained liveness set next_task cannot infer, `wip_limit` the config key that turns
-    the mode on at all — rename any of them in code and a rulebook still teaching the old name
-    would tell every agent everywhere to key off a signal that never arrives."""
+    the mode on at all.
+
+    Round-1 review: the code-side anchors must be RENAME-SENSITIVE, or this pin is theatre. A bare
+    `"exclude" in workflow_src` is satisfied by an unrelated comment ("parenttask is deliberately
+    excluded"), and a bare `"wip_limit" in workflow_src` is satisfied by the method name
+    `_effective_wip_limit` — while the thing SKILL.md actually cites, the repo-toml KEY, lives in
+    config.py, which this test never read. Both would have stayed green through the very rename
+    they claim to catch. Anchor each on the exact construct whose name the rulebook depends on:
+    next_task's parameter, and config.py's lookup of the toml key."""
     text = _skill_text()
     src = _workflow_src()
+    config_src = inspect.getsource(config)
     for token in ("wip_saturated", "exclude", "wip_limit"):
-        assert token in src, f"{token!r} is documented in SKILL.md but gone from workflow.py"
         assert token in text, f"{token!r} is not documented in SKILL.md"
+    assert "wip_saturated" in src, "SKILL.md keys off wip_saturated but workflow.py stopped emitting it"
+    assert "exclude: list[int]" in src, \
+        "SKILL.md tells the pump to pass exclude=… but next_task no longer takes that parameter"
+    assert 'repo.get("wip_limit")' in config_src, \
+        "SKILL.md names wip_limit as the repo-config key but config.py no longer reads that key"
 
 
 def test_the_integration_recipe_pushes_to_the_main_branch_and_names_gc():
