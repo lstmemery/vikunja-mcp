@@ -1372,15 +1372,206 @@ def _interrupted_rebase_build_tree(repo, task_id=42):
     return path
 
 
-def test_gc_shouts_about_a_build_tree_an_interrupted_rebase_left_detached(repo, tracker):
-    """ROUND-2 REVIEW, THE finding: `unreachable-head` used to be graded routine on the code alone,
-    on a justification (a reviewer's in-tree notes, above) that is entirely about REVIEW trees —
-    while the very same code is what a BUILD tree emits after an interrupted rebase.
+def _detached_build_tree_whose_head_is_reachable(repo, task_id=43):
+    """THE HOLE VMCP-86 MEASURED, constructed: an interrupted rebase whose HEAD is on the ONTO
+    commit, i.e. reachable from origin/main.
 
-    Nothing about that is routine: the tree can never be released or reaped, only a human can
-    clear it, and grading it `expected` filed it under "do not look" FOREVER — the exact shape of
-    `half-created`, which this module correctly calls never-routine. Delete the `role` conjunct in
-    `_keep_is_expected` and this goes red on `kept == []`, quietly, which is the whole point."""
+    Not an exotic variant — it is where `git rebase` spends its FIRST moment, since it detaches to
+    `onto` before replaying anything, so a turn killed at the start lands exactly here. Reproduced
+    deterministically as the other everyday route to the same state: the first commit conflicts,
+    the agent resolves it in the sibling's favour (so the resolution stages nothing, leaving the
+    tree CLEAN), and the turn dies before `git rebase --continue`.
+
+    What makes it the hole is the combination: the tree is detached, so `_release_locked`'s
+    `origin/main..HEAD` guard is skipped for the branch; and HEAD is reachable, so the guard that
+    replaces it passes. `task/<id>` and its unpushed commit are checked by NEITHER.
+    """
+    path = Path(ensure_workspace(task_id, cwd=repo)["path"])
+    (path / "contested.txt").write_text("mine\n")
+    _git(path, "add", "contested.txt")
+    _git(path, "commit", "-m", "the task's work, never pushed")
+
+    (repo / "contested.txt").write_text("theirs\n")
+    _git(repo, "add", "contested.txt")
+    _git(repo, "commit", "-m", "sibling touched the same file")
+    _git(repo, "push", "origin", "main")
+
+    _git(path, "fetch", "origin")
+    rebase = subprocess.run(["git", "rebase", "origin/main"], cwd=path,
+                            capture_output=True, text=True)
+    assert rebase.returncode != 0, "the rebase was meant to STOP on the conflict"
+    _git(path, "checkout", "--ours", "contested.txt")      # resolve in the sibling's favour…
+    _git(path, "add", "contested.txt")                     # …then the turn dies, no --continue
+
+    head = _git(path, "rev-parse", "HEAD")
+    assert _git(path, "status", "--porcelain") == "", "the resolved-to-onto tree must read CLEAN"
+    assert [w for w in list_worktrees(repo) if w["path"] == path][0]["branch"] is None
+    assert head == _git(repo, "rev-parse", "origin/main"), "HEAD must sit on the ONTO commit"
+    assert _git(repo, "log", "--oneline", f"origin/main..task/{task_id}") != "", \
+        "the branch must still hold work that is NOT on origin/main — that is the point"
+    _quiesce(path)
+    return path
+
+
+def test_ensure_refuses_a_build_tree_an_interrupted_rebase_left_detached(repo):
+    """VMCP-86, THE bug: `ensure_workspace` found the directory, returned `created: false`, and the
+    resume agent was dropped into a half-finished rebase on a detached HEAD while SKILL.md told it
+    it was standing on `task/<id>`. Its `git push origin HEAD:main` would push the replayed commit.
+
+    The information was never missing — `list_worktrees` reports `branch: None` — so the fix is
+    that ensure ACTS on it, in the module's established shape for a state it cannot safely reason
+    about: refuse loudly and name the recovery (514's `locked initializing` refusal). The recovery
+    commands are asserted verbatim because they ARE the payload of the refusal; an error that only
+    says "detached" leaves the agent exactly as stuck as the silent hand-back did.
+
+    And it must be a pure refusal: nothing recovered on the agent's behalf (`--abort` would discard
+    the replayed commit), so HEAD, the branch and the rebase state are all still there afterwards.
+    """
+    path = _interrupted_rebase_build_tree(repo)
+    head_before = _git(path, "rev-parse", "HEAD")
+
+    with pytest.raises(WorkspaceError) as excinfo:
+        ensure_workspace(42, cwd=repo)
+
+    message = str(excinfo.value)
+    assert str(path) in message and "task/42" in message
+    assert f"git -C {path} rebase --continue" in message
+    assert f"git -C {path} rebase --abort" in message
+    # nothing was decided for the agent
+    assert _git(path, "rev-parse", "HEAD") == head_before
+    assert [w for w in list_worktrees(repo) if w["path"] == path][0]["branch"] is None
+    assert workspace_cmd._rebase_in_progress(path) is True
+
+
+def test_ensure_hands_the_tree_back_once_the_agent_has_cleared_the_rebase(repo):
+    """The refusal must be a POINTER, not a dead end — the whole reason it names two commands the
+    agent can run. Run one of them and the ordinary resume path works again, with the branch's
+    commits (the ones the rebase was replaying) intact."""
+    path = _interrupted_rebase_build_tree(repo)
+    with pytest.raises(WorkspaceError):
+        ensure_workspace(42, cwd=repo)
+
+    _git(path, "rebase", "--abort")                       # the agent's call, not the tool's
+
+    again = ensure_workspace(42, cwd=repo)
+    assert again["created"] is False and again["branch"] == "task/42"
+    assert _git(path, "rev-parse", "--abbrev-ref", "HEAD") == "task/42"
+    assert "work in progress" in _git(path, "log", "--oneline", "-1")
+
+
+def test_ensure_still_hands_back_a_review_tree_which_is_detached_by_design(repo):
+    """The other side of the `role == "build"` conjunct, and the regression that would matter most:
+    a review tree is created with `worktree add --detach` and therefore ALWAYS has `branch: None`.
+    Refuse on detachedness alone and every second `--role review` call for a task dies."""
+    first = ensure_workspace(7, role="review", cwd=repo)
+    second = ensure_workspace(7, role="review", cwd=repo)
+    assert first["created"] is True and second["created"] is False
+    assert second["branch"] is None and second["path"] == first["path"]
+
+
+def test_release_refuses_a_detached_build_tree_and_says_what_it_is(repo):
+    """The mirror refusal. This state used to come out as `unreachable-head` — true, but it names
+    a symptom of the wrong thing (the replayed commit) and offers no recovery, so `--gc`'s `kept`
+    line told a human "reachable from no ref" about a tree whose actual problem is that it is off
+    its branch mid-rebase."""
+    path = _interrupted_rebase_build_tree(repo)
+
+    res = release_workspace(42, cwd=repo)
+
+    assert res["released"] is False
+    assert res["code"] == workspace_cmd.CODE_DETACHED_BUILD
+    assert "MID-REBASE" in res["reason"] and f"git -C {path} rebase --abort" in res["reason"]
+    assert path.exists()
+
+
+def test_release_no_longer_destroys_a_detached_build_tree_whose_branch_is_unpushed(repo):
+    """THE measured hole (see `_detached_build_tree_whose_head_is_reachable`), and the one case
+    here where the OLD behaviour was `released: true`, not merely a bad message.
+
+    A build tree detached with its HEAD on `onto` passed every guard: `dirty` (clean), the
+    branch-history guard (skipped — `wt["branch"]` is None), the reachability guard (origin/main
+    contains HEAD). So `--release` — and `--gc`, unattended, every tick — removed the directory and
+    reported success while `task/43` still held a commit that was not on origin/main, and no key in
+    the payload said so. The work survives on the branch, so this was never data loss; it was a
+    report that said the opposite of what happened."""
+    path = _detached_build_tree_whose_head_is_reachable(repo)
+    unpushed_before = _git(repo, "log", "--oneline", "origin/main..task/43")
+
+    res = release_workspace(43, cwd=repo)
+
+    assert res["released"] is False
+    assert res["code"] == workspace_cmd.CODE_DETACHED_BUILD
+    assert path.exists()
+    assert _git(repo, "log", "--oneline", "origin/main..task/43") == unpushed_before
+    # and the message names the state, not the reachability of a commit nobody asked about
+    assert "reachable from no ref" not in res["reason"]
+
+
+def _detached_build_tree_without_a_rebase(repo, task_id=44):
+    """A build tree off its branch with NO rebase state — the other half of the refusal, and the
+    reason the guard keys on `branch is None` rather than on the rebase probe. A rebase is the
+    commonest way a tree ends up here, not the only one (`git bisect`, a hand `checkout --detach`,
+    a rebase somebody half-cleared), and all of them break the same promise: nothing committed
+    here reaches `task/<id>`."""
+    path = Path(ensure_workspace(task_id, cwd=repo)["path"])
+    (path / "wip.txt").write_text("real work\n")
+    _git(path, "add", "wip.txt")
+    _git(path, "commit", "-m", "work in progress")
+    _git(path, "checkout", "--detach", "HEAD")
+    assert [w for w in list_worktrees(repo) if w["path"] == path][0]["branch"] is None
+    assert workspace_cmd._rebase_in_progress(path) is False
+    _quiesce(path)
+    return path
+
+
+def test_release_refuses_a_detached_build_tree_with_no_rebase_in_progress(repo):
+    """Same refusal, different recovery — and the message must not claim a rebase that is not
+    there. Pinned because the wording is chosen by a PROBE (`_rebase_in_progress`) while the guard
+    itself keys on `branch is None`: mixing those up would either refuse the wrong trees or promise
+    the reader a `rebase --continue` that exits 'no rebase in progress'."""
+    path = _detached_build_tree_without_a_rebase(repo)
+
+    res = release_workspace(44, cwd=repo)
+
+    assert res["released"] is False
+    assert res["code"] == workspace_cmd.CODE_DETACHED_BUILD
+    assert "no rebase in progress" in res["reason"]
+    assert "rebase --continue" not in res["reason"]
+    assert f"git -C {path} checkout task/44" in res["reason"]
+    assert path.exists()
+
+
+def test_the_detached_build_refusal_does_not_advise_discarding_an_orphaned_head(repo):
+    """The branch can be gone (a hand `git branch -D`, or #517's leaked-branch path in reverse) and
+    then this detached HEAD is the ONLY name for the commits in the tree. `checkout task/<id>` —
+    the recovery the ordinary case names — would then be advice that orphans them, so the message
+    has to be built from the fact rather than written once and assumed.
+
+    (Constructed WITHOUT a rebase in flight on purpose: git refuses `branch -D` for a branch a
+    worktree is mid-rebase on — measured, `cannot delete branch 'task/42' used by worktree at …` —
+    so the rebase variant of this state cannot be reached from the outside at all.)"""
+    path = _detached_build_tree_without_a_rebase(repo, task_id=45)
+    _git(repo, "branch", "-D", "task/45")
+
+    res = release_workspace(45, cwd=repo)
+
+    assert res["code"] == workspace_cmd.CODE_DETACHED_BUILD
+    assert "does not exist any more" in res["reason"]
+    assert f"git -C {path} checkout task/45" not in res["reason"]
+    assert f"git -C {path} checkout -b task/45" in res["reason"]
+
+
+def test_gc_shouts_about_a_build_tree_an_interrupted_rebase_left_detached(repo, tracker):
+    """ROUND-2 REVIEW of VMCP-68, THE finding: this refusal used to be graded routine on the code
+    alone, on a justification (a reviewer's in-tree notes, above) that is entirely about REVIEW
+    trees — while a BUILD tree reaches the same detached branch of `_release_locked` after an
+    interrupted rebase.
+
+    Nothing about that is routine, and grading it `expected` filed it under "do not look" FOREVER —
+    the exact shape of `half-created`, which this module correctly calls never-routine. VMCP-86
+    changed WHICH code the build tree emits (`detached-build`, which names the state and its
+    recovery instead of the reachability of the replayed commit) but not the verdict this test
+    exists for: `kept`, never `expected`, and the tree never destroyed."""
     api, wf = tracker
     api.add_task("its card has moved on", "Done")         # task 42 is no longer in Build -> dead
     path = _interrupted_rebase_build_tree(repo)
@@ -1389,9 +1580,23 @@ def test_gc_shouts_about_a_build_tree_an_interrupted_rebase_left_detached(repo, 
 
     assert res["expected"] == []                          # NOT filed under "no action needed"
     assert [k["task_id"] for k in res["kept"]] == [42]
-    assert res["kept"][0]["code"] == workspace_cmd.CODE_UNREACHABLE_HEAD
+    assert res["kept"][0]["code"] == workspace_cmd.CODE_DETACHED_BUILD
     assert res["kept"][0]["role"] == "build"
     assert path.exists()                                  # and still refused, never destroyed
+
+
+def test_keep_grading_of_unreachable_head_still_turns_on_the_role(repo):
+    """VMCP-68's `role` conjunct, pinned DIRECTLY because no sweep can construct it any more: since
+    VMCP-86 a detached build tree is refused upstream with its own code, so `unreachable-head`
+    now only ever arrives from a review tree. The conjunct is kept as a backstop — the grading
+    policy's rule is "fail toward shouting", and letting it decay into "expected on the code alone"
+    would restore VMCP-68's round-2 bug the moment anything routes a build tree back here.
+
+    Delete the conjunct (`return True` on the code alone) and the first assertion goes red."""
+    build = {"code": workspace_cmd.CODE_UNREACHABLE_HEAD, "role": "build", "task_id": 1}
+    review = {"code": workspace_cmd.CODE_UNREACHABLE_HEAD, "role": "review", "task_id": 1}
+    assert workspace_cmd._keep_is_expected(build, parked=set()) is False
+    assert workspace_cmd._keep_is_expected(review, parked=set()) is True
 
 
 def test_a_parked_card_never_launders_a_half_created_tree_into_expected(repo, tracker, monkeypatch):

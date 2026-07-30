@@ -44,6 +44,7 @@ CODE_HALF_CREATED = "half-created"
 CODE_DIRTY = "dirty"
 CODE_UNPUSHED = "unpushed"
 CODE_UNREACHABLE_HEAD = "unreachable-head"
+CODE_DETACHED_BUILD = "detached-build"
 CODE_SELF_TREE = "self-tree"          # --gc only: the tree gc itself is standing in
 CODE_RELEASE_ERROR = "release-error"  # --gc only: _release_locked raised, sweep continued
 
@@ -517,6 +518,109 @@ def _locked_refusal(task_id: int, role: str, wt: dict) -> str:
     )
 
 
+def _rebase_in_progress(wt_path: Path) -> bool:
+    """Is a `git rebase` stopped mid-flight in this worktree?
+
+    MESSAGE-ONLY, exactly like `_locked_refusal`'s marker comparison and for the same reason: the
+    guards key on `branch is None` — the fact that makes a build tree unusable — and only ask this
+    to choose WHICH recovery to name. So being wrong here costs wording, never a wrong refusal, and
+    it must not be able to raise into a guard: an unreadable tree simply reports "no rebase" and
+    gets the generic wording.
+
+    BOTH backend directories, measured on git 2.50.1 — the same pair git's own `git status` checks.
+    The default merge backend leaves `rebase-merge` (constructed with `git rebase origin/main
+    --exec false`, i.e. this project's integration recipe stopped between replayed commits);
+    `git rebase --apply` leaves `rebase-apply` (constructed with a first-commit conflict). Asked for
+    BY NAME via `rev-parse --git-path` rather than assembled from `.git/worktrees/<n>/`, the same
+    way `_last_activity` asks for the index: in a LINKED worktree those live per-tree and the
+    mapping is git's to know. MEASURED both shapes — absolute inside a linked worktree
+    (`…/.git/worktrees/task-540/rebase-merge`), relative in the main one (`.git/rebase-merge`) — so
+    both are resolved against the tree rather than assumed.
+    """
+    for name in ("rebase-merge", "rebase-apply"):
+        try:
+            path = Path(_git_inspect("rev-parse", "--git-path", name, cwd=wt_path))
+            if (path if path.is_absolute() else wt_path / path).exists():
+                return True
+        except (WorkspaceError, OSError):
+            # OSError as well as WorkspaceError, for `_last_activity`'s reason: with cwd pointing
+            # at a directory that is gone, subprocess.run raises a bare FileNotFoundError that
+            # `_git` cannot convert (it only ever inspects `returncode`).
+            return False
+    return False
+
+
+def _detached_build_refusal(root: Path, task_id: int, wt: dict, refusal: str) -> str:
+    """The message for a BUILD worktree that is not standing on its own `task/<id>` branch.
+
+    THE STATE (VMCP-86, constructed and measured in a throwaway repo, not reasoned about). A
+    per-task agent runs SKILL.md's integration recipe — `git fetch origin && git rebase
+    origin/main` — inside `task-<id>` and the turn running it is killed (session limit, API error).
+    git detaches to `onto` BEFORE replaying anything and re-attaches `task/<id>` only at the END, so
+    an interrupted rebase leaves the tree `git status`-CLEAN, DETACHED, with git's rebase state
+    still on disk. Nothing in the tree's own shape says so, which is the whole bug: `_find` returned
+    it, `created: false` said "here is your workspace", and the rulebook told the agent it was
+    standing on its disposable branch.
+
+    ONE message for BOTH refusals (`_ensure_locked` and `_release_locked`), with only the clause
+    naming what was refused passed in. The diagnosis and the recovery are the same fact in both
+    places, and two copies of a recovery drift — SKILL.md and this module have already had to be
+    dragged back into agreement twice.
+
+    WHY IT REFUSES RATHER THAN RECOVERS, and this is the load-bearing half. The recovery is `git
+    rebase --continue` or `git rebase --abort`, and CHOOSING between them is not the tool's to make:
+    `--abort` discards every commit the rebase had already replayed. That is the module's governing
+    invariant ("housekeeping must never be how an agent's work disappears") applied to setup, the
+    same call 514 made for a `locked initializing` tree — refuse loudly, name the two commands, let
+    the agent that owns the work decide. It is also why this is not a "report it in the payload"
+    warning: an agent that does not read the extra key commits onto a HEAD reachable from no ref and
+    pushes it, and under-refusing there is silent while over-refusing is one legible error the pump
+    already knows how to degrade around.
+    """
+    path = wt["path"]
+    head = wt["head"]
+    branch = BUILD_BRANCH.format(task_id=task_id)
+    if _git_ok("show-ref", "--verify", "--quiet", f"refs/heads/{branch}", cwd=root):
+        tip = _git("rev-parse", f"refs/heads/{branch}", cwd=root)
+        where = (
+            f"`{branch}` still points at {tip}, so the task's own commits are NOT lost — they are "
+            f"on the branch, not on this HEAD"
+        )
+        back = (
+            f"`git -C {path} log --oneline {branch}..HEAD` shows what only this HEAD names, and "
+            f"`git -C {path} checkout {branch}` puts the tree back on its branch"
+        )
+    else:
+        # the branch was deleted out from under the tree (a hand `branch -D`, or #517's release
+        # that removed a tree and then failed to delete... in reverse). Then this HEAD is the ONLY
+        # name for whatever was replayed, and "just check out the branch" would be advice that
+        # destroys it.
+        where = (
+            f"`{branch}` does not exist any more, so this detached HEAD is the ONLY name for "
+            f"whatever it holds — do not discard it before looking"
+        )
+        back = (
+            f"`git -C {path} log --oneline` shows what it holds, and `git -C {path} checkout -b "
+            f"{branch}` re-creates the branch on it"
+        )
+    if _rebase_in_progress(path):
+        return (
+            f"{path} is a build worktree stopped MID-REBASE — DETACHED at {head}, with git's own "
+            f"rebase state still in place. That is what SKILL.md's integration recipe (`git fetch "
+            f"origin && git rebase origin/main`) leaves behind when the turn running it is killed "
+            f"between replayed commits. {where}. {refusal} Finish or undo the rebase IN THAT TREE "
+            f"first, then ask again: `git -C {path} rebase --continue` (replay the rest) or `git "
+            f"-C {path} rebase --abort` (back onto {branch}, discarding what was replayed). "
+            f"Deliberately not chosen for you — `--abort` throws away replayed work"
+        )
+    return (
+        f"{path} is a build worktree with a DETACHED HEAD ({head}) and no rebase in progress — a "
+        f"build tree is CREATED on {branch} and is only ever taken off it by something that "
+        f"stopped halfway (an interrupted rebase or bisect, a hand `checkout --detach`). {where}. "
+        f"{refusal} Put it back on its branch before using it: {back}"
+    )
+
+
 def _find(root: Path, task_id: int, role: str) -> dict | None:
     name = (BUILD_NAME if role == "build" else REVIEW_NAME).format(task_id=task_id)
     target = worktree_root(root) / name
@@ -564,6 +668,29 @@ def _ensure_locked(root: Path, task_id: int, role: str, at: str | None) -> dict:
             # the only trace of what killed the add, and "housekeeping must never be how work
             # disappears" applies to setup exactly as it does to reaping.
             raise WorkspaceError(_locked_refusal(task_id, role, existing))
+        if role == "build" and existing["branch"] is None:
+            # VMCP-86, and the information was ALREADY HERE: `list_worktrees` has always parsed
+            # the porcelain's `detached` and left `branch` at None — this early-return simply
+            # copied that None into the payload and called it a workspace. A build tree is created
+            # on `task/<id>` and nothing in this module ever takes it off; detached therefore means
+            # something stopped halfway, and the commonest something is this project's own
+            # integration recipe interrupted mid-rebase (see _detached_build_refusal).
+            #
+            # Gated on `branch is None`, NOT on the rebase probe — same split as the lock guard
+            # above, for the same asymmetry. What makes the tree unusable is that it is off its
+            # branch; whether a rebase is still in progress only refines the message. Refuse on the
+            # fact, phrase from the probe.
+            #
+            # `role == "build"` is the whole condition on the other side: a REVIEW tree is detached
+            # BY DESIGN (`worktree add --detach`), so this must never fire there — the payload just
+            # below deliberately reports `branch: None` for it.
+            raise WorkspaceError(_detached_build_refusal(
+                root, task_id, existing,
+                refusal=f"Refusing to hand it back for task {task_id} (build): a caller that is "
+                        f"told it stands on its disposable branch would commit onto a HEAD "
+                        f"reachable from no ref, and its `git push origin HEAD:main` would push "
+                        f"the replayed commit rather than the branch's work.",
+            ))
         payload = {
             "role": role, "task_id": task_id, "path": str(existing["path"]),
             "branch": existing["branch"], "created": False,
@@ -727,6 +854,36 @@ def _release_locked(root: Path, task_id: int, role: str) -> dict:
             return {"released": False, "task_id": task_id, "role": role, "path": str(path),
                     "code": CODE_UNPUSHED,
                     "reason": f"{len(unpushed.splitlines())} commit(s) not on {base}"}
+    elif role == "build":
+        # VMCP-86: the branch below assumes "detached ⇒ this is a review tree", and a build tree
+        # left detached by an interrupted rebase falls straight into it — with the guard ABOVE
+        # skipped, because that one keys on `wt["branch"]` and a detached tree has none. So the
+        # unpushed history of `task/<id>` — which still exists and still holds the agent's commits
+        # — goes UNCHECKED, and whether the tree is destroyed comes down to the unrelated question
+        # of whether its HEAD happens to be reachable.
+        #
+        # MEASURED, in a throwaway repo, on the code as it stood: a rebase interrupted with HEAD
+        # still on `onto` (git detaches there BEFORE replaying anything, so a turn killed at the
+        # start lands exactly there; also reachable via a first-commit conflict resolved in the
+        # sibling's favour, which leaves the tree clean) gave `{"released": true}` — the directory
+        # DELETED, `task/541` left behind holding one commit that was not on origin/main, and
+        # nothing in the report saying so. `--gc` does that unattended, every tick.
+        #
+        # Refuse instead, FIRST in the detached branch: which of HEAD and `task/<id>` is "the work"
+        # is exactly the question this module cannot answer for the agent, and it is the more
+        # specific statement about the same tree than "reachable from no ref" (the ordering
+        # argument gc's self-guard-before-grace-window makes). `unreachable-head` is left untouched
+        # for the review trees it was written about; `_keep_is_expected`'s `role` conjunct STAYS as
+        # a backstop should anything reach it with a build tree again.
+        return {"released": False, "task_id": task_id, "role": role, "path": str(path),
+                "code": CODE_DETACHED_BUILD,
+                "reason": _detached_build_refusal(
+                    root, task_id, wt,
+                    refusal="Refusing to release it: the unpushed-commits guard that protects a "
+                            "build tree cannot run on a tree that is not on its branch, so "
+                            "removing it here would report success while the branch's own commits "
+                            "went unchecked.",
+                )}
     else:
         # a review tree is DETACHED — it holds no branch, so the guard above cannot apply —
         # but its HEAD is NOT automatically safe either: anyone can commit INSIDE a detached
@@ -894,6 +1051,15 @@ def _build_workflow(root: Path) -> tuple:
 #     review tree, an alarm in a build tree. This does NOT bring back the never-empty `kept` the
 #     split exists to fix — an interrupted rebase is an incident, not a state the pipeline
 #     produces on the happy path.
+#
+#     VMCP-86 KEPT THIS CONJUNCT AS A BACKSTOP, deliberately, and it is no longer the ONLY thing
+#     standing between that build tree and a routine grading: `_release_locked` now refuses a
+#     DETACHED BUILD tree upstream, with its own CODE_DETACHED_BUILD, so today nothing reaches
+#     here with `unreachable-head` on a build tree. Dropping the conjunct on that ground would be
+#     the same mistake in reverse — it would make the grading depend on a guard three hundred
+#     lines away staying exactly as it is, and the whole policy is "fail toward shouting". Pinned
+#     directly (test_keep_grading_of_unreachable_head_still_turns_on_the_role) rather than through
+#     a sweep, precisely because no sweep can construct it any more.
 # Neither set contains CODE_HALF_CREATED, CODE_SELF_TREE, CODE_RELEASE_ERROR or CODE_NO_WORKTREE:
 # a parked card must not launder a broken tool state. A half-created tree needs a human with two
 # git commands whether or not its card is parked, and the other three describe gc itself, not the

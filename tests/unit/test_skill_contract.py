@@ -308,6 +308,7 @@ def test_the_gc_report_split_the_skill_teaches_is_the_one_the_code_produces():
         workspace_cmd.CODE_DIRTY,             # kept, or expected while the card is parked
         workspace_cmd.CODE_UNPUSHED,          # the Your Call state that made `kept` never-empty
         workspace_cmd.CODE_UNREACHABLE_HEAD,  # routine in a REVIEW tree, an alarm in a build one
+        workspace_cmd.CODE_DETACHED_BUILD,    # VMCP-86: a build tree off its own task/<id> branch
         workspace_cmd.CODE_HALF_CREATED,      # never expected: only a human can clear it
         workspace_cmd.CODE_SELF_TREE,
         workspace_cmd.CODE_RELEASE_ERROR,

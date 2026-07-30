@@ -144,8 +144,14 @@ docker rm -f vikunja-test
   look, `expected` = the two routine states that used to keep `kept` permanently non-empty — a
   parked Your Call card's unsaved work (hence `Workflow.parked_task_ids`, off the same board
   fetch) and a review tree's in-tree commit. Routine is a property of the guard AND the board AND
-  the ROLE: the same `unreachable-head` in a BUILD tree is an interrupted rebase, which only a
-  human can clear, so it shouts. An unknown code lands in `kept`: noisy beats quiet. A `released`
+  the ROLE — `unreachable-head` is routine only in a REVIEW tree (the conjunct stays as a
+  backstop even though #540 stopped build trees from reaching it). A BUILD tree that is not on
+  its own `task/<id>` branch — what an interrupted `git rebase origin/main` leaves: CLEAN, yet
+  DETACHED — is refused by BOTH `ensure` (loudly, so a resume agent is never handed a tree whose
+  HEAD is not where it is told) and `--release` (`detached-build`, because the unpushed-commits
+  guard cannot run on a tree that is off its branch), each naming `git rebase --continue`/
+  `--abort` for the AGENT to choose: the tool never picks, since `--abort` discards replayed
+  work. An unknown code lands in `kept`: noisy beats quiet. A `released`
   entry can still need action — #517's `branch_deleted: false` + `warning` (the tree went, the
   branch leaked), which is why the rulebook says read `kept` AND scan `released`.
 - `src/vikunja_mcp/skills/tracker/SKILL.md` — process rules for agents
