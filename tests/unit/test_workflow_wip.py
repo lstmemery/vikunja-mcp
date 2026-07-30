@@ -6,6 +6,7 @@ makes the parallel drain bounded: without it a pump could claim the whole Queue 
 import pytest
 
 from tests.unit.fakes import FakeAPI
+from vikunja_mcp.config import DEFAULT_WIP_LIMIT
 from vikunja_mcp.workflow import STAGES, Workflow, WorkflowError
 
 
@@ -21,15 +22,32 @@ def _hold(api, wf, title):
     return task
 
 
-def test_no_limit_by_default_lets_a_second_claim_through():
-    """Ships inert: an unconfigured consumer keeps today's unbounded behavior."""
+def test_the_unset_default_holds_three_and_refuses_the_fourth():
+    """An unconfigured consumer gets THREE slots and a live gate — the human's decision of
+    2026-07-30 (tracker #524), replacing the "unset = no gate at all" this test used to pin.
+
+    This is where the number 3 is pinned BEHAVIOURALLY, and only here: the refusal itself has
+    to say 3/3, so a fourth claim going through (or the count drifting) fails the test. Every
+    other assertion about the default reads DEFAULT_WIP_LIMIT instead of repeating the literal."""
     api, wf = _env()
-    _hold(api, wf, "first")
-    second = api.add_task("second", "Queue")
-    assert wf.claim(second["id"])["claimed"] is True
+    for title in ("first", "second", "third"):
+        _hold(api, wf, title)
+    fourth = api.add_task("fourth", "Queue")
+    with pytest.raises(WorkflowError, match=r"WIP limit reached \(3/3\)"):
+        wf.claim(fourth["id"])
+
+
+def test_the_unset_default_comes_from_the_shared_constant():
+    """One definition of the number, two readers: workflow's fallback and config.py's < 1
+    refusal. A second literal 3 hidden in _effective_wip_limit would drift away from the
+    constant the config error advertises, so pin the identity rather than the value."""
+    _api, wf = _env()
+    assert wf._effective_wip_limit() == DEFAULT_WIP_LIMIT
 
 
 def test_limit_two_allows_two_and_refuses_the_third():
+    """An explicit number must stay the truth in BOTH directions — 2 is narrower than the
+    default of 3, so this doubles as "the default is not a floor"."""
     api, wf = _env(wip_limit=2)
     _hold(api, wf, "first")
     _hold(api, wf, "second")
@@ -81,9 +99,14 @@ def test_next_task_reports_wip_on_every_result():
     assert res["wip"] == {"active": 0, "limit": 2, "free": 2}
 
 
-def test_wip_free_is_none_when_unlimited():
-    api, wf = _env()
-    assert wf.next_task()["wip"] == {"active": 0, "limit": None, "free": None}
+def test_wip_reports_the_default_when_the_toml_configures_nothing():
+    """The payload the rulebook branches on must never say `null` again: an unconfigured
+    consumer now reads limit/free as the default number, which is what tells the pump it may
+    run a parallel drain without anyone editing a toml (tracker #524)."""
+    _api, wf = _env()
+    assert wf.next_task()["wip"] == {
+        "active": 0, "limit": DEFAULT_WIP_LIMIT, "free": DEFAULT_WIP_LIMIT,
+    }
 
 
 def test_excluded_active_task_is_not_offered_again():

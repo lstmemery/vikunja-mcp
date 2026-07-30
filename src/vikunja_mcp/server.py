@@ -235,8 +235,9 @@ def next_task(exclude: list[int] | None = None) -> dict:
     and not your own (review_kind names the rubric: 'bug' or 'change'), (4) the top FREE
     task in Queue. Never hands out a task assigned to someone else — those are "for humans".
     Leaves Backlog, blocked, and epic containers (label epic — a container, not a unit of
-    work) alone. One task at a time BY DEFAULT — up to wip.limit at once where a wip_limit is
-    configured (see PARALLEL DRAIN below); the `wip` payload, never a guess, says which.
+    work) alone. Up to wip.limit tasks at once — the repo toml's wip_limit where it sets one
+    (or 1 for the legacy enforce_single_wip = true), else THREE by default; the `wip` payload,
+    never a guess, says how many, and it is always a number (see PARALLEL DRAIN below).
     Among your active tasks, one that is a predecessor of another of your active tasks is
     handed back first (finish the unblocking rework before its successor), overriding priority.
     A free task whose predecessor
@@ -260,8 +261,9 @@ def next_task(exclude: list[int] | None = None) -> dict:
 
     PARALLEL DRAIN: pass `exclude` = the ids of tasks you ALREADY have a live agent on, so
     they are not handed back and dispatched twice. They still occupy their WIP slot. Every
-    result carries wip: {active, limit, free}. free == 0 comes back as task:null PLUS
-    wip_saturated:true — that means WAIT for an agent to return, NOT that the queue is empty.
+    result carries wip: {active, limit, free} — limit and free are always numbers, never null.
+    free == 0 comes back as task:null PLUS wip_saturated:true — that means WAIT for an agent to
+    return, NOT that the queue is empty.
     """
     return _wf().next_task(exclude=exclude)
 
@@ -273,12 +275,12 @@ def claim(task_id: int) -> dict:
     tasks or ones already assigned to you; one assigned to someone else is "for humans"
     and claim won't hand it over. Also refused outside Queue and on a lost race (call
     next_task then). An epic container (label epic) is refused too — it's a container, not a
-    unit of work; its evidence lives in its children, so work on those. Where the repo toml
-    sets a WIP policy (wip_limit = N, or the legacy enforce_single_wip = true meaning N=1;
-    unset by default = no gate), claim also refuses once you already hold N active
-    Design/Build tasks — "WIP limit reached (N/N) — you already hold #… Finish one (advance
-    to Review) or return_task it before claiming another". next_task's `wip` payload reports
-    the same limit and how many slots are free."""
+    unit of work; its evidence lives in its children, so work on those. The WIP gate is ALWAYS
+    on: N is the repo toml's wip_limit if it sets one, else 1 for the legacy
+    enforce_single_wip = true, else the default of 3. Claim refuses once you already hold N
+    active Design/Build tasks — "WIP limit reached (N/N) — you already hold #… Finish one
+    (advance to Review) or return_task it before claiming another". next_task's `wip` payload
+    reports the same limit and how many slots are free."""
     return _wf().claim(task_id)
 
 

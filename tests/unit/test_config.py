@@ -1,6 +1,12 @@
 import pytest
 
-from vikunja_mcp.config import Config, ConfigError, _parse_env_file, load_config
+from vikunja_mcp.config import (
+    DEFAULT_WIP_LIMIT,
+    Config,
+    ConfigError,
+    _parse_env_file,
+    load_config,
+)
 
 
 def _write_toml(path, project_id=3, url="https://tracker.zz.hgdev.com"):
@@ -272,7 +278,12 @@ def test_enforce_single_wip_reads_true_from_toml(tmp_path):
 
 # --- wip_limit: the parallel-drain slot count (committed in the toml, generalises #38) ---
 
-def test_wip_limit_defaults_to_none(tmp_path):
+def test_an_absent_wip_limit_stays_none_at_the_config_layer(tmp_path):
+    """None here means "the key is absent", NOT "no gate" (that is what this test used to pin,
+    before tracker #524 made an unset key mean DEFAULT_WIP_LIMIT). The number is deliberately
+    resolved one layer up, in Workflow._effective_wip_limit: if load_config substituted the
+    default, `enforce_single_wip = true` could never be reached and the legacy flag would
+    silently widen from 1 to 3. Absence has to stay visible for that precedence to exist."""
     (tmp_path / ".vikunja-mcp.toml").write_text('[tracker]\nurl = "http://x"\nproject_id = 3\n')
     (tmp_path / ".vikunja-mcp.env").write_text("VIKUNJA_TOKEN=t\n")
     assert load_config(cwd=tmp_path, environ={}).wip_limit is None
@@ -288,7 +299,8 @@ def test_wip_limit_reads_from_toml(tmp_path):
 
 def test_wip_limit_is_never_read_from_env(tmp_path):
     """Committed TEAM POLICY, like enforce_single_wip: a machine-local env var must not
-    quietly widen another repo's slot count."""
+    quietly widen another repo's slot count. Absent from the toml stays absent (None) even
+    with the env var set, so the effective limit is the default — never the env's 9."""
     (tmp_path / ".vikunja-mcp.toml").write_text('[tracker]\nurl = "http://x"\nproject_id = 3\n')
     (tmp_path / ".vikunja-mcp.env").write_text("VIKUNJA_TOKEN=t\n")
     cfg = load_config(cwd=tmp_path, environ={"VIKUNJA_WIP_LIMIT": "9"})
@@ -303,6 +315,22 @@ def test_wip_limit_below_one_is_a_config_error(tmp_path):
     (tmp_path / ".vikunja-mcp.env").write_text("VIKUNJA_TOKEN=t\n")
     with pytest.raises(ConfigError, match="wip_limit"):
         load_config(cwd=tmp_path, environ={})
+
+
+def test_the_below_one_refusal_names_the_default_and_not_no_limit(tmp_path):
+    """The refusal is the only place the config layer TELLS a human what omitting the key does,
+    and it used to say "omit the key entirely for no limit" — false since tracker #524, and
+    exactly the kind of stale sentence that teaches the wrong contract. It must name the
+    default, and must not offer "no limit" at all: 0 is not the unbounded spelling, there is
+    none. Reads DEFAULT_WIP_LIMIT so the message follows the constant instead of drifting."""
+    (tmp_path / ".vikunja-mcp.toml").write_text(
+        '[tracker]\nurl = "http://x"\nproject_id = 3\nwip_limit = 0\n'
+    )
+    (tmp_path / ".vikunja-mcp.env").write_text("VIKUNJA_TOKEN=t\n")
+    with pytest.raises(ConfigError) as err:
+        load_config(cwd=tmp_path, environ={})
+    assert f"default of {DEFAULT_WIP_LIMIT}" in str(err.value)
+    assert "for no limit" not in str(err.value)
 
 
 def test_wip_limit_non_numeric_is_a_config_error(tmp_path):

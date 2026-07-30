@@ -14,6 +14,16 @@ REPO_FILE = ".vikunja-mcp.toml"
 REPO_ENV_FILE = ".vikunja-mcp.env"
 USER_ENV_FILE = Path("~/.config/vikunja-mcp/env").expanduser()
 
+# How many Design/Build tasks one token may hold at once when the repo toml sets no wip_limit.
+# THE ONE definition of that number (workflow._effective_wip_limit and the < 1 refusal below
+# both read it) — human decision of 2026-07-30, tracker #524: an unset key means THREE, not
+# "no gate". It used to mean no gate in the code while the rulebook told the pump the drain was
+# SERIAL — two contradictory meanings for one absent key — and the humans want three parallel
+# per-task agents everywhere without hand-editing every project's toml. Consequence, accepted:
+# "no limit" is no longer expressible at all (wip_limit = 0 stays a ConfigError, it is NOT the
+# unbounded spelling), and claim starts refusing a 4th active task in projects that set nothing.
+DEFAULT_WIP_LIMIT = 3
+
 
 class ConfigError(Exception):
     pass
@@ -32,7 +42,11 @@ class Config:
     # how many tasks this token may hold in Design/Build AT ONCE — the parallel-drain slot
     # count, and the generalisation of enforce_single_wip (which is exactly wip_limit=1).
     # Committed TEAM POLICY of the same class: repo toml ONLY, never env, never a secret.
-    # None (default) -> fall back to enforce_single_wip, i.e. today's behavior byte-for-byte.
+    # None means "the key is ABSENT from the toml" and nothing more — it is NOT "no gate".
+    # The effective number is resolved one layer up, in workflow._effective_wip_limit:
+    # enforce_single_wip = true -> 1, otherwise DEFAULT_WIP_LIMIT. Keeping absence visible
+    # HERE is exactly what keeps that precedence expressible (resolve the default in this
+    # dataclass and the legacy flag could never be reached).
     wip_limit: int | None = None
     # Slack-compatible incoming-webhook URL pinged when call_human parks a card in
     # Your Call (#252). A secret of the token's class — whoever holds the URL can post
@@ -129,7 +143,8 @@ def load_config(cwd: Path | None = None, environ: Mapping[str, str] | None = Non
             raise ConfigError(f"wip_limit must be a number, got {raw_limit!r}")
         if wip_limit < 1:
             raise ConfigError(
-                f"wip_limit must be >= 1 (got {wip_limit}) — omit the key entirely for no limit"
+                f"wip_limit must be >= 1 (got {wip_limit}) — omit the key for the "
+                f"default of {DEFAULT_WIP_LIMIT}; there is no spelling for 'no limit'"
             )
 
     worktree_root = (

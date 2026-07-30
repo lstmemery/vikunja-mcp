@@ -28,7 +28,22 @@ work sits in its own tree and the resume agent walks straight back into it.
 - Drain up to `wip_limit` tasks concurrently, each per-task agent isolated in
   its own worktree; reviewers likewise get their own tree.
 - The limit is **configured and machine-enforced**, not remembered by a model.
-- Ships **inert**: a consumer that sets nothing behaves byte-for-byte as today.
+- ~~Ships **inert**: a consumer that sets nothing behaves byte-for-byte as
+  today.~~ **This goal was REVERSED by a human decision on 2026-07-30 (tracker
+  #524): an unset `wip_limit` now means 3.** Kept here rather than deleted,
+  because it explains the shape of everything below. Why it was dropped: an
+  absent key meant two contradictory things — *no gate at all* in the code, a
+  *serial* drain in the rulebook — so every consumer ran one task at a time by
+  discipline while `claim` silently permitted any number. The humans want three
+  parallel per-task agents as the default everywhere, and adding the key by hand
+  to each project's toml was the friction that prompted the change. What was
+  traded away: inertness bought a safe rollout of an unproven mode; once the
+  mode existed, the human took the blast radius knowingly — `stable`
+  re-resolves on every MCP server start, so `claim` begins refusing a 4th
+  active task in projects that configured nothing. "No limit" is no longer
+  expressible at all (`wip_limit = 0` remains a `ConfigError`, NOT the unbounded
+  spelling); if unbounded is ever wanted it gets its own explicit spelling in
+  its own task.
 - `main` stays the integration branch — one task, one commit, pushed at
   `advance(to='review')` time, CI auto-release untouched.
 - Worktree hygiene (release, GC of crashed agents' trees) is mechanical, and
@@ -69,17 +84,22 @@ No git here. This layer only counts slots.
 
 ```toml
 [tracker]
-wip_limit = 3                                # absent = today's behavior; 1 = enforce_single_wip
+wip_limit = 3                                # absent = 3 as well (#524); 1 = enforce_single_wip
                                              # (< 1 is a ConfigError, see below — not "no limit")
 worktree_root = "../vikunja-mcp.worktrees"   # optional
 ```
 
 `wip_limit` is committed team policy of the same class as `enforce_single_wip`:
 read **only** from the repo toml, never from env, never a secret. Precedence:
-`wip_limit` set → it is the truth; unset → today's behavior (`enforce_single_wip
-= true` ⇒ limit 1, `false` ⇒ no limit). `enforce_single_wip` keeps working;
-docs mark `wip_limit = 1` as the modern spelling. `wip_limit < 1` raises
-`ConfigError` at load rather than silently meaning "no slots".
+`wip_limit` set → it is the truth; unset → `enforce_single_wip = true` ⇒ limit 1,
+otherwise `DEFAULT_WIP_LIMIT` = **3** (tracker #524, superseding the reversed
+"ships inert" goal above — it used to be "no limit"). `enforce_single_wip` keeps
+working; docs mark `wip_limit = 1` as the modern spelling. `wip_limit < 1` raises
+`ConfigError` at load rather than silently meaning "no slots". The number is
+resolved in `workflow._effective_wip_limit`, which returns `int` and never
+`None` — the gate is unconditional, and `Config.wip_limit is None` says only
+that the key is absent, which is what keeps the `enforce_single_wip` step of
+that precedence reachable.
 
 `worktree_root` is machine-local, so unlike `wip_limit` it *does* take an env
 override (`VIKUNJA_WORKTREE_ROOT`). Relative paths resolve against the git root.
@@ -98,7 +118,8 @@ holds the snapshot in `board`. Pass it through.
    occupied slot** — one rule, no per-branch exceptions. On a fresh tick
    after a killed turn the set is empty, and `next_task` correctly hands the
    active tasks back as "pick up the abandoned work", exactly as today.
-2. Every result carries `wip: {"active": K, "limit": N|null, "free": …}`. The
+2. Every result carries `wip: {"active": K, "limit": N, "free": …}` — both
+   numbers always, never `null`, since #524 removed the unlimited case. The
    free-queue branch is offered only while `free > 0`; otherwise the result is
    `{"task": null, "wip_saturated": true, "wip": {...}}` — "wait for an agent to
    return; do not claim, do not sleep".
@@ -229,10 +250,16 @@ goes into CLAUDE.md as a rule, not as an accident.
 
 ### 4. Process rules (`skills/tracker/SKILL.md`)
 
-SKILL.md ships to every consumer, most of whom set no `wip_limit`. The serial
-flow therefore stays the documented default, and the parallel flow is described
-as what happens **when `wip.limit > 1`**. The agent learns the limit from
-`next_task`'s `wip` payload; it is never hardcoded in prose.
+SKILL.md ships to every consumer, most of whom set no `wip_limit`. ~~The serial
+flow therefore stays the documented default~~ — **inverted by #524**: an unset
+key now yields `limit: 3`, so the consumers who set nothing are precisely the
+ones running the PARALLEL flow, and the serial flow is what a project opts into
+with `wip_limit = 1` (or the legacy `enforce_single_wip = true`). The rule
+therefore keys on the NUMBER in `next_task`'s `wip` payload (`1` ⇒ serial,
+`> 1` ⇒ parallel) — `limit: null` can no longer reach an agent at all, so the
+old "`null` or `1` ⇒ serial" wording had to go. The agent still learns the limit
+from the payload; the default is named in prose only as *what an unset key
+means*, never as a number to hardcode into a tick.
 
 **Orchestrator tick (parallel mode):**
 
@@ -299,7 +326,9 @@ refuses to delete unpushed work. After `advance(to='review')` the agent calls
 - A pin that `claimable`'s verdict is unchanged with `wip_limit > 1` and an
   empty `exclude` — this protects the cross-repo contract.
 - `config`: `wip_limit < 1` → `ConfigError`; `enforce_single_wip = true` with no
-  `wip_limit` → limit 1.
+  `wip_limit` → limit 1; neither key set → `DEFAULT_WIP_LIMIT` (#524: the
+  gate fires on the 4th claim, and the `< 1` refusal names the default instead
+  of offering "no limit").
 - One integration test for `--gc` against the real container (it reads the
   board); the rest of the git surface never talks to Vikunja.
 
@@ -309,7 +338,9 @@ Each step is green and shippable on its own; the feature only becomes live at
 step 4.
 
 1. Config + `claim` gate + `next_task` (`wip_limit` absent → behavior
-   byte-for-byte as today). Inert, ships immediately.
+   byte-for-byte as today). Inert, ships immediately. *(Historical: that
+   inertness is what #524 later reversed — an absent key means 3 now, so this
+   step no longer describes the shipped code, only the order it landed in.)*
 2. The `workspace` CLI. A new subcommand nobody calls yet.
 3. SKILL.md rules — active only when `wip.limit > 1`.
 4. Set `wip_limit = 2` in this repo's own `.vikunja-mcp.toml` and dogfood it.

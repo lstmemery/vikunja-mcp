@@ -49,7 +49,13 @@ docker rm -f vikunja-test
   parks a card in Your Call) is a secret of the same class: env layers only, never the toml.
   Two parallel-drain keys sit on opposite sides of that split: `wip_limit` (how many
   Design/Build tasks one token may hold at once; generalises `enforce_single_wip`, which is
-  exactly 1) is committed TEAM POLICY — repo toml ONLY, never env; `worktree_root` /
+  exactly 1) is committed TEAM POLICY — repo toml ONLY, never env. **Unset means
+  `DEFAULT_WIP_LIMIT` = 3, not "no gate"** (human decision, tracker #524 — the gate is always
+  on, so every project drains 3-wide without a toml edit); precedence is explicit `wip_limit` →
+  else 1 when `enforce_single_wip = true` → else 3, resolved in `workflow._effective_wip_limit`
+  (which returns `int`, never `None`) while `Config.wip_limit is None` keeps meaning only "the
+  key is absent". `wip_limit = 0` is a `ConfigError`, NOT the unbounded spelling: "no limit" is
+  deliberately not expressible any more. `worktree_root` /
   `VIKUNJA_WORKTREE_ROOT` (where per-task worktrees materialise, default a `<repo>.worktrees`
   sibling) is MACHINE-local, so unlike `wip_limit` the env layers DO win over the toml.
 - `src/vikunja_mcp/api.py` — REST client. **Vikunja gotchas are codified here:
@@ -166,9 +172,11 @@ per-task agent for the WHOLE task → drain next. That agent owns the whole
 lifecycle (`get_task` → spec/`advance(to='build')` → implement, possibly spawning
 its own sub-agents → commit+push → `advance(to='review')`); the orchestrator does
 no task content itself. Bugs get independent agent review (orchestrator dispatches
-a sibling reviewer). With `wip_limit > 1` in `.vikunja-mcp.toml` the same pump keeps
-several per-task agents in flight at once — up to the limit `next_task` reports in its
-`wip` payload — each in its OWN worktree from `vikunja-mcp workspace <id>`, and the pump
+a sibling reviewer). Whenever the effective limit exceeds 1 — this repo's `.vikunja-mcp.toml`
+says `wip_limit = 3` explicitly, and a project that says nothing gets the same 3 by default
+(tracker #524) — the same pump keeps several per-task agents in flight at once, up to the
+limit `next_task` reports in its `wip` payload, each in its OWN worktree from
+`vikunja-mcp workspace <id>`, and the pump
 passes `exclude=[ids it has a live agent on]` so `next_task` doesn't re-offer them. Any
 `workspace` failure degrades to one slot in this checkout, never a stopped loop. Rules
 for agents live in SKILL.md («Параллельный дренаж»).

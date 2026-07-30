@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 
 from .api import VikunjaError
+from .config import DEFAULT_WIP_LIMIT
 from .formatting import html_to_text
 from .notify import WebhookNotifier
 
@@ -164,9 +165,9 @@ class Workflow:
         # server; None (default, URL unset) -> call_human behaves bit-for-bit as before.
         # Called strictly best-effort — see call_human.
         self.notifier = notifier
-        # parallel drain: how many tasks may be active (Design/Build) at once. None -> fall
-        # back to the legacy flag, so an unconfigured consumer is unchanged. See
-        # _effective_wip_limit for the precedence.
+        # parallel drain: how many tasks may be active (Design/Build) at once. None means the
+        # repo toml set no wip_limit — NOT "no gate": the fallback is the legacy flag (1) or
+        # DEFAULT_WIP_LIMIT. See _effective_wip_limit for the precedence.
         self.wip_limit = wip_limit
         self._me_cache: dict | None = None
         self._view_cache: dict | None = None
@@ -252,15 +253,20 @@ class Workflow:
             for t in (bucket.get("tasks") or [])
         ]
 
-    def _effective_wip_limit(self) -> int | None:
-        """How many active tasks this token may hold. None = no limit.
+    def _effective_wip_limit(self) -> int:
+        """How many active tasks this token may hold. ALWAYS a number — the gate is never off.
 
         Precedence: an explicit wip_limit is the truth; otherwise the legacy #38 flag means
-        exactly 1; otherwise unlimited (today's default). Keeping both keys alive means an
-        existing consumer that committed enforce_single_wip = true needs no edit."""
+        exactly 1; otherwise DEFAULT_WIP_LIMIT. Keeping both keys alive means an existing
+        consumer that committed enforce_single_wip = true needs no edit.
+
+        There is deliberately no "unlimited" (tracker #524): an unset key used to return None
+        = no gate, which contradicted the rulebook's «unset ⇒ SERIAL drain» and let a pump
+        claim the whole Queue. Returning int, not int | None, is what makes that structural —
+        callers cannot reintroduce an unbounded branch by forgetting a None check."""
         if self.wip_limit is not None:
             return self.wip_limit
-        return 1 if self.enforce_single_wip else None
+        return 1 if self.enforce_single_wip else DEFAULT_WIP_LIMIT
 
     def _find_task(self, task_id: int, board: list[dict] | None = None) -> tuple[dict, str]:
         for bucket in (board if board is not None else self._board()):
@@ -415,7 +421,7 @@ class Workflow:
         wip = {
             "active": len(mine),
             "limit": limit,
-            "free": None if limit is None else max(0, limit - len(mine)),
+            "free": max(0, limit - len(mine)),
         }
 
         def with_wip(result: dict) -> dict:
@@ -848,19 +854,19 @@ class Workflow:
                 f"predecessor: {joined}. A predecessor becomes ready only at Review or Done; "
                 f"finish that one first"
             )
-        # WIP slot gate (generalises the #38 single-WIP flag): refuse a claim that would put
-        # this token over its configured number of simultaneously active tasks. Reuse the board
-        # snapshot claim already fetched — the old code called _my_active_tasks() with no board
-        # and paid for a SECOND full board fetch on every gated claim.
+        # WIP slot gate (generalises the #38 single-WIP flag): refuse a claim that would put this
+        # token over its allowed number of simultaneously active tasks — always enforced, since
+        # _effective_wip_limit always yields a number (an unset wip_limit means DEFAULT_WIP_LIMIT,
+        # tracker #524). Reuse the board snapshot claim already fetched — the old code called
+        # _my_active_tasks() with no board and paid for a SECOND full board fetch per gated claim.
         limit = self._effective_wip_limit()
-        if limit is not None:
-            active = self._my_active_tasks(board=board)
-            if len(active) >= limit:
-                names = ", ".join(f"#{t['id']}" for _stage, t in active)
-                raise WorkflowError(
-                    f"WIP limit reached ({len(active)}/{limit}) — you already hold {names}. "
-                    f"Finish one (advance to Review) or return_task it before claiming another"
-                )
+        active = self._my_active_tasks(board=board)
+        if len(active) >= limit:
+            names = ", ".join(f"#{t['id']}" for _stage, t in active)
+            raise WorkflowError(
+                f"WIP limit reached ({len(active)}/{limit}) — you already hold {names}. "
+                f"Finish one (advance to Review) or return_task it before claiming another"
+            )
         existing = task.get("assignees") or []
         me = self._me()
         # self-heal: партиальный клейм (assign прошёл, move — нет) или человек руками
