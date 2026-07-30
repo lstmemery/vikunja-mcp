@@ -160,6 +160,40 @@ def test_excluded_stuck_queue_task_is_not_handed_back():
     assert "resume" not in res
 
 
+# --- the `stage` payload invariant the rulebook's tick branches on ---
+
+def test_every_task_bearing_next_task_result_carries_its_stage():
+    """SKILL.md's parallel tick decides "claim or not" by `stage` (Queue -> claim, even when
+    resume is true, because that finishes a partial claim; Design/Build -> already yours). That
+    rule is only writable if EVERY branch that hands back a task says which stage it came from.
+    Two branches used to omit it — the free queue and the review offer — and the free queue is
+    the most common branch there is, so the rulebook's discriminator was missing exactly where it
+    mattered and the rule got written wrong twice (rounds 2 and 3 of review). Cover all four
+    task-bearing shapes in ONE test so a new branch cannot quietly reintroduce the gap."""
+    api, wf = _env(wip_limit=3)
+
+    free = api.add_task("free", "Queue")
+    res = wf.next_task()
+    assert res["task"]["id"] == free["id"]
+    assert res["resume"] is False and res["stage"] == "Queue", "free queue lost its stage"
+
+    stuck = api.add_task("stuck claim", "Queue", assignee=api.me_user)
+    res = wf.next_task()
+    assert res["task"]["id"] == stuck["id"]
+    assert res["resume"] is True and res["stage"] == "Queue", "stuck-in-Queue lost its stage"
+
+    wf.claim(stuck["id"])                                  # now MY active task, in Design
+    res = wf.next_task()
+    assert res["task"]["id"] == stuck["id"]
+    assert res["resume"] is True and res["stage"] == "Design", "the active task lost its stage"
+
+    theirs = api.add_task("someone else's work", "Review")
+    api.add_comment(theirs["id"], "[worklog] done")
+    res = wf.next_task(exclude=[stuck["id"]])
+    assert res["task"]["id"] == theirs["id"]
+    assert res["review"] is True and res["stage"] == "Review", "the review offer lost its stage"
+
+
 # --- liveness accessors: what workspace --gc asks the tracker ---
 
 def test_active_task_ids_lists_my_design_and_build_tasks():

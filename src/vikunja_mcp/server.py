@@ -248,6 +248,12 @@ def next_task(exclude: list[int] | None = None) -> dict:
     breaks the cycle (removes one link in the web UI). A genuinely empty queue is still task:null
     with 'the queue is empty'.
 
+    Every result that carries a task also carries `stage` — the stage it was found in. THAT is
+    what decides whether to claim, not `resume`: stage 'Queue' needs claim(task_id) (it moves it
+    into Design, and finishes a partial claim) whether resume is false (fresh) or true (assigned
+    to you but never moved); stage 'Design'/'Build' is already yours, so claim would refuse;
+    stage 'Review' is a review offer, not work to claim.
+
     PARALLEL DRAIN: pass `exclude` = the ids of tasks you ALREADY have a live agent on, so
     they are not handed back and dispatched twice. They still occupy their WIP slot. Every
     result carries wip: {active, limit, free}. free == 0 comes back as task:null PLUS

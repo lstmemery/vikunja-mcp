@@ -518,7 +518,12 @@ class Workflow:
                 continue
             review_kind = "bug" if self._has_label(t, LABEL_BUG) else "change"
             return with_wip({
-                "review": True, "review_kind": review_kind, "task": self._summary(t),
+                # "stage" on every task-bearing result (see the free-queue branch below): the
+                # stage the task was FOUND in, which for a review offer is always Review.
+                # classify_next checks `review` BEFORE `resume`/`stage`, so this stays kind
+                # "review" — pinned in test_claimable_cmd.
+                "review": True, "review_kind": review_kind, "stage": "Review",
+                "task": self._summary(t),
                 "note": (
                     "this task is waiting for independent review — run it and cast a verdict "
                     "via review_task(task_id, verdict=..., report=...). review_kind='bug': "
@@ -596,7 +601,16 @@ class Workflow:
             blockers = self._unfinished_predecessors(t["id"], board=raw, resolve_full=resolve_full)
             if not blockers:
                 return with_wip({
-                    "resume": False, "task": self._summary(t),
+                    # "stage" is on EVERY task-bearing result (see the review offer below and
+                    # the two resume branches above), because SKILL.md's tick branches on it:
+                    # "stage == Queue -> claim; Design/Build -> it's already yours". A free
+                    # queue task used to omit it, so the rulebook's discriminator was ABSENT on
+                    # the most common branch of all and the pump had to infer Queue-ness from
+                    # resume:false — which is exactly how the rule got written wrong twice.
+                    # classify_next (claimable_cmd, a cross-repo contract) only reads `stage`
+                    # inside its resume-truthy branch, so resume:False still classifies as
+                    # kind "queue" here — pinned in test_claimable_cmd.
+                    "resume": False, "stage": "Queue", "task": self._summary(t),
                     "note": (
                         "a free task from the queue — call claim(task_id) (it moves it into "
                         "Design), then dispatch a per-task agent for the whole task. "

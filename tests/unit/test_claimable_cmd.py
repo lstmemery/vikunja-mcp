@@ -17,7 +17,9 @@ from vikunja_mcp.workflow import STAGES, Workflow
 
 
 @pytest.mark.parametrize("result,expected", [
-    ({"review": True, "review_kind": "bug", "task": {"id": 5}},
+    # the review offer and the free queue carry "stage" too since the rulebook's tick branches
+    # on it (workflow.py; pinned in test_workflow_wip) — these shapes mirror the real payloads
+    ({"review": True, "review_kind": "bug", "stage": "Review", "task": {"id": 5}},
      {"claimable": True, "kind": "review", "task_id": 5}),
     ({"resume": True, "stage": "Build", "task": {"id": 6}},
      {"claimable": True, "kind": "resume", "task_id": 6}),
@@ -25,7 +27,7 @@ from vikunja_mcp.workflow import STAGES, Workflow
      {"claimable": True, "kind": "resume", "task_id": 6}),
     ({"resume": True, "stage": "Queue", "task": {"id": 7}},
      {"claimable": True, "kind": "stuck_claim", "task_id": 7}),
-    ({"resume": False, "task": {"id": 8}},
+    ({"resume": False, "stage": "Queue", "task": {"id": 8}},
      {"claimable": True, "kind": "queue", "task_id": 8}),
     ({"task": None, "message": "the queue is empty — no work for the agent"},
      {"claimable": False, "kind": "empty", "task_id": None}),
@@ -92,6 +94,38 @@ def test_my_unfinished_build_task_is_claimable_as_resume():
     assert classify_next(wf.next_task()) == {
         "claimable": True, "kind": "resume", "task_id": t["id"],
     }
+
+
+def test_the_new_stage_key_leaves_the_exported_kind_untouched():
+    """`stage` was added to the free-queue and review-offer results so the rulebook's tick can
+    branch on ONE discriminator across every branch (test_workflow_wip pins the payload half).
+    `kind` is a CLOSED enum in the hgdev-acp hub, which fail-CLOSES on a value it doesn't know
+    and re-resolves @stable within MINUTES of a green push — so a payload edit here that shifted
+    a kind would turn every hub loop red before anyone noticed. classify_next reads `stage` only
+    inside its resume-truthy branch, so neither new shape can reach it: the free queue is
+    resume:False (falls to "queue"), and a review offer matches on `review` BEFORE resume is
+    consulted ("review").
+
+    Assert BOTH halves against REAL next_task output: that `stage` is genuinely present, and
+    that the verdict is identical to what it was before the key existed. Kind-only assertions
+    already exist above and would pass unchanged if `stage` silently vanished — which is the
+    other half of this contract, since the rulebook now depends on it."""
+    api = FakeAPI(buckets=STAGES)
+    wf = Workflow(api, project_id=3)
+    free = api.add_task("free work", "Queue")
+
+    result = wf.next_task()
+    assert result["stage"] == "Queue", "the free-queue result must carry its stage"
+    assert classify_next(result) == {"claimable": True, "kind": "queue", "task_id": free["id"]}
+
+    wf.claim(free["id"])                                   # get it out of the way of the offer
+    other = {"id": 77, "username": "agent-other"}
+    theirs = api.add_task("their change", "Review", assignee=other)
+    api.add_comment(theirs["id"], "[worklog]\nСделано: X\n\nEvidence: sha")
+
+    result = wf.next_task(exclude=[free["id"]])
+    assert result["stage"] == "Review", "the review offer must carry its stage"
+    assert classify_next(result) == {"claimable": True, "kind": "review", "task_id": theirs["id"]}
 
 
 def test_the_check_makes_no_writes():
