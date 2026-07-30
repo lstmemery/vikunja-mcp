@@ -1213,11 +1213,19 @@ def test_the_page_size_threshold_is_one_shared_rule_not_a_copy():
     [1, 2, 3, 4], identical to shipped. `_paged_list`'s rule is a CONJUNCTION (`added_new and
     (maybe_full or header_more)`), which is exactly why the flat half above does bite.
 
-    What NEITHER read pins is the SERVED operand: both serve 2 against a stated 5, so `min(5, 2)`
-    and the served length are the same number and substituting one for the other is a no-op. That
-    direction is pinned only by the two reads at the end of this file, which put the operands in
-    DISAGREEMENT. The value table here is the helper's arithmetic, and arithmetic survives a reader
-    that quietly stops calling it."""
+    What NEITHER read catches is the SERVED-ONLY direction — substituting `longest_served` for the
+    whole call: both serve 2 against a stated 5, so `min(5, 2)` and the served length are the same
+    number and the substitution is a no-op. That direction is caught only by the two reads at the
+    end of this file, which put the operands in DISAGREEMENT. The value table here is the helper's
+    arithmetic, and arithmetic survives a reader that quietly stops calling it.
+
+    (Named as a DIRECTION on purpose. The sibling docstring on
+    test_a_required_bucket_repeating_a_window_SHORTER_than_the_stated_size says "pins the SERVED
+    operand", meaning the operand whose REMOVAL that test catches — the opposite end of the same
+    mutation. Carry that convention into this paragraph and it reads false, because the flat read
+    here does catch the removal of the served operand — this same docstring says so above,
+    "Weakening that call site to stated-only is red here too". Both sentences are true under the
+    convention each supplies; only mixing them is not.)"""
     assert api_mod._could_be_full(5, 0) == 0        # nothing served yet -> page 1 proves nothing
     assert api_mod._could_be_full(5, 2) == 2        # the SERVED length wins when it is smaller
     assert api_mod._could_be_full(5, 9) == 5        # the STATED size caps a fluke-long page
@@ -1254,7 +1262,8 @@ def test_the_page_size_threshold_is_one_shared_rule_not_a_copy():
 # WHY nothing saw it, and why it is a property of the test data rather than an oversight. ALMOST
 # every server modelled above serves at most what /info states — `_offset_pages` cuts windows at
 # `page_size`, and the sweep driving `_short_non_final_pages` (which is a pass-through: it serves
-# whatever windows it is handed) draws their lengths from `randint(1, page_size - 1)` — and wherever
+# whatever windows it is handed) draws their lengths from `randint(1, max(1, page_size - 1))`,
+# never offering it a page size of 1 — so every window is short of the stated size — and wherever
 # `longest_served <= stated` the cap collapses to `served`, so the stated operand is arithmetically
 # dead and deleting it is a no-op.
 #
@@ -1291,17 +1300,60 @@ def test_the_page_size_threshold_is_one_shared_rule_not_a_copy():
 # "randomize harder" answer — does not help either: 300 rounds, still 300/300 identical, and the
 # healthy read never truncates even on shipped code, because that sweep hands its server fresh
 # ids on every page and the DISJUNCTION above lets `added_new_required` carry those reads whatever
-# the threshold says. Only a REPEAT window makes the threshold load-bearing, which is why the two
-# tests below are constructed rather than swept.
+# the threshold says. (Re-measured on today's tree: 270 of those 300 rounds really do over-serve,
+# and the equality still holds in all 300. Since VMCP-124 (603) that widened generator ALSO trips
+# the sweep's own `assert max(served_lengths) <= page_size` — a different red, about scope rather
+# than about the mutant; `_serving_lengths` records the same experiment from 603's side.)
+# Only a REPEAT window makes the threshold load-bearing, which is why the two tests below are
+# constructed rather than swept.
 #
 # The two operands therefore only separate on a server that serves a page LONGER than /info
-# states — the "fluke-long page" the helper's own docstring says the stated size is there to cap.
-# CONSTRUCTED, not measured against a real 2.3.0 (same honesty as VMCP-103's short-non-final page,
-# which a real container also refused to produce): what IS measured on that server is that its
-# self-description is unreliable in both directions — `_total_pages` under-reports on the kanban
-# tasks endpoint and over-reports on views/buckets. An under-reported max_items_per_page is that
-# same class of fact, and the cap is what keeps ONE long page from raising the bar for every page
-# after it.
+# states — the "fluke-long page" the shared-rule test's own assert pins the stated size against
+# (`_could_be_full(5, 9) == 5`). The phrase is that assert's, not the helper's: `fluke` appears
+# nowhere in api.py and never has, and an earlier draft of this paragraph credited it there.
+#
+# THAT SERVER IS REAL, AND THIS PARAGRAPH USED TO SAY IT WAS NOT. Until VMCP-124 (603) it read
+# "CONSTRUCTED, not measured against a real 2.3.0 ... which a real container also refused to
+# produce", and offered an under-reported max_items_per_page as merely the same CLASS of fact as
+# `_total_pages` being wrong in both directions. 603 replaced the analogy with direct evidence and
+# then re-scoped its own first draft of it (see the api.py note above `_page_size`, and
+# test_the_degraded_read_never_loses_a_task_the_healthy_read_saw in this same file far above): on a
+# 2.3.0 instance stating max_items_per_page=5, GET /projects serves pages of EIGHT — five real rows
+# plus a CONSTANT 3-row pseudo tail appended after the SQL limit — while paging the real ids
+# honestly. Read every row count in that note as one instance's CONTENT and never as an endpoint
+# constant: the same card measured 10 views and 11 buckets on one container and 4 and 63 on
+# another, both stating 5.
+#
+# AND THE BAND THESE TWO TESTS ARE BUILT ON IS OBSERVED THERE TOO, not just the long page. That
+# same read's page 7 serves SEVEN rows: full by the stated measure, SHORT of the served 8 — the
+# exact window the fixtures below construct. Through this client, `projects()` returns 34
+# rows in 8 requests with /info up and 7 with /info down, the degraded bar of 8 stopping a page
+# earlier than the healthy min(5, 8). The bar difference is not a thought experiment; it costs a
+# request on a real endpoint today.
+#
+# WHAT IS STILL UNOBSERVED IS THE ONE REMAINING INGREDIENT — ROWS BEHIND THAT SHORT PAGE, i.e. the
+# LOSS. Live, the pseudo tail is constant, so the page short of the bar is the LAST one carrying
+# real rows and the read was over anyway; 603 had to move that page off the end before anything
+# disappeared. Do not restate the reason this comment used to give for the gap — that the endpoints
+# which over-serve are PRECISELY the ones ignoring `?page=`, so their next page is always a pure
+# repeat — because 603 measured it FALSE, /projects being the counterexample. (VMCP-103's separate
+# probe still stands, and is a DIFFERENT shape: a page short of the STATED size with rows behind it
+# could not be produced on the kanban tasks endpoint. Welding those two together is precisely what
+# the old parenthetical got wrong.) So nobody has yet watched this client lose a task here, and
+# these tests do not claim otherwise: what they pin is that once the rows ARE behind it, the stated
+# operand is what keeps ONE long page from raising the bar for every page after it.
+#
+# AND THE WAY THAT SENTENCE WENT WRONG IS THIS CARD'S OWN SUBJECT. What a sibling falsified was
+# PROSE, not a number. Three rounds re-measured 2767/1383/1384 and the SEVEN against each rebased
+# tree and left the non-numeric claim standing — including the round that read 603's diff and cited
+# it in the paragraph on the SEVEN's drift rate, above. "Re-measure the seven; do not inherit it"
+# was written for the counts and is owed to the sentences too. Third over-claim this card has had
+# to retract; the other two are quoted in the SHORTER-window docstring's closing parenthetical.
+#
+# FORWARD LINK, because it aims at the two tests below: VMCP-127 (608) is open on this exact shape,
+# and the fix it proposes DELETES the stated operand from both bars (api.py's `_page_size` note
+# carries the w-table and the four costs). If it lands, these two go red BY DESIGN — read that note
+# before "fixing" them.
 
 
 def test_a_server_serving_MORE_than_it_stated_still_reads_the_board_whole():
