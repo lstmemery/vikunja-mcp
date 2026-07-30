@@ -1690,3 +1690,136 @@ def test_the_claude_md_workspace_bullet_keeps_the_code_claim_scoped():
         "CLAUDE.md's workspace bullet no longer attributes the machine-readable `code` to the "
         "`--release`/`--gc` channel. An unattributed `code` sentence reads as universal again"
     )
+
+
+def _reviewer_tree_rule(text: str) -> str:
+    """The «Ревьюер, вынеся вердикт, освобождает своё дерево» bullet — the ONLY place a REVIEWER
+    reads about its own worktree.
+
+    Sliced, and the slice IS the point of VMCP-104 (563). Both phrases pinned below already occur
+    in this file, in the BUILD agent's sections: «не считай, что ты всё ещё стоишь в своём дереве»
+    lives in the `call_human` paragraph of the push recipe, and the `no-worktree` refusal is
+    explained in the `--release` breakdown. A whole-file substring therefore cannot tell "the
+    reviewer is told" from "the build agent is told" — which was exactly the state this card found:
+    the rule was stated twice for build and only IMPLIED for review («дерево будет жить, пока
+    карточка не уйдёт из Review» — while `needs_work` IS that departure).
+    """
+    start = text.find("- **Ревьюер, вынеся вердикт, освобождает своё дерево:**")
+    assert start != -1, "SKILL.md no longer has a rule about the reviewer's own worktree"
+    end = text.find("\n- **", start + 1)
+    assert end != -1, "the reviewer's tree rule no longer ends where the next top-level bullet does"
+    bullet = text[start:end]
+    assert 0 < len(bullet) < len(text), "the reviewer-tree slice is not a proper subset of SKILL.md"
+    assert "Не завелось" not in bullet, "the slice swallowed the following bullet"
+    return bullet
+
+
+def test_the_reviewers_tree_rule_says_its_own_verdict_can_take_the_directory_away():
+    """VMCP-104 (563): a review tree is alive BY ROLE — while the card sits in Review the sweep
+    skips it whatever its age — so the reviewer's exposure is exactly its OWN `needs_work`, which
+    moves the card to Build and kills the tree that same second. The rulebook stated the standing
+    "re-`ensure`, do not assume your cwd survived" rule twice for the BUILD agent and never for the
+    reviewer; workspace_cmd's own grace-window comment meanwhile asserts it "is a rule for BOTH
+    roles", so the code was documenting a rule the rulebook only half-carried.
+
+    MEASURED on this code before writing the prose (throwaway probe, real git repo + FakeAPI):
+    a review tree quiesced past `_REAP_GRACE_SECONDS` with its card in Review -> `{released: [],
+    kept: [], expected: []}`; after `approve` -> same, card still in Review; after `needs_work` ->
+    the very next sweep returns it in `released` and the directory is gone; `--release --role
+    review` on it -> exit 0, `{released: false, code: "no-worktree"}`.
+
+    Pinned on both sides, since SKILL.md self-heals onto every consumer with no review gate:
+      * the two board-facing CLAIMS are anchored in workflow.review_task itself — approve must
+        keep the card in Review (no `_move` in that branch) and needs_work must take it out. Make
+        approve move the card and this rulebook paragraph becomes false; the test fails first.
+      * the ORDERING claim ("grace-окно до него даже не доходит") is anchored in gc_workspaces:
+        the by-role liveness check has to run BEFORE `_last_activity` is ever consulted.
+      * the two PROSE imperatives are pinned inside the slice, not the file, for the reason
+        `_reviewer_tree_rule` records.
+
+    MUTATION-CHECKED (`__pycache__` cleared between rounds, each round confirmed to select exactly
+    1 test, SKILL.md restored from a COPY — never `git checkout --`, the edits are uncommitted):
+    control PASS; delete the whole «Из Review карточку двигает не только человек» sub-bullet while
+    LEAVING both phrases in their build-side homes -> FAIL on the imperative; delete only the
+    imperative sentence and keep the rest of the sub-bullet -> FAIL; delete the `no-worktree`
+    sub-bullet while the `--release` breakdown still explains that code -> FAIL; make
+    `review_task`'s approve branch call `_move` -> FAIL; move the by-role check below
+    `_last_activity` in gc_workspaces -> FAIL; re-wrap the paragraph across the pinned phrases ->
+    PASS by design (`_flat`)."""
+    text = _skill_text()
+    bullet = _reviewer_tree_rule(text)
+    flat = _flat(bullet)
+
+    review_src = inspect.getsource(workflow.Workflow.review_task)
+    approve_at = review_src.index('if verdict == "approve":')
+    needs_work_at = review_src.index('[review] NEEDS WORK')
+    assert "_move(" not in review_src[approve_at:needs_work_at], \
+        "review_task's approve branch now MOVES the card — SKILL.md tells the reviewer the " \
+        "tree survives an approve, which would become false"
+    assert 'self._move(task_id, "Build")' in review_src[needs_work_at:], \
+        "needs_work no longer takes the card out of Review — the whole hazard this rule " \
+        "documents (your own verdict kills your tree) would be gone"
+    assert "`approve` карточку НЕ двигает" in flat, \
+        "the reviewer's rule no longer says approve leaves the card (and the tree) alone"
+    assert "needs_work" in flat, \
+        "the reviewer's rule no longer names the verdict that takes its own directory away"
+
+    gc_src = inspect.getsource(workspace_cmd.gc_workspaces)
+    assert gc_src.index("alive[role]") < gc_src.index("_last_activity("), \
+        "gc now consults the grace window BEFORE by-role liveness — SKILL.md tells the " \
+        "reviewer the window is never even reached while the card sits in Review"
+
+    assert "не считай, что ты всё ещё стоишь в своём дереве" in flat, \
+        "the reviewer is no longer told not to assume its cwd survived the verdict — the " \
+        "phrase still occurs in the BUILD agent's sections, which is why this pin is scoped"
+    assert "`workspace <id> --role review --at <sha>` заново" in flat, \
+        "the reviewer is no longer told HOW to get a directory back (re-ensure it), only that " \
+        "it may be gone"
+
+
+def _degraded_workspace_bullet(text: str) -> str:
+    """The «Не завелось — цикл НЕ роняем» bullet — where the pump learns to tell a `workspace`
+    FAILURE (exit 1, `error`) from a `--release` that simply declined (exit 0, `released: false`).
+
+    Sliced for the same reason as `_reviewer_tree_rule`: every refusal code it contrasts is also
+    explained, at length, in the `--release` breakdown further down, so a file-wide substring
+    cannot tell "this bullet still distinguishes them" from "the words exist somewhere"."""
+    start = text.find("- **Не завелось — цикл НЕ роняем.**")
+    assert start != -1, \
+        "SKILL.md no longer tells the pump that a failed `workspace` is not a reason to stop"
+    end = text.find("\n- **", start + 1)
+    assert end != -1, "the «Не завелось» bullet no longer ends where the next top-level bullet does"
+    bullet = text[start:end]
+    assert 0 < len(bullet) < len(text), "the «Не завелось» slice is not a proper subset of SKILL.md"
+    assert "Ревьюер, вынеся вердикт" not in bullet, "the slice swallowed the preceding bullet"
+    return bullet
+
+
+def test_the_released_false_shorthand_never_teaches_only_the_protective_reading():
+    """VMCP-104 (563), the second half: `released: false` is taught in TWO places, and the short
+    one used to collapse it to a single meaning — «это не сбой инструмента, а „у тебя осталась
+    несохранённая работа"». That reading is wrong for `no-worktree`, whose meaning is the
+    opposite (the tree is already gone and nothing is owed), and `no-worktree` is precisely the
+    reviewer's routine outcome after a `needs_work` that outlived the grace window.
+
+    Both sites are pinned to name the code, anchored on the CONSTANT so a re-value fails here
+    rather than silently in the field. Scoped to each bullet: `no-worktree` appears in the
+    `--release` breakdown too, so a file-wide substring would stay green with either shorthand
+    collapsed back.
+
+    MUTATION-CHECKED (same protocol as above): control PASS; restore the old one-meaning wording
+    in «Не завелось» while the breakdown still explains all three codes -> FAIL; delete the
+    reviewer's third-reading sub-bullet -> FAIL; re-value CODE_NO_WORKTREE -> FAIL on both."""
+    text = _skill_text()
+    for name, section in (
+        ("«Не завелось — цикл НЕ роняем»", _degraded_workspace_bullet(text)),
+        ("the reviewer's tree rule", _reviewer_tree_rule(text)),
+    ):
+        assert workspace_cmd.CODE_NO_WORKTREE in section, \
+            f"{name} teaches `released: false` without its third reading — an agent whose tree " \
+            f"is already gone reads a routine success as a protective refusal"
+    degraded = _flat(_degraded_workspace_bullet(text))
+    for code in (workspace_cmd.CODE_DIRTY, workspace_cmd.CODE_UNPUSHED):
+        assert code in degraded, \
+            f"the shorthand no longer says which codes DO mean unsaved work ({code}) — " \
+            f"'read the `code`' without the codes sends the reader to the wrong half"
