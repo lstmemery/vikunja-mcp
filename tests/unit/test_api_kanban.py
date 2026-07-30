@@ -646,9 +646,26 @@ def test_a_required_bucket_repeating_a_window_SHORTER_than_the_stated_size():
     cap). THIS server serves 3 against a stated 5, and wherever `served <= stated` the cap collapses
     to `served` — so the STATED operand is dead weight here and deleting it changes nothing. Its pin
     is `test_a_server_serving_MORE_than_it_stated_still_reads_the_board_whole` at the end of this
-    file, on the only shape where the two operands disagree. (Stated as a fact about THIS server on
-    purpose: the same correction once over-generalised it to every server in the file, and that is
-    false — see the instrumented count in the VMCP-111 section's comment block.)"""
+    file, whose server serves 8 against a stated 5.
+
+    That is the shape THIS pin uses — NOT the only shape in this file where the two operands
+    disagree. INSTRUMENTED (the count lives in the VMCP-111 comment block): FOUR tests put them in
+    disagreement. Two are the pins themselves — the board one named above and its flat sibling
+    `..._still_reads_the_list_whole`, each serving 8 against a stated 5, one per call site. The
+    third is the direct arithmetic assert `_could_be_full(5, 9)` in the shared-rule test, which
+    calls the helper rather than reading anything. The fourth is a REAL READ that pins NEITHER
+    operand: `test_an_endpoint_that_ignores_page_terminates_without_duplicating_rows` serves ELEVEN
+    against a stated 5, but its page 2 is a pure repeat, `added_new` ends the read first, and
+    shipped / served-only / stated-only / an unreachable threshold all return the same 11 rows in 2
+    requests — MEASURED on that fixture, all four identical. So disagreeing operands are NECESSARY
+    for a read to notice the stated operand going missing (where they agree, `min(stated, served)`
+    and `served` are the same number and the substitution cannot change anything) but NOT
+    sufficient: the read has to reach the threshold before some other clause ends it.
+
+    (Scoped to named servers on purpose. This one docstring has now shipped the same error twice:
+    first "every server on this side of the file serves at most what /info states", then "the only
+    shape where the two operands disagree" — each a true measurement restated as a universal, and
+    each false by the same counterexample, the eleven-against-five read above.)"""
     def handler(request):
         page = int(request.url.params.get("page", 1))
         build = {1: [1, 2, 3], 2: [1, 2, 3], 3: [4, 5, 6]}.get(page, [])
@@ -1167,9 +1184,9 @@ def test_the_page_size_threshold_is_one_shared_rule_not_a_copy():
     served-only GREEN, and the threshold made ENTIRELY unreachable (`10**9`) GREEN.
 
     That is structural, not a fixture accident. `view_tasks`' stop rule is a DISJUNCTION —
-    `added_new_required or (maybe_full_required and added_new)` — and `_short_non_final_pages`
-    never repeats a window, so every page that continues the read below brings fresh required ids
-    and `added_new_required` carries the read single-handed: with the threshold unreachable, so
+    `added_new_required or (maybe_full_required and added_new)` — and the windows the read below
+    hands `_short_non_final_pages` never repeat, so every page continuing it brings fresh REQUIRED
+    ids and `added_new_required` carries the read single-handed: with the threshold unreachable, so
     that `maybe_full_required` can never be True, the read still requests 3 pages and still returns
     [1, 2, 3, 4], identical to shipped. `_paged_list`'s rule is a CONJUNCTION (`added_new and
     (maybe_full or header_more)`), which is exactly why the flat half above does bite.
@@ -1214,7 +1231,8 @@ def test_the_page_size_threshold_is_one_shared_rule_not_a_copy():
 #
 # WHY nothing saw it, and why it is a property of the test data rather than an oversight. ALMOST
 # every server modelled above serves at most what /info states — `_offset_pages` cuts windows at
-# `page_size`, `_short_non_final_pages` draws from `randint(1, page_size - 1)` — and wherever
+# `page_size`, and the sweep driving `_short_non_final_pages` (which is a pass-through: it serves
+# whatever windows it is handed) draws their lengths from `randint(1, page_size - 1)` — and wherever
 # `longest_served <= stated` the cap collapses to `served`, so the stated operand is arithmetically
 # dead and deleting it is a no-op.
 #
@@ -1223,8 +1241,14 @@ def test_the_page_size_threshold_is_one_shared_rule_not_a_copy():
 # this paragraph was written against: 2767 calls, 1383 of them degraded (`stated=None`, where the
 # mutation is a no-op by definition) and 1384 with a known stated. Read the three totals as a
 # snapshot, not an invariant — any test that pages moves them, and rebasing this very commit onto a
-# sibling moved them from 2607/1383/1224 without touching anything below. What is NOT a snapshot is
-# the count that matters: exactly SEVEN calls have `stated < served`, five of which are this
+# sibling moved them from 2607/1383/1224 without touching anything below. The count that MATTERS is
+# a snapshot of the same kind, just a far slower-moving one: exactly SEVEN calls have
+# `stated < served` at that tree. The difference is drift RATE, not immunity — the totals move
+# whenever ANY test pages, the seven moves only when a test models a server that OVER-serves its
+# stated size. Slower is not never, and this family writes on exactly that shape: VMCP-124 (603)
+# landed on this fixture between two rounds of this card, and re-instrumenting after it returned
+# the same 2767/1383/1384 and the same seven only because it scoped the sweeps instead of adding an
+# over-serving server. Re-measure the seven; do not inherit it. Five of the seven are this
 # section's own two tests. Of the other two, one is the arithmetic assert `_could_be_full(5, 9)`
 # above — not a read — and one
 # is a REAL READ that predates this section: test_an_endpoint_that_ignores_page_terminates_without
@@ -1243,7 +1267,7 @@ def test_the_page_size_threshold_is_one_shared_rule_not_a_copy():
 # randomized rounds of sweep 1's own generator, healthy identical to degraded (pages AND board) in
 # 200/200 under the mutant. Widening sweep 2 so pages MAY overshoot the stated size — the obvious
 # "randomize harder" answer — does not help either: 300 rounds, still 300/300 identical, and the
-# healthy read never truncates even on shipped code, because `_short_non_final_pages` serves fresh
+# healthy read never truncates even on shipped code, because that sweep hands its server fresh
 # ids on every page and the DISJUNCTION above lets `added_new_required` carry those reads whatever
 # the threshold says. Only a REPEAT window makes the threshold load-bearing, which is why the two
 # tests below are constructed rather than swept.
