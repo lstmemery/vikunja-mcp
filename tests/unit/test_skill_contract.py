@@ -12,6 +12,7 @@ widened to every change in #117, is for; this is only the net that catches a cit
 stale on either side.
 """
 import inspect
+import re
 from importlib.resources import files
 
 from vikunja_mcp import config, server, workflow, workspace_cmd
@@ -135,6 +136,51 @@ def test_the_integration_recipe_pushes_to_the_main_branch_and_names_gc():
     text = _skill_text()
     assert "git push origin HEAD:main" in text, "the explicit push-to-main refspec vanished"
     assert "workspace --gc" in text, "the tick no longer reaps dead worktrees (workspace --gc)"
+
+
+def _integration_recipe(text: str) -> str:
+    """The FENCED integration recipe — the block an agent copies, not the prose that explains it.
+
+    Scoped to the fence on purpose, and not by a whole-file substring: `git push origin HEAD:main`
+    alone appears twice in the rulebook (the fence, plus the parallel-drain bullet that summarises
+    it in prose), so a file-wide search cannot tell "the recipe still says it" from "some paragraph
+    mentions it" — exactly the weakness `_gc_section`'s docstring records having MEASURED. Exactly
+    one such fence must exist: two would mean the recipe was duplicated, which is the drift this
+    module exists to catch, not a state to tolerate."""
+    blocks = [
+        b for b in re.findall(r"```sh\n(.*?)```", text, re.S) if "git push origin HEAD:main" in b
+    ]
+    assert len(blocks) == 1, f"expected exactly 1 fenced integration recipe, found {len(blocks)}"
+    recipe = blocks[0]
+    assert 0 < len(recipe) < len(text), "the recipe slice is not a proper subset of SKILL.md"
+    return recipe
+
+
+def test_the_recipe_verifies_the_evidence_sha_actually_landed_on_main():
+    """VMCP-77 (526): the recipe used to end at `git push origin HEAD:main` + `git rev-parse HEAD`,
+    so "the push landed" rested on the absence of an error message. `rev-parse` cannot carry that
+    weight — it (and `rev-parse --verify`) echoes back a full 40-hex sha with exit 0 whether or not
+    the object exists — and existence is not ancestry either: a PRE-REBASE sha resolves fine while
+    never reaching main, which under the parallel drain is the normal case, not the exotic one.
+    Both commands were measured in a throwaway repo before being written into the rulebook.
+
+    Pinned for the same reason the push refspec above is: SKILL.md self-heals onto every consumer
+    on server start over the moving `stable` branch, with no per-consumer pin and no review gate,
+    so an edit that "simplifies" this back to `rev-parse` ships to everyone silently. There is no
+    code-side anchor to pin against — these are shell commands, not workflow symbols — so this is
+    the `600`-interval kind of pin: a value that lives only in the rulebook.
+
+    The literals are asserted WITH their quoting, which is load-bearing rather than stylistic:
+    under zsh's `extendedglob` a bare `<sha>^{commit}` dies with `no matches found` before git
+    runs, and that failure looks exactly like a bad sha. MUTATION-CHECKED (both directions, and
+    with `__pycache__` cleared): delete either command line from the fence and this test fails;
+    leave the fence alone but delete the surrounding explanation and it stays green — by design,
+    prose wording is review's job, the copyable step is this net's."""
+    recipe = _integration_recipe(_skill_text())
+    assert 'git cat-file -e "<sha>^{commit}"' in recipe, \
+        "the recipe no longer proves the evidence sha EXISTS (git cat-file -e)"
+    assert 'git merge-base --is-ancestor "<sha>" origin/main' in recipe, \
+        "the recipe no longer proves the evidence sha is ON the main branch (merge-base)"
 
 
 def _gc_section(text: str) -> str:

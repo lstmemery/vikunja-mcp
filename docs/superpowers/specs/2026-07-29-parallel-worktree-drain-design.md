@@ -286,12 +286,30 @@ git commit -m "type(scope): … (tracker #N)"
 git fetch origin && git rebase origin/main
 <re-run this task's done criteria>    # catches what the merge swallowed
 git push origin HEAD:main             # rejected → repeat the block, max 3 rounds
-git rev-parse HEAD                    # evidence sha — read AFTER a successful push
+git rev-parse HEAD                    # the CANDIDATE sha — read AFTER a successful push
+git cat-file -e "<sha>^{commit}"                  # 0 = the commit exists; 128 = it does not
+git merge-base --is-ancestor "<sha>" origin/main  # 0 = it is REALLY on main; 1 = it is not
 ```
 
 "Done criteria" are the ones the orchestrator put in the dispatch brief (here:
 `uv run pytest tests/unit -q` + `uv run ruff check .`). SKILL.md ships to every
 consumer, so it names the *concept*, never a repo's specific commands.
+
+The last two lines are the fix for VMCP-77 (526) and are not decoration: `git
+rev-parse HEAD` only *prints* the local HEAD — it (and `rev-parse --verify`)
+returns a full 40-hex sha with exit 0 whether or not the object exists, so the
+check everyone reaches for is the one check that cannot catch a fabricated
+evidence sha, and *existence* is still not ancestry (a pre-rebase sha resolves
+while never reaching `main`). Both failures were measured, the second one live —
+see *"Verifying a reported `evidence` sha with `git rev-parse` does not work"* in
+§What contradicted. The two exit codes carry different diagnoses (`128` = no such
+commit *here* — fabricated, mistyped, or simply not fetched; `1` = it exists but
+is not on `main`), both commands are silent on success, and the quotes around
+`"<sha>^{commit}"` are load-bearing under zsh's `extendedglob`. Verifying your
+own push needs no extra `fetch` (the push updates the local `origin/main`);
+verifying *someone else's* sha does, or a landed commit fails exactly like a
+fabricated one. Same two commands guard the reviewer's `--at`, which validates
+that the sha exists but not that it is on `main`.
 
 A rebase conflict is resolved by the agent itself (it holds the task's context);
 if it cannot, `call_human` — and the worktree survives, because `--release`
@@ -573,6 +591,16 @@ is not on `main`. The recipe's "read the sha AFTER a successful push" is what
 prevents this, and 522's agent additionally self-invented the right check (`git
 branch -r --contains HEAD`). Neither SKILL.md nor this spec's recipe names a
 post-push verification step; they should. Filed as **VMCP-77 (526)**.
+
+*(Closed by VMCP-77 (526): both recipes now end with `git cat-file -e
+"<sha>^{commit}"` + `git merge-base --is-ancestor "<sha>" origin/main` — see §4 —
+and `tests/unit/test_skill_contract.py` pins them inside the recipe's own fence.
+Re-measured there on git 2.50.1, which also settled two things this section left
+open: `merge-base --is-ancestor` on a nonexistent object exits **128**, not 1, so
+the two exit codes are diagnoses rather than a redundant pair; and `git push
+origin HEAD:main` **does** update the local `origin/main`, so the fetch this card
+suggested is needed only when the sha is not your own — the case where a landed
+commit otherwise reads exactly like a fabricated one.)*
 
 *(Honest note on method: my own first pass mistyped an abbreviated sha and got
 `fatal: Not a valid object name` — a wrong guess at an abbreviation is
