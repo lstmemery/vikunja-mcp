@@ -46,15 +46,23 @@ class VikunjaAPI:
     def __init__(
         self, base_url: str, token: str, client: httpx.Client | None = None,
         *, timeout: float = 30, max_retries: int | None = None,
+        event_hooks: dict | None = None,
     ):
-        """`timeout`/`max_retries` exist for ONE caller: `workspace --gc`, whose board read
-        happens while it holds the repo-wide worktree flock (see workspace_cmd._build_workflow).
-        Everything else keeps the defaults. `timeout` is ignored when `client` is supplied — the
-        caller then owns the whole client (tests pass a MockTransport one)."""
+        """`timeout`/`max_retries`/`event_hooks` exist for ONE caller: `workspace --gc`, whose
+        board read happens while it holds the repo-wide worktree flock (see
+        workspace_cmd._build_workflow). Everything else keeps the defaults. All three are ignored
+        when `client` is supplied — the caller then owns the whole client (tests pass a
+        MockTransport one, and a test that wants a hook builds it into its own client).
+
+        `event_hooks` is httpx's own {"request": [...], "response": [...]} mapping. It is here
+        rather than assembled by the caller so that gc's client is still built by THIS
+        constructor: duplicating the base-url canonicalisation and the Authorization header at a
+        second call site is how one of them silently stops matching the other."""
         self._client = client or httpx.Client(
             base_url=canonical_base_url(base_url),
             headers={"Authorization": f"Bearer {token}"},
             timeout=timeout,
+            event_hooks=event_hooks,
         )
         if max_retries is not None:
             # an INSTANCE attribute shadowing the class default below, for this client only

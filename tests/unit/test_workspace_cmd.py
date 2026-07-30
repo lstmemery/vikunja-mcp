@@ -11,13 +11,16 @@ import time
 import tomllib
 from pathlib import Path
 
+import httpx
 import pytest
 
 from tests.unit.fakes import FakeAPI
 from vikunja_mcp import workspace_cmd
+from vikunja_mcp.api import VikunjaAPI
 from vikunja_mcp.config import ENV_WORKTREE_ROOT
 from vikunja_mcp.workflow import STAGES, Workflow
 from vikunja_mcp.workspace_cmd import (
+    ReadDeadlineExceeded,
     WorkspaceError,
     ensure_workspace,
     gc_workspaces,
@@ -607,7 +610,7 @@ def test_build_workflow_resolves_config_from_the_given_root(repo, monkeypatch):
         return config_mod.Config(url="http://example.invalid", token="t", project_id=7)
 
     monkeypatch.setattr(config_mod, "load_config", fake_load_config)
-    wf = _build_workflow(repo)
+    wf, _deadline = _build_workflow(repo)          # VMCP-72: (workflow, read deadline)
     assert seen["cwd"] == repo
     assert wf.project_id == 7
 
@@ -870,7 +873,7 @@ def test_gc_builds_a_tracker_client_that_cannot_hold_the_lock_for_minutes(repo, 
 
     monkeypatch.setattr(config_mod, "load_config", lambda cwd=None, environ=None:
                         config_mod.Config(url="http://example.invalid", token="t", project_id=7))
-    wf = _build_workflow(repo)
+    wf, _deadline = _build_workflow(repo)                 # VMCP-72: (workflow, read deadline)
 
     assert wf.api._MAX_RETRIES == 0                       # no backoff sleeps under the lock
     timeout = wf.api._client.timeout
@@ -886,6 +889,9 @@ def test_the_default_api_client_is_untouched_by_the_gc_bound():
     api = VikunjaAPI("https://t.example", "tk")
     assert api._MAX_RETRIES == 3
     assert api._client.timeout.read == 30
+    # VMCP-72: and no read budget either — the MCP server's own calls are not under any lock,
+    # so a hook that abandoned them past 30s would be a new failure with nothing to gain.
+    assert api._client.event_hooks["request"] == []
 
 
 # --- final whole-branch review, Minor 7: silently ignored argument combinations ---
@@ -1462,3 +1468,287 @@ def test_a_clean_release_says_nothing_about_the_branch(repo):
     res = release_workspace(42, cwd=repo)
     assert res["released"] is True
     assert "branch_deleted" not in res and "warning" not in res
+# --- VMCP-72: the sweep's liveness read is bounded OVERALL, not just per request ---
+#
+# Modelled rather than slept: the deadline measures DURATIONS, so a test that really waited would
+# be slow AND flaky. `_FakeClock` is the clock the deadline reads and the transport advances, so
+# "how long did this read hold the lock" is an exact number here instead of a stopwatch.
+
+
+class _FakeClock:
+    def __init__(self):
+        self.t = 0.0
+
+    def __call__(self):
+        return self.t
+
+
+def _slow_board_client(clock, seconds_per_request, sent, attempted, *,
+                       review=0, your_call=0, page_size=50, hooks=()):
+    """A REAL httpx.Client over a transport that models a tracker answering every request
+    `seconds_per_request` late — and, like a real socket, giving up when that exceeds the timeout
+    it was handed. That second half is what makes the clamp observable at all: httpcore reads
+    `request.extensions["timeout"]` when it sends, MockTransport does not, so the model must.
+    (Verified against the real thing before it was modelled: a 10 s budget on a read needing 18 s
+    came back at 9.96 s with a ReadTimeout, not at 12 s.)
+
+    `attempted` records every request the CLIENT tried to send (hook level, so it includes the
+    ones the deadline refuses); `sent` records only those that reached the transport. Two lists
+    because the difference between them IS the deadline's effect.
+    """
+    def record(request):
+        attempted.append(str(request.url).split("/api/v1")[-1])
+
+    def handler(request):
+        allowed = (request.extensions.get("timeout") or {}).get("read")
+        took = seconds_per_request if allowed is None else min(seconds_per_request, allowed)
+        clock.t += took
+        sent.append(str(request.url).split("/api/v1")[-1])
+        if allowed is not None and seconds_per_request > allowed:
+            raise httpx.ReadTimeout("timed out", request=request)
+        path = request.url.path
+        if path.endswith("/info"):
+            return httpx.Response(200, json={"max_items_per_page": page_size})
+        if path.endswith("/user"):
+            return httpx.Response(200, json={"id": 1, "username": "agent"})
+        if path.endswith("/views"):
+            return httpx.Response(200, json=[{"id": 7, "view_kind": "kanban", "title": "K"}])
+        page = int(request.url.params.get("page", 1))
+        counts = {"Review": review, "Your Call": your_call}
+        return httpx.Response(200, json=[
+            {"id": index, "title": title, "tasks": [
+                {"id": index * 10_000 + i, "title": f"t{i}", "assignees": []}
+                for i in range((page - 1) * page_size,
+                               min(page * page_size, counts.get(title, 0)))
+            ]}
+            for index, title in enumerate(STAGES, start=1)
+        ])
+
+    return httpx.Client(
+        base_url="http://tracker.invalid/api/v1",
+        transport=httpx.MockTransport(handler),
+        timeout=workspace_cmd._READ_TIMEOUT_SECONDS,
+        event_hooks={"request": [record, *hooks]},
+    )
+
+
+def _workflow_on(client):
+    """The REAL Workflow and the REAL api.py client loop — only the socket is modelled. The
+    swallowing that matters (`_fetch_page_size` eating httpx errors) lives in api.py, so a fake
+    api here would prove nothing about it."""
+    return Workflow(VikunjaAPI("http://tracker.invalid", "t", client=client, max_retries=0), 10)
+
+
+def _read(wf, deadline=None):
+    """PRODUCTION's own read helper — the whole unit the budget covers, arming included. Driven
+    here rather than imitated: the relabelling and the arming are the behaviour under test, and a
+    test-local copy of the read would exercise neither."""
+    return workspace_cmd._read_liveness(wf, deadline)
+
+
+def test_the_liveness_read_costs_one_more_request_per_page_of_a_human_drained_column():
+    """The premise of `_READ_DEADLINE_SECONDS`: the hold is the REQUEST COUNT, and the count is
+    not a constant. `liveness_board` pages Review and (since VMCP-68) Your Call exhaustively —
+    the two columns the pump cannot drain, because a card leaves them only when a human moves it
+    to Done or answers it. So a per-request bound cannot bound the hold: it multiplies.
+
+    Measured against the real tracker at 4 requests / ~1 s; modelled here at 3 s per request so
+    the arithmetic is visible."""
+    clock, sent, attempted = _FakeClock(), [], []
+    wf = _workflow_on(_slow_board_client(clock, 3.0, sent, attempted, review=41, your_call=5))
+    _read(wf)
+    assert len(sent) == 4 and clock.t == pytest.approx(12.0)      # today's board
+
+    for column in ({"review": 140}, {"your_call": 140}):          # EITHER one drives it
+        clock, sent, attempted = _FakeClock(), [], []
+        wf = _workflow_on(_slow_board_client(clock, 3.0, sent, attempted, **column))
+        _read(wf)
+        assert len(sent) == 6, f"{column}: {sent}"
+        assert clock.t == pytest.approx(18.0), f"{column} held the lock {clock.t}s"
+
+
+def test_the_sweep_read_is_bounded_overall_not_only_per_request():
+    """The fix itself, stated as the delta it buys. The SAME read, at the SAME per-request
+    ceiling: unbounded it holds the lock for six times that ceiling, budgeted it stops at the
+    budget and abandons — refusing the next request BEFORE sending it, so the abandon costs
+    nothing more."""
+    per_request = workspace_cmd._READ_TIMEOUT_SECONDS
+    budget = workspace_cmd._READ_DEADLINE_SECONDS
+
+    clock, sent, attempted = _FakeClock(), [], []
+    wf = _workflow_on(_slow_board_client(clock, per_request, sent, attempted, your_call=140))
+    _read(wf)
+    assert len(sent) == 6 and clock.t == pytest.approx(6 * per_request)   # 60s of held lock
+
+    clock, sent, attempted = _FakeClock(), [], []
+    deadline = workspace_cmd._ReadDeadline(budget, now=clock)
+    wf = _workflow_on(_slow_board_client(clock, per_request, sent, attempted,
+                                         your_call=140, hooks=[deadline]))
+    with pytest.raises(ReadDeadlineExceeded):
+        _read(wf, deadline)
+    assert clock.t == pytest.approx(budget)          # the hold IS the budget, not 60s
+    assert len(attempted) == len(sent) + 1           # one refused before it went out
+    assert not any("page=3" in url for url in attempted)
+
+
+def test_a_spent_read_budget_is_not_swallowed_by_the_page_size_fallback():
+    """`api._fetch_page_size` catches `(VikunjaError, httpx.HTTPError)` and falls back to a page
+    size of 50. Were `ReadDeadlineExceeded` an httpx exception, a budget that ran out at `/info`
+    would be EATEN right there and the read would carry on past its own deadline — the bound
+    silently gone on exactly the boards big enough to need it. Being a WorkspaceError, it stops
+    the read where it fires: the tasks endpoint is never even attempted."""
+    clock, sent, attempted = _FakeClock(), [], []
+    deadline = workspace_cmd._ReadDeadline(workspace_cmd._READ_TIMEOUT_SECONDS, now=clock)
+    wf = _workflow_on(_slow_board_client(clock, workspace_cmd._READ_TIMEOUT_SECONDS,
+                                         sent, attempted, hooks=[deadline]))
+    with pytest.raises(ReadDeadlineExceeded):
+        _read(wf, deadline)
+    assert attempted == ["/projects/10/views", "/info"]
+    assert sent == ["/projects/10/views"]
+
+
+def test_the_read_budget_clamps_each_request_to_what_is_left():
+    """Without the clamp the LAST request keeps its own full ceiling, so a read that starts one
+    tick inside the budget overshoots it by a whole `_READ_TIMEOUT_SECONDS` — the bound would be
+    "budget plus a timeout", not the budget. Clamped, the read ends ON the budget.
+
+    And it is reported as the BUDGET, not as the bare `ReadTimeout` the clamp actually raises —
+    the finding that came out of running this end to end (see `_read_liveness`): a sweep that
+    stops exactly on its budget and says "timed out" is indistinguishable from one request timing
+    out, so the operator learns nothing from the line that matters most."""
+    clock, sent, attempted = _FakeClock(), [], []
+    per_request = workspace_cmd._READ_TIMEOUT_SECONDS
+    budget = 2.5 * per_request                     # runs out HALFWAY through the third request
+    deadline = workspace_cmd._ReadDeadline(budget, now=clock)
+    wf = _workflow_on(_slow_board_client(clock, per_request, sent, attempted,
+                                         your_call=140, hooks=[deadline]))
+    with pytest.raises(ReadDeadlineExceeded) as caught:
+        _read(wf, deadline)
+    assert clock.t == pytest.approx(budget)        # not 3 x per_request
+    assert "overall budget" in str(caught.value)
+    assert isinstance(caught.value.__cause__, httpx.ReadTimeout)   # cause kept, not lost
+
+
+def test_a_failure_with_budget_left_is_not_laundered_into_a_deadline():
+    """The other direction of the relabelling, and the reason it keys on `spent()` alone: a read
+    that fails while the budget still has time on it — a 500, a refused connection, a bad token —
+    is NOT the tracker being slow, and calling it that would send an operator hunting latency for
+    a broken token. It must propagate exactly as it is."""
+    clock = _FakeClock()          # never advanced: the budget is untouched when this fails
+    deadline = workspace_cmd._ReadDeadline(workspace_cmd._READ_DEADLINE_SECONDS, now=clock)
+
+    def refuse(request):
+        raise httpx.ConnectError("connection refused", request=request)
+
+    client = httpx.Client(base_url="http://tracker.invalid/api/v1",
+                          transport=httpx.MockTransport(refuse),
+                          event_hooks={"request": [deadline]})
+    with pytest.raises(httpx.ConnectError):
+        _read(_workflow_on(client), deadline)
+
+
+def test_gc_reaps_nothing_when_the_liveness_read_is_abandoned(repo, tracker):
+    """THE invariant, and the one that makes this a latency fix rather than a data-loss bug: an
+    abandoned read must leave every tree alone — including one that is dead, quiet and otherwise
+    perfectly reapable. A partial or failed `alive` set can never reach the reap loop, because
+    the read raises before the loop is entered. Also proves the lock is RELEASED on that path:
+    bounding the hold is pointless if abandoning leaks it."""
+    api, wf = tracker
+    path = Path(ensure_workspace(42, cwd=repo)["path"])          # nothing on the board -> dead
+    _quiesce(path)
+
+    class AbandoningWorkflow:
+        """What the deadline hook looks like from gc's side: the read raises, nothing else runs."""
+
+        def liveness_board(self):
+            raise ReadDeadlineExceeded("the liveness read exceeded its overall budget")
+
+        def active_task_ids(self, board=None):
+            raise AssertionError("a liveness set was computed from an abandoned read")
+
+        review_task_ids = parked_task_ids = active_task_ids
+
+    with pytest.raises(ReadDeadlineExceeded):
+        gc_workspaces(cwd=repo, workflow=AbandoningWorkflow())
+
+    assert path.exists()                                          # KEEP
+    assert _git(repo, "branch", "--list", "task/42").strip()      # and its branch
+    common = Path(_git(repo, "rev-parse", "--git-common-dir"))
+    if not common.is_absolute():
+        common = (repo / common).resolve()
+    with open(common / "vikunja-mcp-worktree.lock", "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)            # free again, not leaked
+        fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def test_gc_arms_the_read_budget_only_once_it_holds_the_lock(repo, tracker, monkeypatch):
+    """The budget bounds the HOLD, and `_repo_lock` BLOCKS. Armed at construction — before the
+    flock — a sweep queued behind another agent's ensure/--release/--gc would spend its budget
+    WAITING, then abandon a read it never got to start: every contended tick failing, forever,
+    having done nothing wrong. Proven the way Important 5 proves the read's placement: the probe
+    for a second, non-blocking flock must FAIL at arming time, i.e. the lock is already held."""
+    api, wf = tracker
+    common = Path(_git(repo, "rev-parse", "--git-common-dir"))
+    if not common.is_absolute():
+        common = (repo / common).resolve()
+    lock_path = common / "vikunja-mcp-worktree.lock"
+    events = []
+
+    class ProbingDeadline:
+        def arm(self):
+            with open(lock_path, "w") as fh:
+                with pytest.raises(BlockingIOError):
+                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            events.append("armed")
+
+    class RecordingWorkflow:
+        def liveness_board(self):
+            events.append("read")
+            return wf.liveness_board()
+
+        def active_task_ids(self, board=None):
+            return wf.active_task_ids(board=board)
+
+        def review_task_ids(self, board=None):
+            return wf.review_task_ids(board=board)
+
+        def parked_task_ids(self, board=None):
+            return wf.parked_task_ids(board=board)
+
+    monkeypatch.setattr(workspace_cmd, "_build_workflow",
+                        lambda root: (RecordingWorkflow(), ProbingDeadline()))
+    gc_workspaces(cwd=repo)                     # workflow=None -> the PRODUCTION path
+    assert events == ["armed", "read"]          # armed under the lock, and before the read
+
+
+def test_the_gc_client_carries_the_read_budget_as_a_request_hook(repo, monkeypatch):
+    """The bound is only real if it is on the client gc actually BUILDS. Pinned here because
+    every other test in this group installs the hook itself, so a `_build_workflow` that quietly
+    stopped attaching it would leave them all green and the production sweep unbounded."""
+    from vikunja_mcp import config as config_mod
+    from vikunja_mcp.workspace_cmd import _build_workflow
+
+    monkeypatch.setattr(config_mod, "load_config", lambda cwd=None, environ=None:
+                        config_mod.Config(url="http://example.invalid", token="t", project_id=7))
+    wf, deadline = _build_workflow(repo)
+
+    assert isinstance(deadline, workspace_cmd._ReadDeadline)
+    assert deadline in wf.api._client.event_hooks["request"]
+    assert deadline.budget == workspace_cmd._READ_DEADLINE_SECONDS
+
+
+def test_an_abandoned_sweep_is_one_json_error_line_the_pump_can_read(monkeypatch, capsys,
+                                                                     tmp_path):
+    """`ReadDeadlineExceeded` is public and unprefixed because the class name IS the CLI's error
+    string. A pump that sees `{"error": "ReadDeadlineExceeded: ..."}` knows the tracker was slow,
+    not that its worktrees are broken — and exit 1 puts it on the path SKILL.md already covers
+    ("--gc не достучался до трекера": degrade the drain, never stop it)."""
+    monkeypatch.chdir(tmp_path)                    # see the hygiene note above
+
+    def boom():
+        raise ReadDeadlineExceeded("the liveness read exceeded its 30s overall budget")
+
+    monkeypatch.setattr("vikunja_mcp.workspace_cmd.gc_workspaces", boom)
+    assert run_workspace(["--gc"]) == 1
+    err = json.loads(capsys.readouterr().out.strip())["error"]
+    assert err.startswith("ReadDeadlineExceeded: ") and "overall budget" in err

@@ -131,9 +131,150 @@ _LOCK_INITIALIZING = "initializing"
 # `advance` at all — this is a backstop, not a promise.
 _REAP_GRACE_SECONDS = 30 * 60
 
+# THE SWEEP-READ BOUNDS (VMCP-72). Two numbers, because gc's liveness read is SEVERAL requests
+# and the lock it holds is repo-wide: `_READ_TIMEOUT_SECONDS` bounds ONE request,
+# `_READ_DEADLINE_SECONDS` bounds the WHOLE read. The per-request bound alone cannot bound the
+# hold, because the request COUNT is not a constant.
+#
+# MEASURED against the real tracker (public https, 3 rounds, read-only, board as VMCP-68 left
+# it): the read is FOUR requests — GET /projects/<p>/views, GET /info, GET
+# /projects/<p>/views/<v>/tasks?page=1, GET /user — totalling 0.89-1.10 s. (`buckets` is NOT in
+# this path; workflow._bucket() is only used for MOVES.) `liveness_board` passes
+# require_titles={Design,Build,Review,"Your Call"}, so paging stops once those buckets stop
+# returning full pages: requests = 3 fixed + floor(max(|Design|,|Build|,|Review|,|Your Call|) /
+# page_size) + 1, where page_size is the server's max_items_per_page (50 here).
+#
+# WHY THAT GROWS. TWO of those four columns are drained by a HUMAN, not by the pump: a card
+# waits in Review until someone moves it to Done, and in Your Call until someone answers it.
+# Review held 41 cards when this was written — nine short of the 50 that adds a page, and it
+# gained one during the session that measured it. So the request count rises by one per 50 cards
+# in EITHER column and has no upper bound, and with it the hold: MEASURED in a lab (a
+# slow-but-correct fake Vikunja at 3 s/request, real httpx + real api.py), today's shape =
+# 4 requests = 12.03 s held; 140 in Review = 6 requests = 18.03 s; 140 in Your Call and an EMPTY
+# Review = 6 requests = 18.04 s, i.e. the newer column drives it exactly as hard. Exactly
+# requests x latency. At the per-request ceiling that is 40 s of held lock today, 60 s at 140
+# cards, unbounded upward. Everything queued behind it — every agent's `--release`, every
+# `ensure` for a dispatch — waits that long, and at wip_limit = 3 those are precisely the agents
+# trying to clean up after themselves.
+#
+# WHY 30 s. It must never fire on a tracker that is merely SLOW (a false abandon costs a skipped
+# sweep), and must be small next to the tick it delays. 30 s is: >= 3x the per-request bound, so
+# a single legitimately slow request is never truncated by the TOTAL; ~26-33x the measured
+# healthy read; enough for 15 requests at a degraded 2 s each (~600 cards in Review) before a
+# working read is abandoned; and 5% of a `/loop 10m` tick. Like `_REAP_GRACE_SECONDS` it is a
+# constant and not a config key — a bound on housekeeping latency, not a per-repo preference.
+#
+# REJECTED, on the measurement above: (a) a CHEAPER liveness query — 3 of the 4 requests are
+# FIXED overhead, so it could at best remove the ONE board page and would still leave the hold
+# proportional to nothing it controls; and none exists anyway, since a task's stage is knowable
+# only from the kanban board (Vikunja 2.3's task JSON carries no per-view bucket) so the
+# alternative is a per-tree get_task — up to 2 x wip_limit requests, MORE than the one it
+# replaces — and since VMCP-68 that one fetch has THREE consumers (active/review/parked), so a
+# cheaper query has to answer all three or the saving is imaginary. (b) ACCEPTING the current
+# bound and documenting the worst case — a worst case that grows by 10 s per 50 cards in a
+# column only a human drains is not a bound. (c) A NON-BLOCKING lock (recorded in the dossier
+# before this task existed) — it bounds how long gc WAITS, and the cost is how long it HOLDS.
+#
+# WHAT IS AND IS NOT BOUNDED. This covers the tracker READ. The rest of the hold is local git,
+# already ceilinged per call by `_GIT_TIMEOUT` and in practice milliseconds per tree; the total
+# hold is therefore (<= 30 s of read) + (local git per tree on disk).
+_READ_TIMEOUT_SECONDS = 10.0
+_READ_DEADLINE_SECONDS = 30.0
+
 
 class WorkspaceError(Exception):
     """The message is printed as the CLI's JSON error line."""
+
+
+class ReadDeadlineExceeded(WorkspaceError):
+    """The sweep's liveness read ran out of its OVERALL budget — reported, nothing reaped.
+
+    A `WorkspaceError` SUBCLASS, and that inheritance is a safety decision, not tidiness. Two
+    layers of api.py would eat this if it were an httpx exception instead:
+      * `_fetch_page_size` catches `(VikunjaError, httpx.HTTPError)` and falls back to a page
+        size of 50 — a spent budget would be SWALLOWED there and the read would carry on past
+        its own deadline;
+      * `_req` retries `httpx.TransportError` on idempotent methods, so with retries ever
+        re-enabled a deadline would be re-attempted rather than obeyed.
+    Being a WorkspaceError, it propagates straight out of the read — before `gc_workspaces`
+    enters its reap loop — and lands on the CLI's own `except Exception` as one JSON error line
+    with exit 1, the same shape a `--gc` that cannot reach the tracker already has (SKILL.md: an
+    erroring `--gc` degrades the pump, it does not stop it). MEASURED end to end through the CLI:
+    exit 1 at 30.26 s on a read that would have taken 36 s, every tree still on disk — including
+    one that was clean, pushed and otherwise due to be reaped — and the very next sweep against a
+    healthy tracker succeeding in 0.74 s, i.e. the abandon released the lock rather than leaking
+    it.
+
+    Public (no leading underscore) on purpose: the class name IS the CLI's error string, and
+    `{"error": "ReadDeadlineExceeded: ..."}` tells a human reading the pump's log that the
+    tracker was too slow, not that the worktrees are broken.
+    """
+
+
+class _ReadDeadline:
+    """An overall budget for gc's liveness read, enforced as an httpx REQUEST event hook.
+
+    Enforced at the hook rather than around the call because the read's cost is spread over
+    several requests inside `liveness_board()`/`active_task_ids()`, and there is no safe way to
+    abandon a call from the outside: a thread that times out does not stop the socket read it is
+    blocked in, so the lock would be released while a request was still in flight.
+
+    Each request does two things:
+      * REFUSE when the budget is spent — raising BEFORE the request is sent, so the abandon
+        costs nothing and, crucially, happens before any liveness set exists to act on;
+      * CLAMP that request's own timeout to what is LEFT, so the last request cannot overshoot
+        the budget by a whole `_READ_TIMEOUT_SECONDS`. `request.extensions["timeout"]` is httpx's
+        documented per-request override and is read by httpcore at send time; MEASURED honoured
+        on httpx 0.28.1 against a slow server — a 10 s budget on a read that needs 18 s returned
+        at 9.96 s, not 12 s.
+    The clamp is why the budget's failure does not always name itself — a clamped request dies as
+    httpx's own `ReadTimeout` — and why `_read_liveness` relabels one that fires with the budget
+    already spent. Read that note before changing either half.
+
+    ARMED EXPLICITLY, by `_read_liveness`, once its caller holds the lock. It is also
+    armed at construction, so a caller that forgets still gets a bounded read rather than an
+    unbounded one; the failure of forgetting is then a budget that started slightly early, never
+    one that never starts. Deliberately NOT disarmed after the board fetch: `active_task_ids()`
+    still issues the `/user` request, and any request a future sweep adds is covered by
+    construction rather than by remembering to extend the window.
+
+    `now` is injectable so the behaviour can be tested without sleeping; the default is
+    `time.monotonic` (a DURATION must not move when NTP steps the wall clock — unlike
+    `_last_activity`, which compares against file mtimes and therefore must use `time.time`).
+    """
+
+    def __init__(self, budget: float, now=time.monotonic) -> None:
+        self.budget = budget
+        self._now = now
+        self.arm()
+
+    def arm(self) -> None:
+        self._expires_at = self._now() + self.budget
+
+    def spent(self) -> bool:
+        """Is the budget gone? Asked by `_read_liveness` to tell the budget's own doing from an
+        unrelated failure that merely happened while it was running."""
+        return self._now() >= self._expires_at
+
+    def __call__(self, request) -> None:
+        remaining = self._expires_at - self._now()
+        if remaining <= 0:
+            raise ReadDeadlineExceeded(
+                f"the liveness read exceeded its {self.budget:.0f}s overall budget at "
+                f"{request.method} {request.url.path} — the sweep was abandoned with the repo "
+                f"lock released and NOTHING inspected or removed; the next tick sweeps again"
+            )
+        # every key explicitly, not just the ones already present: httpx always populates all
+        # four (connect/read/write/pool) from the client's Timeout, but a missing mapping must
+        # clamp rather than silently leave the request unbounded.
+        current = request.extensions.get("timeout") or {}
+        request.extensions = {
+            **request.extensions,
+            "timeout": {
+                key: remaining if current.get(key) is None else min(current[key], remaining)
+                for key in ("connect", "read", "write", "pool")
+            },
+        }
 
 
 def _run_git(
@@ -635,12 +776,18 @@ def _parse_workspace_name(name: str) -> tuple[str, int] | None:
     return _ROLE_BY_PREFIX[match.group(1)], int(match.group(2))
 
 
-def _build_workflow(root: Path):
-    # Review Minor: `cwd=root` (the MAIN worktree — see gc_workspaces) is load-bearing, not
-    # decorative. `.vikunja-mcp.env` (the token) sits BESIDE `.vikunja-mcp.toml` in the repo,
-    # found by config.py's own walk-up from `cwd` — a linked worktree has neither file, so
-    # `load_config()` with no cwd would silently miss them whenever gc runs from inside one
-    # (the normal invocation site per SKILL.md), and fall through to env/user config or raise.
+def _build_workflow(root: Path) -> tuple:
+    """(workflow, deadline) for one sweep. The deadline is returned rather than kept private
+    because only the CALLER knows when the clock should start: it must be armed once the repo
+    lock is HELD (see gc_workspaces), never here — a budget started before the flock would be
+    spent WAITING for it, so every sweep under contention would abandon itself.
+
+    Review Minor: `cwd=root` (the MAIN worktree — see gc_workspaces) is load-bearing, not
+    decorative. `.vikunja-mcp.env` (the token) sits BESIDE `.vikunja-mcp.toml` in the repo,
+    found by config.py's own walk-up from `cwd` — a linked worktree has neither file, so
+    `load_config()` with no cwd would silently miss them whenever gc runs from inside one
+    (the normal invocation site per SKILL.md), and fall through to env/user config or raise.
+    """
     from vikunja_mcp.api import VikunjaAPI
     from vikunja_mcp.config import load_config
     from vikunja_mcp.workflow import Workflow
@@ -660,9 +807,16 @@ def _build_workflow(root: Path):
     # NOT the alternative (take the lock non-blocking, skip the sweep on contention): that
     # bounds how long gc WAITS, and the problem is how long gc HOLDS — it would not shorten
     # the wait of a single `--release` queued behind a hung board read by one second.
-    return Workflow(
-        VikunjaAPI(cfg.url, cfg.token, timeout=10, max_retries=0), cfg.project_id
+    #
+    # VMCP-72: the per-request bound above is NOT the hold. The read is several requests and the
+    # count grows with the board (see `_READ_DEADLINE_SECONDS`), so the deadline hook bounds the
+    # TOTAL — the only one of the two that is invariant to page count.
+    deadline = _ReadDeadline(_READ_DEADLINE_SECONDS)
+    api = VikunjaAPI(
+        cfg.url, cfg.token, timeout=_READ_TIMEOUT_SECONDS, max_retries=0,
+        event_hooks={"request": [deadline]},
     )
+    return Workflow(api, cfg.project_id), deadline
 
 
 # THE GRADING POLICY (VMCP-68), and the two-part shape is the point: expectedness is a property of
@@ -699,6 +853,54 @@ def _keep_is_expected(entry: dict, parked: set[int]) -> bool:
     if code in _EXPECTED_ALWAYS:
         return True
     return code in _EXPECTED_WHEN_PARKED and entry["task_id"] in parked
+
+
+def _read_liveness(wf, deadline) -> tuple[dict, set]:
+    """ONE sweep's entire tracker read — the board plus every set derived from it — bounded as a
+    whole (VMCP-72). Lifted out of `gc_workspaces` because "the thing the budget covers" is a
+    unit worth naming: the budget must not stop at the board fetch, since `active_task_ids` still
+    costs the `/user` request after it.
+
+    ARMED HERE, which is to say once the CALLER holds the lock — never at construction. The
+    budget exists to bound the HOLD and `_repo_lock` BLOCKS: started before the flock it would be
+    spent waiting for another agent's sweep, and every contended tick would abandon a read it
+    never got to start.
+
+    WHY THE RELABELLING, which is the part that came out of running it rather than reasoning
+    about it. The budget can end a read two ways and only one of them names itself: a request
+    REFUSED before it is sent raises `ReadDeadlineExceeded`, but a request the budget CLAMPED
+    mid-flight dies as httpx's own `ReadTimeout`. MEASURED end-to-end through the CLI against a
+    slow tracker (6 s per request, a three-page board): the sweep stopped dead on the budget at
+    30.27 s — correct — and reported `{"error": "ReadTimeout: timed out"}`, which a human cannot
+    tell from ONE request timing out at 10 s. Right behaviour, unreadable report. So a failure
+    raised with the budget already spent is re-raised as what it actually is, keeping the
+    original as its `__cause__` and in its text.
+
+    Narrow on purpose: `deadline.spent()` is the whole condition, so a failure with budget still
+    on the clock — a 500, a refused connection, a bad token — propagates untouched rather than
+    being laundered into "the tracker was slow". EVERY branch here raises or returns; none
+    swallows. That is the KEEP invariant: `gc_workspaces` reaps nothing it has not read.
+    """
+    if deadline is not None:
+        deadline.arm()
+    try:
+        board = wf.liveness_board()
+        alive = {"build": set(wf.active_task_ids(board=board)),
+                 "review": set(wf.review_task_ids(board=board))}
+        # NOT a liveness set (a parked card's tree is dead, deliberately) — it only GRADES the
+        # refusals below, off the same single fetch. See _keep_is_expected.
+        parked = set(wf.parked_task_ids(board=board))
+        return alive, parked
+    except ReadDeadlineExceeded:
+        raise                                       # already says what it is
+    except Exception as exc:                        # noqa: BLE001 — re-raised either way
+        if deadline is None or not deadline.spent():
+            raise
+        raise ReadDeadlineExceeded(
+            f"the liveness read exceeded its {deadline.budget:.0f}s overall budget "
+            f"({exc.__class__.__name__}: {exc}) — the sweep was abandoned with the repo lock "
+            f"released and NOTHING inspected or removed; the next tick sweeps again"
+        ) from exc
 
 
 def gc_workspaces(cwd: Path | None = None, workflow=None) -> dict:
@@ -757,10 +959,21 @@ def gc_workspaces(cwd: Path | None = None, workflow=None) -> dict:
     rewrites a tree's index, so an inspected-and-kept tree looks young on the next tick and is
     skipped — a standing entry (either list) therefore reappears about once per grace window
     rather than every tick.
+
+    VMCP-72: the read under the lock is bounded OVERALL, not just per request
+    (`_READ_DEADLINE_SECONDS`) — its request count grows with the board, so a per-request bound
+    could not bound the hold. Past the budget the read RAISES, here, before a single tree has
+    been inspected: the sweep is skipped whole and the next tick does it again. That direction is
+    the invariant — a truncated or failed `alive` set must never reach the loop below, where a
+    live tree missing from it would read as dead. It applies to the WHOLE read, so VMCP-68's
+    `parked` set — a third consumer of the same fetch, and the one that made "Your Call" drive
+    pagination too — is inside the budget rather than beside it.
     """
     here = repo_root(cwd).resolve()
     root = _main_worktree(here)
-    wf = workflow if workflow is not None else _build_workflow(root)
+    # an injected workflow (tests) brings no client and therefore no deadline — the bound is a
+    # property of the client gc BUILDS, so there is nothing to arm on a caller-supplied one.
+    wf, deadline = (workflow, None) if workflow is not None else _build_workflow(root)
     wt_root = worktree_root(root)
 
     released, kept, expected = [], [], []
@@ -772,13 +985,9 @@ def gc_workspaces(cwd: Path | None = None, workflow=None) -> dict:
         # `ensure_workspace` call serialises against the SWEEP via the same flock, but not
         # against a liveness snapshot taken before the flock was even acquired) — the fresh
         # tree is clean and pushed, so every guard below passes and it is destroyed out from
-        # under a just-dispatched agent. One board fetch serves both sets (Important 4).
-        board = wf.liveness_board()
-        alive = {"build": set(wf.active_task_ids(board=board)),
-                 "review": set(wf.review_task_ids(board=board))}
-        # NOT a liveness set (a parked card's tree is dead, deliberately) — it only GRADES the
-        # refusals below, off the same single fetch. See _keep_is_expected.
-        parked = set(wf.parked_task_ids(board=board))
+        # under a just-dispatched agent. One board fetch serves every set (Important 4), and
+        # VMCP-72 bounds that whole read — arming the budget with the lock already held.
+        alive, parked = _read_liveness(wf, deadline)
         for wt in list_worktrees(root):
             if wt["path"].parent != wt_root:
                 # not ours — skip a hand-made worktree. Review Minor 12a: this guard is NOT
