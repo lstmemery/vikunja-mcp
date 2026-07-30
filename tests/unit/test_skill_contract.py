@@ -218,6 +218,73 @@ def test_the_parallel_drain_rules_cite_real_signals():
         "SKILL.md names wip_limit as the repo-config key but config.py no longer reads that key"
 
 
+def _exclude_completeness_bullet(text: str) -> str:
+    """The bullet that tells the pump what an INCOMPLETE `exclude` costs it (#527).
+
+    Sliced to the bullet rather than matched over the whole file for the reason the sibling
+    slices exist: `exclude` and `wip_saturated` are named a dozen times in this rulebook, so a
+    whole-file substring could not tell "the rule is still stated" from "the words still occur
+    somewhere". Deleting this bullet must fail the pin even though every word in it survives
+    elsewhere."""
+    start = text.find("\n- **Полнота `exclude`")
+    assert start != -1, \
+        "SKILL.md no longer tells the pump what an incomplete `exclude` costs it (#527)"
+    end = text.find("\n- **", start + 1)
+    assert end != -1, "the exclude-completeness bullet no longer ends where the next one begins"
+    bullet = text[start:end]
+    assert 0 < len(bullet) < len(text), "the exclude-completeness slice is not a proper subset"
+    return bullet
+
+
+def test_the_rulebook_says_wip_saturated_needs_a_complete_exclude_and_the_code_agrees():
+    """#527: the rule and the code property it describes, pinned together so they cannot drift
+    apart in either direction.
+
+    The gap this closes was observed live: the same board in the same minute answers
+    wip_saturated:true to a complete `exclude` and a resume at free:0 — with no wip_saturated key
+    at all — to an incomplete one, because branch 1 (your active tasks) returns before the slot
+    guard. SKILL.md justified `exclude` ONLY as double-dispatch avoidance, so a pump that had
+    lost its in-flight set was reading a payload the rulebook did not explain.
+
+    Three things are pinned as INSTRUCTIONS, not as vocabulary — each assertion names the action
+    or the claim, so deleting a sentence while leaving its keywords in the bullet still fails:
+    (a) saturation is conditional on a complete `exclude`, (b) the imperative for the confusing
+    state — check your own set, not the board, (c) the order is deliberate and stays. (c) matters
+    most: without it the next reader files this as a bug, and "fixing" it would make
+    `vikunja-mcp claimable` — which passes NO exclude — report "no work" on a board holding
+    resumable work, silently idling every hub loop that trusts it.
+
+    The behavioural half drives the real Workflow to both outcomes, so a future reordering of
+    next_task's branches fails HERE too, not only in some distant hub."""
+    bullet = _exclude_completeness_bullet(_skill_text())
+    assert "ТОЛЬКО если `exclude` полон" in bullet, \
+        "SKILL.md no longer says wip_saturated requires a COMPLETE exclude"
+    assert "проверяй СВОЙ `exclude`, а не доску" in bullet, \
+        "SKILL.md no longer tells the pump where to look when a resume arrives at free:0"
+    assert "порядок ветвей НЕ трогаем" in bullet, \
+        "SKILL.md no longer says the branch order is deliberate — the next reader will 'fix' it"
+    assert "vikunja-mcp claimable" in bullet, \
+        "SKILL.md no longer names the contract that the branch order protects"
+
+    api = FakeAPI(buckets=workflow.STAGES)
+    wf = workflow.Workflow(api, project_id=3, wip_limit=2)
+    held = [api.add_task(t, "Queue") for t in ("first", "second")]
+    for task in held:
+        wf.claim(task["id"])
+    api.add_task("free work nobody can take", "Queue")
+
+    complete = wf.next_task(exclude=[t["id"] for t in held])
+    assert complete["task"] is None and complete["wip_saturated"] is True, \
+        "a COMPLETE exclude no longer produces the saturation signal the rulebook promises"
+
+    incomplete = wf.next_task(exclude=[held[0]["id"]])
+    assert incomplete["task"] is not None and incomplete["resume"] is True
+    assert incomplete["wip"]["free"] == 0
+    assert "wip_saturated" not in incomplete, \
+        "saturation became reachable with an incomplete exclude — SKILL.md's rule is now wrong, " \
+        "and `vikunja-mcp claimable` (empty exclude) may no longer report resumable work"
+
+
 def test_the_integration_recipe_pushes_to_the_main_branch_and_names_gc():
     """Under the parallel drain a per-task agent sits in its own worktree on a THROWAWAY task/<id>
     branch, so a bare `git push` pushes that branch and leaves the main branch — and therefore the

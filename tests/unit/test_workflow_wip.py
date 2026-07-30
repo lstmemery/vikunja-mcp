@@ -139,6 +139,36 @@ def test_empty_exclude_still_hands_back_the_active_task():
     assert res["resume"] is True and res["task"]["id"] == held["id"]
 
 
+def test_a_resume_at_zero_free_slots_tells_the_pump_to_check_its_exclude():
+    """#527: the ONE state where a resume is ambiguous, answered in the payload the pump is
+    actually reading at that moment.
+
+    free == 0 with a resume means the caller holds every slot AND did not name one of those
+    tasks in `exclude` — either an honest crash-recovery tick (no live agent, dispatch) or an
+    incomplete set (a live agent is already there, and dispatching again is the double-dispatch
+    `exclude` exists to prevent). The board cannot tell those apart; only the caller can, so the
+    note sends it to its OWN set rather than to the board. Pinned as the INSTRUCTION, not the
+    word: the assertion names the action the note must demand."""
+    api, wf = _env(wip_limit=1)
+    _hold(api, wf, "in flight")
+    res = wf.next_task()
+    assert res["resume"] is True and res["wip"]["free"] == 0
+    assert "wip_saturated" not in res
+    assert "check your exclude, not the board" in res["note"]
+    assert "do NOT dispatch a second agent onto it" in res["note"]
+
+
+def test_the_zero_slot_note_stays_off_the_ordinary_resume():
+    """The clause is conditional on purpose: at free > 0 nothing is ambiguous (saturation was
+    never on offer), so the common resume keeps its note unchanged. Without this the rule would
+    be noise on every tick — the argument that made it worth adding at all."""
+    api, wf = _env(wip_limit=2)
+    _hold(api, wf, "in flight")
+    res = wf.next_task()
+    assert res["resume"] is True and res["wip"]["free"] > 0
+    assert "exclude" not in res["note"]
+
+
 def test_saturation_does_not_suppress_a_review_offer():
     """Background review is not 'your active task' and consumes no slot (SKILL.md rule)."""
     api, wf = _env(wip_limit=1)
@@ -446,14 +476,25 @@ def test_the_resume_note_discloses_an_over_budget_board():
 
 def test_the_resume_note_says_nothing_extra_at_or_below_the_limit():
     """The no-noise half of that decision, and the half a reviewer should distrust most: the
-    common case must be byte-for-byte the old note. Drop the `if wip["active"] > limit` guard
-    (append unconditionally) and this goes red while the test above stays green."""
+    over-budget clause must be absent whenever active <= limit. Drop the
+    `if wip["active"] > limit` guard (append unconditionally) and this goes red while the test
+    above stays green — that is the property, and it is asserted on BOTH envs.
+
+    #527 narrowed the "byte-for-byte the old note" form this test used to take. The exactly-full
+    env below sits at free == 0, and that state now appends its OWN clause (saturation is only
+    reported once `exclude` is complete — see
+    test_a_resume_at_zero_free_slots_tells_the_pump_to_check_its_exclude). The two clauses are
+    independent and both correct there: "you are over budget" and "you are at zero free slots"
+    answer different questions. So the byte-identical check stays where it is still the truth —
+    the under-limit env, which has a free slot and therefore no clause of either kind."""
     api, wf = _env(wip_limit=3)
     _hold(api, wf, "just one")
     at_limit = _env(wip_limit=1)
     _hold(*at_limit, "exactly full")
 
     for wf_under in (wf, at_limit[1]):
-        note = wf_under.next_task()["note"]
-        assert note.endswith("continue from where it left off"), note
-        assert "against a limit of" not in note
+        assert "against a limit of" not in wf_under.next_task()["note"]
+
+    under_note = wf.next_task()["note"]
+    assert wf.next_task()["wip"]["free"] > 0, "precondition: this env is genuinely under-limit"
+    assert under_note.endswith("continue from where it left off"), under_note

@@ -532,6 +532,30 @@ class Workflow:
                     f"clears when it reaches Review. Don't 'fix' the board and don't "
                     f"call_human about it"
                 )
+            if wip["free"] == 0:
+                # #527: THIS branch returns before the free == 0 slot guard below, so a caller
+                # whose `exclude` misses even one in-flight task gets a resume here and never
+                # sees wip_saturated — the same board in the same minute answers
+                # wip_saturated:true to a complete exclude and "your active task" at free:0 to an
+                # incomplete one. That order is DELIBERATE and stays: `vikunja-mcp claimable`
+                # calls next_task with an EMPTY exclude, and free == 0 implies
+                # len(mine) >= limit >= 1, so the guard is structurally unreachable there — which
+                # is exactly what keeps the hub's CLOSED seven-kind enum whole (see
+                # claimable_cmd.classify_next: a saturated payload would classify as "empty" and
+                # idle every hub loop on a board that still has resumable work). So the fix is
+                # not to move the guard but to say HERE what the pump is looking at — the payload
+                # is what it reads at the moment of confusion, and a rule in a file it loaded
+                # hours ago is weaker. Conditional on free == 0 so the common resume (a free slot,
+                # nothing surprising) keeps a byte-identical note.
+                note += (
+                    ". NOTE: wip.free == 0 AND a resume, with no wip_saturated — saturation is "
+                    "only reported once `exclude` names every task you already have a live agent "
+                    "on, because your active tasks are offered BEFORE the slot check. So check "
+                    "your exclude, not the board: if an agent IS live on this task your exclude "
+                    "is incomplete — add this id and call next_task again (that is how the "
+                    "saturation signal appears), and do NOT dispatch a second agent onto it. If "
+                    "no agent is live on it, this is the ordinary crash-recovery resume"
+                )
             return with_wip({
                 "resume": True, "stage": stage, "task": self._summary(task),
                 "note": note,

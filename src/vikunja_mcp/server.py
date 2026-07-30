@@ -319,7 +319,10 @@ def next_task(exclude: list[int] | None = None) -> dict:
     they are not handed back and dispatched twice. They still occupy their WIP slot. Every
     result carries wip: {active, limit, free} — limit and free are always numbers, never null.
     free == 0 comes back as task:null PLUS wip_saturated:true — that means WAIT for an agent to
-    return, NOT that the queue is empty.
+    return, NOT that the queue is empty. But that signal exists only once `exclude` is COMPLETE:
+    your own active tasks are offered (branch 1) BEFORE the slot check, so an unexpected resume
+    at free:0 with no wip_saturated means your exclude is short, not that the board changed —
+    check your exclude, not the board (the resume's own note says so at the moment it happens).
     """
     return _wf().next_task(exclude=exclude)
 
