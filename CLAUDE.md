@@ -23,7 +23,7 @@ guardrails for agents; the real security boundary is the scoped API token.
 
 ```bash
 uv sync                                   # env (Python 3.11+, uv)
-uv run pytest tests/unit -q               # 528 unit tests (FakeAPI, MockTransport)
+uv run pytest tests/unit -q               # 500+ unit tests (FakeAPI, MockTransport)
 uv run ruff check .                       # lint (line-length 100)
 uv run vikunja-mcp --version              # smoke
 uv run vikunja-mcp claimable              # one JSON line: is there claimable work for this
@@ -177,6 +177,19 @@ create_project, enforces delete-only-empty buckets, monotonic comment
 `created`). Integration tests hit a real container and exist to catch what
 the fake can't: permission scopes, pagination shape, relation shapes,
 `/login` rate limit (10/60s — conftest retries 429).
+
+**The unit count above is a FLOOR (`500+`), and must stay one — never re-pin it
+to an exact figure.** Its only job is a tripwire: a mistyped path makes `pytest`
+select NOTHING and print "no tests ran", which looks very much like a pass. A
+floor catches that and survives every landing; an exact count is stale by
+construction here (at `wip_limit = 3` up to three worktrees land tests
+concurrently — the pinned number was wrong twice in one day, 69 → 520 → 528, and
+had drifted again to 529 by the time card 555 removed it). It is also an
+attractive nuisance in a repo that verifies by running: **capture your own count
+from your own run — a figure read out of this file was only ever true at the sha
+that wrote it.** Touch the floor only if the suite ever shrinks below it, which
+is itself worth noticing. Where a figure genuinely needs precision, DATE it
+instead — as the release section does with its landings-per-day snapshot.
 
 ## Releases: the `stable` channel
 
