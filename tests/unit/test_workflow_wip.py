@@ -498,3 +498,94 @@ def test_the_resume_note_says_nothing_extra_at_or_below_the_limit():
     under_note = wf.next_task()["note"]
     assert wf.next_task()["wip"]["free"] > 0, "precondition: this env is genuinely under-limit"
     assert under_note.endswith("continue from where it left off"), under_note
+
+
+# --- the free == 0 note is the base plus the ENUMERATED clauses, and nothing else (VMCP-106) ---
+#
+# Why literals live here. #529 pinned the resume note byte-exact on BOTH envs
+# (`endswith("continue from where it left off")`), and at the exactly-full env that doubled as a
+# no-noise-at-all guarantee: nothing may be appended at free == 0. #527 legitimately appends its
+# own clause exactly there, so the endswith had to move to the under-limit env — and the narrower
+# "and nothing ELSE is appended at free == 0" went with it. Measured, not argued (VMCP-106): in
+# that state a third, unconditional clause added to workflow.py's free == 0 branch passed the
+# whole suite, 582 tests, exit 0.
+#
+# The restored pin is a DIFFERENTIAL, and its two sides come from deliberately different places:
+#   left  — the note workflow.py actually produces at free == 0;
+#   right — the note an UNDER-LIMIT env produces (the one state that appends nothing, so it is the
+#           bare base) + the clause text below, which this test file OWNS.
+# That is what lets the sides disagree: a clause the code grows shows up on the left only. Lifting
+# the clauses into constants in workflow.py and importing them here would put both sides on one
+# source and pin nothing — a clause written INTO an existing constant would move both sides
+# together and stay green. Counting clauses by splitting on the ". NOTE" marker was rejected for
+# the same reason in reverse: it pins a naming convention the code never promised, and the probe
+# above used a different marker, so it would have slipped straight through.
+#
+# The base is READ from the other env rather than copied so that a wording change to the shared
+# prose stays a one-file edit. An UNCONDITIONAL clause cannot hide inside it: _clause_free_base
+# re-asserts the base's byte-exact tail before handing it over, so a clause appended on every
+# resume moves the base's ending and fails there instead.
+
+_BASE_TAIL = "continue from where it left off"
+
+_ZERO_FREE_CLAUSE = (
+    ". NOTE: wip.free == 0 AND a resume, with no wip_saturated — saturation is only reported "
+    "once `exclude` names every task you already have a live agent on, because your active "
+    "tasks are offered BEFORE the slot check. So check your exclude, not the board: if an agent "
+    "IS live on this task your exclude is incomplete — add this id and call next_task again "
+    "(that is how the saturation signal appears), and do NOT dispatch a second agent onto it. "
+    "If no agent is live on it, this is the ordinary crash-recovery resume"
+)
+
+# spelled with the numbers the over-budget env below actually reaches (4 active, limit 3): the
+# clause interpolates them, and pinning the rendered form keeps the breadcrumb honest here too.
+_OVER_BUDGET_CLAUSE_4_OF_3 = (
+    ". NOTE — you hold 4 active tasks against a limit of 3: that is legitimate, NOT board "
+    "corruption. The limit gates claim(); a card bounced back by review_task(verdict='needs_work') "
+    "or moved out of Your Call by a human re-enters Build without passing it, and rework outranks "
+    "a fresh claim. Drain the rework — the overshoot clears when it reaches Review. Don't 'fix' "
+    "the board and don't call_human about it"
+)
+
+
+def _clause_free_base() -> str:
+    """The resume note in the ONE state that appends nothing: under the limit, a slot free.
+
+    This is the right-hand side's base, and it is fetched from a SEPARATE env on purpose — see the
+    block comment above. The endswith is the anchor that keeps the differential honest."""
+    api, wf = _env(wip_limit=3)
+    _hold(api, wf, "just one")
+    res = wf.next_task()
+    assert res["wip"]["free"] > 0, "precondition: this env must append no clause at all"
+    assert res["note"].endswith(_BASE_TAIL), res["note"]
+    return res["note"]
+
+
+def test_the_exactly_full_resume_note_is_the_base_plus_527s_clause_and_nothing_else():
+    """At free == 0 and active == limit exactly ONE clause is justified — #527's "check your
+    exclude, not the board". Equality, not `in`: this is the assertion that goes red when a third
+    clause is appended there, which is the coverage VMCP-106 was filed to restore. The `wip`
+    check first is not decoration — it proves the env really is the exactly-full one, so a
+    refactor that quietly moved this env under the limit could not turn the test into a
+    restatement of the base."""
+    api, wf = _env(wip_limit=1)
+    _hold(api, wf, "exactly full")
+    res = wf.next_task()
+    assert res["wip"] == {"active": 1, "limit": 1, "free": 0}
+    assert res["note"] == _clause_free_base() + _ZERO_FREE_CLAUSE, res["note"]
+
+
+def test_the_over_budget_resume_note_is_the_base_plus_both_clauses_in_that_order():
+    """The other half of free == 0, where BOTH clauses are legitimate — and the only test that
+    says which comes first. Order carries meaning: the over-budget disclosure explains the state
+    the pump is in, the exclude clause tells it what to do about the resume it just got, so the
+    diagnosis precedes the instruction. Substring assertions (the three in
+    test_the_resume_note_discloses_an_over_budget_board) cannot see order and cannot see a fourth
+    clause; this can."""
+    api, wf = _env(wip_limit=3)
+    _bounce_to_over_budget(api, wf, 3)
+    res = wf.next_task()
+    assert res["wip"] == {"active": 4, "limit": 3, "free": 0}
+    assert res["note"] == (
+        _clause_free_base() + _OVER_BUDGET_CLAUSE_4_OF_3 + _ZERO_FREE_CLAUSE
+    ), res["note"]
