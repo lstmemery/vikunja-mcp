@@ -504,21 +504,36 @@ def _serving_lengths(handler, sink):
     is the exact failure that produced that prose; this makes it fail loudly instead.
 
     KEEP BOTH CALL SITES EVEN THOUGH ONE LOOKS REDUNDANT — the two sweeps differ, and only a
-    mutation shows how. Each generator widened to over-serve, applied alone, __pycache__ cleared,
-    that sweep run alone:
+    mutation shows how. Each generator widened to over-serve, applied ALONE, __pycache__ cleared,
+    then run at the scope each row names (a "sole guard" claim is about the SUITE, so those rows
+    were measured by running the whole suite, not the one sweep):
 
-      `_short_non_final_pages`: n = randint(1, page_size + 3)   -> RED here, and GREEN with this
-                                                                  assert removed. Nothing else in
-                                                                  the suite sees it (582 measured
-                                                                  the same over 300 rounds).
-      `_offset_pages`: window cut at page_size + 3, and at + 1   -> RED here, and STILL RED with
+      `_short_non_final_pages`: n = randint(1, page_size + 3)   -> WHOLE SUITE 1 failed/628 passed
+                                                                  with this assert, and 629 passed
+                                                                  — fully GREEN — without it. So
+                                                                  nothing else in the suite sees it
+                                                                  (582 measured the same over 300
+                                                                  rounds).
+      `_offset_pages`, EVERY page cut at page_size + 3 (and +1)  -> RED here, and STILL RED with
                                                                   this assert removed — that sweep's
-                                                                  own equality assert happens to
-                                                                  catch it on these seeds.
+                                                                  own equality assert catches it on
+                                                                  these seeds.
+      `_offset_pages`, PAGE 1 ONLY cut at page_size + 3          -> WHOLE SUITE 1 failed/628 passed
+                                                                  with this assert, and 629 passed
+                                                                  without it. The FLUKE-LONG FIRST
+                                                                  PAGE this card's fixtures are
+                                                                  built on — and on it this assert
+                                                                  is the SOLE guard in the suite.
 
-    So on `_offset_pages` this is not the only guard; it is the one that fires FIRST, names the
-    cause instead of an inscrutable data mismatch, and is a property of the SCOPE rather than of an
-    outcome that another seed could hide."""
+    So "not the only guard on `_offset_pages`" holds for ONE widening and FAILS for the other — do
+    not generalise from the middle row to the sweep. Which widening is the LIKELIER one was not
+    measured and is not claimed: no live endpoint probed has the page-1-only shape (2.3.0's
+    /projects over-serves on EVERY page, by a constant tail), so that row is the card's fixture
+    shape rather than a field-observed one. On the middle row this assert is also the guard that
+    fires FIRST and names the cause instead of an inscrutable data mismatch; on the other two there
+    is nothing to fire before it. Throughout, it keys on the SCOPE rather than on an outcome another
+    seed could hide. (Suite counts are 2026-07-31 snapshots; totals move whenever anyone adds a
+    test.)"""
     def wrapped(request):
         response = handler(request)
         for bucket in response.json():
@@ -780,12 +795,19 @@ def test_the_degraded_read_never_loses_a_task_the_healthy_read_saw():
     by construction: its 'could still be full' test uses the longest page the server has PROVEN it
     can serve, which is <= the real page size". Every clause of that is true and the conclusion
     does not follow: the bound is <= the REAL page size, while the healthy reader uses the STATED
-    one, and VMCP-124 (603) MEASURED a real 2.3.0 serving 10 and 11 rows against a stated 5. Where
-    stated < served the healthy bar is the LOWER one, so the degraded read is the STRICTER of the
-    two and is a strict SUBSET — measured on 582's fixture, 2 requests and Build[1..8] against 4
-    and Build[1..11]. On that same server the healthy read truncates too, one repeat-window length
-    later, so it is the shared inference that breaks and not this branch; the api.py note above
-    `_page_size` carries the w-table and why neither bar is changed."""
+    one, and VMCP-124 (603) MEASURED /projects on a 2.3.0 instance serving pages of 8 against a
+    stated 5, over-serving WHILE paging honestly (and .../buckets serving 63). Where stated < served the
+    HEALTHY bar is the LOWER one, so the degraded read is the STRICTER of the two and a strict
+    SUBSET — measured on 582's fixture, 2 requests and Build[1..8] against 4 and Build[1..11].
+
+    AND THE HEALTHY READ IS NOT THE SAFE ONE EITHER — WHICH IS WHY CHANGING ONLY THE DEGRADED BAR
+    FIXES NOTHING REAL. The
+    control: page 1 serving EXACTLY the stated 5, nothing over-serving anywhere, and the healthy
+    read still loses the tail for every repeat window shorter than 5. Between that run and the
+    over-serving one the healthy loss band was the SAME (w < stated); what over-serving moved was
+    the DEGRADED bar, and so only the degraded band. It is the shared inference that breaks, not
+    this branch; the api.py note above `_page_size` carries the w-table, that control, and the
+    separate reasons neither bar moves."""
     rng = random.Random(20260730)
     checked = 0
     for _ in range(60):
@@ -911,11 +933,11 @@ def test_the_healthy_read_never_loses_a_task_a_server_serves_short():
     NUMBER only while no page exceeds the stated size, which every page here does by construction
     (`n <= page_size - 1`) and the `assert max(served_lengths) <= page_size` below keeps true. Let
     a page overshoot the stated size and the two /info states compute DIFFERENT bars — the healthy
-    one min(stated, longest), the degraded one longest — and the equality asserted here is simply
-    false: 582's two constructed tests at the end of this file are that case, and widening this
-    generator is NOT how to reach it (measured there: 300 rounds with overshoot allowed, 300/300
-    still identical, because `_short_non_final_pages` never repeats a window and
-    `added_new_required` carries every read whatever the bar says)."""
+    one min(stated, longest), the degraded one longest — so the equality asserted here stops being
+    GUARANTEED. Overshoot alone did NOT break it over 300 rounds of this generator (582 measured
+    that): `_short_non_final_pages` never repeats a window, so `added_new_required` carries every
+    read whatever the bar says. Reaching the divergence took 582's two constructed shapes at the
+    end of this file — so widening this generator is not how to get there."""
     rng = random.Random(20260731)
     checked = 0
     for _ in range(60):

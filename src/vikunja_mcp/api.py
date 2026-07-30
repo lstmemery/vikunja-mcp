@@ -205,6 +205,16 @@ class VikunjaAPI:
     #     GET /projects/{id}/views           -> ALL 10 rows, ?page= IGNORED
     #     GET /projects/{id}/views/{v}/buckets -> ALL 11 rows, ?page= IGNORED
     #
+    # Those row counts are that instance's CONTENT, not endpoint constants — VMCP-124 (603)
+    # measured 4 views and 63 buckets on another 2.3.0 container also stating
+    # max_items_per_page=5. It also measured /projects
+    # OVER-SERVING on this same version: the one user measured had BOTH saved filters and a
+    # favourite, and got 3 pseudo rows that are not counted against the page size, so at
+    # max_items_per_page=5 every page carrying a full window of real rows carried 8 while the real
+    # ids paged honestly (the last page with real rows carried 7). "Over-serves" and "ignores `?page=`" are therefore INDEPENDENT
+    # properties of an endpoint, not two names for one set — see the note above `_page_size` for
+    # what that costs the degraded read.
+    #
     # The four that paginate all fail in the WORSE direction — absence, which every caller acts
     # on. MEASURED end to end: `setup_cmd.reconcile` looks a project up by title over
     # `projects()`, so an EXISTING project past the window reads as missing and reconcile CREATES
@@ -566,17 +576,34 @@ class VikunjaAPI:
     #
     # VMCP-124 (603) — AND THAT IS EXACTLY AS FAR AS THE ARGUMENT REACHES. It compares L against
     # the REAL size S, while the HEALTHY reader uses the size /info STATED, and those are the same
-    # number only while the server never serves more than it states. It does: MEASURED on a real
-    # 2.3.0 with max_items_per_page=5, GET /projects/{id}/views serves TEN rows and .../buckets
-    # ELEVEN — the same self-description unreliability `_total_pages` documents, in the size field.
-    # Where stated < served the healthy bar min(stated, L) is LOWER than the degraded bar L, so the
-    # DEGRADED read is the stricter one and stops sooner: a strict SUBSET, the opposite of the
-    # direction this paragraph was long read as promising "by construction". MEASURED (/info states
-    # 5, page 1 serves 8, page 3 holds 9..11, page 2 a repeat window of w tasks): the degraded read
-    # loses 9,10,11 for every w < 8 — and THE HEALTHY READ LOSES THEM TOO for every w < 5. Both
-    # bars spell one and the same inference, "a required page shorter than the bar means that
-    # bucket is exhausted", so an over-serving server breaks BOTH; the healthy/degraded gap is a
-    # symptom of that, not a defect of the degraded branch.
+    # number only while the server never serves more than it states. It does not always: on a 2.3.0
+    # container stating max_items_per_page=5, MEASURED 2026-07-31, TWO of the five list reads
+    # exercised there handed back pages LONGER than 5 — /projects at 8 rows and .../buckets at 63 —
+    # the same self-description unreliability `_total_pages` documents, in the size field. Every
+    # row count in this block is that INSTANCE's content on that date and not an endpoint constant:
+    # that container served only 4 views, and 63 buckets because 63 buckets had been created.
+    # Where stated < served the healthy bar min(stated, L) is LOWER than the
+    # degraded bar L, so the DEGRADED read is the stricter one and stops sooner: a strict SUBSET,
+    # the opposite of the direction this paragraph was long read as promising "by construction".
+    # MEASURED (/info states 5, page 1 serves 8, page 3 holds 9..11, page 2 a repeat window of w
+    # tasks): the degraded read loses 9,10,11 for every w < 8 — and THE HEALTHY READ LOSES THEM TOO
+    # for every w < 5. The flat reader mirrors it.
+    #
+    # BUT OVER-SERVING IS NOT WHAT BREAKS THE HEALTHY READ, AND THE CONTROL IS WHAT SAYS SO. Run
+    # the same shape with page 1 serving EXACTLY the stated 5 — nothing over-serving anywhere — and
+    # the healthy read still loses 6,7,8 for every w < 5, and the flat reader loses its tail the
+    # same way. Both losses above have the same trigger: a NON-FINAL page short of THAT reader's
+    # own bar which leaves the read nothing to continue on — no over-serving needed. Between those
+    # two runs the only thing over-serving moved was the DEGRADED bar (5 -> 8) and hence the
+    # degraded loss band (w < 5 -> w < 8); the healthy band was w < 5, the stated size, in both.
+    # (Only stated = 5 was run, so read "w < stated" as the shape of the result, not as a swept
+    # parameter.)
+    # So both bars spell one and the same inference — "a required page shorter than the bar means
+    # that bucket is exhausted" — and it is that SHARED inference that is unsound; the trigger for
+    # it does not require over-serving at all. The healthy/degraded gap is a symptom of that, not a
+    # defect of the degraded branch. (This comment used to say "an over-serving server breaks
+    # BOTH". That is TRUE of the run it was based on — what the control adds is that over-serving
+    # is not NECESSARY, so the sentence was right as an observation and wrong as a cause.)
     #
     # NOT fixed here, and the reason is this file's own history. With /info down `stated` could be
     # any size >= 1, so the only degraded bar that restores the superset for EVERY server is "never
@@ -584,19 +611,87 @@ class VikunjaAPI:
     # it the way 103 exists to have removed: strictly more robust with /info DOWN than with it up
     # (on w < 5 above, a 0/1 degraded read returns the whole board while the healthy one truncates).
     # Making BOTH bars 0/1 is sound and is the only fix that is, but it is a design change rather
-    # than a correction: it costs +1 request on every flat read (the honest last partial page ends
-    # the read today and would end it no longer), it turns a required bucket that repeats a
-    # non-empty window while any other bucket produces into a `_MAX_UNPROVEN_PAGES` RAISE instead
-    # of a board, and it deletes the stated operand VMCP-111 spent a card pinning. Tracked as
-    # VMCP-127 (608), which carries the full w-table and the four costs to measure first.
+    # than a correction. Its request cost is NOT the "+1 on every flat read" this comment used to
+    # claim: MEASURED with `_could_be_full` forced to 1 over five honest shapes at a stated size of
+    # 5, it is +1 on TWO of them and +0 on three — 7 rows in pages 5+2 with a total-pages header of
+    # 2 goes from 2 requests to 3, the same 7 rows with NO header goes 2 -> 3, while 10 rows in
+    # 5+5, 20 rows in four full pages and 3 rows in one partial page all stay put. Across those
+    # five the +1 lands where the last page carrying NEW rows is PARTIAL and is not page 1. Two
+    # things that rule does NOT license, both measured rather than reasoned:
+    #   * it is not a licence to call the change free on this client's real reads. LIVE /labels
+    #     is a +1 case, not a +0 one: it served 22 rows as 5,5,5,5,2 (and later 66 as 5x13,1), so
+    #     it goes 5 -> 6 requests (and 14 -> 15). An earlier draft of this note cited "20 rows in
+    #     four full pages" AS the live /labels shape; that shape is +0, but /labels never served
+    #     it — the partial last page is exactly what /labels has.
+    #   * the fullness bar is not the only stop, so a partial non-first page does not always cost.
+    #     `added_new` ends a read whatever the bar says, which is why the `?page=`-ignoring
+    #     endpoints are +0: views() at 4 rows and buckets() at 63 both stay at 2 requests, though
+    #     page 2 is partial-and-not-page-1 by the letter of the rule. Only reads that stop ON THE
+    #     FULLNESS BAR can pay the +1.
+    # A read ending on a FULL page is stopped by the empty page after it either way, and on page 1
+    # `longest_served` is still 0, so the shipped reader already pays that request. It
+    # also turns a required bucket that repeats a non-empty window while any other bucket produces
+    # into a `_MAX_UNPROVEN_PAGES` RAISE instead of a board, and it deletes the stated operand
+    # VMCP-111 spent a card pinning. Tracked as VMCP-127 (608), which carries the full w-table and
+    # the four costs to measure first.
     #
-    # THE TRIGGER IS DOUBLY UNOBSERVED, which is why that card is not urgent. Loss needs
-    # over-serving AND a later short NON-FINAL page in the SAME read (`longest_page` is a per-call
-    # local, so the 10 and the 11 above never leak into another read). The endpoints that over-serve
-    # are precisely the ones that IGNORE `?page=`, so their next page is a pure repeat that ends the
-    # read on `added_new` — MEASURED through this client against that container, /info up and /info
-    # down both return 10 views and 11 buckets in 4 requests, identically — and a short non-final
-    # page could not be produced on 2.3.0 at all (see "HONEST ABOUT THE TRIGGER" below).
+    # HOW CLOSE IS THE TRIGGER? CLOSER THAN "UNOBSERVED", AND THE REASON THIS COMMENT USED TO GIVE
+    # IS MEASURED FALSE. "The trigger" here means specifically the DIVERGENCE this card is named
+    # after — the degraded read losing a row the healthy read saw — which is narrower than
+    # truncation as such (the control above truncates the healthy read with no over-serving at
+    # all). That divergence needs over-serving AND a later page SHORT of the degraded bar with rows
+    # still behind it, in the SAME read (`longest_page` is a per-call local, so one endpoint's long
+    # page never leaks into another read). The claim here was that the endpoints which over-serve are
+    # PRECISELY the ones that ignore `?page=`, so their next page is always a pure repeat that ends
+    # the read on `added_new`. That is false, and the counter-example is this client's own reconcile
+    # read. On the container above (2026-07-31, stated size 5) with 34 projects, 2 saved filters and
+    # a favourite, Vikunja appends the pseudo-projects AFTER the SQL limit:
+    #
+    #     GET /projects?page=1..6 -> 8 rows each (5 real + a CONSTANT 3-row pseudo tail), the real
+    #                                ids ADVANCING 1-5, 6-10 … 26-30; total-pages 7
+    #     GET /projects?page=7    -> 7 rows (4 real, 31-34, + the tail)
+    #     GET /projects?page=8    -> 3 rows (the tail alone)
+    #
+    # So it over-serves its own stated size on every page that carries a full window of real rows,
+    # WHILE paging honestly, and the next page is not a repeat. Through this client against that container, /info up vs /info down:
+    #
+    #     projects()   34 rows /  8 req  vs  34 rows /  7 req    <- the ONLY one that differs
+    #     labels()     66 rows / 14 req  vs  66 rows / 14 req
+    #     views()       4 rows /  2 req  vs   4 rows /  2 req
+    #     buckets()    63 rows /  2 req  vs  63 rows /  2 req
+    #     view_tasks() 37 tasks / 9 req  vs  37 tasks / 9 req
+    #
+    # The row counts there are the container's CONTENT and drifted between two runs of the probe
+    # (labels was 22 rows / 5 req and view_tasks 13 tasks / 4 req before it was topped up); what
+    # did NOT drift, in either run, is which reader disagrees across the two /info states — only
+    # `projects()`. The degraded read really does stop a page earlier on a real endpoint, by
+    # exactly this bar (page 7 serves 7 < the degraded bar 8, while the healthy bar min(5,8)=5
+    # lets it read on).
+    #
+    # NOTHING IS LOST THERE, and the reason has to be named precisely because it is not the reason
+    # given above. On this shape the pseudo tail is a CONSTANT 3 rows, so the page short of the bar
+    # is the LAST one carrying real rows — the read is over anyway. The header is NOT what saves it
+    # here (it says 7 of 7, i.e. it agrees the read is done); what saves it is that there is
+    # nothing behind the short page. Move that page off the end and the loss appears — CONSTRUCTED
+    # over this exact shape (5 real + 3 pseudo per page, page 3 serving only 2 real, page 4 still
+    # holding 13-17): with the header present both reads return all 17 rows in 5 requests, but with
+    # the header ABSENT the degraded read returns 1..12 in 3 requests while the healthy one still
+    # returns all 17. So on that constructed shape it is `x-pagination-total-pages` — reporting a
+    # page PAST the short one — that keeps the degraded read whole. Which is a thin thread to hang
+    # on: it is the same header `_total_pages` documents as measured WRONG in both directions on
+    # this very version, on other endpoints.
+    #
+    # WHAT WAS TRIED AND DID NOT PRODUCE THE LOSS on 2.3.0, recorded so nobody redoes it:
+    # permission-filtered /labels and /projects for a second user (for the ONE filtered user
+    # measured, row count and total-pages both described the FILTERED set — labels an EMPTY page 1
+    # at 0 pages, projects 1 row at 1 page — so no short non-final page appeared);
+    # 63 buckets, to see whether that endpoint caps internally and would carry a short page later
+    # (no cap appeared at 63 — 63 rows on page 1 and the identical 63 on page 2); and the
+    # NESTED endpoint itself, whose per-bucket windows never EXCEEDED the stated 5 in either probe
+    # run (5,5,3,0 with 13 tasks in the bucket, 5,5,5,5 with 37), so it does not over-serve and
+    # those long flat pages cannot leak in. A short
+    # non-final page could not be produced on the kanban tasks endpoint at all (see "HONEST ABOUT
+    # THE TRIGGER" below).
     #
     # VMCP-103 — AND THAT WAS ONLY HALF THE JOB: THE DEGRADED READ WAS LEFT STRICTLY MORE ROBUST
     # THAN THE HEALTHY ONE. The two rules were never symmetric — "len >= S" IMPLIES "len >= L", so
