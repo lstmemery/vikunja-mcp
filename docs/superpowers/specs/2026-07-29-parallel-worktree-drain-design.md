@@ -69,7 +69,8 @@ No git here. This layer only counts slots.
 
 ```toml
 [tracker]
-wip_limit = 3                                # 0/absent = today's behavior; 1 = enforce_single_wip
+wip_limit = 3                                # absent = today's behavior; 1 = enforce_single_wip
+                                             # (< 1 is a ConfigError, see below — not "no limit")
 worktree_root = "../vikunja-mcp.worktrees"   # optional
 ```
 
@@ -280,7 +281,7 @@ refuses to delete unpushed work. After `advance(to='review')` the agent calls
 | Not a git repo / no `origin` / git missing | `{"error": …}`, exit 1. The orchestrator does **not** kill the loop — it falls back to one slot in the main checkout, i.e. exactly today's behavior. |
 | `--release` refuses (dirty/unpushed) | The worktree stays; `--gc` reports it on the next tick so a human can see it. |
 | Rebase conflict | The agent resolves it, or `call_human`. Never force-push, never `--skip`. |
-| Push rejected repeatedly (>3 rounds) | `call_human`; the task stays in Build with its worktree intact. |
+| Push rejected repeatedly (>3 rounds) | `call_human`; the card parks in **Your Call**, so the worktree reads DEAD to `--gc` — what keeps it is the unpushed work in it, not the stage. Cleaned up before asking (`rebase --abort`), it is clean and pushed and will be reaped mid-question; the agent re-runs `workspace <id>` after the human answers. |
 | Per-task agent crashes | The task stays active, its worktree keeps the work, and `workspace <id>` returns that same tree to the resume agent. Strictly better than today, where the diff sat in the shared checkout. |
 | No free slots *and* the free queue is gated | `wip_saturated` wins and is reported alone. `starving` describes a chain that cannot start; with zero slots that is not the actionable fact, and computing it would cost a board escalation for nothing. |
 

@@ -5,12 +5,15 @@ matters: that housekeeping can never destroy an agent's unpushed work.
 """
 import fcntl
 import json
+import os
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
 
 from tests.unit.fakes import FakeAPI
+from vikunja_mcp import workspace_cmd
 from vikunja_mcp.config import ENV_WORKTREE_ROOT
 from vikunja_mcp.workflow import STAGES, Workflow
 from vikunja_mcp.workspace_cmd import (
@@ -606,3 +609,245 @@ def test_gc_reaps_a_build_tree_once_its_task_reaches_review(repo, tracker):
 
     assert [r["task_id"] for r in res["released"]] == [task["id"]]
     assert not path.exists()
+
+
+# --- final whole-branch review, Critical 1: a reused review tree must never be silently stale ---
+
+def _poisoned_review_tree(repo):
+    """Build the state that triggers Critical 1 and that this module deliberately preserves: a
+    review tree pinned at sha1 that holds a commit made INSIDE it (reviewer's notes), which
+    `--release` refuses to remove (unreachable from any ref) and `--gc` cannot reap either — so
+    `review-<id>` lives on. Then the author fixes the code and pushes sha2. Returns
+    (tree path, the tree's actual HEAD, sha2)."""
+    review = ensure_workspace(7, role="review", at=_git(repo, "rev-parse", "HEAD"), cwd=repo)
+    path = Path(review["path"])
+    (path / "notes.md").write_text("nit: rename this\n")
+    _git(path, "add", "notes.md")
+    _git(path, "commit", "-m", "review notes")
+    pinned = _git(path, "rev-parse", "HEAD")
+
+    (repo / "README.md").write_text("v2 FIXED\n")          # the fix the round-2 reviewer wants
+    _git(repo, "add", "README.md")
+    _git(repo, "commit", "-m", "fix")
+    _git(repo, "push", "origin", "main")
+    return path, pinned, _git(repo, "rev-parse", "HEAD")
+
+
+def test_review_reuse_reports_the_head_it_is_actually_pinned_at(repo):
+    """Half one of Critical 1: the reuse payload was missing the "head" key the CREATED payload
+    carries, so nothing in the response could ever reveal where the tree really sits. A caller
+    that gets what it asked for must still be told, in the same shape, what it got."""
+    head = _git(repo, "rev-parse", "HEAD")
+    first = ensure_workspace(7, role="review", at=head, cwd=repo)
+    again = ensure_workspace(7, role="review", at=head, cwd=repo)     # same sha -> plain reuse
+    assert again["created"] is False
+    assert again["head"] == first["head"] == head
+    assert _git(Path(again["path"]), "rev-parse", "HEAD") == again["head"]   # not a stale echo
+
+
+def test_review_reuse_at_a_different_sha_is_refused_not_silently_stale(repo):
+    """Half two, and THE finding: round 2 of a review asked for the fix's sha, silently got a
+    tree still pinned at the PRE-FIX code, and cast a verdict on it. Refuse — and prove the
+    refusal did not become the new destruction path: the unreleasable in-tree commit must still
+    be there afterwards, object and all."""
+    path, pinned, sha2 = _poisoned_review_tree(repo)
+    assert pinned != sha2
+
+    with pytest.raises(WorkspaceError, match="pinned at"):
+        ensure_workspace(7, role="review", at=sha2, cwd=repo)
+
+    assert _git(path, "rev-parse", "HEAD") == pinned          # HEAD not re-pointed
+    _git(repo, "cat-file", "-e", f"{pinned}^{{commit}}")      # the commit object still exists
+    assert (path / "notes.md").exists()
+    assert (path / "README.md").read_text() == "hi\n"         # still the old tree, but refused
+
+
+def test_review_reuse_without_at_still_reports_head_and_does_not_refuse(repo):
+    """The bound of the refusal: no --at means "wherever it is is fine" (a resume dispatch that
+    doesn't restate the sha), so reuse must succeed — while still naming the head."""
+    path, pinned, _sha2 = _poisoned_review_tree(repo)
+    again = ensure_workspace(7, role="review", cwd=repo)
+    assert again["created"] is False and again["head"] == pinned
+    assert Path(again["path"]) == path
+
+
+def test_build_reuse_is_unaffected_by_the_review_refusal(repo):
+    """A build tree is reused by BRANCH, and --at is rejected for it at the CLI (Minor 7): the
+    new review-only branch must not leak into the build path."""
+    ensure_workspace(42, cwd=repo)
+    again = ensure_workspace(42, cwd=repo)
+    assert again["created"] is False and again["branch"] == "task/42"
+    assert "head" not in again                     # review-only key, same as the created payload
+
+
+# --- final whole-branch review, Important 2: no git call may block forever under the lock ---
+
+def test_git_calls_do_not_inherit_a_blocking_stdin(repo, monkeypatch):
+    """`git hash-object --stdin` genuinely READS stdin: with the DEVNULL redirect it sees EOF
+    and returns the empty-blob hash instantly; inheriting a never-written pipe (what a terminal
+    looks like to a subprocess) it blocks — and every git call here can be holding the repo-wide
+    flock while it does. _GIT_TIMEOUT is dropped to 5s so that removing the redirect FAILS this
+    test in seconds instead of hanging the suite."""
+    monkeypatch.setattr(workspace_cmd, "_GIT_TIMEOUT", 5.0)
+    expected = subprocess.run(["git", "hash-object", "--stdin"], cwd=repo, input="",
+                              capture_output=True, text=True, check=True).stdout.strip()
+    read_fd, write_fd = os.pipe()                  # nothing is ever written to it
+    saved_stdin = os.dup(0)
+    try:
+        os.dup2(read_fd, 0)
+        out = workspace_cmd._git("hash-object", "--stdin", cwd=repo)
+    finally:
+        os.dup2(saved_stdin, 0)
+        for fd in (saved_stdin, read_fd, write_fd):
+            os.close(fd)
+    assert out == expected
+
+
+def test_git_runs_with_terminal_prompts_disabled_and_keeps_the_callers_transport(repo, tmp_path):
+    """An https remote with no credential helper prompts on the terminal and waits forever.
+    Proven by making git launch a stand-in for ssh that dumps the environment git handed it —
+    which also pins the other half: a GIT_SSH_COMMAND the CALLER set must survive untouched (an
+    injected BatchMode default would override a configured `core.sshCommand` identity)."""
+    dump = tmp_path / "git-env.txt"
+    fake_ssh = tmp_path / "fake-ssh.sh"
+    fake_ssh.write_text(f'#!/bin/sh\nenv > "{dump}"\nexit 1\n')
+    fake_ssh.chmod(0o755)
+    os.environ["GIT_SSH_COMMAND"] = str(fake_ssh)
+    _git(repo, "remote", "set-url", "origin", "ssh://git@127.0.0.1/nowhere.git")
+    try:
+        with pytest.raises(WorkspaceError, match="failed"):
+            workspace_cmd._git("fetch", "origin", cwd=repo)
+    finally:
+        del os.environ["GIT_SSH_COMMAND"]
+
+    seen = dict(
+        line.split("=", 1) for line in dump.read_text().splitlines() if "=" in line
+    )
+    assert seen["GIT_TERMINAL_PROMPT"] == "0"
+    assert seen["GIT_SSH_COMMAND"] == str(fake_ssh)
+
+
+def test_the_fetch_under_the_lock_times_out_instead_of_wedging_it_forever(
+    repo, tmp_path, monkeypatch
+):
+    """`git fetch origin` runs INSIDE _repo_lock, before the idempotency early-return, and is
+    the one call that can hang on something off this machine — an ssh host-key question read
+    straight off /dev/tty (which neither GIT_TERMINAL_PROMPT nor a DEVNULL stdin can reach), a
+    black-holed TCP connection. It must END, as the WorkspaceError the CLI and gc's per-tree
+    handler already report. Driven through the REAL entry point, so it also pins that the fetch
+    call site takes the tight NETWORK bound and not the 600s local ceiling: a stand-in for ssh
+    sleeps 30s, so a call site on the wrong constant fails this on the elapsed time."""
+    slow_ssh = tmp_path / "slow-ssh.sh"
+    slow_ssh.write_text("#!/bin/sh\nsleep 30\n")
+    slow_ssh.chmod(0o755)
+    monkeypatch.setenv("GIT_SSH_COMMAND", str(slow_ssh))
+    monkeypatch.setattr(workspace_cmd, "_GIT_NET_TIMEOUT", 2.0)
+    _git(repo, "remote", "set-url", "origin", "ssh://git@127.0.0.1/nowhere.git")
+
+    started = time.monotonic()
+    with pytest.raises(WorkspaceError, match="fetch origin timed out after 2s"):
+        ensure_workspace(42, cwd=repo)
+    assert time.monotonic() - started < 15        # not the 30s sleep, not the 600s ceiling
+
+
+def test_a_local_git_call_keeps_the_generous_ceiling(repo):
+    """The other direction of the two-bound split: killing a `worktree add` mid-checkout is
+    destructive (git registers a "locked / initializing" entry BEFORE checking out, which
+    `prune` will not drop and `_find` hands back as `created: false`), so local calls must NOT
+    inherit the network bound — a big checkout on a slow disk is slow, not hung."""
+    assert workspace_cmd._GIT_TIMEOUT >= 600
+    assert workspace_cmd._GIT_NET_TIMEOUT < workspace_cmd._GIT_TIMEOUT
+    ensure_workspace(42, cwd=repo)                # the real create path still works end to end
+
+
+# --- final whole-branch review, Important 3: the board read under the lock must be bounded ---
+
+def test_gc_builds_a_tracker_client_that_cannot_hold_the_lock_for_minutes(repo, monkeypatch):
+    """gc reads the board INSIDE the repo lock (Important 5 put it there on purpose). With
+    api.py's defaults an unreachable tracker costs 30s x 4 attempts + backoff ~= 2 minutes of
+    held lock per request, and every agent's `--release` queues behind it. Pin the bound where
+    it is set, since no unit test can make a real tracker hang."""
+    from vikunja_mcp import config as config_mod
+    from vikunja_mcp.workspace_cmd import _build_workflow
+
+    monkeypatch.setattr(config_mod, "load_config", lambda cwd=None, environ=None:
+                        config_mod.Config(url="http://example.invalid", token="t", project_id=7))
+    wf = _build_workflow(repo)
+
+    assert wf.api._MAX_RETRIES == 0                       # no backoff sleeps under the lock
+    timeout = wf.api._client.timeout
+    assert max(timeout.connect, timeout.read, timeout.write, timeout.pool) <= 10
+
+
+def test_the_default_api_client_is_untouched_by_the_gc_bound():
+    """The other direction: the short timeout is for gc ALONE. The MCP server's own client —
+    which is not holding any lock and does want the transient retries — must keep the 30s
+    default and its 3 retries."""
+    from vikunja_mcp.api import VikunjaAPI
+
+    api = VikunjaAPI("https://t.example", "tk")
+    assert api._MAX_RETRIES == 3
+    assert api._client.timeout.read == 30
+
+
+# --- final whole-branch review, Minor 7: silently ignored argument combinations ---
+
+@pytest.mark.parametrize("argv, needle", [
+    (["42", "--release", "9"], "already names the task"),   # acted on 9, dropped 42, exit 0
+    (["--release", "9", "--at", "deadbee"], "--at is for creating"),
+    (["--gc", "--role", "review"], "sweeps both roles"),
+    (["--gc", "--at", "deadbee"], "sweeps both roles"),
+    (["42", "--at", "deadbee"], "only to --role review"),   # --help says review-only; it wasn't
+])
+def test_run_workspace_refuses_silently_ignored_argument_combinations(
+    argv, needle, monkeypatch, capsys, tmp_path
+):
+    """Same class as the `--gc` + task id combination that WAS rejected: argparse accepts all of
+    these and one argument is quietly dropped. On a CLI a pump drives unattended, a dropped
+    `--at` is how a reviewer ends up reading a revision nobody asked for."""
+    monkeypatch.chdir(tmp_path)
+    calls = []
+    for name in ("gc_workspaces", "release_workspace", "ensure_workspace"):
+        monkeypatch.setattr(f"vikunja_mcp.workspace_cmd.{name}",
+                            lambda *a, **k: calls.append(a))
+    code = run_workspace(argv)
+    assert code == 1
+    assert not calls                                  # refused BEFORE acting on either argument
+    assert needle in json.loads(capsys.readouterr().out.strip())["error"]
+
+
+def test_run_workspace_still_accepts_the_legitimate_combinations(repo, monkeypatch, capsys):
+    """The guards must not overshoot: `--release <id> --role review` (the reviewer's own
+    cleanup, where --role is MANDATORY) and a bare `<id> --role review --at <sha>` stay legal."""
+    monkeypatch.chdir(repo)
+    head = _git(repo, "rev-parse", "HEAD")
+    assert run_workspace(["7", "--role", "review", "--at", head]) == 0
+    capsys.readouterr()
+    assert run_workspace(["--release", "7", "--role", "review"]) == 0
+    assert json.loads(capsys.readouterr().out.strip())["released"] is True
+
+
+def test_argparse_own_errors_still_exit_rather_than_print_json(monkeypatch, tmp_path):
+    """Minor 10: `except SystemExit: raise` was dead code (SystemExit is a BaseException, so the
+    `except Exception` below never caught it). Removing it changes nothing — pinned here so the
+    next reader does not have to re-derive that."""
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit):
+        run_workspace(["42", "--role", "bogus"])
+
+
+# --- final whole-branch review, Minor 9: a broken config must surface, not relocate trees ---
+
+def test_a_malformed_repo_toml_is_not_swallowed_into_the_default_root(repo):
+    """`except Exception` around load_config treated "this toml is broken" exactly like "there
+    is no tracker config here" — and silently put the tree in the default sibling directory,
+    where a `worktree_root` the human meant to configure would never be looked for again."""
+    (repo / ".vikunja-mcp.toml").write_text("[tracker\nurl = 'oops'\n")
+    with pytest.raises(Exception, match="[Ee]xpected"):        # tomllib.TOMLDecodeError
+        worktree_root(repo)
+
+
+def test_a_repo_with_no_tracker_config_still_falls_back_silently(repo):
+    """The other direction, and the reason the try/except exists at all: create and release need
+    no tracker config whatsoever, so ConfigError alone must stay swallowed."""
+    assert worktree_root(repo) == repo.parent / "work.worktrees"

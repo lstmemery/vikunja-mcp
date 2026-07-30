@@ -17,6 +17,7 @@ Housekeeping must never be how an agent's work disappears.
 import argparse
 import fcntl
 import json
+import os
 import re
 import subprocess
 from contextlib import contextmanager
@@ -28,13 +29,58 @@ BUILD_BRANCH = "task/{task_id}"
 _NAME_RE = re.compile(r"^(task|review)-(\d+)$")
 _ROLE_BY_PREFIX = {"task": "build", "review": "review"}
 
+# Review Important 2: EVERY git call in this module can run while `_repo_lock` is HELD (the
+# network one — `git fetch origin` in _ensure_locked — provably does, before the idempotency
+# early-return), so a call that blocks forever does not merely hang ITS caller: it wedges every
+# other agent's ensure/--release/--gc on this repo, permanently, with no diagnostic. The things
+# that block forever are closed here, in the ONE helper, so no call site can forget:
+#   * an https credential prompt (no helper configured) -> GIT_TERMINAL_PROMPT=0;
+#   * anything reading the inherited stdin -> stdin=DEVNULL, which is EOF and never a wait;
+#   * an ssh host-key/passphrase prompt (ssh reads /dev/tty DIRECTLY, so neither of the two
+#     above touches it) and a black-holed TCP connection -> the timeout below, the only
+#     backstop that also covers what we cannot name in advance. Deliberately NOT closed by
+#     exporting GIT_SSH_COMMAND="ssh -o BatchMode=yes": that env var OVERRIDES the user's
+#     `core.sshCommand`, so injecting it would silently discard a configured identity
+#     (`ssh -i ~/.ssh/id_rsa_…`, exactly how some of our own boxes are reached) and break
+#     fetch outright for setups that work today — a new failure traded for a bounded stall.
+# TWO bounds, because a timeout is itself a kill and the two kinds of call differ in what a kill
+# COSTS. The network one (`fetch`) is the only call that can hang on something outside this
+# machine, and killing it costs nothing — a half-fetched pack is discarded — so it gets the tight
+# bound: 120s, an eternity for an incremental fetch on an already-cloned repo, and short enough
+# that a wedged one frees the lock well inside an orchestrator tick instead of stacking ticks.
+# Everything else is local disk and can only be SLOW, never hung on a peer — but killing a
+# `worktree add` mid-checkout is destructive in a quiet way: git registers the admin dir with a
+# "locked / initializing" marker BEFORE checking out, so a kill leaves an entry that `prune`
+# refuses to drop and `_find` happily hands back as `created: false` — an agent dispatched into a
+# half-populated tree. So local calls get a ceiling that exists only to catch a genuine hang
+# (600s), never to police a big checkout on a slow disk.
+_GIT_TIMEOUT = 600.0
+_GIT_NET_TIMEOUT = 120.0
+
 
 class WorkspaceError(Exception):
     """The message is printed as the CLI's JSON error line."""
 
 
-def _git(*args: str, cwd: Path | None = None) -> str:
-    proc = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+def _run_git(
+    args: tuple[str, ...], cwd: Path | None, timeout: float | None
+) -> subprocess.CompletedProcess:
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    limit = _GIT_TIMEOUT if timeout is None else timeout
+    try:
+        return subprocess.run(
+            ["git", *args], cwd=cwd, capture_output=True, text=True,
+            stdin=subprocess.DEVNULL, env=env, timeout=limit,
+        )
+    except subprocess.TimeoutExpired:
+        # convert here rather than let TimeoutExpired escape: the module's whole error
+        # vocabulary is WorkspaceError (the CLI prints it, gc's per-tree handler reports it),
+        # and "git … timed out" is the one message that names the actual failure.
+        raise WorkspaceError(f"git {' '.join(args)} timed out after {limit:.0f}s") from None
+
+
+def _git(*args: str, cwd: Path | None = None, timeout: float | None = None) -> str:
+    proc = _run_git(args, cwd, timeout)
     if proc.returncode != 0:
         detail = proc.stderr.strip() or proc.stdout.strip()
         raise WorkspaceError(f"git {' '.join(args)} failed: {detail}")
@@ -42,7 +88,7 @@ def _git(*args: str, cwd: Path | None = None) -> str:
 
 
 def _git_ok(*args: str, cwd: Path | None = None) -> bool:
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True).returncode == 0
+    return _run_git(args, cwd, None).returncode == 0
 
 
 def repo_root(cwd: Path | None = None) -> Path:
@@ -71,9 +117,7 @@ def worktree_root(root: Path) -> Path:
     `root` is canonicalised to the MAIN worktree first (see `_main_worktree`) so create,
     release and gc can never disagree about where trees live just because one of them happened
     to be invoked from inside a linked tree."""
-    import os
-
-    from vikunja_mcp.config import ENV_WORKTREE_ROOT, load_config
+    from vikunja_mcp.config import ENV_WORKTREE_ROOT, ConfigError, load_config
 
     root = _main_worktree(root)
     # env FIRST, on purpose: create/release need no tracker config at all, and load_config
@@ -83,7 +127,13 @@ def worktree_root(root: Path) -> Path:
     if not configured:
         try:
             configured = load_config(cwd=root).worktree_root
-        except Exception:  # noqa: BLE001 — no tracker config is fine; create/release need none
+        except ConfigError:
+            # ConfigError ONLY (review Minor 9): "this repo has no tracker config" is the
+            # expected, fine case — create/release need none. A blanket `except Exception`
+            # also swallowed the genuinely broken ones (malformed toml -> TOMLDecodeError,
+            # an unreadable file -> OSError) and silently relocated every tree to the default
+            # sibling directory, so a typo'd worktree_root would strand a live tree somewhere
+            # the next `--release`/`--gc` no longer looks. Those must surface, not be guessed at.
             configured = None
     if configured:
         # .resolve() ALWAYS, even when `configured` is already absolute: `_find` compares
@@ -138,7 +188,15 @@ def list_worktrees(root: Path) -> list[dict]:
         if key == "worktree":
             if current:
                 entries.append(current)
-            current = {"path": Path(value), "branch": None, "detached": False}
+            current = {"path": Path(value), "branch": None, "detached": False, "head": None}
+        elif key == "HEAD" and current is not None:
+            # the checked-out COMMIT sha, same meaning as ensure_workspace's "head" (never the
+            # "detached" BOOL below — one key, one meaning, per round 1's Finding 4). Taken from
+            # the porcelain rather than a `rev-parse HEAD` with cwd=<tree>, on purpose: a
+            # worktree whose directory is gone but which `prune` cannot drop (git refuses to
+            # prune a LOCKED entry) is still listed here with its HEAD, while running git with
+            # cwd inside it raises a bare FileNotFoundError that _git cannot convert.
+            current["head"] = value
         elif key == "branch" and current is not None:
             # removeprefix, NOT rsplit("/") — refs/heads/task/42 must stay "task/42"
             current["branch"] = value.removeprefix("refs/heads/")
@@ -169,17 +227,47 @@ def _check_role(role: str) -> None:
 def _ensure_locked(root: Path, task_id: int, role: str, at: str | None) -> dict:
     _check_role(role)
     _git("worktree", "prune", cwd=root)
-    _git("fetch", "origin", cwd=root)
+    # the ONE network call in this module, and it runs with the repo lock already held — hence
+    # the tight bound rather than the local ceiling (see _GIT_NET_TIMEOUT)
+    _git("fetch", "origin", cwd=root, timeout=_GIT_NET_TIMEOUT)
     wt_root = worktree_root(root)
     wt_root.mkdir(parents=True, exist_ok=True)
     base = f"origin/{default_base(root)}"
 
     existing = _find(root, task_id, role)
     if existing is not None:
-        return {
+        payload = {
             "role": role, "task_id": task_id, "path": str(existing["path"]),
             "branch": existing["branch"], "created": False,
         }
+        if role == "review":
+            # Review Critical 1 — the only bug on this branch that produced a WRONG VERDICT
+            # rather than noise. This early-return fires before the role branch below, so `at`
+            # used to be discarded in silence AND the payload carried no "head" (the created
+            # one does): round 2 of a review asked for the fix's sha, got a tree still pinned
+            # at the PRE-FIX sha, and nothing in the response said so — the reviewer read the
+            # old code and approved it. The trigger is a state this module deliberately
+            # preserves: a reviewer that commits notes inside its detached tree can never
+            # release it (the reachability guard below refuses, correctly) and --gc cannot reap
+            # it either, so review-<id> persists and poisons every later round for that task.
+            #
+            # REFUSE, never re-point: moving a detached HEAD (`checkout --detach <at>`) is
+            # itself a destruction path — it would orphan exactly the in-tree commit the
+            # reachability guard exists to protect. "push OK -> remove, push FAIL -> KEEP"
+            # says housekeeping must never be how work disappears; the same holds for setup.
+            payload["head"] = existing["head"]
+            # `at^{commit}` and not a bare `at`: rev-parse ECHOES BACK a full 40-hex sha with
+            # exit 0 without checking the object exists, so a bare comparison would silently
+            # pass on garbage; the peel also makes an annotated tag comparable to a commit sha.
+            if at is not None and _git("rev-parse", f"{at}^{{commit}}", cwd=root) != (
+                existing["head"]
+            ):
+                raise WorkspaceError(
+                    f"review tree for task {task_id} is pinned at {existing['head']} but --at "
+                    f"asked for {at} — release it first ({existing['path']}); if --release "
+                    f"refuses, it holds an in-tree commit that only a human should resolve"
+                )
+        return payload
 
     name = (BUILD_NAME if role == "build" else REVIEW_NAME).format(task_id=task_id)
     path = wt_root / name
@@ -311,7 +399,23 @@ def _build_workflow(root: Path):
     from vikunja_mcp.workflow import Workflow
 
     cfg = load_config(cwd=root)
-    return Workflow(VikunjaAPI(cfg.url, cfg.token), cfg.project_id)
+    # Review Important 3: BOUND the read, because it happens INSIDE the repo lock (Important 5
+    # put it there deliberately, to close the race where a tree created between the read and the
+    # reap is destroyed under a just-dispatched agent — do not move it back out). With api.py's
+    # defaults an unreachable tracker costs 30s x 4 attempts + backoff ~= 2 MINUTES of held
+    # lock per request, and everything queued behind it — every agent's `--release` — waits;
+    # at wip_limit = 2 those are precisely the agents trying to clean up after themselves.
+    #   * timeout 10s: generous for a JSON API that normally answers in tens of ms, and a
+    #     black hole (the pathological case) now costs 10s of lock, not 120s.
+    #   * no retries: this is HOUSEKEEPING on a loop. A transient 429/5xx costs one skipped
+    #     sweep and the next tick retries anyway — sleeping through a backoff while holding a
+    #     lock other agents need is strictly worse than trying again in ten minutes.
+    # NOT the alternative (take the lock non-blocking, skip the sweep on contention): that
+    # bounds how long gc WAITS, and the problem is how long gc HOLDS — it would not shorten
+    # the wait of a single `--release` queued behind a hung board read by one second.
+    return Workflow(
+        VikunjaAPI(cfg.url, cfg.token, timeout=10, max_retries=0), cfg.project_id
+    )
 
 
 def gc_workspaces(cwd: Path | None = None, workflow=None) -> dict:
@@ -366,7 +470,20 @@ def gc_workspaces(cwd: Path | None = None, workflow=None) -> dict:
                  "review": set(wf.review_task_ids(board=board))}
         for wt in list_worktrees(root):
             if wt["path"].parent != wt_root:
-                continue                       # not ours — never touch a hand-made worktree
+                # not ours — skip a hand-made worktree. Review Minor 12a: this guard is NOT
+                # what protects that worktree, and a future refactor must not believe it is.
+                # Constructed and measured: with this line deleted, a hand-made `task-77`
+                # worktree outside the root is STILL untouched — `_release_locked` re-derives
+                # the canonical path from `worktree_root` and never trusts the enumerated one,
+                # so it simply finds nothing there (`released: []`, `kept: [77] "no worktree
+                # for this task"`, tree and branch intact). Re-measured on this wave: all 59
+                # workspace tests stay green with the guard deleted, so nothing here pins it —
+                # the comment IS the pin. What the guard actually buys is the ABSENCE of that
+                # bogus `kept` entry — real value (the `kept` signal discipline in SKILL.md
+                # depends on it staying quiet), but not
+                # safety. Let `_release_locked` trust the enumerated path and this line becomes
+                # load-bearing overnight, silently.
+                continue
             parsed = _parse_workspace_name(wt["path"].name)
             if parsed is None:
                 continue                       # under our root but not task-<id>/review-<id>
@@ -408,28 +525,48 @@ def gc_workspaces(cwd: Path | None = None, workflow=None) -> dict:
 def run_workspace(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="vikunja-mcp workspace")
     parser.add_argument("task_id", nargs="?", type=int, help="create a workspace for this task")
-    parser.add_argument("--role", choices=("build", "review"), default="build")
+    # default=None, NOT "build": every guard below has to answer "did the caller ASK for a
+    # role?", and an eager default makes that unanswerable — `--gc --role review` would be
+    # indistinguishable from a plain `--gc`. The default is applied once, just below.
+    parser.add_argument("--role", choices=("build", "review"), default=None)
     parser.add_argument("--at", help="review role: the ref to check out (default origin/<main>)")
     parser.add_argument("--release", type=int, metavar="TASK_ID")
     parser.add_argument("--gc", action="store_true",
                          help="reap worktrees whose task is no longer alive on the board")
     try:
         args = parser.parse_args(argv)
+        role = args.role or "build"
+        # Review Important 6 + Minor 7: argparse lets every one of these combinations through,
+        # and each USED to be accepted with one of the arguments silently dropped — `42
+        # --release 9` acted on 9 and forgot 42; `--gc --at <sha>` swept anyway; `42 --at <sha>`
+        # (no --role review) ignored the sha even though --help says it is review-only. A
+        # silently ignored argument on a CLI a pump drives unattended is how a reviewer ends up
+        # somewhere it never asked to be. Refuse instead; the caller can always say it again.
         if args.gc:
-            # Review Important 6: argparse alone allows `42 --gc` and `--release 9 --gc`
-            # through — an explicit refusal beats a --gc branch that silently wins and
-            # ignores the other argument the caller plainly meant to act on.
             if args.task_id is not None or args.release is not None:
                 raise WorkspaceError("--gc cannot be combined with a task id or --release")
+            if args.role is not None or args.at is not None:
+                raise WorkspaceError("--gc takes no --role/--at: it sweeps both roles, at no ref")
             result = gc_workspaces()
         elif args.release is not None:
-            result = release_workspace(args.release, role=args.role)
+            if args.task_id is not None:
+                raise WorkspaceError(
+                    f"--release {args.release} already names the task — drop the positional "
+                    f"{args.task_id}, or drop --release to CREATE a workspace for it"
+                )
+            if args.at is not None:
+                raise WorkspaceError("--at is for creating a review tree, not for --release")
+            result = release_workspace(args.release, role=role)
         elif args.task_id is not None:
-            result = ensure_workspace(args.task_id, role=args.role, at=args.at)
+            if args.at is not None and role != "review":
+                raise WorkspaceError("--at applies only to --role review")
+            result = ensure_workspace(args.task_id, role=role, at=args.at)
         else:
             raise WorkspaceError("give a task id to create, or --release <task id>")
-    except SystemExit:
-        raise
+    # NO `except SystemExit: raise` here (review Minor 10): SystemExit derives from
+    # BaseException, so the `except Exception` below never caught it in the first place —
+    # argparse's own exits (`--role bogus`, `--help`) pass straight through either way. The
+    # clause read as load-bearing and was not.
     except Exception as e:      # noqa: BLE001 — a CLI: ANY failure is one JSON line + exit 1
         print(json.dumps({"error": f"{e.__class__.__name__}: {e}"}))
         return 1

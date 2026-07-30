@@ -43,12 +43,22 @@ def canonical_base_url(base_url: str) -> str:
 
 
 class VikunjaAPI:
-    def __init__(self, base_url: str, token: str, client: httpx.Client | None = None):
+    def __init__(
+        self, base_url: str, token: str, client: httpx.Client | None = None,
+        *, timeout: float = 30, max_retries: int | None = None,
+    ):
+        """`timeout`/`max_retries` exist for ONE caller: `workspace --gc`, whose board read
+        happens while it holds the repo-wide worktree flock (see workspace_cmd._build_workflow).
+        Everything else keeps the defaults. `timeout` is ignored when `client` is supplied — the
+        caller then owns the whole client (tests pass a MockTransport one)."""
         self._client = client or httpx.Client(
             base_url=canonical_base_url(base_url),
             headers={"Authorization": f"Bearer {token}"},
-            timeout=30,
+            timeout=timeout,
         )
+        if max_retries is not None:
+            # an INSTANCE attribute shadowing the class default below, for this client only
+            self._MAX_RETRIES = max_retries
         self._page_size_cache: int | None = None
 
     # --- транзиентные ретраи (#86 «восстановление работы на ошибках апи») ---
