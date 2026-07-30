@@ -18,10 +18,15 @@ Status: approved (brainstorming) → ready for implementation plan
 > superseded decisions are silently corrected loses the only thing it is for: the ability to
 > tell what was *decided* from what was later *learned*. **The markers are not exhaustive**: an
 > unmarked passage means "nobody has checked it", never "verified current". Sweeps so far:
-> tracker #551, which found **eighteen** stale passages — thirteen of prose, plus the five
-> source-line citations below — where the card that ordered the sweep had named two. It also
+> tracker #551, whose first pass found **eighteen** stale passages — thirteen of prose, plus the
+> five source-line citations below — where the card that ordered the sweep had named two. It also
 > re-verified five *open* findings as still open, which is the other half of the job: a sweep
-> that only marks is indistinguishable from a sweep that gave up. Assume a second will find more.
+> that only marks is indistinguishable from a sweep that gave up. Its independent review then
+> found a nineteenth site the sweep had skipped (§3's create path, marked here in two places)
+> **and two of that same sweep's new markers factually wrong** — one of them stating the exact
+> opposite of the code it cited. Both corrected inside the same task. Take that literally: a
+> marked passage carries the claim that someone checked it, which is a *stronger* claim than an
+> unmarked one and can therefore be wrong in a worse way. Assume a third pass finds more.
 >
 > Two narrower cautions:
 >
@@ -34,12 +39,18 @@ Status: approved (brainstorming) → ready for implementation plan
 >   were actually run, which are observations, not contracts to copy.
 > * **Every `workflow.py:<line>` citation in this document is stale** — all five of them
 >   (§Problem, §2 ×3, §"What I could not observe"). Each was **exact when written**, re-checked
->   at its own authoring commit: `READY_STAGES` really was line 36, the rework-first ordering
->   line 361, `claim`'s predecessor gate line 731. `workflow.py` has since gone 1471 → 1667
->   lines, with the growth *above* each of them, so those three now sit at **37, 482 and 922**
->   and every printed number points at unrelated code. Grep for the named *symbol* instead. Left
->   as written rather than re-pointed: a line number is a citation that rots on the next commit,
->   so re-pointing it would only reset the clock — which is also the reason not to add any more.
+>   at this document's own authoring commit `143cc42`, where the file was 1471 lines:
+>   `READY_STAGES` really was line 36, the rework-first ordering line 361, `claim`'s predecessor
+>   gate line 731. `workflow.py` has grown by hundreds of lines since, most of it *above* those
+>   points, so every printed number now lands on unrelated code. **Grep for the named symbol
+>   instead** — `READY_STAGES`, the `rework_first` block in `next_task`, and the
+>   `_unfinished_predecessors` call inside `claim`. Left as written rather than re-pointed, and
+>   **this bullet deliberately prints no replacement numbers either**: a line number is a citation
+>   that rots on the next commit, so re-pointing it would only reset the clock. That is not a
+>   stylistic preference. The first version of this bullet *did* print three fresh numbers; they
+>   were measured before its own rebase, a sibling task moved `workflow.py` underneath it, and one
+>   of the three was already wrong when it was pushed — caught in review. A figure pinned to a
+>   NAMED COMMIT (above) keeps forever; a figure describing "now" is stale as soon as it is typed.
 >
 > Finally, **everything from "First live parallel drain" downward was APPENDED after the body**
 > (tracker #518, #531, #550, #532) and is therefore NEWER than what precedes it. Where an
@@ -275,10 +286,36 @@ the repo — deliberately not inside it, where pytest collection, ruff and
 5. neither exists → `worktree add -b task/<id> <path> origin/main`;
 6. the path exists but is not a worktree → refuse, touch nothing.
 
+> **STEP 3 GREW A SECOND REFUSAL, AND IT FIRES FIRST (2026-07-30, tracker #514).** Before the
+> VMCP-86 detached check that step names, `_ensure_locked` now refuses any existing tree git
+> reports as **`locked`** — the `locked "initializing"` half-checkout a killed `worktree add`
+> leaves behind, which `prune` will not drop and which this step used to hand straight back as
+> `created: false`, dispatching an agent into a directory holding nothing but `.git`. It is gated
+> on the lock's PRESENCE, not on its reason, and carries `code: half-created` with the two git
+> commands a human needs to clear it. So the real order for an already-existing tree is: locked →
+> refuse (#514); build tree sitting off its branch → refuse (VMCP-86 / #540); *only then* the
+> `created: false` return described above. Both refusals fail toward refusing, for the reason
+> SKILL.md's «Не завелось — цикл НЕ роняем» gives: a legible error degrades the pump to one slot,
+> while a silent hand-back produces work built on a tree that is not there.
+
 **`--role review`** → `worktree add --detach <root>/review-<id> <ref>`, with
 `--at` defaulting to `origin/main` (under this design the reviewed code is
 already on `main`) though a reviewer normally passes the `evidence` sha from the
 dossier. Detached is mandatory: `task/<id>` is checked out by the builder.
+
+> **THIS DESCRIBES CREATION ONLY, AND THE REUSE PATH NO LONGER DISCARDS `--at` (2026-07-30).**
+> When a review tree for the task already exists, `--at` used to be dropped in silence and the
+> payload carried no `head`, so round 2 of a review could ask for the fix's sha, be handed a tree
+> still pinned at the PRE-FIX sha, and say nothing about it — the **"Review Critical 1"** case,
+> the one bug on this branch that produced a WRONG VERDICT rather than noise: the reviewer read
+> the old code and approved it. Now the payload reports `head` for the reused tree as well as the
+> created one, and a pin that disagrees with `--at` is a hard refusal (*"review tree for task N is
+> pinned at <sha> but --at asked for <sha> — release it first"*). **Refuse, never re-point:**
+> moving the detached HEAD would orphan exactly the in-tree commit the reachability guard exists
+> to protect, and "housekeeping must never be how work disappears" binds setup as much as reaping.
+> The state that triggers it is one this module preserves on purpose — a reviewer who commits
+> notes inside its detached tree can never release it — so SKILL.md warns reviewers about both
+> halves: do not commit inside a review tree, and expect the pin refusal if you did.
 
 **`--release` — hgdev-acp's policy verbatim: push OK → remove, push FAIL →
 keep.** A dirty tree (`status --porcelain`) or unpushed commits (`log
@@ -314,12 +351,17 @@ this (`active_task_ids()` / `review_task_ids()`) rather than the CLI reaching
 into `_my_active_tasks()` — the boundary stays a real interface.
 
 > **STILL THE DESIGN, but the sweep grew three parts this description does not have** (all
-> 2026-07-30). (1) It no longer "releases everything else": a dead tree whose own directory was
-> touched inside `_REAP_GRACE_SECONDS` (30 min) is skipped **silently, in neither output list**,
-> so a sweep cannot pull the rug from under an agent standing between `advance(to='review')` and
-> `--release` (tracker #519; the window keys on tree CREATION time and takes its max over
-> non-future markers, #534, and `--gc`'s own inspection was made to stop counting as tree
-> activity, #545). (2) The refusals it collects are **graded** into `kept` vs `expected` rather
+> 2026-07-30). (1) It no longer "releases everything else": a dead tree whose directory or index
+> was touched inside `_REAP_GRACE_SECONDS` (30 min) is skipped **silently, in neither output
+> list**, so a sweep cannot pull the rug from under an agent standing between
+> `advance(to='review')` and `--release` (tracker #519). The window is measured by
+> `_last_activity` — the newest **non-future** mtime of those two footprints — so it runs for 30
+> min from the agent's last WRITE inside the tree, *not* from the tree's creation; taking the max
+> and discarding future mtimes is #534, and #545 stopped `--gc`'s own inspection from counting as
+> tree activity. (Creation only ever enters as a consequence: a purely read-only review tree
+> writes neither marker, so its birth is the only thing that ever set them — the deliberate hole
+> recorded under "Deferred follow-ups" item 2.) (2) The refusals it collects are **graded** into
+> `kept` vs `expected` rather
 > than one list (#516 — see "Deferred follow-ups" item 8, which is where this came from). (3)
 > The tracker read is bounded as a WHOLE, not per request (#520 — item 4). The role-keyed
 > liveness rule itself is unchanged and still exactly right.
