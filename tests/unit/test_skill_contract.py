@@ -1653,16 +1653,57 @@ def _claude_workspace_bullet(text: str) -> str:
     return bullet
 
 
-# "every … refusal … code" with nothing naming the RELEASE side in between: the universal claim
-# 580 removed. The `code` clause is what makes this usable — MEASURED, the correct bullet says
-# "every refusal" twice on purpose (once quoted, to forbid the phrase; once as "on create every
-# refusal has the same answer", which is the scoped truth), so a bare every/refusal scan would be
-# red on the text it is meant to bless. `[^.!?]` keeps each match inside one sentence.
-_UNSCOPED_CODE_UNIVERSAL = re.compile(
-    r"(?i)\bevery\b(?P<gap>[^.!?]{0,32}?)\brefusals?\b[^.!?]{0,72}?\bcode\b"
+# CANDIDATE shape only — "every … refusal … code" inside one sentence. Whether a candidate is a
+# VIOLATION is decided by `_unscoped_code_universal` below, which reads the scope window; this
+# pattern on its own says nothing about scoping, and must not be used as if it did. The `code`
+# clause is what makes it usable at all — MEASURED, the correct bullet says "every refusal" twice
+# on purpose (once quoted, to forbid the phrase; once as "on create every refusal has the same
+# answer", which is the scoped truth), so a bare every/refusal scan would be red on the text it is
+# meant to bless. The quantifier is a SET, not just "every" — MEASURED on the shipped bullet:
+# with `\bevery\b` alone, adding "Each refusal carries a machine-readable `code`." beside the
+# intact attribution PASSED, i.e. one synonym re-generalised straight past the pin. `[^.!?]` keeps
+# every part of a candidate inside one sentence.
+_CODE_UNIVERSAL_CANDIDATE = re.compile(
+    r"(?i)\b(?:every|each|all|any)\b[^.!?]{0,32}?\b(?P<noun>refusals?)\b[^.!?]{0,72}?\bcode\b"
 )
+# Names one of the two channels, i.e. narrows what a quantifier ranges over. The release side is
+# required in its FLAG spelling (`--release`/`--gc`), so prose that merely contains the word
+# "release" cannot bless itself; a bare `create` DOES count, because the bullet legitimately
+# quantifies over create refusals ("on create every refusal has the same answer").
+_NAMES_A_CHANNEL = re.compile(r"(?i)--release|--gc|\bcreate\b")
 # the same claim, correctly scoped: the `code` is attributed to the release/gc channel
 _SCOPED_CODE_CLAIM = re.compile(r"`--release`/`--gc`[^.!?]{0,160}?\bcode\b")
+
+
+def _unscoped_code_universal(flat: str):
+    """The first `code` universal in `flat` that scopes itself to NEITHER refusal channel.
+
+    A candidate is scoped when its SCOPE WINDOW — the text from the start of its sentence up to
+    the NOUN it quantifies — names a channel. That window is everything which can narrow what
+    "every … refusal" ranges over, and nothing that merely follows it, so both legitimate shapes
+    land inside it: "Every `--release`/`--gc` refusal …" narrows at the noun phrase (this is the
+    `gap` the old pattern captured and never read), "on create every refusal …" narrows at the
+    clause before it.
+
+    The window deliberately STOPS there rather than running to the end of the sentence, and that
+    boundary is the whole difference between a check and a rubber stamp: the exact sentence 580
+    deleted, "Every refusal carries a machine-readable `code`, and `--gc` GRADES them into two
+    lists", names `--gc` further along the SAME sentence — so a sentence-wide window would bless
+    the one text this pin exists to forbid. MEASURED, with a case built so that ONLY this clause
+    can speak (the forbidden sentence ADDED beside the intact attribution, so the `{"error"`,
+    `exit 1` and attribution clauses all still pass): shipped boundary -> FAIL, quoting it;
+    the same run with the window widened to the sentence end -> PASS, rc 0.
+
+    Not a parser, and the limit is worth stating: a sentence that names a channel before the noun
+    and then over-generalises anyway ("on create every refusal carries a `code`") reads as scoped
+    here and is review's job. The drift this catches is the measured one — an unqualified
+    universal — in every wording of it.
+    """
+    for match in _CODE_UNIVERSAL_CANDIDATE.finditer(flat):
+        sentence_start = max(flat.rfind(end, 0, match.start()) for end in ".!?") + 1
+        if not _NAMES_A_CHANNEL.search(flat[sentence_start:match.start("noun")]):
+            return match
+    return None
 
 
 def test_the_claude_md_workspace_bullet_keeps_the_code_claim_scoped():
@@ -1685,8 +1726,9 @@ def test_the_claude_md_workspace_bullet_keeps_the_code_claim_scoped():
     Three clauses are pinned, deliberately as ANCHORS rather than as sentences, because the failure
     mode is not deletion but re-wording that quietly re-generalises:
       * NO unscoped universal survives — the claim is caught by its SHAPE ("every … refusal …
-        code" inside one sentence, with nothing naming `--release`/`--gc` in the gap), so a reflow
-        or a synonym for "carries" cannot walk past it.
+        code" inside one sentence) whenever nothing before the NOUN names a channel, so a reflow,
+        a synonym for "carries" or a synonym for "every" cannot walk past it. What counts as
+        scoping, and why the window stops where it does, is in `_unscoped_code_universal`.
       * the CREATE channel is stated at all: its literal payload token and its exit code. A bullet
         that merely stops saying "every" would satisfy the first clause while leaving the reader
         with no idea what a create refusal looks like — which is the state that produced the drift.
@@ -1706,6 +1748,16 @@ def test_the_claude_md_workspace_bullet_keeps_the_code_claim_scoped():
     slicer, not a vacuous pass; widen the end anchor to the next `##` -> FAIL from the swallow
     guard.
 
+    And mutation-checked in the other direction too, because the first version of this pin was RED
+    ON CORRECT PROSE — it captured the gap and never read it, so "scoped" was never actually
+    tested. All three cases measured, on this bullet: the wording the failure message itself
+    dictates ("Every `--release`/`--gc` refusal carries a machine-readable `code`, and `--gc`
+    GRADES them…", create paragraph intact) -> PASS, where it used to fail and leave an author who
+    OBEYED the error message with no way out but to weaken the pin; the bullet's own create clause
+    reworded without its "SKILL.md" citation (which only ever passed because that literal dot ended
+    the sentence scan) -> PASS; and "Each refusal carries a machine-readable `code`." added beside
+    the intact attribution -> FAIL, where the "every"-only pattern let it through.
+
     The vacuity question was then asked PROPERLY, because "the slicer can't miss" is not the same
     claim as "a miss can't pass": with the slice replaced by the WHOLE file AND the subset/swallow
     guards deleted AND the create paragraph gone, this test PASSES. That is not hypothetical —
@@ -1716,14 +1768,17 @@ def test_the_claude_md_workspace_bullet_keeps_the_code_claim_scoped():
     bullet = _claude_workspace_bullet(_claude_md_text())
     flat = _flat(bullet)
 
-    violation = _UNSCOPED_CODE_UNIVERSAL.search(flat)
+    violation = _unscoped_code_universal(flat)
     # the message is evaluated only when the assert FAILS, so .group() is safe here
     assert violation is None, (
         f"CLAUDE.md's workspace bullet states the UNSCOPED universal again: "
         f"{violation.group(0)!r}. Only a `--release`/`--gc` refusal carries a `code`; a CREATE "
-        f'refusal is `{{"error": …}}` + exit 1 and carries none. Scope the sentence (say "every '
-        f'`--release`/`--gc` refusal") — or, if the CODE really did change, change the code and '
-        f"tests/unit/test_workspace_cmd.py's channel pin FIRST, then this prose"
+        f'refusal is `{{"error": …}}` + exit 1 and carries none. Name the channel BEFORE the word '
+        f'"refusal" — "every `--release`/`--gc` refusal …", or "on create every refusal …" for a '
+        f"claim about the other side; naming it only later in the sentence does not count, since "
+        f"the sentence this pin exists to forbid did exactly that. Or, if the CODE really did "
+        f"change, change the code and tests/unit/test_workspace_cmd.py's channel pin FIRST, then "
+        f"this prose"
     )
     assert '{"error"' in bullet, (
         'CLAUDE.md\'s workspace bullet no longer shows what a CREATE refusal looks like '

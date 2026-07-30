@@ -1126,7 +1126,7 @@ def test_the_two_refusal_channels_are_not_interchangeable(repo, monkeypatch, cap
     from `_release_locked`'s half-created refusal -> FAIL on the release half.
 
     And the size of the gap was measured, not assumed: under that first mutation the ENTIRE
-    pre-existing suite — all 582 tests, this file's own create test included — stays GREEN. Someone
+    pre-existing suite — all 593 tests, this file's own create test included — stays GREEN. Someone
     could have made the false universal true and no test in this repo would have said a word.
     """
     path = _half_created_tree(repo, monkeypatch)          # ONE state both channels can see
