@@ -1814,3 +1814,77 @@ def test_an_abandoned_sweep_is_one_json_error_line_the_pump_can_read(monkeypatch
     assert run_workspace(["--gc"]) == 1
     err = json.loads(capsys.readouterr().out.strip())["error"]
     assert err.startswith("ReadDeadlineExceeded: ") and "overall budget" in err
+
+
+# --- VMCP-89: a page size the client had to GUESS must never be able to end in a reap ---
+
+def _paginating_tracker(page_size, tasks_by_stage, *, info_status=200, sent=None):
+    """A REAL httpx client over a tracker that pages each bucket's `tasks` the way Vikunja 2.3
+    does — `page_size` at a time, per bucket, driven by `?page=` — and whose `/info` can be made
+    to fail.
+
+    Real client + real api.py, not `FakeAPI`, because the whole mechanism lives in api.py: the
+    fake resolves no page size at all, so a board truncated by a WRONG one is invisible to it —
+    the shape this project has already been bitten by (a fake that shares the code's own wrong
+    model proves nothing about it).
+    """
+    def handler(request):
+        path = request.url.path
+        if sent is not None:
+            sent.append(f"{path.split('/api/v1')[-1]}?{request.url.params}".rstrip("?"))
+        if path.endswith("/info"):
+            if info_status != 200:
+                return httpx.Response(info_status, json={"message": "boom"})
+            return httpx.Response(200, json={"max_items_per_page": page_size})
+        if path.endswith("/user"):
+            return httpx.Response(200, json={"id": 1, "username": "agent"})
+        if path.endswith("/views"):
+            return httpx.Response(200, json=[{"id": 7, "view_kind": "kanban", "title": "Kanban"}])
+        page = int(request.url.params.get("page", 1))
+        return httpx.Response(200, json=[
+            {"id": index, "title": title, "tasks": [
+                {"id": tid, "title": f"t{tid}", "assignees": [{"id": 1}]}
+                for tid in tasks_by_stage.get(title, [])[(page - 1) * page_size:page * page_size]
+            ]}
+            for index, title in enumerate(STAGES, start=1)
+        ])
+
+    return httpx.Client(base_url="http://tracker.invalid/api/v1",
+                        transport=httpx.MockTransport(handler))
+
+
+@pytest.mark.parametrize("info_status, why", [
+    (200, "the control: with /info healthy the same board reads whole"),
+    (500, "the bug: /info failed, so the page size had to be guessed"),
+])
+def test_gc_keeps_every_live_tree_when_the_servers_pages_are_smaller_than_the_guess(
+    repo, info_status, why
+):
+    """THE data-loss path this task exists for, constructed rather than reasoned about.
+
+    A server whose real `max_items_per_page` is 3 and an `/info` that fails: the client used to
+    fall back to a hardcoded 50, and `view_tasks` stopped paging as soon as no bucket returned a
+    FULL page — which on this server is never. The board silently ended after page 1, the tasks
+    past it read as gone, and `--gc` destroyed their worktrees. Observed before the fix, on this
+    exact test: `released=[804, 805]`, two LIVE trees and their `task/*` branches deleted, in a
+    sweep that reported success.
+
+    The 200 row is the control, and it is what makes the 500 row trustworthy: the identical board
+    and the identical trees, with the ONLY difference being whether the client could know the page
+    size. Both must keep all five.
+    """
+    live = [801, 802, 803, 804, 805]                 # 5 tasks, 3 per page -> two pages
+    trees = {}
+    for task_id in live:
+        trees[task_id] = Path(ensure_workspace(task_id, cwd=repo)["path"])
+        _quiesce(trees[task_id])                     # past the grace window: reapable if dead
+    client = _paginating_tracker(3, {"Build": live}, info_status=info_status)
+    wf = Workflow(VikunjaAPI("http://tracker.invalid", "t", client=client, max_retries=0), 10)
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert res["released"] == [], why
+    assert res["kept"] == []
+    for task_id, path in trees.items():
+        assert path.is_dir(), f"{why}: live tree for {task_id} was destroyed"
+        assert _git(repo, "branch", "--list", f"task/{task_id}").strip()

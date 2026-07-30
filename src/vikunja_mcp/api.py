@@ -67,7 +67,10 @@ class VikunjaAPI:
         if max_retries is not None:
             # an INSTANCE attribute shadowing the class default below, for this client only
             self._MAX_RETRIES = max_retries
+        # resolved ONCE per client, and the flag is separate from the value because "unknown" is
+        # now a real answer (None) rather than a guess — see _page_size / VMCP-89.
         self._page_size_cache: int | None = None
+        self._page_size_resolved = False
 
     # --- транзиентные ретраи (#86 «восстановление работы на ошибках апи») ---
     # Раньше _req падал с ПЕРВОЙ же 429/5xx/обрыва связи, и работа агента вставала на
@@ -258,28 +261,57 @@ class VikunjaAPI:
     # эмпирически против vikunja 2.3.0 (см. отчёт F1): GET .../views/{v}/tasks пагинирует
     # tasks[] ВНУТРИ каждого бакета независимо через params={"page": n} с фиксированным
     # page size = max_items_per_page сервера (per_page на эту вложенную пагинацию не влияет).
-    # Порог «полной страницы» читаем из /info (_page_size, кэш на клиенте); 50 — лишь fallback:
-    # на инстансе с max_items_per_page<50 хардкод 50 молча обрезал бы доску после page=1.
+    # Порог «полной страницы» читаем из /info (_page_size, кэш на клиенте).
     # Страницы могут перекрываться на 1-2 задачи из-за нестабильной сортировки при равных
     # ключах (без ORDER BY тайбрейкера) — наблюдался дубль, ни разу не пропуск. Мёржим по
     # (bucket_id, task_id), останавливаемся когда ни один бакет не отдал полную страницу
     # (значит дальше для всех пусто) ИЛИ страница не принесла ни одной новой задачи (защита
     # от зацикливания на нестабильной сортировке).
-    _PAGE_SIZE_FALLBACK = 50
-
-    def _page_size(self) -> int:
-        if self._page_size_cache is None:
+    #
+    # VMCP-89 — THE PAGE SIZE IS KNOWN OR UNKNOWN, NEVER GUESSED, and that is a data-loss fix.
+    # `_fetch_page_size` used to swallow an unreachable or silent `/info` and return a hardcoded
+    # 50. On an instance whose real max_items_per_page is SMALLER, no bucket ever returns 50
+    # tasks, so "no bucket gave a full page" read as "that is the whole board" and this loop
+    # TRUNCATED after page 1 — no exception, no marker, just fewer tasks. `workspace --gc` builds
+    # its liveness set from exactly this board and destroys the worktree of every task missing
+    # from it. CONSTRUCTED (real git worktrees, real httpx, real api.py, max_items_per_page=3, a
+    # 500 on /info, five live Build tasks): `released=[804, 805]` — two LIVE trees removed and
+    # their `task/*` branches deleted, in a sweep that reported success. gc is the caller that
+    # loses work, but it is not the only victim: claim/_find_task read a truncated board as "no
+    # such task" on a card that is right there.
+    #
+    # So the guess is gone. `_page_size()` answers None when the server never told us — EITHER
+    # way it can fail to (the request errored, or the payload carries no usable
+    # max_items_per_page) — and an UNKNOWN size simply forbids concluding a bucket is complete
+    # from a SHORT page: the loop then keeps going until a page brings no NEW task in the required
+    # buckets, which is a fact about the DATA and needs no page size at all. It costs exactly one
+    # extra request, only while /info is broken. A KNOWN size keeps the cheap fullness rule
+    # unchanged, so the healthy path pays nothing (this includes #43's require_titles win). Both
+    # outcomes are resolved ONCE per client (`_page_size_resolved`), so a broken /info does not
+    # add a probe per call either.
+    #
+    # NOT chosen: making the failure fail-CLOSED (propagate, so gc abandons the sweep — the shape
+    # VMCP-72 used for its read deadline). It keeps gc at KEEP, but it leaves the identical
+    # truncation live for next_task/claim/setup, and it would disable housekeeping FOREVER on a
+    # deployment whose /info simply does not report the field. Not guessing is strictly stronger
+    # than refusing to act on a guess: the read stays CORRECT instead of merely being abandoned.
+    def _page_size(self) -> int | None:
+        if not self._page_size_resolved:
             self._page_size_cache = self._fetch_page_size()
+            self._page_size_resolved = True
         return self._page_size_cache
 
-    def _fetch_page_size(self) -> int:
+    def _fetch_page_size(self) -> int | None:
         # /info — публичный, неаутентифицированный эндпоинт; Bearer на нём безвреден.
+        # Ошибку по-прежнему ГЛОТАЕМ (у этого резолвера есть вызыватели, которым падение
+        # из-за /info было бы хуже деградации) — но отдаём None «не знаю», а не число-догадку:
+        # решает не молчание, а то, что с None делает view_tasks (см. комментарий выше).
         try:
             info = self._req("GET", "/info")
         except (VikunjaError, httpx.HTTPError):
-            return self._PAGE_SIZE_FALLBACK
+            return None
         size = info.get("max_items_per_page") if isinstance(info, dict) else None
-        return size if isinstance(size, int) and size > 0 else self._PAGE_SIZE_FALLBACK
+        return size if isinstance(size, int) and size > 0 else None
 
     def view_tasks(
         self, project_id: int, view_id: int, require_titles: set[str] | None = None
@@ -291,7 +323,7 @@ class VikunjaAPI:
         # returns full pages no longer forces extra fetches once the required buckets are
         # exhausted. next_task passes its working stages here so it stops after them instead of
         # rescanning the ever-growing Done on every call (the named next_task-latency fix).
-        page_size = self._page_size()
+        page_size = self._page_size()       # None = the server never told us; see VMCP-89 above
         merged: dict[int, dict] = {}
         seen: dict[int, set] = {}
         owner: dict[int, int] = {}          # task_id -> последний бакет, где её видели (см. дедуп ниже)
@@ -304,14 +336,14 @@ class VikunjaAPI:
                 break
             saw_full_page = False
             added_new = False
+            added_new_required = False
             for bucket in buckets:
                 bid = bucket["id"]
                 dest = merged.setdefault(bid, {**bucket, "tasks": []})
                 ids = seen.setdefault(bid, set())
                 tasks = bucket.get("tasks") or []
-                if len(tasks) >= page_size and (
-                    require_titles is None or bucket.get("title") in require_titles
-                ):
+                required = require_titles is None or bucket.get("title") in require_titles
+                if page_size is not None and len(tasks) >= page_size and required:
                     saw_full_page = True
                 for task in tasks:
                     owner[task["id"]] = bid          # последнее вхождение выигрывает (см. дедуп ниже)
@@ -319,7 +351,12 @@ class VikunjaAPI:
                         ids.add(task["id"])
                         dest["tasks"].append(task)
                         added_new = True
-            if not saw_full_page or not added_new:
+                        added_new_required = added_new_required or required
+            # UNKNOWN page size: a short page proves nothing, so the only honest stop is a page
+            # that brought no NEW task to a REQUIRED bucket. Required-only on purpose — counting
+            # any bucket would let an unbounded Done/Backlog drag the loop through itself, the
+            # very cost #43's require_titles exists to avoid.
+            if not (added_new_required if page_size is None else (saw_full_page and added_new)):
                 break
             page += 1
         # #41 глобальный дедуп по task id: задачу, переезжающую между колонками ВО ВРЕМЯ

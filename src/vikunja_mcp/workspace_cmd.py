@@ -191,9 +191,10 @@ class ReadDeadlineExceeded(WorkspaceError):
 
     A `WorkspaceError` SUBCLASS, and that inheritance is a safety decision, not tidiness. Two
     layers of api.py would eat this if it were an httpx exception instead:
-      * `_fetch_page_size` catches `(VikunjaError, httpx.HTTPError)` and falls back to a page
-        size of 50 — a spent budget would be SWALLOWED there and the read would carry on past
-        its own deadline;
+      * `_fetch_page_size` catches `(VikunjaError, httpx.HTTPError)` and resolves the page size
+        to UNKNOWN — a spent budget would be SWALLOWED there and the read would carry on past its
+        own deadline (and, VMCP-89, on an unknown page size it carries on paging EXHAUSTIVELY,
+        so a swallowed deadline would cost more requests, not fewer);
       * `_req` retries `httpx.TransportError` on idempotent methods, so with retries ever
         re-enabled a deadline would be re-attempted rather than obeyed.
     Being a WorkspaceError, it propagates straight out of the read — before `gc_workspaces`

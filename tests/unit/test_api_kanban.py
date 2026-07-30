@@ -258,22 +258,74 @@ def test_view_tasks_caches_page_size_across_calls():
     assert len(info_hits) == 1
 
 
-def test_page_size_falls_back_when_field_missing():
-    """/info без поля max_items_per_page — резолвер откатывается на 50, а не роняется на None."""
+def test_page_size_is_unknown_when_field_missing():
+    """VMCP-89: /info без поля max_items_per_page — резолвер отвечает «не знаю» (None), а НЕ
+    догадкой 50. Догадка, оказавшаяся больше настоящего размера страницы, молча обрезает доску
+    (а на пути `--gc` обрезанная доска = снесённые ЖИВЫЕ деревья), поэтому «сервер не сказал» и
+    «сервер сказал 50» обязаны быть разными состояниями, а не одним числом."""
     def handler(request):
         return httpx.Response(200, json={})
 
     api = make_api(handler)
-    assert api._page_size() == 50
+    assert api._page_size() is None
 
 
-def test_page_size_falls_back_when_info_errors():
-    """/info вернул 500 — резолвер глотает ошибку и откатывается на 50, view_tasks не падает."""
+def test_page_size_is_unknown_when_info_errors():
+    """/info вернул 500 — ошибку резолвер по-прежнему ГЛОТАЕТ (view_tasks не падает), но отдаёт
+    None «не знаю», а не 50: решение принимает view_tasks, которая на None перестаёт делать вывод
+    «страница неполная => доска кончилась» (VMCP-89)."""
     def handler(request):
         return httpx.Response(500, json={"message": "boom"})
 
     api = make_api(handler)
-    assert api._page_size() == 50
+    assert api._page_size() is None
+
+
+def test_view_tasks_does_not_truncate_the_board_on_an_unknown_page_size():
+    """VMCP-89, суть бага: /info недоступен, значит page size НЕИЗВЕСТЕН, а настоящий (3) меньше
+    прежнего хардкода 50. По старому правилу «остановиться, если ни один бакет не отдал полную
+    страницу» первая же страница из 3 задач читалась как «это вся доска», и задачи 4-8 просто
+    исчезали из снапшота — без ошибки и без следа. Именно из такого снапшота `--gc` строит
+    множество живых задач.
+
+    На неизвестном размере страницы остановка теперь только по факту ДАННЫХ: страница не принесла
+    ни одной новой задачи. Цена — ровно один лишний запрос (page=4)."""
+    pages_seen = []
+
+    def handler(request):
+        if request.url.path.endswith("/info"):
+            return httpx.Response(503, json={"message": "unavailable"})
+        page = int(request.url.params.get("page", "1"))
+        pages_seen.append(page)
+        all_ids = list(range(1, 9))                                  # 8 задач при page size 3
+        tasks = [{"id": i, "title": f"t{i}"} for i in all_ids[(page - 1) * 3:page * 3]]
+        return httpx.Response(200, json=[{"id": 4, "title": "Build", "tasks": tasks}])
+
+    api = make_api(handler)
+    api._MAX_RETRIES = 0                        # как у клиента `--gc`: одна попытка /info, без sleep
+    board = api.view_tasks(3, 11)
+    assert sorted(t["id"] for t in board[0]["tasks"]) == list(range(1, 9))   # ничего не потеряно
+    assert pages_seen == [1, 2, 3, 4]            # +1 запрос: пустая страница — единственный стоп
+
+
+def test_an_unknown_page_size_is_resolved_once_not_probed_per_call():
+    """Неизвестность кэшируется так же, как известное число: сломанный /info НЕ должен добавлять
+    по запросу (а с ретраями — по четыре) на КАЖДЫЙ view_tasks. Форма запросов на здоровом и на
+    сломанном /info одинакова — меняется только правило остановки."""
+    info_hits = []
+
+    def handler(request):
+        if request.url.path.endswith("/info"):
+            info_hits.append(1)
+            return httpx.Response(500, json={"message": "boom"})
+        return httpx.Response(200, json=[{"id": 4, "title": "Build", "tasks": []}])
+
+    api = make_api(handler)
+    api._MAX_RETRIES = 0                # без ретраев: считаем РЕЗОЛВЫ, а не попытки (и без sleep)
+    api.view_tasks(3, 11)
+    assert len(info_hits) == 1          # один резолв на первый вызов…
+    api.view_tasks(3, 11)
+    assert len(info_hits) == 1          # …и НИ ОДНОГО на второй: «не знаю» кэшируется как число
 
 
 def test_move_task_posts_to_bucket_endpoint():
