@@ -1576,6 +1576,55 @@ def test_the_cross_session_boundary_names_the_fix_and_not_only_the_symptom():
         "`.claude/settings.json`) — the bare path also occurs in the sentence after it"
 
 
+def test_the_cross_session_boundary_forecloses_the_storage_state_non_fix():
+    """VMCP-113 (585): the bullet above names a fix AND its cost, and the cost has an obvious,
+    upstream-documented-looking remedy that does not work. This pins the foreclosure.
+
+    The bullet ends by telling an agent the price of `--isolated`: an in-memory profile, so
+    browser logins stop surviving a restart. Upstream's README then describes `--storage-state`
+    (env: `PLAYWRIGHT_MCP_STORAGE_STATE`) as the way to load cookies and localStorage INTO an
+    isolated context — which reads exactly like the missing half, and is how this card came to
+    be filed in the first place. Measured on the installed 0.0.78, it is half true and the
+    wrong half: the file IS read when the browser context is created (cookies restored,
+    confirmed by what the browser then sent to the origin), and it is NEVER written — after a
+    login, `browser_close` and a clean shutdown the file was byte-identical, and the next
+    session read back the seed rather than the login. A path to a not-yet-existing file makes
+    EVERY `browser_*` call fail outright.
+
+    Why a rulebook clause and not just a repo note: this bullet is the one place that tells an
+    agent working in SOMEONE ELSE'S project what to do about a cross-session browser collision,
+    and it already instructs it to report rather than edit. An agent that reads only "logins no
+    longer persist" has been handed a problem with a plausible published solution, and the
+    self-healing `stable` copy puts this text in front of every consumer with no review gate
+    (see this module's docstring) — so the "do not propose it" has to travel with the cost.
+
+    Pinned as the INSTRUCTION plus the MEASUREMENT that justifies it, never the variable name:
+    the name alone would stay green through a rewrite that mentioned the variable while
+    dropping the verdict, and could equally be satisfied by some future paragraph elsewhere.
+
+    MUTATION-CHECKED (`__pycache__` cleared between rounds, each round confirmed to select
+    exactly 1 test, SKILL.md restored from a COPY — never `git checkout --`, since the subject
+    is uncommitted while the card is in Build): control PASS; delete the whole clause while
+    ADDING a mention of `PLAYWRIGHT_MCP_STORAGE_STATE` in a different section of the file ->
+    FAIL, the round that proves this is not a keyword grep; delete only "не предлагай его как
+    починку", keeping the measurement -> FAIL; delete only the never-written measurement,
+    keeping the instruction -> FAIL; soften "НЕ ПИШЕТСЯ обратно НИКОГДА" to "пишется редко"
+    -> FAIL; re-wrap the paragraph across every pinned phrase -> PASS."""
+    flat = _flat(_rule_boundary_bullet(_skill_text()))
+    assert "`PLAYWRIGHT_MCP_STORAGE_STATE` эту цену НЕ отменяет" in flat, \
+        "the bullet states the cost of `--isolated` (logins stop persisting) without the " \
+        "measured verdict on the remedy upstream's README appears to offer for it — the " \
+        "reader is left one search away from re-deriving tracker #585"
+    assert "не предлагай его как починку" in flat, \
+        "the bullet no longer INSTRUCTS an agent not to propose PLAYWRIGHT_MCP_STORAGE_STATE " \
+        "as the fix — and this is the bullet an agent reads while standing in someone else's " \
+        "project, where a confident wrong suggestion is the whole risk"
+    assert "НЕ ПИШЕТСЯ обратно НИКОГДА" in flat, \
+        "the bullet no longer says WHY the remedy is not one (the file is only ever read, " \
+        "never written back, so a login does not reach the next session). An instruction " \
+        "without its reason is the first thing a later agent overrules"
+
+
 def _claude_workspace_bullet(text: str) -> str:
     """CLAUDE.md's `workspace_cmd.py` architecture bullet — where the refusal-channel split lives.
 

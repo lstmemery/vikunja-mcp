@@ -21,6 +21,13 @@ set that actually flips the flag, and they ask GIT — not a grep — whether th
 the ignore rules. The rulebook half of the same card (the `Граница правила` bullet that tells
 an agent what to do when it meets this in someone else's project) is pinned next door, in
 tests/unit/test_skill_contract.py, which is the module that owns SKILL.md.
+
+#585 added the other half of the same subject: the tests that hold what is deliberately NOT
+configured. Its proposal — `PLAYWRIGHT_MCP_STORAGE_STATE`, upstream's documented complement to
+`--isolated` — was measured, composes, and still does not ship, because the file it points at
+is LIVE SESSION COOKIES and this repo is PUBLIC. So the pins below run the other way round:
+that the committed settings never carry such a path, and that git cannot be made to carry the
+file itself.
 """
 import json
 import subprocess
@@ -34,6 +41,15 @@ SETTINGS_PATH = ".claude/settings.json"          # repo-relative: the spelling g
 LOCAL_STATE_PATH = ".claude/settings.local.json"  # machine-local sibling, must stay hidden
 GITIGNORE_NEGATION = "!.claude/settings.json"
 ISOLATION_ENV = "PLAYWRIGHT_MCP_ISOLATED"
+STORAGE_STATE_ENV = "PLAYWRIGHT_MCP_STORAGE_STATE"
+
+# What `browser_storage_state` writes when it is given no filename, and the shape a human
+# would reach for. Both are LIVE session cookies; this repo is public.
+STORAGE_STATE_FILES = (
+    "storage-state-2026-07-30T12-00-00-000Z.json",   # the tool's own default, at the root
+    "playwright_storage_state.json",                 # the underscore spelling, also at the root
+    "docs/my-storage-state.json",                    # nested: the rule must not be root-anchored
+)
 
 # playwright-core's `envToBoolean`: only these two strings are true. "false"/"0" are false and
 # ANYTHING ELSE is ignored entirely — which is why the value, not the key, is what gets pinned.
@@ -215,6 +231,142 @@ def test_gitignore_still_lets_the_settings_file_through():
         f".gitignore no longer says {GITIGNORE_NEGATION!r} verbatim — git may still deliver " \
         f"{SETTINGS_PATH} by some other spelling, but the line this repo's comment explains " \
         "(and that reviewers look for) is gone; update this pin only on purpose"
+
+
+def test_the_committed_settings_never_carry_a_path_to_live_session_cookies():
+    """#585: the follow-up card's proposal, measured and REFUSED — and the refusal is the pin.
+
+    `PLAYWRIGHT_MCP_STORAGE_STATE` is upstream's documented complement to `--isolated`, and
+    measured on the installed 0.0.78 it really does compose: with isolation on, the file's
+    cookies and localStorage ARE restored (the browser then sent them, so the origin's own
+    request log is what says so) and no profile touches disk. What it does NOT do is write:
+    after a login, `browser_close` and a clean shutdown the file was byte-identical, and the
+    next session read back the seed rather than the login. So there is no version of this that
+    ships as a committed setting, for two INDEPENDENT reasons, and the test holds the weaker
+    of them because it is the one an edit could plausibly forget:
+
+    * the value is an absolute path to LIVE SESSION COOKIES — a credential for whatever the
+      human was logged into, this project's tracker included — and this repository is PUBLIC.
+      Its class is `.vikunja-mcp.env` and `VIKUNJA_NOTIFY_WEBHOOK`: env layers only, never a
+      committed file. Its SIBLING in this very file is the opposite kind (team policy that
+      belongs in git), which is exactly the mix that invites "well, the isolation flag lives
+      here, so its companion should too".
+    * a committed path would also be inert-to-hostile for everyone else: measured, a path
+      whose file does not exist yet makes EVERY `browser_*` call fail with `Error reading
+      storage state … ENOENT`, so a clone would get a browser that does not work at all.
+
+    A negative pin can hold nothing and stay green, so this one is mutation-checked in the
+    direction that matters — by ADDING the thing it forbids (`__pycache__` cleared between
+    rounds, exactly 1 test selected per round, settings restored from a COPY): control PASS;
+    add `PLAYWRIGHT_MCP_STORAGE_STATE` to the `env` block -> FAIL; add it with an innocuous
+    empty value -> FAIL (an empty string is still a committed decision, and `envToString`
+    would hand it straight to the loader); add a differently-named key ending in
+    `_STORAGE_STATE` -> FAIL, which is the round that proves the check is on the whole env
+    block and not on one literal string.
+    """
+    settings = REPO_ROOT / SETTINGS_PATH
+    env = json.loads(settings.read_text(encoding="utf-8")).get("env", {})
+    offenders = sorted(k for k in env if k.endswith("_STORAGE_STATE"))
+    assert not offenders, \
+        f"{SETTINGS_PATH} now commits {offenders} — a Playwright storage-state path points at " \
+        "LIVE session cookies, which is a machine-local secret in a PUBLIC repo (env layers " \
+        "only, like .vikunja-mcp.env), and a path that does not exist on someone else's disk " \
+        "makes every browser_* call fail with `Error reading storage state … ENOENT`"
+
+
+@pytest.mark.parametrize("path", STORAGE_STATE_FILES)
+def test_a_storage_state_file_can_never_become_committed(path):
+    """The one thing #585 ships: the accident it forecloses.
+
+    Measured while answering the card: `browser_storage_state` — the ONLY way to produce one
+    of these — refuses every path outside the MCP client's workspace root (`File access
+    denied: … is outside allowed roots`). Its workspace root IS the repository the session
+    was opened in, so a live-cookie file can land in exactly one place: inside this public
+    repo. Asked the obvious way (`filename: "state.json"`) it wrote to the repo ROOT; asked
+    with no filename at all it writes `storage-state-<timestamp>.json` there. That artifact
+    is untracked, plausible-looking, and one `git add -A` away from being published forever.
+
+    So the guard is a `.gitignore` rule, and this asks GIT rather than grepping the file —
+    the same lesson its sibling above records twice over: a pattern can be present and
+    defeated (by an earlier blanket rule, by a stray negation), and a green that comes from
+    the machine's own `~/.config/git/ignore` is not a property of this repository at all.
+    Hence both halves: git excludes the path, AND the rule that decided lives in THIS repo.
+
+    MUTATION-CHECKED (`__pycache__` cleared, exactly 1 test id selected per round, .gitignore
+    restored from a COPY): control PASS; delete the `*storage-state*.json` line -> FAIL for
+    the two hyphenated paths; delete `*storage_state*.json` -> FAIL for the underscore one;
+    anchor the rule as `/storage-state*.json` -> FAIL for the nested path, which is the round
+    that proves the rule is not root-only; rewrite the explanatory comment above the rules
+    -> PASS.
+    """
+    ignored, source, pattern = _ignore_rule(path)
+    assert ignored, \
+        f"git would happily commit {path!r} — that file is a Playwright storage state: live " \
+        "session cookies for whatever the browser was logged into, in a PUBLIC repo. " \
+        "`browser_storage_state` cannot write anywhere BUT inside this repo, so .gitignore " \
+        "is the only thing standing between an export and a permanent leak"
+    assert source == ".gitignore", \
+        f"{path!r} is ignored by {pattern!r} from {source}, not by this repo's own .gitignore " \
+        "— the protection then exists only on machines whose global ignore file happens to " \
+        "cover it, and vanishes silently in a fresh clone"
+
+
+def test_no_storage_state_file_is_tracked_today():
+    """The ignore rule above prevents the NEXT accident; this one checks there was no last one.
+
+    Cheap, and it is the assertion that would actually fire on the day it matters: an ignore
+    pattern does nothing to a path git already tracks, so a file added before the rule existed
+    would keep travelling to every clone while every pin above stayed green.
+
+    MUTATION-CHECKED: control PASS; `git add -f` a file named `storage-state-x.json` -> FAIL
+    (then unstaged, and the file deleted).
+    """
+    listed = _git("ls-files", "--", "*storage-state*.json", "*storage_state*.json")
+    assert listed.returncode == 0, f"git ls-files failed: {listed.stderr.strip()}"
+    assert not listed.stdout.split(), \
+        f"git already carries {listed.stdout.split()} — a Playwright storage state is a live " \
+        "credential and this repo is public; the .gitignore rule does not retract a file that " \
+        "is already tracked, so this one has to be removed from the index by hand"
+
+
+def test_claude_md_records_why_storage_state_is_not_configured_here():
+    """A refusal nobody can find gets re-litigated — this card exists BECAUSE of that.
+
+    #585 was filed off upstream's README, which describes `--storage-state` as the way to load
+    cookies into an isolated context: entirely true, and it reads like the cure for the cost
+    #558 paid. The next reader of that README will reach the same conclusion, so the measured
+    reason it is NOT the cure has to sit next to the cost it appears to answer.
+
+    Two clauses, both instructions rather than tokens: that the variable is set NOWHERE here
+    (the decision), and that it is never written back (the measurement the decision rests on —
+    without it the decision reads as caution, and caution is exactly what a later reader
+    overrides). Deliberately not pinned: the ENOENT detail, the capability name, the file-size
+    evidence — prose that a rewrite should be free to reshape.
+
+    MUTATION-CHECKED (`__pycache__` cleared, exactly 1 test selected, CLAUDE.md restored from a
+    COPY): control PASS; delete the whole paragraph while leaving `PLAYWRIGHT_MCP_STORAGE_STATE`
+    mentioned in the paragraph above it -> FAIL, which is the round that proves this pin is not
+    a keyword grep; keep the paragraph but soften "does NOT buy that cost back" into "may not
+    help" -> FAIL; delete only the never-written sentence -> FAIL; re-wrap the paragraph across
+    both pinned phrases -> PASS.
+    """
+    text = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+    start = text.find("**Committed `.claude/settings.json` sets")
+    assert start != -1, "CLAUDE.md no longer explains the committed browser-isolation setting"
+    end = text.find("\n## ", start)
+    assert end != -1, "the browser paragraphs no longer end at a heading"
+    section = " ".join(text[start:end].split())
+    assert 0 < len(section) < len(text), "the slice is not a proper subset of CLAUDE.md"
+
+    assert f"`{STORAGE_STATE_ENV}` does NOT buy that cost back, and is deliberately set " \
+        "NOWHERE here" in section, \
+        "CLAUDE.md no longer states the DECISION that no committed file sets " \
+        f"{STORAGE_STATE_ENV} — the next reader of upstream's README will propose it again, " \
+        "exactly as tracker #585 did"
+    assert "It is never WRITTEN" in section, \
+        "CLAUDE.md no longer carries the measurement the refusal rests on (the file is read " \
+        "and never written back, so a login does not survive into the next session). Without " \
+        "it the refusal reads as mere caution and the next reader will overrule it"
 
 
 @pytest.mark.parametrize("value", ["yes", "True", "on", "", "false", "0"])

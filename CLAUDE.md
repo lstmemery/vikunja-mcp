@@ -354,6 +354,26 @@ environment — both measured. It is deliberately NOT a `.mcp.json` entry: a pro
 instead of fixing the first. Cost: the profile lives in memory, so browser logins do not
 persist between sessions.
 
+**`PLAYWRIGHT_MCP_STORAGE_STATE` does NOT buy that cost back, and is deliberately set
+NOWHERE here** (tracker #585, measured on the 0.0.78 this machine actually runs). Upstream
+documents it as `--isolated`'s complement and it is one — but only for LOADING. Measured:
+with isolation the file IS read (cookie + localStorage restored, confirmed server-side by
+the `Cookie:` header the browser then sent) and zero profiles hit disk, so the two really
+do compose; WITHOUT isolation the same variable is silently ignored. It is never WRITTEN:
+after a login, `browser_close` and a clean client shutdown the file stayed byte-identical
+(md5, size, mtime_ns) — SIGTERM too — and session 2 read back the seed, not the login. So
+it converts "log in every session" into "hand-maintain a seed file", not into persistent
+logins. Two further measurements make a committed value actively harmful: a path whose
+file does not exist yet makes EVERY `browser_*` call fail (`Error reading storage state …
+ENOENT`), which is worse than the status quo for anyone who clones; and the value is a
+machine-local path to LIVE SESSION COOKIES — a secret of the same class as
+`.vikunja-mcp.env` and `VIKUNJA_NOTIFY_WEBHOOK`, which this repo keeps out of committed
+files on principle. The only writer, the `browser_storage_state` tool (hidden behind
+`PLAYWRIGHT_MCP_CAPS=storage`, which also exposes 16 other cookie/storage tools), refuses
+to write outside the MCP client's workspace root — i.e. it can only drop live cookies
+INSIDE this public repo, which is what the `*storage-state*.json` rule in `.gitignore`
+exists to make un-commitable.
+
 ## Live instance notes
 
 - Tracker: `https://tracker.zz.hgdev.com` (public) / `tracker.vpn.hgdev.com`

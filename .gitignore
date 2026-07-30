@@ -17,3 +17,13 @@ dist/
 
 # Stray saved web pages (e.g. docroot.html); no .html is tracked or ever has been.
 *.html
+
+# Playwright storage state = LIVE session cookies + localStorage, i.e. a credential for
+# whatever the browser was logged into. This repo is PUBLIC, so it must never be commitable.
+# Measured (#585): the only thing that can produce one is the `browser_storage_state` tool,
+# and it REFUSES any path outside the MCP client's workspace root ("File access denied: …
+# is outside allowed roots") — so it can only ever write INTO this repo, and with no
+# filename given it writes `storage-state-<timestamp>.json` at the root. Nothing here sets
+# PLAYWRIGHT_MCP_STORAGE_STATE; a machine-local opt-in keeps its file outside the repo.
+*storage-state*.json
+*storage_state*.json
