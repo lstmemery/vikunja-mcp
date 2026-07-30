@@ -336,12 +336,15 @@ def gc_workspaces(cwd: Path | None = None, workflow=None) -> dict:
     derivation (`worktree_root`, `_build_workflow`'s config lookup) agrees with create/release
     regardless of where --gc itself was invoked (review Critical 1's fix, applied here too).
 
-    Review Critical 2: `here` is ALSO never reaped, even if its own task reads as dead — a task
-    leaves Build the instant its agent calls `advance(to='review')`, and that agent is very
-    often still sitting in the tree afterwards (about to release it itself, or simply running
-    its next --gc tick before it gets there). Destroying the directory a live process is
-    standing in is not "a red test", it is that process's shell cwd vanishing underneath it —
-    worse than any of the guards below, which only ever refuse a DIFFERENT tree.
+    Review Critical 2: `here` is ALSO never reaped once its task reads as DEAD — a task leaves
+    Build the instant its agent calls `advance(to='review')`, and that agent is very often
+    still sitting in the tree afterwards (about to release it itself, or simply running its
+    next --gc tick before it gets there). Destroying the directory a live process is standing
+    in is not "a red test", it is that process's shell cwd vanishing underneath it. Round 2,
+    Minor 1: this guard runs AFTER the liveness check, not before — a LIVE self-tree (the
+    mainline: --gc runs every tick from inside the agent's own tree) is just another live tree
+    and produces no entry in either list; only a self-tree that is ALSO dead reaches this
+    guard and gets refused-and-reported, which is the one case a human actually needs to see.
     """
     here = repo_root(cwd).resolve()
     root = _main_worktree(here)
@@ -368,16 +371,24 @@ def gc_workspaces(cwd: Path | None = None, workflow=None) -> dict:
             if parsed is None:
                 continue                       # under our root but not task-<id>/review-<id>
             role, task_id = parsed
+            if task_id in alive[role]:
+                # Review round 2, Minor 1: the alive check runs BEFORE the self-guard below.
+                # --gc runs on every tick from inside the agent's OWN tree (the docstring's
+                # own mainline), so a healthy self-tree used to fall through to the self-guard
+                # and get reported under `kept` on every single sweep — a signal that is never
+                # empty is a signal nobody reads. A live self-tree now takes this branch like
+                # any other live tree: no entry in EITHER list. A DEAD self-tree still reaches
+                # the guard below and is still refused and reported — exactly the case a human
+                # needs to see.
+                continue
             if wt["path"] == here:
-                # Critical 2's guard: never reap the tree gc itself is running from, alive or
-                # not — see the docstring above.
+                # Critical 2's guard: never reap the tree gc itself is running from — reached
+                # only once the tree is ALREADY known dead (see above).
                 kept.append({
                     "released": False, "task_id": task_id, "role": role,
                     "path": str(wt["path"]),
                     "reason": "gc was invoked from inside this worktree — refusing to remove it",
                 })
-                continue
-            if task_id in alive[role]:
                 continue
             try:
                 result = _release_locked(root, task_id, role)

@@ -423,6 +423,25 @@ def test_gc_from_inside_a_dead_tree_completes_the_whole_sweep(repo, tracker):
     assert self_path.exists()
 
 
+def test_gc_from_inside_a_live_self_tree_reports_nothing(repo, tracker):
+    """Round 2, Minor 1: --gc runs on EVERY tick from inside the agent's own tree — that is
+    the mainline, not a corner case — so a healthy self-tree must not show up in `kept` every
+    single sweep (a signal that is never empty is a signal nobody reads). The alive check now
+    runs BEFORE the self-guard, so a LIVE self-tree is just another live tree: no entry in
+    EITHER list. (test_gc_from_inside_a_dead_tree_completes_the_whole_sweep above is the
+    complementary case — a DEAD self-tree must still be refused and reported.)"""
+    api, wf = tracker
+    task = api.add_task("live work", "Queue")
+    wf.claim(task["id"])
+    self_path = Path(ensure_workspace(task["id"], cwd=repo)["path"])   # alive, cwd is INSIDE it
+
+    res = gc_workspaces(cwd=self_path, workflow=wf)
+
+    assert res["released"] == []
+    assert res["kept"] == []
+    assert self_path.exists()
+
+
 # --- Task 4 review, round 1: Importants ---
 
 def test_gc_isolates_a_release_failure_and_keeps_sweeping_the_rest(repo, tracker):
@@ -475,9 +494,15 @@ def test_gc_reads_liveness_under_the_lock(repo, tracker):
     gc_workspaces(cwd=repo, workflow=ProbingWorkflow())
 
 
-def test_run_workspace_gc_dispatches_to_gc_workspaces(monkeypatch, capsys):
+def test_run_workspace_gc_dispatches_to_gc_workspaces(monkeypatch, capsys, tmp_path):
     """Important 6: Task 3 established run_workspace's dispatch as a TESTED contract; --gc
-    must not be the one branch that only ever ran by hand."""
+    must not be the one branch that only ever ran by hand.
+
+    Round 2 hygiene: chdir into tmp_path even though gc_workspaces is stubbed here — the house
+    negative-pin rule means someone WILL delete that stub one day to prove it bites, and at
+    that moment "safe because gc_workspaces never really runs" stops being true. The isolation
+    must be structural (an inert cwd), not incidental (a mock that happens to intercept it)."""
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
         "vikunja_mcp.workspace_cmd.gc_workspaces", lambda: {"released": [], "kept": []}
     )
@@ -486,9 +511,10 @@ def test_run_workspace_gc_dispatches_to_gc_workspaces(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out.strip()) == {"released": [], "kept": []}
 
 
-def test_run_workspace_gc_combined_with_a_task_id_is_refused(monkeypatch, capsys):
+def test_run_workspace_gc_combined_with_a_task_id_is_refused(monkeypatch, capsys, tmp_path):
     """Important 6: argparse alone lets `42 --gc` through and --gc silently wins, ignoring
     the task id the caller plainly meant to act on — that must be an explicit error."""
+    monkeypatch.chdir(tmp_path)                    # see the hygiene note above
     calls = []
     monkeypatch.setattr("vikunja_mcp.workspace_cmd.gc_workspaces", lambda: calls.append(1))
     code = run_workspace(["42", "--gc"])
@@ -498,7 +524,8 @@ def test_run_workspace_gc_combined_with_a_task_id_is_refused(monkeypatch, capsys
     assert "cannot be combined" in err["error"]
 
 
-def test_run_workspace_gc_combined_with_release_is_refused(monkeypatch, capsys):
+def test_run_workspace_gc_combined_with_release_is_refused(monkeypatch, capsys, tmp_path):
+    monkeypatch.chdir(tmp_path)                    # see the hygiene note above
     calls = []
     monkeypatch.setattr("vikunja_mcp.workspace_cmd.gc_workspaces", lambda: calls.append(1))
     code = run_workspace(["--release", "9", "--gc"])
