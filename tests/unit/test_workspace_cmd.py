@@ -16,7 +16,8 @@ import pytest
 
 from tests.unit.fakes import FakeAPI
 from vikunja_mcp import workspace_cmd
-from vikunja_mcp.api import VikunjaAPI
+from vikunja_mcp.api import _UNKNOWN_PAGE_SIZE_MAX_PAGES as MAX_DEGRADED_PAGES
+from vikunja_mcp.api import VikunjaAPI, VikunjaError
 from vikunja_mcp.config import ENV_WORKTREE_ROOT
 from vikunja_mcp.workflow import STAGES, Workflow
 from vikunja_mcp.workspace_cmd import (
@@ -2095,6 +2096,57 @@ def test_gc_keeps_every_live_tree_when_the_servers_pages_are_smaller_than_the_gu
     assert res["kept"] == []
     for task_id, path in trees.items():
         assert path.is_dir(), f"{why}: live tree for {task_id} was destroyed"
+        assert _git(repo, "branch", "--list", f"task/{task_id}").strip()
+
+
+
+# --- VMCP-92 (548): the DEGRADED read is bounded, and its bound keeps gc at KEEP ---
+
+def test_gc_keeps_every_tree_when_the_degraded_board_read_hits_its_ceiling(repo):
+    """The bound added to `view_tasks` on an unknown page size RAISES rather than returning a
+    short board, and this is why that direction matters — end to end through the reaper rather
+    than reasoned about.
+
+    A server whose `/info` is down and whose board never converges (a brand-new Build task on
+    every page) used to page forever; it now raises, and the exception has to leave `view_tasks`,
+    leave `_read_liveness` and abandon the sweep BEFORE the reap loop. Had the read returned its
+    partial board instead, every one of these quiesced trees would read as dead and be destroyed
+    — the exact VMCP-89 reap, re-opened by a different route."""
+    trees = {}
+    for task_id in (801, 802, 803):
+        trees[task_id] = Path(ensure_workspace(task_id, cwd=repo)["path"])
+        _quiesce(trees[task_id])
+
+    sent = []
+
+    def handler(request):
+        path = request.url.path
+        if path.endswith("/info"):
+            return httpx.Response(503, json={"message": "unavailable"})
+        if path.endswith("/user"):
+            return httpx.Response(200, json={"id": 1, "username": "agent"})
+        if path.endswith("/views"):
+            return httpx.Response(200, json=[{"id": 7, "view_kind": "kanban", "title": "Kanban"}])
+        page = int(request.url.params.get("page", 1))
+        sent.append(page)
+        if len(sent) > 3 * MAX_DEGRADED_PAGES:      # the loop does not terminate -> fail LOUDLY
+            raise RuntimeError("the liveness read paged past three times the ceiling")
+        return httpx.Response(200, json=[
+            {"id": 2, "title": "Build",
+             "tasks": [{"id": 9000 + page, "title": f"t{page}", "assignees": [{"id": 1}]}]},
+        ])
+
+    client = httpx.Client(base_url="http://tracker.invalid/api/v1",
+                          transport=httpx.MockTransport(handler))
+    wf = Workflow(VikunjaAPI("http://tracker.invalid", "t", client=client, max_retries=0), 10)
+
+    with pytest.raises(VikunjaError) as exc:
+        gc_workspaces(cwd=repo, workflow=wf)
+
+    assert "never finished paging" in exc.value.message
+    assert len(sent) == MAX_DEGRADED_PAGES
+    for task_id, path in trees.items():
+        assert path.is_dir(), f"live tree for {task_id} was destroyed"
         assert _git(repo, "branch", "--list", f"task/{task_id}").strip()
 
 

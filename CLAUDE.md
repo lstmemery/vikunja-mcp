@@ -71,7 +71,10 @@ docker rm -f vikunja-test
   There is deliberately no fallback constant: a guessed size (the old
   `_PAGE_SIZE_FALLBACK` = 50) silently TRUNCATED the board on an instance whose real
   limit was smaller, and a truncated board told `--gc` a live task was gone — so it
-  reaped a live worktree (tracker #543). "Unknown" must stay unknown.
+  reaped a live worktree (tracker #543). "Unknown" must stay unknown. That branch is
+  also BOUNDED — `_UNKNOWN_PAGE_SIZE_MAX_PAGES` requests, and hitting it RAISES rather
+  than returning a short board (tracker #548): a truncated board is indistinguishable
+  from tasks that are genuinely gone, so a read that cannot finish must fail LOUDLY.
 - `src/vikunja_mcp/workflow.py` — the product rules: stages, gates,
   assign-then-verify claim (with self-heal), review offering (verdict vs
   worklog timestamps), comment markers `[claim] [spec] [worklog] [нужен
