@@ -44,12 +44,31 @@ dist/
 # accepts ANY filename anywhere under the root, so e.g. `tracker-login.json` is not covered,
 # and no pattern broad enough to catch that is safe to write here. The non-name-based half
 # of the guard lives in tests/unit/test_repo_browser_isolation.py: it asks git what
-# `git add -A` would publish and fails on any file of storage-state SHAPE under ANY name.
-# That is a GATE (red suite before push, red CI after), not a lock on `git commit`.
+# `git add -A` would publish and fails on any file of storage-state SHAPE under ANY name and at
+# ANY SIZE — a candidate too large to read is REPORTED, not skipped. The format carries a
+# localStorage array PER ORIGIN, filled from every origin the context visited, so an export has
+# no fixed upper size; measured, a correctly-shaped one with a single 4 MiB localStorage entry is
+# 4,194,662 bytes. "Too big to classify" is therefore what a fat credential looks like, and the
+# first version of this scan capped itself at 1 MiB and let exactly that walk past. It is a GATE
+# (red suite before push, red CI after), not a lock on `git commit`.
 #
-# Price of the bare names below: a legitimate file called exactly `state.json`/`auth.json`/
-# `cookies.json`/`session.json` is skipped by `git add -A`. A plain `git add <path>` still
-# refuses out loud and points at `-f`, so the failure mode is visible, not silent.
+# PRICE of the bare names below, measured with `git check-ignore --no-index -v` rather than read
+# off the patterns. `state*.json` is a GLOB, and a pattern with no slash matches at ANY DEPTH, so
+# it also hides `states.json`, `state-machine.json`, `state-cache.json`, `statement.json` and
+# `src/data/state-defaults.json` — any basename starting with `state`, anywhere in the tree.
+# `auth.json`/`cookies.json`/`session.json` are exact basenames but likewise at any depth
+# (`pkg/auth.json` too). Only `git add -A` skips them silently; a plain `git add <path>` still
+# refuses out loud and points at `-f`.
+#
+# And this is a DIFFERENT LIST on different machines, because git folds the case of ignore
+# patterns only where `core.ignorecase` is true — which it sets from the filesystem at clone
+# time: true on macOS (this repo's checkouts, and where the MCP browser that writes these files
+# actually runs), false on Linux, where CI runs. Measured with `-c core.ignorecase=false`:
+# `storageState.json` — Playwright's OWN spelling, the `storageState` option and
+# `context.storageState({path})`, so the likeliest name a reader of the upstream API types —
+# is covered here and NOT covered on Linux, as are `Auth.json`, `Cookies.json`, `State.json`.
+# No leak follows: the shape scan reads shape, not names, on either platform. Both directions
+# are pinned, with `core.ignorecase` forced, so the pins mean the same thing on both.
 *storage-state*.json
 *storage_state*.json
 *storagestate*.json

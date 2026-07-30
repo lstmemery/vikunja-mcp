@@ -31,19 +31,29 @@ that the committed settings never carry such a path, and that such a file does n
 That second half is deliberately TWO guards of different kinds, because a name-based one
 cannot do the job alone — and claiming it could was this card's own first defect, caught in
 review by CONSTRUCTING the leak it did not cover. `browser_storage_state` accepts any filename
-anywhere under its root, so `.gitignore` can only exclude a LIST of names. Hence both
-directions are pinned: `COVERED_NAMES` are excluded, `UNCOVERED_NAMES` are NOT, so the prose
-that describes the guard is falsifiable against it either way and cannot quietly drift into
-promising completeness again. The guarantee that does NOT depend on the name is
+anywhere under its root, so `.gitignore` can only exclude a LIST of names. Hence FOUR directions
+are pinned, one per thing the prose claims: `COVERED_NAMES` are excluded, `UNCOVERED_NAMES` are
+NOT, `COLLATERAL_NAMES` are what the rules cost in ordinary files, and `CASE_VARIANT_NAMES` hold
+that the list is a different list on Linux than on macOS. Each sentence describing the guard is
+falsifiable against it, so none can quietly drift into promising more than it does again. The
+guarantee that does NOT depend on the name is
 `test_no_file_of_storage_state_shape_is_reachable_by_git`, which asks git what `git add -A`
-would publish and reads each candidate's SHAPE.
+would publish and reads each candidate's SHAPE — at any size, since a candidate too large to
+read is reported rather than skipped (see `SHAPE_SCAN_MAX_BYTES`, whose first version made the
+guard evadable by making the file bigger).
 
 It is a gate, not a lock: it turns a leak red in the pre-push run this repo's integration
-recipe already requires and in CI; it cannot stop a `git commit`. A `.git/hooks` pre-commit
-hook could, and is deliberately not used — hooks live in `.git/`, which no clone materialises,
-so the guarantee would exist only on whichever machine ran an installer. That is precisely the
-"correct on the author's disk and reaching nobody" failure the settings-delivery pin below was
-written after being bitten by.
+recipe already requires and in CI; it cannot stop a `git commit`. Nothing here can, and the two
+mechanisms that look like they could were built rather than argued about. A `.git/hooks`
+pre-commit hook is not carried by a clone at all. The obvious answer to that — commit the hooks
+and point `core.hooksPath` at them — was constructed: origin with `.githooks/pre-commit` (exit
+1) plus `core.hooksPath=.githooks` blocks its own commit; in a fresh clone the DIRECTORY arrives
+and `core.hooksPath` does NOT (it is local config, not content), and the clone's commit went
+through unblocked. Those two measurements generalise without needing a third: a hook manager can
+only put its trigger in a file under `.git/` or in a local config key, and neither is content, so
+every "stronger" option reduces to "works on whichever machine ran an installer" — which is
+precisely the "correct on the author's disk and reaching nobody" failure the settings-delivery
+pin below was written after being bitten by.
 """
 import json
 import subprocess
@@ -85,15 +95,72 @@ UNCOVERED_NAMES = (
     "storage-state.json5",    # the right words, the wrong extension
 )
 
+# What the name list COSTS, which is a different question from what it covers and was stated
+# too narrowly ("a file called exactly `state.json`") until it was measured. `state*.json` is a
+# GLOB, and a .gitignore pattern without a slash matches at ANY DEPTH, so these ordinary files
+# are hidden from `git add -A` too. Pinned because .gitignore now states this as the price, and
+# a stated price with nothing holding it is how this card shipped an overclaim the first time.
+COLLATERAL_NAMES = (
+    "states.json",
+    "state-machine.json",
+    "state-cache.json",
+    "src/data/state-defaults.json",     # any depth, not just the root
+    "statement.json",                   # `state` is a PREFIX, not a word
+)
+
+# Names that the list covers on one platform and not the other. `core.ignorecase` is not a
+# preference — git sets it from the filesystem at clone time: true on this repo's macOS
+# checkouts, false on Linux, where CI runs. So the coverage table is platform-local, and
+# `storageState.json` is the case that matters, because that camelCase is Playwright's OWN
+# spelling for this thing (the `storageState` option; `context.storageState({path})`) and so is
+# a name someone working from the upstream API can arrive at without inventing anything. No leak
+# follows — the shape scan catches these under any name on either platform — but the list must
+# not read as universal when it is not.
+CASE_VARIANT_NAMES = (
+    "storageState.json",
+    "StorageState.json",
+    "Auth.json",
+    "Cookies.json",
+    "State.json",
+)
+
 # Playwright's storage-state schema, measured off a real export: a JSON object with exactly
 # these two list-valued keys (cookie entries carry name/value/domain/path/expires/httpOnly/
 # secure/sameSite; origin entries carry origin/localStorage). This is what the name-independent
 # guard matches on.
 STORAGE_STATE_SHAPE_KEYS = ("cookies", "origins")
 
-# A storage state is ~450 bytes. The cap keeps the scan from reading anything large; a
-# credential export that big is not a thing, and the tracked tree has no JSON near it.
-SHAPE_SCAN_MAX_BYTES = 1 << 20
+# The scan has to READ a candidate to classify it, so it needs a ceiling on a single read. What
+# that ceiling may NOT be is a silent skip, and the first version of it was exactly that:
+# `1 << 20`, justified by "a credential export that big is not a thing" — a universal about every
+# storage state there is, inferred from one 455-byte export and never measured.
+#
+# MEASURED (constructed here, synthetic values throughout): a correctly-shaped export with one
+# origin, one small session key and one 4 MiB localStorage entry is 4,194,662 bytes. Under the old
+# cap it sat in the tree as `?? tracker-login.json` — the very name UNCOVERED_NAMES designates as
+# layer two's whole reason to exist — and the suite measured `1 passed`; flipping ONLY the cap to
+# `1 << 30` measured FAIL. Layer two was evadable by making the file BIGGER, and the cap alone was
+# what allowed it.
+# STRUCTURAL, not measured here, and it is what says no cap can be justified as "bigger than any
+# credential": the format carries a `localStorage` array PER ORIGIN (that is the shape this file
+# matches on), and Playwright fills it from every origin the context visited, so the size grows
+# with origins x their contents and has no fixed upper bound to appeal to. Per-origin localStorage
+# quotas are documented by browsers in the single-digit-MB range, which is why the 4 MiB above is
+# an ordinary file rather than an exotic one — that number is cited, not measured here.
+#
+# So this is a READ-SAFETY ceiling, not a claim about credentials, and crossing it FAILS the gate
+# instead of skipping the file: "too big to classify" and "a fat credential" look identical from
+# here, and only a human can tell them apart.
+#
+# What it costs, measured on this tree: the candidate set (`git ls-files` union
+# untracked-and-not-ignored) is 62 files / 1.582 MiB, the largest being `uv.lock` at 148,126 bytes
+# — 453x below the ceiling, so today it neither skips nor reports anything, and the old 1 MiB cap
+# had nothing above it either. That cap bought exactly zero while leaving the hole above. What
+# this one buys: one `read_text` + `json.loads` cannot pull an unbounded working-tree file into
+# memory. Measured at that size: a 67,109,130-byte shaped file reads and parses in 72 ms with a
+# 128 MiB peak (tracemalloc), which is the most this gate will spend before it stops guessing and
+# reports instead.
+SHAPE_SCAN_MAX_BYTES = 64 << 20
 
 # playwright-core's `envToBoolean`: only these two strings are true. "false"/"0" are false and
 # ANYTHING ELSE is ignored entirely — which is why the value, not the key, is what gets pinned.
@@ -107,8 +174,15 @@ def _git(*args: str) -> subprocess.CompletedProcess:
     )
 
 
-def _ignore_rule(path: str) -> tuple[bool, str | None, str | None]:
+def _ignore_rule(path: str, *, ignorecase: bool | None = None) -> tuple[bool, str | None, str | None]:
     """Ask git whether it excludes `path`, AND which rule decided — `(ignored, source, pattern)`.
+
+    `ignorecase` forces `core.ignorecase` for the call instead of taking whatever this checkout
+    was cloned with. That is not a knob: git sets that key from the FILESYSTEM at clone time, so
+    the same `.gitignore` covers a different set of names on macOS (true) than on Linux (false),
+    which is where CI runs. Left as None the call reports what THIS machine does; passed
+    explicitly it reports what a given platform does, identically on either — which is the only
+    way a pin about case can mean the same thing in both places.
 
     Measured rather than inferred from the .gitignore text, and every part of this call shape
     was established by experiment, including one that came back as a false green:
@@ -132,8 +206,9 @@ def _ignore_rule(path: str) -> tuple[bool, str | None, str | None]:
     "not ignored" — a green from a failed measurement, the exact failure shape this repo has
     been bitten by. It raises instead.
     """
-    verdict = _git("check-ignore", "--no-index", "-q", "--", path)
-    details = _git("check-ignore", "--no-index", "-v", "--", path)
+    config = () if ignorecase is None else ("-c", f"core.ignorecase={str(ignorecase).lower()}")
+    verdict = _git(*config, "check-ignore", "--no-index", "-q", "--", path)
+    details = _git(*config, "check-ignore", "--no-index", "-v", "--", path)
     for proc in (verdict, details):
         if proc.returncode not in (0, 1):
             raise AssertionError(
@@ -405,6 +480,88 @@ def test_the_name_list_is_known_to_be_incomplete(path):
         "this name is NOT protected. The guard and the claim about it move together"
 
 
+@pytest.mark.parametrize("path", COLLATERAL_NAMES)
+def test_the_state_glob_hides_more_than_a_file_called_state_json(path):
+    """The PRICE of layer one, pinned in the same way its coverage is — because it was misstated.
+
+    `.gitignore` used to price these rules as costing "a legitimate file called exactly
+    `state.json`/`auth.json`/`cookies.json`/`session.json`". Measured with `git check-ignore
+    --no-index -v`, both halves of that are wrong: `state*.json` is a glob over any basename
+    STARTING with `state`, and a pattern containing no slash matches at any DEPTH, so
+    `src/data/state-defaults.json` goes too — as does `pkg/auth.json` for the exact-name rules.
+    Nothing is harmed today: `git ls-files '*.json'` returns exactly three files
+    (`.claude/settings.json`, `.mcp.json`, `opencode.json`) and none of them matches. But the
+    next contributor adding a legitimate `state-*.json` fixture would lose it from `git add -A`
+    silently, and the comment they would read to find out told them it could not happen.
+
+    This is not an argument for narrowing the rule — `state*.json` is what catches `state585.json`
+    (the name review dropped a live cookie under) and `state.json` (the name this guard's own
+    docstring had called "the obvious way" while not covering it). It is the requirement that the
+    price stay stated at its measured size. Narrowing the rule turns this red, which is the same
+    tripwire `test_the_name_list_is_known_to_be_incomplete` provides in the other direction.
+
+    MUTATION-CHECKED (line-precise rule removal, `__pycache__` cleared, .gitignore restored from
+    a COPY): control 5 passed; drop `state*.json` -> FAIL for all 5; narrow it to the literal
+    `state.json` -> FAIL for all 5; anchor it as `/state*.json` -> FAIL for
+    `src/data/state-defaults.json` alone, the round that isolates the depth half from the glob
+    half.
+    """
+    ignored, source, pattern = _ignore_rule(path)
+    assert ignored and source == ".gitignore", \
+        f"{path!r} is no longer hidden by this repo's .gitignore (git applied {pattern!r} from " \
+        f"{source}). That is a coverage change in disguise: `state*.json` was narrowed or " \
+        "anchored, so the price stated in .gitignore — that the glob also swallows ordinary " \
+        "`state…json` files at any depth — is now wrong in the other direction. If the rule was " \
+        "narrowed on purpose, update that sentence and check `state.json`/`state585.json` are " \
+        "still covered, because they are the names the leak was constructed under"
+
+
+@pytest.mark.parametrize("path", CASE_VARIANT_NAMES)
+def test_the_name_list_covers_a_different_set_on_linux_than_on_macos(path):
+    """The coverage table is platform-local, and saying so is the whole point of this pin.
+
+    git decides case-folding of ignore patterns from `core.ignorecase`, which it sets from the
+    FILESYSTEM when the repo is cloned: true on macOS (where this repo is developed and where
+    the playwright MCP server that writes these files actually runs), false on Linux (where CI
+    runs). Measured on both settings: `storageState.json` — Playwright's OWN spelling for this
+    thing, the `storageState` option and `context.storageState({path})`, so a name reachable
+    straight from the upstream API — is covered here by `*storagestate*.json` and NOT covered on
+    Linux. Same for `Auth.json`, `Cookies.json`, `State.json`.
+
+    Both directions are asserted, with `core.ignorecase` FORCED rather than inherited, so this
+    pin reads the same on either platform instead of quietly testing one of them. That is the
+    trap in pinning a case fact at all: a pin that just asked "is `storageState.json` ignored?"
+    would be green here and red in CI, or vice versa, and would be measuring the runner.
+
+    No leak follows — layer two reads shape, not names, and catches these on either platform —
+    so this is not a hole, it is a boundary that the .gitignore comment now states. Adding case
+    variants to the rules is a fine decision; it just has to turn this red first and move the
+    sentence with it.
+
+    MUTATION-CHECKED (`__pycache__` cleared, the parametrised count verified with
+    `--collect-only`, .gitignore restored from a COPY): control 5 passed; append a
+    case-insensitive rule `*[Ss]torage[Ss]tate*.json` -> FAIL for `storageState.json` and
+    `StorageState.json` on the Linux half, the two green -> so each name is judged on its own;
+    append `Auth.json` -> FAIL for `Auth.json` alone; drop `*storagestate*.json` -> FAIL for
+    `storageState.json` and `StorageState.json` on the macOS half. Both halves can fail, which
+    is what makes this a statement about the DIFFERENCE and not about either platform.
+    """
+    on_macos, mac_source, _ = _ignore_rule(path, ignorecase=True)
+    assert on_macos and mac_source == ".gitignore", \
+        f"on a case-folding checkout (macOS, `core.ignorecase=true`) this repo's .gitignore no " \
+        f"longer covers {path!r}. The .gitignore comment says it does, and macOS is where the " \
+        "MCP server that writes these files actually runs — so this is the half that matters " \
+        "in practice. Either restore the rule or move the name out of CASE_VARIANT_NAMES"
+
+    on_linux, linux_source, linux_pattern = _ignore_rule(path, ignorecase=False)
+    assert not on_linux, \
+        f"on a case-SENSITIVE checkout (Linux, CI) {path!r} is now ignored by " \
+        f"{linux_pattern!r} from {linux_source}. If that was deliberate — a case variant added " \
+        "to the rules — this is the intended tripwire, not a bug: the .gitignore comment and " \
+        "CLAUDE.md currently tell the reader this list is CASE-DEPENDENT and that this name is " \
+        "covered on macOS only. Update both, and move the name into COVERED_NAMES"
+
+
 @pytest.mark.parametrize("path", (
     ".playwright-mcp/page-2026-07-30T20-35-12-319Z.yml",
     ".playwright-mcp/storage-state-2026-07-30T20-35-12-331Z.json",
@@ -458,6 +615,12 @@ def test_no_file_of_storage_state_shape_is_reachable_by_git():
     name layer structurally cannot — a `git add -f`, and a file committed before any rule
     existed. In CI, where the checkout is clean, the index half is the whole scan.
 
+    Size is the axis this test got WRONG on its first outing, and the fix is in
+    `SHAPE_SCAN_MAX_BYTES`: the ceiling on a single read is a cost bound, not a statement that
+    credentials are small, so a candidate above it is REPORTED as unclassified rather than
+    skipped. There is no size at which this scan quietly stops looking, because there is no
+    size above which a storage state stops being one.
+
     Honest boundary, stated because this card is about claims outrunning evidence: this is a
     GATE, not a lock. It goes red in the pre-push `uv run pytest tests/unit -q` the
     integration recipe already requires, and in CI. It does not stop `git commit`, and it
@@ -467,13 +630,35 @@ def test_no_file_of_storage_state_shape_is_reachable_by_git():
     unavoidable, printing it would defeat the purpose.
 
     MUTATION-CHECKED (`__pycache__` cleared, exactly 1 test selected per round, no
-    `git checkout --` anywhere near an untracked subject): control PASS; write a real
-    storage-state-shaped file (synthetic values) as `tracker-login.json`, which NO ignore rule
-    covers -> FAIL naming that path; the same content under `state.json`, which IS ignored ->
-    PASS, correctly, since `git add -A` cannot take it; that same ignored file then `git add
-    -f`-ed into the index -> FAIL, the round that proves the index half is not decorative; a
-    non-storage-state JSON object carrying only one of the two keys -> PASS, so the matcher is
-    not "any JSON".
+    `git checkout --` anywhere near an untracked subject; every probe synthetic, every probe
+    deleted): control PASS; write a real storage-state-shaped file (synthetic values) as
+    `tracker-login.json`, which NO ignore rule covers -> FAIL naming that path; the same content
+    under `state.json`, which IS ignored -> PASS, correctly, since `git add -A` cannot take it;
+    that same ignored file then `git add -f`-ed into the index -> FAIL, the round that proves
+    the index half is not decorative; a non-storage-state JSON object carrying only one of the
+    two keys -> PASS, so the matcher is not "any JSON".
+
+    And the rounds that hold the size axis, all built rather than reasoned about:
+
+    * the same shape grown to 4,194,662 bytes by one 4 MiB localStorage entry (well inside a
+      single origin's quota), still `?? tracker-login.json` -> FAIL. Against the code as it
+      stood, with `SHAPE_SCAN_MAX_BYTES = 1 << 20`, that same file measured `1 passed`, and
+      flipping ONLY that constant to `1 << 30` measured FAIL: the ceiling, alone, was what let
+      it through. The guard was evadable by making the file BIGGER.
+    * the same shape grown PAST the ceiling (67,109,154 bytes) -> FAIL, on the second
+      assertion, naming it unclassified. That is the round the old code could not produce at
+      all: it reported nothing.
+    * the 4 MiB file again with the ceiling put BACK to `1 << 20`, nothing else touched -> still
+      FAIL, and the message measured is "could NOT be classified", i.e. the file crossed from
+      `offenders` to `unclassified` and the verdict did not move. Predicted PASS, measured FAIL,
+      and the measurement is the stronger statement: there is no value of the ceiling at which
+      this file goes quiet. Lowering it trades a precise finding for a vague one, never for
+      silence — which is the whole repair, since the ceiling is now about what the scan can
+      afford to read and not about how big a credential can be.
+    * a large file that is NOT of the shape gets no special case: above the ceiling it is
+      reported too, because not reading it is exactly why its shape is unknown. The remedy the
+      message gives (`.gitignore` it) also removes it from `git add -A`'s reach, so the noise
+      resolves in the same direction as the guard.
     """
     candidates = set()
     for args in (("ls-files", "-z"), ("ls-files", "--others", "--exclude-standard", "-z")):
@@ -481,12 +666,21 @@ def test_no_file_of_storage_state_shape_is_reachable_by_git():
         assert listed.returncode == 0, f"git {' '.join(args)} failed: {listed.stderr.strip()}"
         candidates.update(p for p in listed.stdout.split("\0") if p)
 
-    offenders = []
+    offenders, unclassified = [], []
     for rel in sorted(candidates):
         path = REPO_ROOT / rel
         try:
-            if not path.is_file() or not 0 < path.stat().st_size <= SHAPE_SCAN_MAX_BYTES:
+            if not path.is_file():
                 continue
+            size = path.stat().st_size
+        except OSError:
+            continue
+        if size == 0:
+            continue  # an empty file cannot be a JSON object
+        if size > SHAPE_SCAN_MAX_BYTES:
+            unclassified.append(rel)  # REPORTED, never skipped — see SHAPE_SCAN_MAX_BYTES
+            continue
+        try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue  # unreadable, not text, or not JSON — cannot be a storage state
@@ -501,6 +695,16 @@ def test_no_file_of_storage_state_shape_is_reachable_by_git():
         "lists), i.e. LIVE session cookies, from a PUBLIC repo. The .gitignore name list did " \
         "not cover this name, which is expected — that is why this check reads shape instead. " \
         "Delete the file (and `git rm --cached` it if it is tracked); do not just rename it"
+
+    assert not unclassified, \
+        f"{unclassified} — bigger than the {SHAPE_SCAN_MAX_BYTES}-byte ceiling this scan will " \
+        "read, so it could NOT be classified. That is reported rather than skipped on purpose: " \
+        "a storage state carries the full localStorage of every origin visited (5-10 MB of " \
+        "quota EACH), so a large file is precisely what a fat credential looks like, and a " \
+        "silent skip here is how this guard was evaded once already. Look at what it is. If it " \
+        "is not a credential: `.gitignore` it — which also removes it from `git add -A`'s reach " \
+        "— or, if it genuinely has to be committable, raise SHAPE_SCAN_MAX_BYTES together with " \
+        "the measurement in the comment that justifies it"
 
 
 def test_no_storage_state_file_is_tracked_today():

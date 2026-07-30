@@ -386,17 +386,32 @@ under a name the rule missed, and a guard oversold is worse than one honestly de
 only ever cover a LIST: here that is the tool's default
 (`.playwright-mcp/storage-state-<timestamp>.json` — the output dir, NOT the repo root, and
 `.playwright-mcp/` is ignored wholesale, which also settles #607's page snapshots), all three
-spellings of `storage-state`, `state*.json`, `auth.json`/`cookies.json`/`session.json`, and
-`.auth/` for Playwright's documented `playwright/.auth/user.json`. It does NOT cover
-`tracker-login.json`, and no pattern that would is safe to write here. The guarantee that
+lower-case spellings of `storage-state`, `state*.json`, `auth.json`/`cookies.json`/
+`session.json`, and `.auth/` for Playwright's documented `playwright/.auth/user.json`. It does
+NOT cover `tracker-login.json`, and no pattern that would is safe to write here. Two measured
+qualifications on that list, both of which read as universal until you check them: the
+`state*.json` glob also hides ordinary files (`states.json`, `src/data/state-defaults.json` —
+any basename starting with `state`, at any depth), and the whole list is CASE-DEPENDENT — git
+folds case only where `core.ignorecase` is true, which it takes from the filesystem at clone
+time, so `storageState.json` (Playwright's own `context.storageState({path})` spelling) is
+covered on a macOS checkout and NOT on Linux, where CI runs. The guarantee that
 does not depend on the name is a unit test: it asks git what `git add -A` would publish and
 fails on any file of storage-state SHAPE (`{"cookies": […], "origins": […]}`) under any name,
-tracked or untracked. That is a GATE — red in the pre-push `pytest` run the integration
-recipe already requires, and red in CI — not a lock on `git commit`. A `.git/hooks`
-pre-commit hook would be a lock, and is deliberately not used: hooks live in `.git/`, which
-no clone materialises, so the protection would exist only on whichever machine ran an
-installer. Both halves, including the list of names deliberately left uncovered, are pinned
-in `tests/unit/test_repo_browser_isolation.py`.
+tracked or untracked, and at any SIZE — a candidate too big to read is reported rather than
+skipped. The format holds a localStorage array PER ORIGIN, filled from every origin the context
+visited, so an export has no fixed upper size and "too large to classify" is exactly what a fat
+credential looks like. That part was itself a bounce: the first version capped the scan at 1 MiB
+on the reasoning that "a credential export that big is not a thing", and a correctly-shaped
+4,194,662-byte export then walked past it with the suite green. That is a GATE — red in the pre-push `pytest` run the
+integration recipe already requires, and red in CI — not a lock on `git commit`. Nothing here
+is a lock, and the candidates were built rather than argued about: a `.git/hooks` pre-commit
+hook does not reach a clone at all, and committing the hooks with `core.hooksPath` pointed at
+them does not either — constructed, the DIRECTORY clones and `core.hooksPath` does not (it is
+local config, not content), so the clone committed unblocked. A pre-commit framework installs
+into `.git/hooks` from a per-clone step and fails the same way. Every stronger option reduces
+to "works on whichever machine ran an installer". All of it — coverage, the names deliberately
+left uncovered, the collateral, the case split — is pinned in
+`tests/unit/test_repo_browser_isolation.py`.
 
 ## Live instance notes
 
