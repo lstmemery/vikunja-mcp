@@ -11,14 +11,17 @@ NOT check semantic correctness (whether a rule is right) — that is what indepe
 widened to every change in #117, is for; this is only the net that catches a cited token going
 stale on either side.
 """
+import ast
 import inspect
 import re
+import textwrap
 from importlib.resources import files
+from pathlib import Path
 
 import pytest
 
 from tests.unit.fakes import FakeAPI
-from vikunja_mcp import config, server, workflow, workspace_cmd
+from vikunja_mcp import config, server, setup_cmd, workflow, workspace_cmd
 
 
 def _skill_text() -> str:
@@ -28,6 +31,95 @@ def _skill_text() -> str:
 
 def _workflow_src() -> str:
     return inspect.getsource(workflow)
+
+
+SKILL_SOURCE_PATH = "src/vikunja_mcp/skills/tracker/SKILL.md"   # the copy the rulebook cites
+
+
+def _calls_in(func) -> set[str]:
+    """The plain names a function actually CALLS — parsed, not grepped.
+
+    A substring pin cannot carry the premise below, and this is MEASURED, not feared: `main`
+    names `_self_heal_installed_artifacts()` in an explanatory COMMENT as well as calling it, so
+    deleting the call left `"_self_heal_installed_artifacts()" in getsource(main)` green; and the
+    heal's own body IMPORTS `sync_installed_artifacts` on the line above the call, so replacing
+    the call left that assertion green too. Both mutations are the drift the pin exists to catch,
+    and both walked straight through it. An AST call-set survives neither."""
+    tree = ast.parse(textwrap.dedent(inspect.getsource(func)))
+    return {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+
+
+def _freshness_section(text: str) -> str:
+    """The section that tells an agent WHICH copy of this rulebook is authoritative.
+
+    Scoped to its own section, like `_gc_section`: `install-skill` and the sync's opt-out env are
+    named in the MANAGED header too, so a whole-file substring could not tell "the rule is still
+    stated" from "the header still mentions the sync"."""
+    start = text.find("\n## Какую копию этих правил ты читаешь\n")
+    assert start != -1, "SKILL.md no longer states which copy of itself is authoritative"
+    end = text.find("\n## ", start + 1)
+    assert end != -1, "the freshness section no longer ends where the next section begins"
+    section = text[start:end]
+    assert 0 < len(section) < len(text), "the freshness slice is not a proper subset of SKILL.md"
+    return section
+
+
+def test_the_rulebook_says_which_copy_of_itself_is_authoritative():
+    """VMCP-96 (552): the self-heal this whole module rests on fires ONCE — from `server.main`, at
+    server start — and a session's server starts once. So the installed copy every agent reads is a
+    SNAPSHOT taken before the session's first landing, while the repo copy moves with each one. On
+    2026-07-30 eight tasks edited SKILL.md inside one session and every agent dispatched during it
+    read the pre-session text; nothing broke only because the orchestrator's briefs happened to
+    carry the current rules. The sharp case is not staleness but a wrong CONCLUSION: a task whose
+    deliverable IS a SKILL.md edit cannot verify itself through the skill — it gets the old text
+    back and reads "my edit did not take", correctly for what it can see and wrongly in fact.
+
+    The fix is a rule, not a code path (a mid-session rewrite of `~/.claude` would be a write whose
+    effect the running session cannot confirm; a per-call sync was rejected outright — filesystem
+    writes on a stdio server's hot path for a problem that only bites during self-modification).
+    So what needs a net is the rule's PREMISE and its REDIRECT TARGET, both of which are code facts
+    that can drift out from under prose that self-heals onto every consumer with no review gate:
+
+    1. Premise — the refresh is a server-START event. Move the sync anywhere else (per tool call, a
+       timer) and the section's "this text does not move inside a session" becomes a lie shipped to
+       everyone. Anchored on the CALL GRAPH (`_calls_in`, which see): the obvious substring form of
+       this pin was written first and measured green through both mutations it claims to catch.
+    2. Redirect target — the rule sends an agent to a PATH. If the skill source moves in the tree,
+       an agent following the rule finds nothing and silently falls back to the stale copy it was
+       told not to trust. Anchored on the file existing AND being byte-identical to the packaged
+       rulebook, so the pin fails on a move and on a copy that stopped being the source.
+
+    Deliberately NOT pinned: the wording of the self-verification and rollout bullets — prose is
+    review's job (see this module's docstring); the slice above only holds the section itself open.
+
+    MUTATION-CHECKED (`__pycache__` cleared between rounds, each run confirmed to select exactly 1
+    test): control PASS; drop the heal call from `server.main` -> FAIL; make the heal call
+    something other than `sync_installed_artifacts` -> FAIL; re-value `SKILL_SYNC_OPT_OUT_ENV` ->
+    FAIL; delete the cited path from the section -> FAIL; rename the section heading so the slice
+    cannot find it -> FAIL (loudly, with its own message). The first two rounds are why `_calls_in`
+    exists: under the substring pin they came back GREEN."""
+    text = _skill_text()
+    section = _freshness_section(text)
+
+    # 1. the premise: the installed copy really is refreshed at server START, once
+    assert "_self_heal_installed_artifacts" in _calls_in(server.main), \
+        "SKILL.md says the installed copy is refreshed at server start, but main no longer heals"
+    assert "sync_installed_artifacts" in _calls_in(server._self_heal_installed_artifacts), \
+        "the server's start-time heal no longer calls sync_installed_artifacts"
+    assert setup_cmd.SKILL_SYNC_OPT_OUT_ENV in text, \
+        "SKILL.md names a sync opt-out env var that setup_cmd no longer defines under that name"
+
+    # 2. the redirect target: the path the rule sends agents to IS the packaged rulebook
+    assert SKILL_SOURCE_PATH in section, \
+        "the rule no longer names the in-repo source copy it redirects agents to"
+    source = Path(__file__).resolve().parents[2] / SKILL_SOURCE_PATH
+    assert source.is_file(), f"the rulebook redirects agents to {SKILL_SOURCE_PATH}, which is gone"
+    assert source.read_text(encoding="utf-8") == text, \
+        f"{SKILL_SOURCE_PATH} is no longer the source the packaged rulebook is built from"
 
 
 def test_every_workflow_stage_is_documented_in_the_skill():

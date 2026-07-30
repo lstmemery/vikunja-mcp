@@ -159,7 +159,14 @@ docker rm -f vikunja-test
   independent review of EVERY task and not just bugs («Независимое ревью
   изменений»), and — when `wip.limit > 1` — the parallel drain:
   `exclude`/`wip_saturated`, one worktree per task, rebase-then-recheck-then-push).
-  Ships inside the wheel; root `skills` is a symlink.
+  Ships inside the wheel; root `skills` is a symlink. **THIS file is the authoritative
+  copy** — `sync_installed_artifacts` refreshes the installed `~/.claude/skills/tracker/SKILL.md`
+  once, at MCP server start, and a session's server starts once, so the text the `tracker`
+  skill serves is frozen at session start while this one moves with every landing. Working
+  here, read it from the worktree; a task whose deliverable IS a SKILL.md edit therefore
+  cannot verify itself by invoking the skill (it gets the pre-session text back and reads as
+  "my edit did not take") — `grep`/`diff` the worktree file and say so in the `[worklog]`.
+  The rule is stated for agents in the skill's own «Какую копию этих правил ты читаешь».
 
 ## Testing Philosophy
 
