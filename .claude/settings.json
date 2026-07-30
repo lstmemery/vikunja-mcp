@@ -1,0 +1,5 @@
+{
+  "env": {
+    "PLAYWRIGHT_MCP_ISOLATED": "true"
+  }
+}

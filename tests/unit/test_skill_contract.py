@@ -1488,3 +1488,89 @@ def test_the_brief_less_ceiling_reads_the_repo_toml_before_it_falls_back():
         "the orchestrator's dispatch brief still promises the agent a bare default when the limit "
         "is not named. Both halves have to agree, or the brief keeps teaching the old behaviour"
     )
+def _rule_boundary_bullet(text: str) -> str:
+    """The «Граница правила» bullet — what happens when the OTHER session is not a sibling.
+
+    Sliced out of `_shared_resources_section` rather than out of the whole file, for the reason
+    every slicer here records: `.claude/settings.json` is named TWICE inside this one bullet
+    (the remedy, then the note that a project-scoped file really does reach the MCP server's
+    env), so even a bullet-scoped substring has to be chosen with care — and a file-wide one
+    could not tell "the rule is still stated" from "the path is mentioned somewhere".
+
+    This bullet is currently the LAST item of its section, so the slice runs to the section's
+    end — which `_shared_resources_section` already bounds at the next `##` heading, and which
+    is asserted to be a proper subset there. If a later bullet is appended after it, `\\n- **`
+    ends the slice earlier; both shapes are correct, neither can silently widen to the file.
+    """
+    section = _shared_resources_section(text)
+    start = section.find("- **Граница правила.**")
+    assert start != -1, \
+        "SKILL.md no longer draws the boundary of the shared-browser rules (one session's " \
+        "subagents) — an agent meeting a SECOND `claude` session has nothing to read"
+    end = section.find("\n- **", start + 1)
+    bullet = section[start:] if end == -1 else section[start:end]
+    assert 0 < len(bullet) < len(section), \
+        "the rule-boundary slice is not a proper subset of the shared-resources section"
+    assert "#### Общий браузер" not in bullet, "the slice swallowed the subsection heading"
+    return bullet
+
+
+def test_the_cross_session_boundary_names_the_fix_and_not_only_the_symptom():
+    """VMCP-… (558): the cross-session case is the ONE browser collision an agent cannot detect
+    its way out of, and it is also the one that has a real fix — so the bullet has to carry the
+    fix, not just the diagnosis.
+
+    Measured while doing the card: `@playwright/mcp` derives its on-disk profile as
+    `mcp-<channel>-<sha256(first MCP root path)[:7]>`, so two sessions collide only when they
+    share a workspace ROOT; different repositories never do. The collision is loud (the second
+    browser refuses to start after ~7 s of lock wait) and the remedy is one committed line —
+    `PLAYWRIGHT_MCP_ISOLATED` in `.claude/settings.json`, the env equivalent of `--isolated`.
+
+    Three clauses are pinned, each as an INSTRUCTION rather than as a token, because the failure
+    mode of this bullet is not deletion but EROSION into a symptom report — "your second browser
+    will not start, that is normal" — which reads as complete, ships to every consumer over the
+    self-healing `stable` copy with no review gate (see this module's docstring), and leaves the
+    reader believing there is nothing to do:
+
+      * the DERIVATION (the profile formula) and the scope claim it supports. Without it the
+        no-collision guarantee is an assertion an agent has no reason to trust, and the first
+        person who hits an unrelated browser failure in a different repo will "generalise" the
+        rule to cover it.
+      * the remedy's KEY AND VALUE together. `"true"` is not decoration: playwright-core's
+        `envToBoolean` accepts only `"true"`/`"1"` and silently ignores everything else, so a
+        rulebook that names the variable without its value invites `"yes"` — a setting that
+        looks configured and does nothing. (The repo's own settings file is pinned against the
+        same fact in tests/unit/test_repo_browser_isolation.py.)
+      * WHERE it goes. The bare path cannot carry this: it appears twice in this bullet, so
+        pinning the token alone stays green while the sentence that says "the `env` block of
+        that file" is deleted — the same defect the `attach_file` pin above was reworked for.
+
+    Deliberately NOT pinned: the "do not add it to someone else's project silently" advice and
+    the in-memory-profile cost. Both are prose judgements, which is review's job per this
+    module's docstring; and pinning them would make a re-wording of the surrounding paragraph
+    fail a test that is supposed to hold the RULE.
+
+    MUTATION-CHECKED (`__pycache__` cleared between rounds, each round confirmed to select
+    exactly 1 test, SKILL.md restored from a COPY — never `git checkout --`, since this card's
+    edits are uncommitted and a git restore would delete the subject under test): control PASS;
+    delete the `PLAYWRIGHT_MCP_ISOLATED` sentence while leaving the surrounding prose intact ->
+    FAIL; keep the variable but replace "в блоке `env` файла `.claude/settings.json`" with a
+    vaguer "somewhere in the project config" -> FAIL, which is the round that proves the WHERE
+    clause is pinned and not just the twice-occurring path; drop the profile formula -> FAIL;
+    drop the "different repositories never collide" claim -> FAIL; replace `"true"` with
+    `"yes"` -> FAIL; rename the bullet's opening words so the slice cannot find it -> FAIL
+    loudly from the slicer; re-wrap the paragraph ACROSS two of the pinned phrases and rewrite
+    the cost sentence -> PASS, by design (`_flat` is what makes a reflow a non-event)."""
+    flat = _flat(_rule_boundary_bullet(_skill_text()))
+    assert "`mcp-<канал>-<sha256(корень воркспейса)[:7]>`" in flat, \
+        "the bullet no longer derives the browser profile from the workspace root — the " \
+        "scope claim below it becomes an assertion the reader has no reason to believe"
+    assert "РАЗНЫЕ репозитории не сталкиваются никогда" in flat, \
+        "the bullet no longer says different workspace roots never collide — an agent will " \
+        "read every unrelated browser failure as this one"
+    assert '`PLAYWRIGHT_MCP_ISOLATED` = `"true"`' in flat, \
+        "the bullet no longer names the fix with its VALUE — envToBoolean accepts only " \
+        '"true"/"1" and IGNORES anything else, so the value is the fix, not decoration'
+    assert "в блоке `env` файла `.claude/settings.json`" in flat, \
+        "the bullet no longer says WHERE the variable goes (the `env` block of a project " \
+        "`.claude/settings.json`) — the bare path also occurs in the sentence after it"

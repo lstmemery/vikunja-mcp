@@ -323,6 +323,21 @@ is PUBLIC — this repo's own token is supplied via the repo-local
 `.vikunja-mcp.env` (sits next to `.vikunja-mcp.toml`, gitignored), never
 committed.
 
+**Committed `.claude/settings.json` sets `PLAYWRIGHT_MCP_ISOLATED=true`** (tracker #558)
+— do not delete it as stray local state; `.gitignore` deliberately re-includes that one
+file (`.claude/*` + `!.claude/settings.json`). `@playwright/mcp` derives its on-disk
+browser profile as `mcp-<channel>-<sha256(first MCP root)[:7]>`, i.e. PER WORKSPACE ROOT,
+so different repos never collide — but two `claude` sessions on the SAME repo (a human's
+plus the hgdev-acp repo-agent, the normal case here) resolve to one profile, and the
+second browser refuses to start at all: `Browser is already in use … use --isolated`,
+after ~7 s of lock polling. The env var is the documented equivalent of `--isolated`
+(in-memory profile), and project-scope settings DO reach a spawned MCP server's
+environment — both measured. It is deliberately NOT a `.mcp.json` entry: a project
+`.mcp.json` does not shadow a plugin-provided server (`claude mcp list` then shows BOTH
+`plugin:playwright:playwright` and the new one), so that route adds a second browser
+instead of fixing the first. Cost: the profile lives in memory, so browser logins do not
+persist between sessions.
+
 ## Live instance notes
 
 - Tracker: `https://tracker.zz.hgdev.com` (public) / `tracker.vpn.hgdev.com`
