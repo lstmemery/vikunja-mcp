@@ -1260,3 +1260,67 @@ def test_a_page_with_no_rows_ends_a_flat_read_even_when_the_header_says_there_is
 
     assert [x["id"] for x in api.labels()] == [1, 2, 3, 4, 5], what     # mutant: [1..10]
     assert seen == [1, 2], what                                        # mutant: [1, 2, 3, 4]
+
+
+# --- VMCP-120 (595): pages the stated page size justifies cost a FLAT read nothing --------------
+#
+# The flat mirror of test_pages_the_stated_page_size_justifies_cost_the_ceiling_nothing, which has
+# stood behind the same guard in `view_tasks` since VMCP-103 and says so in its own docstring
+# ("make the counter unconditional ... and this goes red at request 121"). `_paged_list` had no
+# such test at all, so ITS guard — `if page_size is None or len(items) < page_size` — could be
+# charged unconditionally with a green suite as cover.
+#
+# And unlike VMCP-116 directly above, this card's mutation is NOT inert. MEASURED by construction
+# (real httpx over real api.py, request-capped so a mutation goes RED rather than hanging) against
+# an HONEST server — /info states max_items_per_page=5 and every page serves exactly 5, the rate
+# the server itself advertised:
+#
+#   full pages   shipped                         `if True:` (charge EVERY page)
+#   ----------   -----------------------------   ----------------------------------------------
+#      119       595 rows in 120 requests        595 rows in 120 requests — IDENTICAL, still under
+#      121       605 rows in 122 requests        RAISED 508 at request 120, nothing returned
+#      160       800 rows in 161 requests        RAISED 508 at request 120, nothing returned
+#
+# — and with that mutation applied alone (`__pycache__` cleared) the whole unit suite stayed GREEN
+# at 612 passed. So an honest long list read at the advertised rate would have started raising 508
+# instead of completing, and nothing in the suite would have said a word.
+#
+# Not cosmetic, because this is the reader every flat list uses: `projects()`, `labels()`,
+# `comments()` and `project_users()`, so the mutant's 508 is a hard failure of `setup`, `next_task`
+# and every tool that reads a card's comments. At Vikunja's own default max_items_per_page of 50
+# that cliff sits at 6 000 rows. A bound that turns a big honest list into an error is a worse bug
+# than the hang it exists to prevent — the same sentence the nested twin was written for.
+#
+# The 119-page row is why the shape below is far past the ceiling instead of one page over it: the
+# two sides AGREE under the ceiling, so a shrunken fixture would keep this test green with the
+# mutation applied and pin nothing. That is what the request-count assertion guards.
+
+
+def test_pages_the_stated_page_size_justifies_cost_a_flat_read_nothing():
+    """An honest list far past the ceiling in PAGES must still read WHOLE — 800 rows is not an
+    error. Every page here comes back full at the stated 5, so `max_items_per_page` accounts for
+    all 160 of them and the unproven-page budget is never touched; the only unaccounted-for page is
+    the trailing empty one, which breaks out of the loop before it can be charged.
+
+    Charge every page instead (`if page_size is None or len(items) < page_size:` -> `if True:`) and
+    this goes RED at request 121 with a 508 and no rows at all — the regression the guard exists to
+    prevent, and word for word what the nested twin
+    test_pages_the_stated_page_size_justifies_cost_the_ceiling_nothing says for `view_tasks`.
+
+    What it does NOT hold, stated so nobody reads more into it: the OPPOSITE direction of the same
+    guard — never charging a page, so the ceiling can no longer stop a degraded read. That belongs
+    to test_a_list_that_never_finishes_paging_raises_instead_of_truncating, and VMCP-119 is the
+    open card that the mutation HANGS that test rather than failing it, because it is the one
+    runaway-read test built on a bare `make_api`. This one cannot hang whatever is mutated: `_flat`
+    carries the harness cap."""
+    full_pages = MAX_UNPROVEN_PAGES + 40                    # 160 pages, far past the ceiling
+    ids = list(range(1, 5 * full_pages + 1))                # 800 rows served 5 at a time
+    api, seen = _flat({p: [{"id": i} for i in ids[(p - 1) * 5:p * 5]]
+                       for p in range(1, full_pages + 1)},
+                      page_size=5, total_pages=full_pages)
+
+    assert [x["id"] for x in api.labels()] == ids           # mutant: VikunjaError 508, no rows
+    assert seen == list(range(1, full_pages + 2))           # 160 full pages + the empty stop
+    # ... and the read really did outrun the ceiling — below it the mutation is invisible (see the
+    # 119-page row above), so a fixture that shrank would leave this test green and pinning nothing
+    assert len(seen) > MAX_UNPROVEN_PAGES
