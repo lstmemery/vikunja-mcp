@@ -1230,6 +1230,50 @@ def test_gc_does_not_skip_forever_on_an_mtime_in_the_future(repo, tracker):
 
     assert [r["task_id"] for r in res["released"]] == [42]
     assert not path.exists()
+
+
+def test_last_activity_still_reports_a_future_mtime_when_every_marker_is_future(repo):
+    """The all-future case belongs to the CALLER's `0 <=` bound, and must keep belonging to it.
+
+    `_last_activity` drops future markers so one bad clock reading cannot suppress a good one
+    (VMCP-84) — but when there is no good one left it reports the future value anyway rather than
+    `None`. Both make the sweep fall through, so behaviour is identical today; the difference is
+    that `None` would make the `0 <=` bound above unreachable, i.e. deletable without a single
+    test going red, and the test that pins it (`..._does_not_skip_forever_...`) would then be
+    pinning nothing. Keep the signal, keep the bound that reads it."""
+    path = Path(ensure_workspace(42, cwd=repo)["path"])
+    ahead = time.time() + 86_400
+    for marker in _grace_markers(path):
+        os.utime(marker, (ahead, ahead))
+
+    assert workspace_cmd._last_activity(path) > time.time()
+
+
+def test_gc_grace_window_is_not_defeated_by_a_future_mtime_on_the_sibling_marker(repo, tracker):
+    """VMCP-84, the defect this fixes: the fall-through above used to be decided on the `max()`
+    OVER BOTH markers, so a single future mtime MASKED a genuinely fresh one and the tree was
+    reaped with its agent still standing in it — the very race VMCP-71 exists to close, reopened
+    by a clock reading that says nothing about whether anyone is working here.
+
+    Both orientations, because the two markers move for different reasons and either can be the
+    skewed one: task 42 = future DIRECTORY (a restored/copied tree) with an index the agent just
+    wrote; task 43 = future INDEX (skew on whatever wrote it) with a directory touched moments
+    ago. Swept alongside a quiet dead sibling that IS reaped, so a fix that simply stops reaping
+    cannot pass. Revert `_last_activity` to a max over ALL markers and both trees are destroyed."""
+    api, wf = tracker
+    skewed_dir = Path(ensure_workspace(42, cwd=repo)["path"])     # dead: nothing on the board
+    skewed_index = Path(ensure_workspace(43, cwd=repo)["path"])
+    quiet = Path(ensure_workspace(44, cwd=repo)["path"])
+    _quiesce(quiet)
+    ahead = time.time() + 86_400
+    os.utime(_grace_markers(skewed_dir)[0], (ahead, ahead))       # ...index stays fresh
+    os.utime(_grace_markers(skewed_index)[1], (ahead, ahead))     # ...directory stays fresh
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert [r["task_id"] for r in res["released"]] == [44] and not quiet.exists()
+    assert res["kept"] == []                       # young is not "a human should look at this"
+    assert skewed_dir.is_dir() and skewed_index.is_dir()
 # --- VMCP-68 (516): `--gc` grades its refusals, so `kept` is only what a human should look at ---
 #
 # Every test here `_quiesce`s its tree, and that is the ORDER these two changes compose in: VMCP-71

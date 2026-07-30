@@ -109,6 +109,25 @@ _LOCK_INITIALIZING = "initializing"
 # directory vanishing under a running turn, which surfaces as confusing tool errors while an agent
 # composes its report.
 #
+# HOW MUCH OF THAT MIRROR CASE THE WINDOW ACTUALLY COVERS (VMCP-84): CONDITIONALLY, and the
+# condition is not the one the sentence above suggests. This window is measured from a WRITE, and a
+# review tree can live its whole life without one — a reviewer that only READS (the Read tool,
+# `git log`, `git show`) moves neither marker `_last_activity` looks at. What such a tree has
+# instead is its BIRTH: `git worktree add` sets both, so the protection runs for
+# `_REAP_GRACE_SECONDS` FROM CREATION rather than from the verdict. A review that fits inside the
+# window is covered exactly like a build tree (and most do — which is why this reads as free); a
+# LONGER read-only review is covered by nothing at all, and the first sweep after its `needs_work`
+# may take the directory out from under it. Reviewers that run the suite or a `git diff` in their
+# tree bump a marker and rejoin the covered case; ONLY the long, purely-read-only review is exposed.
+# LEFT AS IS, deliberately, and this paragraph is the decision: the exposure is bounded to a
+# vanishing cwd (a review tree is detached and clean, an in-tree commit is refused by the
+# reachability guard, so there is nothing there to destroy), while every fix reintroduces something
+# already rejected above — a FACT-based signal (nothing holds a process across an LLM's tool calls),
+# or keeping a tree alive on a card the reaper must not be made to wait for. Touching a marker just
+# to be seen would be gc's own bug (VMCP-90) rebuilt on the other side. SKILL.md's standing rule —
+# never assume your tree survived `advance`/a verdict, re-`ensure` it — is what covers the rest, and
+# it is a rule for BOTH roles precisely because this window is not a promise to either.
+#
 # WHY A CLOCK AND NOT A FACT. The semantically exact signal would be a held flock, and an LLM
 # sub-agent holds no process across tool calls, so there is nothing to hold it. REJECTED (recorded
 # so it is not re-proposed): treating a build tree as alive while its card sits in Review — a card
@@ -755,11 +774,11 @@ def _ensure_locked(root: Path, task_id: int, role: str, at: str | None) -> dict:
 
 
 def _last_activity(wt_path: Path) -> float | None:
-    """Newest mtime of the two footprints a WORKING agent leaves in a worktree — the input to the
-    grace window (`_REAP_GRACE_SECONDS`). None when NEITHER can be read, which the caller must
-    treat as "no opinion" and fall through to the ordinary guards: a directory that is already
-    gone has nobody standing in it, and a silent skip that can never expire would leak a tree
-    with no report at all.
+    """Newest NON-FUTURE mtime of the two footprints a WORKING agent leaves in a worktree — the
+    input to the grace window (`_REAP_GRACE_SECONDS`). None when NEITHER can be read, which the
+    caller must treat as "no opinion" and fall through to the ordinary guards: a directory that is
+    already gone has nobody standing in it, and a silent skip that can never expire would leak a
+    tree with no report at all.
 
       * the worktree DIRECTORY — entries created or removed at its top level (a new file, the
         `.pytest_cache` a verification run drops) and `git worktree add` itself, so a
@@ -783,6 +802,28 @@ def _last_activity(wt_path: Path) -> float | None:
     stopped writing, NOT that this function stopped looking (dropping the index would blind it to
     exactly the hour-old tree whose only fresh footprint is the commit it just made).
 
+    WHY THE MAX IS TAKEN OVER NON-FUTURE MARKERS ONLY (VMCP-84). An mtime in the FUTURE — clock
+    skew, a restored backup, an unpacked archive — is not evidence of anything, and the caller
+    deliberately refuses to honour one (its `0 <=` bound; a future value would otherwise read as
+    "younger than N" on every sweep forever, and that skip is silent). But that refusal is decided
+    on the value THIS function returns, so a plain max let one skewed marker MASK the other:
+    constructed and measured on this code, a tree with a future directory mtime and an index the
+    agent had just written was reaped — and so was the mirror case (future index, fresh directory).
+    Two stats, and the useless one won. Dropping future markers before the max means a bad clock
+    reading can no longer suppress a good one; nothing else moves, because a future value never
+    survived to mean "young" in the first place.
+
+    WHEN EVERY MARKER IS FUTURE there is no good one left, and this returns the future value ANYWAY
+    rather than `None`. Both fall through to the ordinary guards, so the sweep behaves identically
+    — but `None` means "no opinion" and would make the caller's `0 <=` bound unreachable, i.e.
+    deletable with the whole suite still green. The bound stays the thing that decides that case;
+    this function only stops letting it decide the OTHER case too.
+
+    `now` is sampled AFTER the stats, never before: a marker an agent writes DURING this read would
+    otherwise be compared against a `now` from before it existed, land in the future, and be
+    discarded — throwing away the freshest evidence there is. Sampled last, every write that really
+    happened precedes it.
+
     COST, since the sweep holds the repo-wide flock throughout: two stats and one local `rev-parse`
     per DEAD tree — live trees short-circuit before this is ever called — against a board read the
     same lock already covers.
@@ -797,14 +838,17 @@ def _last_activity(wt_path: Path) -> float | None:
         # only ever inspects `returncode`). Such an entry IS still listed — git refuses to prune a
         # LOCKED one — so this is reachable, and the directory mtime below fails the same way.
         pass
-    newest: float | None = None
+    mtimes: list[float] = []
     for candidate in candidates:
         try:
-            mtime = candidate.stat().st_mtime
+            mtimes.append(candidate.stat().st_mtime)
         except OSError:
             continue
-        newest = mtime if newest is None else max(newest, mtime)
-    return newest
+    if not mtimes:
+        return None
+    now = time.time()
+    real = [mtime for mtime in mtimes if mtime <= now]
+    return max(real) if real else max(mtimes)
 
 
 def _release_locked(root: Path, task_id: int, role: str) -> dict:
@@ -1302,6 +1346,12 @@ def gc_workspaces(cwd: Path | None = None, workflow=None) -> dict:
                 # every sweep forever, and this skip is silent — the one combination that leaks a
                 # tree with nothing to notice. Out-of-window in either direction falls through to
                 # the release guards, which still refuse to destroy anything that holds work.
+                #
+                # It decides only the case where EVERY marker is future (VMCP-84). While one real
+                # marker survives, `_last_activity` no longer offers the future one at all — this
+                # bound used to be reached with a MAX taken over both, so a skewed mtime masked a
+                # fresh one and the tree was reaped mid-turn. The two now split the job cleanly:
+                # which markers count is the reader's, what an all-bad reading means is this line's.
                 continue
             try:
                 result = _release_locked(root, task_id, role)
