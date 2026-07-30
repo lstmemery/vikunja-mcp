@@ -755,16 +755,75 @@ def test_the_shared_browser_rule_stays_detectable_rather_than_wishful():
     heading -> FAIL loudly from the slicer, never silently green; reword the surrounding prose
     without touching the pinned clauses -> PASS (by design: wording is review's job, per this
     module's docstring). Each failure was read for its MESSAGE, not just its colour — a round that
-    fails from the slicer proves nothing about the clause it claims to pin."""
+    fails from the slicer proves nothing about the clause it claims to pin.
+
+    REWORK (review of the first attempt): the check as first shipped FAILED OPEN. It claimed
+    "every browser response prints `Page URL:`", which is false for `browser_take_screenshot` —
+    the one call the evidence rule names. Measured on an own isolated server across four server
+    configurations (default, `--snapshot-mode none`, `--output-dir`, no tab navigated yet):
+    screenshot NEVER prints the line, snapshot ALWAYS does. The cause is in playwright-core's
+    response renderer: the `Page` section renders when `_includeSnapshot !== "none" ||
+    tabHeaders.some(h => h.changed)`; screenshot leaves `_includeSnapshot` at its "none" default
+    and so depends on `changed` — a flag ANY previously serialized response consumes, a sibling's
+    included — while `browser_snapshot` calls `setIncludeFullSnapshot()` ("explicit"), which
+    satisfies the first disjunct unconditionally, config-independently. So an agent looking for
+    the line in a screenshot response finds nothing and reads it as "no mismatch": absence of
+    evidence taken for evidence of absence, the same shape as a `git rev-parse` that merely echoes
+    its argument back. Hence the two pins added here: the rule must name `browser_snapshot` as
+    what it checks WITH, and must say outright that a missing line is not confirmation.
+
+    And the pin itself was the nit: it held the TOKEN `Page URL`, so a mutation that kept the
+    token while deleting the imperative ("сверь / перейди заново / вывод не делай") passed. The
+    branch an agent executes on a MISMATCH is the rule; the token is only where it reads it. Both
+    are pinned now, which is what makes the mutation below bite.
+
+    The same weakness then bit the INHERITED `attach_file` pin, and only a mutation round found
+    it: this rework added a second mention of `attach_file` (the verify-before-attach clause), so
+    `"attach_file" in section` was satisfied even after the clause naming WHICH path — absolute,
+    in the main checkout — was deleted. Adding prose can silently defang a pin that was honest
+    when it was written; the pin now holds that clause, not the word. Rounds added for both:
+
+    T1, on top of the list above: delete the "зови `browser_snapshot` и сверяй `Page URL`"
+    instruction while LEAVING the token in the section -> FAIL (this is the nit's round); soften
+    "не печатает `Page URL` НИКОГДА" -> FAIL; drop "Нет строки — нет подтверждения" -> FAIL; gut
+    the mismatch branch ("перейди заново, пересними, вывод не делай") -> FAIL; drop only "вывод
+    не делай" -> FAIL; put the disproved "В каждом ответе печатается `Page URL:`" claim back ->
+    FAIL on the negative pin; delete the attach_file PATH clause while the bare token survives
+    elsewhere in the section -> FAIL."""
     section = _shared_resources_section(_skill_text())
-    assert "Page URL" in section, \
-        "the browser rule no longer tells agents to VERIFY the page is still theirs"
-    assert "attach_file" in section, \
-        "the browser rule no longer says which path attach_file must be given"
+    flat = _flat(section)
+    # WHAT to read the page identity from — pinned as the INSTRUCTION, not as the token:
+    # `Page URL` and `browser_snapshot` each occur elsewhere in this very section (the
+    # no-isolation-parameter bullet names both tools), so a bare-token pin is satisfied by
+    # prose that instructs nothing. That is the nit review raised, and this is its fix.
+    assert "зови `browser_snapshot` и сверяй `Page URL`" in flat, \
+        "the rule no longer tells the agent to verify WITH browser_snapshot — `Page URL` is the " \
+        "one line browser_take_screenshot never prints, so the check would be looking at nothing"
+    assert "не печатает `Page URL` НИКОГДА" in flat, \
+        "the rule no longer states that browser_take_screenshot never prints `Page URL` — an " \
+        "agent that looks for it there finds nothing and reads that as 'no mismatch'"
+    assert "Нет строки — нет подтверждения" in flat, \
+        "the rule no longer says a MISSING line is not confirmation — that is the fail-open " \
+        "this rework exists to close (absence of evidence read as evidence of absence)"
+    # WHAT TO DO about a mismatch: the branch IS the rule
+    assert "перейди заново" in flat, \
+        "the rule may still carry the `Page URL` token but no longer says what to DO when it " \
+        "does not match (re-navigate and re-shoot) — a token is a word, not an instruction"
+    assert "вывод не делай" in flat, \
+        "the rule no longer forbids CONCLUDING from a page that may be a sibling's — " \
+        "detect-don't-prevent is worthless if the agent may still use what it saw"
+    assert "`attach_file` отдавай АБСОЛЮТНЫЙ путь В ГЛАВНОМ ЧЕКАУТЕ" in flat, \
+        "the browser rule no longer says WHICH path attach_file must be given (absolute, in " \
+        "the MAIN checkout) — the bare token now also occurs in the verify-before-attach " \
+        "clause, so pinning the word alone would survive deleting the path rule"
     for tool in ("browser_close", "browser_resize"):
         assert tool in section, f"the rule no longer bans {tool} — it destroys a sibling's state"
     assert "browser_tabs" in section, \
         "the rule no longer explains that a tab is not isolation (global, shifting indices)"
+    # the disproved claim this rework removed must not come back
+    assert "В каждом ответе печатается" not in flat, \
+        "the disproved claim that EVERY browser response prints `Page URL:` is back — it is " \
+        "false for browser_take_screenshot, and it is what made the check fail open"
 
 
 def test_the_shared_resource_rules_name_a_knob_the_agent_can_actually_reach():
@@ -888,3 +947,83 @@ def test_the_wip_overshoot_the_rulebook_describes_is_one_the_code_produces():
     claim_doc = inspect.getdoc(server.claim) or ""
     assert "NOT an invariant on the active count" in claim_doc and "review_task" in claim_doc, \
         "claim's tool docstring no longer says the WIP gate guards one transition, not the count"
+
+
+def test_the_browser_answer_leads_with_the_isolation_an_agent_can_launch_itself():
+    """The human's card asked for parallel agents to PARALLELISE their tools — "playwright should
+    launch so it does not disturb the others". The first attempt answered "cannot be done": true
+    of the SHARED MCP browser (no isolation parameter on any tool; `--isolated`/`--user-data-dir`
+    isolate per MCP client, and all siblings are one client), but false of the request, which
+    review disproved by simply doing it. Reproduced here before documenting: `npx -y
+    @playwright/mcp@latest --isolated --headless` from an own cwd is ready in ~1s and gives REAL
+    per-agent isolation — two servers run at once, the first's page survived two `navigate`s by
+    the second, and `browser_close` on the first did nothing to the second. For the common case
+    (a screenshot as evidence) there is no MCP at all: `npx -y playwright@latest screenshot
+    --channel=chrome URL file.png` takes ~2s, writes into the agent's OWN worktree and exits by
+    itself; two concurrent runs from different worktrees both returned rc=0 with both files
+    intact, and no browser process leaked.
+
+    So the deliverable must LEAD with the launchable answer and keep detect-don't-prevent as the
+    fallback for agents that use the shared server anyway. Order is the assertion: a later edit
+    that demotes "launch your own" back to a conditional footnote — which is exactly how the
+    first attempt buried it — restores the wrong answer to the card while every keyword still
+    appears somewhere in the section. `--channel=chrome` is pinned because it is load-bearing,
+    not decoration: without it the CLI refuses with "npx playwright install" (that refusal was
+    reproduced), and a recipe an agent cannot run is worse than none — this section's other test
+    exists for that same reason.
+
+    MUTATION-CHECKED, same discipline as the two tests above (`__pycache__` cleared, exactly 1
+    test selected per round, section restored from a COPY — never `git checkout`, which deletes
+    the subject under test — and every failure read by its MESSAGE): control PASS; swap the two
+    subsections so the shared-browser rules come first -> FAIL on the ordering assert; strip
+    `--channel=chrome` from the screenshot RECIPE -> FAIL; strip `--isolated` from the launch
+    RECIPE -> FAIL; strip `--headless` -> FAIL; restore the old "изнутри его изолировать НЕЛЬЗЯ"
+    framing -> FAIL on the negative pin; reword the costs prose without touching the recipes ->
+    PASS.
+
+    Two of those rounds are why the flags are matched inside the fence. Written first as
+    section-wide substrings, they stayed GREEN while the flag was stripped from the command an
+    agent copies — `--channel=chrome` survives in the sentence explaining why it is required, and
+    `--isolated` survives in THREE places including the bullet that says the flag is out of reach
+    on the shared server. A pin satisfied by the prose about a flag, while the runnable line has
+    lost it, is the same defect this card was returned for: a check that reports success from the
+    wrong evidence."""
+    section = _shared_resources_section(_skill_text())
+    own = section.find("#### Свой браузер")
+    shared = section.find("#### Общий браузер")
+    assert own != -1, \
+        "the section no longer has a 'свой браузер' subsection — the card's answer (an agent " \
+        "CAN have its own browser) is gone, leaving only the disproved 'cannot be done'"
+    assert shared != -1, \
+        "the shared-browser subsection is gone — agents that use the session browser anyway " \
+        "still need the detect-don't-prevent rules"
+    assert own < shared, \
+        "the own-browser answer no longer LEADS — demoting it below the shared-browser rules " \
+        "is how the first attempt buried the one thing that actually answers the card"
+    # The flags are pinned INSIDE the fenced recipes, not merely "somewhere in the section":
+    # both `--isolated` and `--channel=chrome` also occur in the surrounding prose (and
+    # `--isolated` occurs in the bullet explaining it is out of reach on the SHARED server —
+    # the worst possible satisfier), so a section-wide substring stayed green in the mutation
+    # round that stripped the flag from the runnable command. An agent copies the fence.
+    fences = re.findall(r"```sh\n(.*?)```", section, re.S)
+    cli = [f for f in fences if "playwright@latest screenshot" in f]
+    assert len(cli) == 1, \
+        "expected exactly 1 fenced one-line screenshot recipe in the shared-resources section, " \
+        f"found {len(cli)} — it is the cheapest own-browser answer and the most-used one"
+    assert "--channel=chrome" in cli[0], \
+        "the screenshot RECIPE lost `--channel=chrome` — without it the CLI refuses with " \
+        "'npx playwright install' (reproduced), so the line an agent copies does not run"
+    srv = [f for f in fences if "@playwright/mcp@latest" in f]
+    assert len(srv) == 1, \
+        "expected exactly 1 fenced launch line for an agent's OWN playwright MCP server, " \
+        f"found {len(srv)}"
+    assert "--isolated" in srv[0], \
+        "the own-server RECIPE lost `--isolated` — that flag is what keeps the profile in " \
+        "memory and off the shared browser's disk profile; prose about it is not a command"
+    assert "--headless" in srv[0], \
+        "the own-server RECIPE lost `--headless` — the browser is headed by default, so a " \
+        "window pops up on the human's screen"
+    for old in ("изнутри его изолировать НЕЛЬЗЯ", "НЕ выполнимо"):
+        assert old not in section, \
+            f"the disproved framing is back in SKILL.md ({old!r}) — an agent CAN launch its " \
+            "own isolated browser; see this test's docstring"
