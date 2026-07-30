@@ -245,9 +245,9 @@ class VikunjaAPI:
     # OVER-SERVING on this same version: the one user measured had BOTH saved filters and a
     # favourite, and got 3 pseudo rows that are not counted against the page size, so at
     # max_items_per_page=5 every page carrying a full window of real rows carried 8 while the real
-    # ids paged honestly (the last page with real rows carried 7). "Over-serves" and "ignores `?page=`" are therefore INDEPENDENT
-    # properties of an endpoint, not two names for one set — see the note above `_page_size` for
-    # what that costs the degraded read.
+    # ids paged honestly (the last page with real rows carried 7). "Over-serves" and "ignores
+    # `?page=`" are therefore INDEPENDENT properties of an endpoint, not two names for one set —
+    # see the note above `_page_size` for what that costs the degraded read.
     #
     # The four that paginate all fail in the WORSE direction — absence, which every caller acts
     # on. MEASURED end to end: `setup_cmd.reconcile` looks a project up by title over
@@ -619,16 +619,38 @@ class VikunjaAPI:
     # per-call local, so one endpoint's long page never leaked into another read. The claim here was that the endpoints which over-serve are
     # PRECISELY the ones that ignore `?page=`, so their next page is always a pure repeat that ends
     # the read on `added_new`. That is false, and the counter-example is this client's own reconcile
-    # read. On a live 2.3.0 container (2026-07-31, stated size 5) with 34 projects, 2 saved filters and
-    # a favourite, Vikunja appends the pseudo-projects AFTER the SQL limit:
+    # read. On a live 2.3.0 container (2026-07-31, stated size 5) with 34 projects, 2 saved filters
+    # and a favourite, the pseudo-projects (Favorites, plus one row per saved filter) are simply
+    # not counted against the page size — which is the OBSERVATION; where the server applies its
+    # limit relative to them is its own business and was not measured:
     #
-    #     GET /projects?page=1..6 -> 8 rows each (5 real + a CONSTANT 3-row pseudo tail), the real
-    #                                ids ADVANCING 1-5, 6-10 … 26-30; total-pages 7
-    #     GET /projects?page=7    -> 7 rows (4 real, 31-34, + the tail)
-    #     GET /projects?page=8    -> 3 rows (the tail alone)
+    #     GET /projects?page=1..6  -> 8 rows each (5 real + a CONSTANT 3-row pseudo tail: -1
+    #                                 Favorites, -2 and -3 the saved filters), the real ids
+    #                                 ADVANCING 1-5, 6-10 … 26-30; total-pages 7
+    #     GET /projects?page=7     -> 7 rows (4 real, 31-34, + the tail) — still 7 > the stated 5
+    #     GET /projects?page=8..12 -> 3 rows each (the tail alone), i.e. SHORT of the stated 5
     #
-    # So it over-serves its own stated size on every page that carries a full window of real rows,
-    # WHILE paging honestly, and the next page is not a repeat. Through this client against that container, /info up vs /info down:
+    # So it over-serves on every page that carries a FULL window of real rows, and NOT on every
+    # page — that last table row is why. Nor is "carries real rows at all" the boundary, which is
+    # the tempting next over-claim and is MEASURED FALSE: what a page hands back is (real rows in
+    # the window) + (the tail), so with THIS user's tail of 3 against a stated 5 it exceeds the
+    # stated size only from three real rows up — measured at 1 real (4 rows, under), 2 real (5
+    # rows, exactly the stated size and so still not over) and 3 real (6 rows, over). The tail is
+    # a property of the USER's pseudo-project set, not a constant 3. Re-probed on the same
+    # container as it grew, all at a stated 5:
+    #
+    #     38 real -> pages 1-7 serve 8 (5 real), page 8 serves 6 (3 real, still over), page 9
+    #                onward the tail alone at 3; those tail-only pages are sha256-IDENTICAL to
+    #                one another (page 8 is not), so past the last real row nothing new arrives
+    #     41 real -> pages 1-8 serve 8, page 9 serves FOUR (1 real + the tail) — UNDER the stated
+    #                5, so the last page carrying real rows need not over-serve at all
+    #
+    # The page NUMBERS above are that instance's CONTENT; the shape is the endpoint's. And it does
+    # all this WHILE paging honestly: the page after an over-serving one ADVANCES the real ids
+    # instead of repeating them, which is the whole counter-example. Only the tail-only pages past
+    # the last real row repeat — those are the sha256-identical ones — so "over-serves" and
+    # "ignores `?page=`" really do come apart here.
+    # Through this client against that container, /info up vs /info down:
     #
     #     projects()   34 rows /  8 req  vs  34 rows /  7 req    <- the ONLY one that differs
     #     labels()     66 rows / 14 req  vs  66 rows / 14 req
@@ -645,16 +667,20 @@ class VikunjaAPI:
     #
     # NOTHING IS LOST THERE, and the reason has to be named precisely because it is not the reason
     # given above. On this shape the pseudo tail is a CONSTANT 3 rows, so the page short of the bar
-    # is the LAST one carrying real rows — the read is over anyway. The header is NOT what saves it
-    # here (it says 7 of 7, i.e. it agrees the read is done); what saves it is that there is
+    # is the LAST one carrying real rows — the read is over anyway. The header is NOT what saved
+    # it here (it says 7 of 7, i.e. it agrees the read is done); what saved it is that there is
     # nothing behind the short page. Move that page off the end and the loss appears — CONSTRUCTED
     # over this exact shape (5 real + 3 pseudo per page, page 3 serving only 2 real, page 4 still
-    # holding 13-17): with the header present both reads return all 17 rows in 5 requests, but with
-    # the header ABSENT the degraded read returns 1..12 in 3 requests while the healthy one still
-    # returns all 17. So on that constructed shape it is `x-pagination-total-pages` — reporting a
-    # page PAST the short one — that keeps the degraded read whole. Which is a thin thread to hang
-    # on: it is the same header `_total_pages` documents as measured WRONG in both directions on
-    # this very version, on other endpoints.
+    # holding 13-17): with the header present both reads returned all 17 rows in 5 requests, but
+    # with the header ABSENT the degraded read returned 1..12 in 3 requests while the healthy one
+    # still returned all 17. So on that constructed shape it was `x-pagination-total-pages` —
+    # reporting a page PAST the short one — that kept the degraded read whole. Which was a thin
+    # thread to hang on: the same header the "WHAT WENT WITH IT" paragraph of the VMCP-127 block
+    # records as measured WRONG in both directions on this very version, on other endpoints.
+    # VMCP-127 cut the thread from the other end — RE-MEASURED on this tree, that constructed shape
+    # now returns all 17 rows in 5 requests in ALL FOUR combinations of header present/absent and
+    # /info up/down, and no pagination header is read anywhere (the one live `r.headers` in this
+    # file is `Retry-After`).
     #
     # WHAT WAS TRIED AND DID NOT PRODUCE THE LOSS on 2.3.0, recorded so nobody redoes it:
     # permission-filtered /labels and /projects for a second user (for the ONE filtered user
@@ -662,11 +688,13 @@ class VikunjaAPI:
     # at 0 pages, projects 1 row at 1 page — so no short non-final page appeared);
     # 63 buckets, to see whether that endpoint caps internally and would carry a short page later
     # (no cap appeared at 63 — 63 rows on page 1 and the identical 63 on page 2); and the
-    # NESTED endpoint itself, whose per-bucket windows never EXCEEDED the stated 5 in either probe
-    # run (5,5,3,0 with 13 tasks in the bucket, 5,5,5,5 with 37), so it does not over-serve and
-    # those long flat pages cannot leak in. A short
-    # non-final page could not be produced on the kanban tasks endpoint at all (see "HONEST ABOUT
-    # THE TRIGGER" below).
+    # NESTED endpoint itself, whose per-bucket windows never EXCEEDED the stated 5 in either
+    # re-measured run (2026-07-31: 5,5,1,0 over a bucket holding 11 tasks, and seven windows of 5
+    # then 0 over one holding 34 — seven fives over 34 rather than 35 because one of those windows
+    # repeats a task, the unstable-sort overlap this file documents at `view_tasks`; and both task
+    # counts are what the container ACTUALLY held, not what the probe asked it to create), so it
+    # does not over-serve and those long flat pages cannot leak in. A short non-final page could
+    # not be produced on the kanban tasks endpoint at all (see "HONEST ABOUT THE TRIGGER" below).
     #
     # THE COST IS REAL AND IS NOT HIDDEN: one extra request per `view_tasks` call whenever a
     # required bucket brought a NEW task on the last page that had content — the smallest board
@@ -698,7 +726,15 @@ class VikunjaAPI:
     # filter-after-paginate shape it exists to survive, filtering being slow delivery relative to
     # the window.
     #
-    # HONEST ABOUT THE TRIGGER: a short non-final page could NOT be produced against Vikunja 2.3.0.
+    # HONEST ABOUT THE TRIGGER: a short non-final page could NOT be produced ON THIS ENDPOINT
+    # against Vikunja 2.3.0 — and the scope word buys less than it looks like, because the FLAT
+    # side does not produce the trigger either. /projects does serve pages short of the stated size
+    # that are not the last one the server answers (measured 2026-07-31 at stated 5: with 41 real
+    # projects page 9 serves FOUR rows, and pages 10 onward serve the 3-row pseudo tail alone —
+    # WHICH page numbers those are, is the instance's content, not the endpoint's). None of them is
+    # this module's trigger, which needs NEW ROWS behind the short page: the tail-only pages are
+    # sha256-identical to one another, so nothing new ever arrives and the read ends on
+    # `added_new`. What the short page 9 has behind it is more pages, not more rows.
     # Request-level `filter=`, a saved filter on the view, `s=` search, and done tasks auto-moving
     # into the Done bucket all push the filter into SQL, so every page comes back full until the
     # last (probed on a container with max_items_per_page=5). The mechanism the card suspected —

@@ -496,43 +496,78 @@ def _tracker(handler, *, info_status=503, page_size=50, harness_cap=3 * MAX_UNPR
 def _serving_lengths(handler, sink):
     """Wrap a fixture server and record the length of every per-bucket page it hands back.
 
-    VMCP-124 (603): the ONE number both sweeps' `healthy == degraded` claim is conditional on. The
-    sweeps assert it (`assert max(sink) <= page_size`) rather than describing it, because the claim
-    they used to make in prose — a superset "by construction" — is FALSE the moment a server serves
-    a page LONGER than /info states. Silently extending a sweep's claimed reach past what it checks
-    is the exact failure that produced that prose; this makes it fail loudly instead.
+    VMCP-124 (603): the ONE property both sweeps' fixture servers are DOCUMENTED as having — no
+    page longer than /info states. The sweeps assert it (`assert max(sink) <= page_size`) rather
+    than describing it, because the claim they used to make in prose — a superset "by construction"
+    — was FALSE the moment a server served a page LONGER than /info states. Silently extending a
+    sweep's claimed reach past what it checks is the exact failure that produced that prose; this
+    makes it fail loudly instead.
 
-    KEEP BOTH CALL SITES EVEN THOUGH ONE LOOKS REDUNDANT — the two sweeps differ, and only a
-    mutation shows how. Each generator widened to over-serve, applied ALONE, __pycache__ cleared,
-    then run at the scope each row names (a "sole guard" claim is about the SUITE, so those rows
-    were measured by running the whole suite, not the one sweep):
+    WHAT THIS GUARDS CHANGED UNDER IT, and saying so is the whole job of this note. When it was
+    added it kept a CONDITIONAL equality applicable: the two /info states were GUARANTEED to agree
+    only while `min(stated, longest_served)` collapsed to `longest_served`. Guaranteed, not
+    achieved — past that point they could still agree, and with sweep 2's draw widened they
+    measurably did: RE-MEASURED on the pre-127 tree for this card, 56 of the 60 rounds really
+    over-served and all 60 still agreed with the scope assert muted. (582's 300-round run, in the
+    "THE SWEEPS ARE BLIND" ledger further down this file, is the independent one.) VMCP-127 (608)
+    then deleted the fullness inference from BOTH readers, so two reads that both COMPLETE now
+    agree by construction. NOT unconditionally: `page_size` still
+    feeds `unproven_pages`, and that ceiling RAISES — MEASURED on this tree, a server serving 130
+    FULL pages of new required tasks completes at 650 tasks in 131 requests with /info up and
+    raises a 508 after 120 with it down. So this assert is now purely a SCOPE pin — "these sweeps
+    model honest servers", which is exactly what the prose above each sweep claims to cover, and
+    which nothing else checks.
 
-      `_short_non_final_pages`: n = randint(1, page_size + 3)   -> WHOLE SUITE 1 failed/628 passed
-                                                                  with this assert, and 629 passed
-                                                                  — fully GREEN — without it. So
-                                                                  nothing else in the suite sees it
-                                                                  (582 measured the same over 300
-                                                                  rounds).
-      `_offset_pages`, EVERY page cut at page_size + 3 (and +1)  -> RED here, and STILL RED with
-                                                                  this assert removed — that sweep's
-                                                                  own equality assert catches it on
-                                                                  these seeds.
-      `_offset_pages`, PAGE 1 ONLY cut at page_size + 3          -> WHOLE SUITE 1 failed/628 passed
-                                                                  with this assert, and 629 passed
-                                                                  without it. The FLUKE-LONG FIRST
-                                                                  PAGE this card's fixtures are
-                                                                  built on — and on it this assert
-                                                                  is the SOLE guard in the suite.
+    KEEP BOTH CALL SITES. Each sweep's server widened to over-serve, one widening at a time,
+    __pycache__ cleared, WHOLE SUITE run every time in a scratch copy of the tree (a "sole guard"
+    claim is about the SUITE, not one sweep), 2026-07-31 on a 690-test tree:
 
-    So "not the only guard on `_offset_pages`" holds for ONE widening and FAILS for the other — do
-    not generalise from the middle row to the sweep. Which widening is the LIKELIER one was not
-    measured and is not claimed: no live endpoint probed has the page-1-only shape (2.3.0's
-    /projects over-serves on EVERY page, by a constant tail), so that row is the card's fixture
-    shape rather than a field-observed one. On the middle row this assert is also the guard that
-    fires FIRST and names the cause instead of an inscrutable data mismatch; on the other two there
-    is nothing to fire before it. Throughout, it keys on the SCOPE rather than on an outcome another
-    seed could hide. (Suite counts are 2026-07-31 snapshots; totals move whenever anyone adds a
-    test.)"""
+      sweep 2's own page draw widened to                        -> 1 failed / 689 passed with this
+      n = randint(1, page_size + 3)                               assert, and the one failure IS
+      (`_short_non_final_pages` is a pass-through — the draw       that sweep; 690 passed — fully
+      feeding it lives INSIDE the sweep, so nothing else in        GREEN — without it (582 measured
+      the suite could see this one; the whole-suite run is         the same over 300 rounds).
+      what shows the failure is confined to it)
+      `_offset_pages`, EVERY page cut at page_size + 3          -> 1 failed / 689 passed with it,
+                                                                  the failure again its own sweep;
+                                                                  690 passed — fully GREEN —
+                                                                  without it.
+      `_offset_pages`, PAGE 1 ONLY cut at page_size + 3         -> 1 failed / 689 passed with it;
+                                                                  690 passed without it. The
+                                                                  FLUKE-LONG FIRST PAGE this card's
+                                                                  fixtures are built on.
+
+    So on this tree the assert is the SOLE guard for all three widenings ABOVE, and the two call
+    sites are not redundant for a subtler reason than they used to be: each is the only guard its
+    own fixture has. Two qualifications, both measured, both there so the guard is not trusted
+    further than it goes. (1) "For these widenings", not for every one: the other two tests that
+    page over `_offset_pages` fix `page_size=50`, so an over-serve of +50 trips their request-count
+    asserts as well (green at +1/+3/+5/+10/+20 with this muted, red at +50) — it is the SMALL
+    over-serve, the one that looks like a real server's fluke, that nothing else sees. (2) The
+    three rows differ in strength: `_offset_pages` is a REAL shared generator (three tests page
+    over it), so its two rows say something about the suite; sweep 2's draw is local to sweep 2,
+    so its row says only that the failure stays confined there.
+
+    THE MIDDLE ROW READ DIFFERENTLY BEFORE VMCP-127, AND THAT HISTORY IS WHY IT IS SPELLED OUT.
+    It used to say "STILL RED with this assert removed". RE-MEASURED at 4149712 — the pre-127 tree,
+    same mutation, assert removed — the red came from the sweep's own SUBSET assert, `set(healthy)
+    <= set(degraded)`, firing on the NON-required `Done` bucket (`AssertionError: ('Done', 2,
+    {'Build', 'Queue', 'Review'})`, `Extra items in the left set: 17, 18`), NOT from its equality
+    assert, which stayed green. A revision of this docstring said "equality"; that was false, and
+    it was false because the row was rewritten without being re-run. On today's tree the row is
+    moot in either spelling: with the fullness inference gone, over-serving produces no
+    healthy/degraded divergence for either of the sweep's own asserts to catch.
+
+    Which widening is the LIKELIER one was not measured and is not claimed. Live 2.3.0's /projects
+    hands back (the window's real rows) + (a pseudo tail fixed by the USER's saved filters and
+    favourites), so it over-serves exactly when that sum passes the stated size — measured at a
+    stated 5 with a tail of 3: 5+3=8 through the full-window pages, 4+3=7 on the last one at 34
+    real projects, 1+3=4 (UNDER the stated 5) on the last one at 41, and 0+3=3 on every page past
+    them. So it is a page-1-only over-server on no reading and an every-page one on no reading
+    either, and the page NUMBERS are that instance's content while the shape is not. Throughout,
+    this assert keys on the SCOPE rather than on an outcome another seed could hide. (Suite totals
+    are 2026-07-31 snapshots and move whenever anyone adds a test — an earlier revision of this
+    table read 628/629, the same experiment on the tree of the day.)"""
     def wrapped(request):
         response = handler(request)
         for bucket in response.json():
@@ -793,27 +828,48 @@ def test_the_degraded_read_never_loses_a_task_the_healthy_read_saw():
 
     WITHIN THAT SCOPE the two reads must agree exactly on the buckets that drive paging, and the
     degraded read may only ever have MORE elsewhere (it spends one extra page, and that page
-    carries extra Done/Backlog tasks). The reason is arithmetic, and the `assert max(served) <=
-    page_size` below is what keeps it applicable: while no page exceeds the stated size, `min(
-    stated, longest_served)` IS `longest_served`, so both /info states compute the very same bar.
+    carries extra Done/Backlog tasks).
+
+    WHY THEY AGREE CHANGED UNDER THIS DOCSTRING — VMCP-127 (608), which landed while VMCP-124
+    (603) was in rework. It used to be arithmetic: while no page exceeded the stated size,
+    `min(stated, longest_served)` WAS `longest_served`, so both /info states computed the very same
+    bar. That expression no longer exists. The stop expression now reads `added_new_required or
+    (required_had_tasks and added_new)` and mentions no page size at all, so what a COMPLETED read
+    contains cannot depend on /info's health — the same thing the sweep below already says of its
+    own scope ("/info's health may change what the ceiling permits but never what the board
+    contains"; the ceiling is still the one place `page_size` is read). The rest of this docstring
+    is the MEASUREMENT that got the module there, and reads in the past tense.
+
+    `assert max(served) <= page_size` below therefore no longer guards a conditional equality —
+    it pins this sweep's stated SCOPE, "an HONEST server", which is what the first paragraph
+    claims to cover. MEASURED on this tree (see `_serving_lengths`): mute it and a `_offset_pages`
+    widened to over-serve by +3 leaves the WHOLE SUITE green. Not for every widening, and the
+    exception is worth knowing before trusting the guard too far: the other two tests that page
+    over `_offset_pages` fix `page_size=50`, so an over-serve of +50 trips THEIR request-count
+    asserts too (measured: +1, +3, +5, +10, +20 all green with this muted; +50 goes red in
+    test_an_honest_large_board_on_the_degraded_path and
+    test_pages_the_stated_page_size_justifies_cost_the_ceiling_nothing). A widening small enough
+    to look like a real server's fluke is exactly the one nothing else sees.
 
     IT IS NOT THE UNIVERSAL THIS DOCSTRING USED TO CLAIM. It said the degraded read is "a SUPERSET
     by construction: its 'could still be full' test uses the longest page the server has PROVEN it
     can serve, which is <= the real page size". Every clause of that is true and the conclusion
     does not follow: the bound is <= the REAL page size, while the healthy reader uses the STATED
     one, and VMCP-124 (603) MEASURED /projects on a 2.3.0 instance serving pages of 8 against a
-    stated 5, over-serving WHILE paging honestly (and .../buckets serving 63). Where stated < served the
-    HEALTHY bar is the LOWER one, so the degraded read is the STRICTER of the two and a strict
-    SUBSET — measured on 582's fixture, 2 requests and Build[1..8] against 4 and Build[1..11].
+    stated 5 — over-serving WHILE paging honestly, on every page carrying a full window of real
+    rows (and .../buckets serving 63). Where stated < served the HEALTHY bar was the LOWER one, so
+    the degraded read was the STRICTER of the two and a strict SUBSET — measured on 582's fixture,
+    2 requests and Build[1..8] against 4 and Build[1..11].
 
     AND THE HEALTHY READ IS NOT THE SAFE ONE EITHER — WHICH IS WHY CHANGING ONLY THE DEGRADED BAR
-    FIXES NOTHING REAL. The
-    control: page 1 serving EXACTLY the stated 5, nothing over-serving anywhere, and the healthy
-    read still loses the tail for every repeat window shorter than 5. Between that run and the
-    over-serving one the healthy loss band was the SAME (w < stated); what over-serving moved was
-    the DEGRADED bar, and so only the degraded band. It is the shared inference that breaks, not
-    this branch; the api.py note above `_page_size` carries the w-table, that control, and the
-    separate reasons neither bar moves."""
+    FIXED NOTHING REAL. The control: page 1 serving EXACTLY the stated 5, nothing over-serving
+    anywhere, and the healthy read still loses the tail for every repeat window shorter than 5.
+    Between that run and the over-serving one the healthy loss band was the SAME (w < stated);
+    what over-serving moved was the DEGRADED bar, and so only the degraded band — right as an
+    observation about that run, wrong as a cause. It was the shared inference that broke, not
+    this branch; the api.py block by `_MAX_UNPROVEN_PAGES` carries the w-table and that control
+    (the note above `_page_size` only delegates to it), and VMCP-127 (608) acted on them by
+    deleting the inference from BOTH readers rather than by moving either bar."""
     rng = random.Random(20260730)
     checked = 0
     for _ in range(60):
@@ -935,15 +991,22 @@ def test_the_healthy_read_never_loses_a_task_a_server_serves_short():
     "is a subset of". After VMCP-103 there is one rule, so /info's health may change what the
     ceiling permits but never what the board contains.
 
-    SCOPED, not universal, and VMCP-124 (603) is the correction: "one rule" collapses to one
-    NUMBER only while no page exceeds the stated size, which every page here does by construction
+    SCOPED, not universal, and VMCP-124 (603) was the correction: "one rule" collapsed to one
+    NUMBER only while no page exceeded the stated size, which every page here does by construction
     (`n <= page_size - 1`) and the `assert max(served_lengths) <= page_size` below keeps true. Let
-    a page overshoot the stated size and the two /info states compute DIFFERENT bars — the healthy
-    one min(stated, longest), the degraded one longest — so the equality asserted here stops being
-    GUARANTEED. Overshoot alone did NOT break it over 300 rounds of this generator (582 measured
-    that): `_short_non_final_pages` never repeats a window, so `added_new_required` carries every
-    read whatever the bar says. Reaching the divergence took 582's two constructed shapes at the
-    end of this file — so widening this generator is not how to get there."""
+    a page overshoot the stated size and the two /info states computed DIFFERENT bars — the
+    healthy one min(stated, longest), the degraded one longest — so the equality asserted here
+    stopped being GUARANTEED. Overshoot alone did NOT break it over 300 rounds of this generator
+    (582 measured that): `_short_non_final_pages` never repeats a window, so `added_new_required`
+    carries every read whatever the bar says. Reaching the divergence took 582's two constructed
+    shapes at the end of this file — so widening this generator was not how to get there.
+
+    PAST TENSE ON PURPOSE: VMCP-127 (608) deleted both bars, so what a COMPLETED read contains no
+    longer depends on a page size at all (the ceiling above is where `page_size` survives, and it
+    can only make a read RAISE). What the assert below still pins is this sweep's SCOPE — pages
+    short of the stated size, never over it. Widen the draw and it is the only thing that goes
+    red; since the draw lives HERE and not in the shared `_short_non_final_pages`, that is a
+    statement about this sweep, not about the suite (`_serving_lengths` carries the run)."""
     rng = random.Random(20260731)
     checked = 0
     for _ in range(60):
