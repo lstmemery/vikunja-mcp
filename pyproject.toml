@@ -5,7 +5,14 @@ description = "Workflow-level MCP server for Vikunja: queue -> claim -> design -
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
-dependencies = ["mcp>=1.2", "httpx>=0.27"]
+# Upper bounds are LOAD-BEARING here, not hygiene. Consumers launch us via
+# `uvx --from git+...@stable`, which re-resolves from THIS list and ignores uv.lock —
+# so the lock protects CI and the local .venv, and protects nobody in production.
+# mcp 2.0.0 (2026-07-28) removed `mcp.server.fastmcp`; every consumer's server died on
+# import with "Connection closed" while tests stayed green on the locked 1.28.1.
+# Pin the majors of anything imported at module scope, and verify a release the way a
+# consumer starts it: uvx --refresh-package vikunja-mcp --from git+...@stable vikunja-mcp --version
+dependencies = ["mcp>=1.2,<2", "httpx>=0.27,<1"]
 
 [project.scripts]
 vikunja-mcp = "vikunja_mcp.server:main"
