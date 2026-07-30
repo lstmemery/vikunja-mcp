@@ -1413,6 +1413,8 @@ def test_neither_reader_takes_a_SHORT_page_for_an_exhausted_one():
 #   r1 -> r2  "every server ... serves AT MOST what /info states"       universal, shipped at TWO
 #                                                                       sites; r2 added the "ALMOST"
 #   r1 -> r3  "the only shape where the two operands disagree"          universal
+#   r2 -> r3  "What is NOT a snapshot is the count that matters:        an IMMUNITY claim; r3
+#              exactly SEVEN calls have `stated < served`"              replaced it with drift RATE
 #   r1 -> r4  the "fluke-long page" credited to the helper's docstring  PROVENANCE
 #   r1 -> r4  "CONSTRUCTED, not measured against a real 2.3.0"          universal negative
 #   r4 -> r5  "If it lands, these two go red BY DESIGN"                 PREDICTION
@@ -1421,26 +1423,41 @@ def test_neither_reader_takes_a_SHORT_page_for_an_exhausted_one():
 #   r4 -> r5  "Three rounds re-measured ... and left it standing"       COUNT of itself
 #   r4 -> r5  "Third over-claim this card has had to retract"           COUNT of itself
 #
-# The "AT MOST" and "only shape" entries are the two quoted verbatim in the SHORTER-window
-# docstring's closing parenthetical; "each reader still routes through it" is recorded by the
-# shared-rule docstring's "corrected that claim twice", and "AT MOST" also by the "ALMOST, not
-# every" line above; the rest are corrected in place above. Grep the phrases case-SENSITIVELY at your peril — the "AT MOST" universal was
-# shipped in capitals and quoted back in lower case, so a `git log -S` on either form alone dates
-# it to the wrong round, which is how a draft of this very list put it at r2 -> r3.
-# NOT counted, deliberately: the three `_short_non_final_pages` attributions re-pointed in round 3.
-# The round-3 review measured them and ruled them harmless ("true of every caller in the file"),
-# asking for no action — a re-pointing, not a retraction. Excluded on that ruling, not by oversight.
-# TEN sentences and NOT ONE MEASURED NUMBER — 2767/1383/1384, the SEVEN over the same four tests
-# and the 3x2 mutation table all reproduced exactly under two independent reviewers. The last two
-# entries are this card's disease turned on itself: a sentence ABOUT the retractions, retracted.
+# WHERE EACH RETRACTION IS RECORDED: "AT MOST" and "only shape" are the two the SHORTER-window
+# docstring's closing parenthetical quotes back — CASE-FOLDED, not verbatim, and that matters (see
+# the next sentence); "each reader still routes through it" by the shared-rule docstring's
+# "corrected that claim twice"; "AT MOST" also by the "ALMOST, not every" line above; the SEVEN's
+# immunity claim by the drift-rate paragraph above; the PREDICTION by the last paragraph of this
+# block, BELOW; "Third over-claim" by this list's own opening sentence; the rest above.
 #
-# Three of the ten are provenance and `git log -S` on the exact phrase settles all three in seconds;
-# two more are counts over this card's own commits, settled by `git show <rev>:<path> | grep`; the
-# PREDICTION needed nothing but running the two tests below against the sibling's api.py. That
-# discipline HAS been applied here exactly once — round 4 counted `fluke` at five separate revisions
-# and got that claim right — and the same rewrite then shipped five unchecked sentences across four
-# of its paragraphs. Doing it once is not doing it. Run it before writing "X says", "this used to",
-# or "card N measured" — an attribution is a claim like any other.
+# AND GREP BOTH CASES. The "AT MOST" universal was shipped in capitals and quoted back in lower
+# case, and only the CAPITALS form dates it right: `git log -S'serves AT MOST what /info states'`
+# returns 6e4de09 and d1fc4ea (entered r1, gone r2 — correct), while the lower-case form returns
+# d1fc4ea and f00f1e6 and reads as r2 -> r3. A draft of this very list shipped that wrong pair.
+#
+# NOT counted, deliberately, and both were checked rather than overlooked: (a) the three
+# `_short_non_final_pages` attributions re-pointed in round 3 — the round-3 review measured them and
+# ruled them harmless ("true of every caller in the file"), asking for NO action, so they are a
+# re-pointing rather than a retraction; (b) round 4's "the exact WINDOW the fixtures below
+# construct", sharpened to BAND above — the round-5 review used "window" approvingly and asked only
+# that it be folded in if the sentence was being touched anyway, so it is terminology, not a
+# measured falsification. Both are borderline; excluded on those rulings, and named so the next
+# reader can disagree with the ruling rather than assume an oversight.
+#
+# ELEVEN entries, and NOT ONE OF THEM IS A NUMBER — read the list: every entry is a sentence. That
+# is the finding. Separately and more narrowly: round 4's measurements — 2767/1383/1384, the SEVEN
+# over the same four tests, the 3x2 mutation table — were each reproduced exactly by two independent
+# reviewers. The last two entries are this card's disease turned on itself: a sentence ABOUT the
+# retractions, retracted.
+#
+# Three of the eleven are provenance and `git log -S` on the exact phrase settles all three in
+# seconds; two more are counts over this card's own commits, settled by `git show <rev>:<path> |
+# grep`; the PREDICTION needed nothing but running the two tests below against the sibling's api.py.
+# The one instance of that discipline I can point to in five rounds is round 4 counting `fluke` at
+# five separate revisions — which got that claim right, while the same rewrite shipped five
+# unchecked sentences across four of its paragraphs. (Stated as what I found, not as a census: I did
+# not re-read every line of every round's worklog.) Doing it once is not doing it. Run it before
+# writing "X says", "this used to", or "card N measured" — an attribution is a claim like any other.
 #
 # WHAT THE FORWARD LINK SAID, AND WHAT ACTUALLY HAPPENED — kept rather than quietly deleted,
 # because a false "by design" is how a live pin gets deleted with a green suite as cover. It read:
@@ -1448,7 +1465,8 @@ def test_neither_reader_takes_a_SHORT_page_for_an_exhausted_one():
 # from both bars ... If it lands, these two go red BY DESIGN — read that note before 'fixing'
 # them." 608 landed as 8b4bfa5 eight and a half minutes after this section's own commit (AUTHOR
 # timestamps, ea4e059 00:48:33 -> 8b4bfa5 00:57:07; the committer stamps a rebase rewrote are
-# 6 min 27 s apart), and the prediction is false on both halves. MEASURED here rather than
+# 6 min 27 s apart), and it is false in both of its checkable parts — the COUNT of tests that go
+# red, and WHAT goes red in the one that moved. MEASURED here rather than
 # inherited: `git archive ea4e059` with ONLY src/vikunja_mcp/api.py swapped for 8b4bfa5's — these
 # two tests exactly as they shipped, against 127's fix —
 #
@@ -1462,11 +1480,14 @@ def test_neither_reader_takes_a_SHORT_page_for_an_exhausted_one():
 # section, written by 127 itself, and it is deliberately not restated here.
 #
 # ITS POINTER, SEPARATELY, WAS NOT WRONG — a sibling moved the target under a correct citation, and
-# that is a different thing from the retractions above, so it is not one of the ten. "(api.py's
+# that is a different thing from the retractions above, so it is not one of the eleven. "(api.py's
 # `_page_size` note carries the w-table and the four costs)" was accurate at ea4e059: that note held
-# the w RESULT and the whole cost discussion and closed by naming 608 as the card carrying the full
-# table. 127 rewrote it and put the table and the costs in api.py's block above
-# `_MAX_UNPROVEN_PAGES`, which is where to look now.
+# the w RESULT and the whole cost discussion and closed by naming 608 as the card that would carry
+# the full table. 127 then WROTE that table into api.py — as a pure addition, not a move — in its
+# own `# VMCP-127 (608) — THE FULLNESS INFERENCE IS GONE` block, which is where to look now. Find it
+# by that heading, not by a direction word: the block sits just BELOW `_MAX_UNPROVEN_PAGES`, while
+# api.py's own cross-reference to it says "the block above `_MAX_UNPROVEN_PAGES`" (127's text, left
+# alone here — it is that card's slice, and it is under review).
 
 
 def test_a_server_serving_MORE_than_it_stated_still_reads_the_board_whole():
