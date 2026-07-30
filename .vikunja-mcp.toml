@@ -2,6 +2,6 @@
 url = "https://tracker.zz.hgdev.com"
 project_id = 10
 project = "vikunja-mcp"
-# enforce_single_wip = true  # refuse claim() while you already have a Design/Build task
-#   (single-WIP discipline). Off by default. Left off here: this repo's orchestrator +
-#   a concurrent /loop share ONE token, so a hard gate would refuse the loop's claims.
+wip_limit = 2   # parallel drain: two per-task agents at a time, each in its own worktree
+                # (vikunja-mcp workspace). 2, not more, on purpose — it bounds the blast
+                # radius of two unrelated tasks landing on main in the same minute.
