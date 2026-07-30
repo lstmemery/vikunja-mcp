@@ -418,3 +418,272 @@ re-executing that step would copy the fence); SKILL.md over-lists
 a comment line-wrap garble in `workspace_cmd.py`; `worktree_root` recomputation;
 a `kept` entry can name an already-removed tree; the WIP refusal message no
 longer says which knob set the limit.
+
+## First live parallel drain (2026-07-30)
+
+Follow-up 1 above — *"the live parallel drain has never run"* — is now closed.
+This section is the record, written by the per-task agent of VMCP-70 (518) from
+**inside** the drain being measured: `task-518` was one of the three slots, so
+everything below was captured live rather than reconstructed afterwards.
+
+**Method, so the evidence can be weighed.** A read-only poller (`git worktree
+list`, `git for-each-ref refs/heads/task/`, `git ls-remote origin main`, `ls` on
+the worktree root; every ~20–45 s, appended to a timestamped log) ran for the
+whole window. It never wrote: no `fetch`, no HEAD moves, and no `--gc` or
+`--release` against sibling trees. Sibling worktrees were inspected only through
+`git -C <path> status/diff/log`. All times below are UTC.
+
+Three cards drained through the window: **524** and **522** landed and reached
+Review, **515** and later **519** were claimed and started. Two reviewers ran
+concurrently.
+
+### Timeline (observed)
+
+| Time | Observation |
+|---|---|
+| 12:47:41 | `task-518@29e8847`, `task-522@29e8847`, `task-524@ba771b8`; `origin/main = ba771b8` |
+| 12:48:21 | `task-524` tree **and** branch `task/524` both gone — release is real |
+| 12:48:34 | `origin/main = 6e5d7f4` (CI `chore: v0.2.51` on top of 524's commit) |
+| 12:50:20 | `review-524  ba771b8 (detached HEAD)` appears; `task-515  6e5d7f4 [task/515]` appears |
+| 12:51:47 | `task-522` flips to `6e5d7f4 (detached HEAD)` — its rebase has started |
+| 12:52:35 | `both modified: SKILL.md` (conflict), `modified: workflow.py` staged clean |
+| 12:53:47 | still unmerged — the conflict took >2 min of agent time |
+| 12:54:09 | rebase done, `HEAD=509d707` on `task/522`, tree clean; `origin/main = 509d707` — pushed |
+| 12:54:54 | `task-522` tree + branch gone; `origin/main = 0ba7780` (CI `v0.2.52`) |
+| ~12:55:17 | `review-522  509d707 (detached HEAD)` appears |
+| 12:56:31 | `task-519  0ba7780 [task/519]` appears — next slot refilled from the newest `main` |
+
+### The checklist, item by item
+
+**Worktrees appear on `task/<id>` branches cut from a fresh `origin/main` —
+CONFIRMED, and the "fresh" part is not incidental.** `task-518`/`task-522` were
+cut at `29e8847`, `task-515` at `6e5d7f4`, `task-519` at `0ba7780` — in each case
+the tip of `origin/main` at creation time, three different bases within nine
+minutes. Step 2 of the create sequence (`git fetch origin` before `worktree add`)
+is doing what §3 says it does.
+
+**Releases actually remove the tree and delete the branch — CONFIRMED, twice.**
+`task/524` and `task/522` each vanished from both `git worktree list` and
+`for-each-ref refs/heads/task/` within ~45 s of their push. The remaining
+directory listing after each was clean; no `prune`-able stragglers appeared.
+
+**Each task lands as its own commit on `main` — CONFIRMED.**
+
+```
+$ git log --oneline -20 origin/main | grep -o 'tracker #[0-9]*' | sort | uniq -c
+   1 tracker #514
+   1 tracker #522
+   1 tracker #524
+```
+
+Exactly one commit per task, and each is single-parent (`git rev-list --parents
+-1` yields two fields, so no merge commits entered `main`). `git push origin
+HEAD:main` from a throwaway branch preserved the one-task-one-commit rule as §
+"Decisions taken" claimed, and CI auto-released per landed task (`v0.2.51` after
+524, `v0.2.52` after 522) — the release pipeline was untouched by parallelism.
+
+**The push race happened; the recipe absorbed it — but no push was ever
+*rejected*, and that distinction matters.** `main` moved two commits under 522
+while it worked (`29e8847` → `ba771b8` → `6e5d7f4`), so a bare `git push origin
+HEAD:main` would have been refused. It never got the chance: the agent ran
+`fetch` → `rebase` → re-verify → push in that order, so the race was *absorbed
+in advance* rather than survived after a rejection. **The `>3 rounds` retry path
+in "Error handling" therefore remains untested by this run.** What was tested,
+and passed, is the harder half: a real semantic collision.
+
+**The rebase conflict — the most valuable thing in this window.** 522 and 524
+both edited `SKILL.md` and `workflow.py` with no declared relation between them:
+the exact "undeclared overlap" of §2. The outcome split cleanly along hunk
+distance, and both halves are instructive.
+
+- `SKILL.md` — 524 rewrote old-side lines 95–104, 522 edited 104–105. Overlapping
+  → **hard conflict**, `both modified`, resolved by the agent by hand (it kept
+  524's newer semantics and re-applied its own edit on top, per its worklog).
+- `workflow.py` — 524 touched old line 418, 522 touched 409–410. Eight lines
+  apart → **clean auto-merge, staged without comment.** This is precisely the
+  failure mode §2 names as worse than a conflict: two individually-correct
+  changes merged silently. Nothing but re-running the criteria could have caught
+  it, and the agent did re-run them (470 passed) *after* resolution and *before*
+  pushing. The recipe's re-verify step is load-bearing, not ceremony.
+
+I verified independently that the resolution lost nothing:
+
+```
+$ git diff --numstat ba771b8 origin/main -- src/vikunja_mcp/skills/tracker/SKILL.md
+39      6       src/vikunja_mcp/skills/tracker/SKILL.md
+```
+
+39 added / 6 removed between 524's commit and post-522 `main` — identical to
+522's own diffstat, i.e. the only change to that file since 524 is 522's, and
+the six removals are 522's deliberate rewrites in three separate hunks. 524's
+`НЕ задан — дефолт **3**` rule and its `DEFAULT_WIP_LIMIT` import both survive at
+`origin/main`.
+
+**`wip_saturated` appeared and the pump respected it — CONFIRMED, with a caveat
+that is itself a finding.** With a fully populated `exclude`:
+
+```
+next_task(exclude=[515, 518, 522]) ->
+  {"task": null, "wip_saturated": true,
+   "message": "all 3 WIP slot(s) are busy (3 active) — nothing can be claimed until one finishes",
+   "wip": {"active": 3, "limit": 3, "free": 0}}
+```
+
+**A review offer does not consume a slot — CONFIRMED empirically**, not just in
+the accounting: with `review-522` *and* `review-524` both live on disk,
+`next_task(exclude=[515,518])` still reported `{"active": 2, "limit": 3, "free":
+1}` and offered a free-queue card. Two concurrent reviewers narrowed the drain by
+nothing, as §1 promised.
+
+**`--gc` left the unrelated harness worktree alone — CONFIRMED.**
+`.claude/worktrees/agent-a76c799de4858312f` and its branch
+`worktree-agent-a76c799de4858312f` were present in **13 of 13** poller snapshots
+spanning the entire window — the same window in which two build trees were
+reaped and three created. The "not ours" guard holds on a real board.
+
+### What contradicted the card, SKILL.md, or this spec
+
+**1. Verifying a reported `evidence` sha with `git rev-parse` does not work.**
+Card 518's own checklist says *"each `evidence` sha actually resolves (`git
+rev-parse`; a subagent can report a sha that never landed)"*. Tested directly:
+
+```
+$ git rev-parse 0123456789012345678901234567890123456789
+0123456789012345678901234567890123456789
+exit=0
+$ git rev-parse --verify 0123456789012345678901234567890123456789
+0123456789012345678901234567890123456789
+exit=0
+$ git cat-file -e 0123456789012345678901234567890123456789^{commit}
+fatal: Not a valid object name …^{commit}
+exit=128
+```
+
+A full 40-char sha is echoed back with exit 0 by `rev-parse` **and** by
+`rev-parse --verify`, whether or not the object exists — so the one check the
+card names is the one check that cannot detect the failure it is guarding
+against. Only `git cat-file -e <sha>^{commit}` fails.
+
+And existence is still not enough, which this window proved live: 522's
+pre-rebase commit `e3d5be6` **still resolves** (`cat-file -e` → 0, object not yet
+gc'd after its branch was deleted) yet `git merge-base --is-ancestor e3d5be6
+origin/main` → **NO**. Had the agent captured `evidence` before the rebase, the
+sha would have passed both `rev-parse` and `cat-file` while naming a commit that
+is not on `main`. The recipe's "read the sha AFTER a successful push" is what
+prevents this, and 522's agent additionally self-invented the right check (`git
+branch -r --contains HEAD`). Neither SKILL.md nor this spec's recipe names a
+post-push verification step; they should. Filed.
+
+*(Honest note on method: my own first pass mistyped an abbreviated sha and got
+`fatal: Not a valid object name` — a wrong guess at an abbreviation is
+indistinguishable from a missing object. Verify against full shas only.)*
+
+**2. `wip_saturated` is invisible to a caller whose `exclude` is incomplete —
+even when `free` is 0 in the very same payload.** Tested at 12:58:53 with three
+build trees live (`task-515`, `task-518`, `task-519`), first with the in-flight
+set named and then without it:
+
+```
+next_task(exclude=[515, 518, 522])
+  -> {"task": null, "wip_saturated": true, "wip": {"active": 3, "limit": 3, "free": 0}}
+
+next_task()                       # same moment, empty exclude
+  -> {"task": {"id": 518, …}, "resume": true, "stage": "Build",
+      "wip": {"active": 3, "limit": 3, "free": 0}}
+```
+
+Same `free: 0`, and the second result carries no `wip_saturated` key at all: the
+resume branch returns before the `free == 0` check, so the saturation signal is
+structurally unreachable unless the caller names its live agents. SKILL.md
+already requires the orchestrator to maintain `exclude` to avoid double-dispatch;
+what it does not say is that the *saturation signal itself* depends on it. It
+also independently confirms, by observation rather than by code-tracing, 524's
+claim that `claimable`'s verdict is unaffected — with an empty `exclude` the
+saturated state cannot be reached at all.
+
+**3. The double-dispatch hazard is real, and I walked into it.** An earlier
+`next_task()` at 12:48:34, again with no `exclude`, handed me **task 522** as
+"your active task" (`stage: "Design"`, `resume: true`) — a card that at that
+moment had a live sibling agent standing in `task-522` with uncommitted edits to
+`SKILL.md` and `workflow.py`. An orchestrator that had lost its in-flight set
+would have dispatched a second agent straight onto that dirty tree. SKILL.md
+warns about this in prose; this is the observed instance.
+
+### What I could not observe, and why
+
+Stated plainly rather than filled in:
+
+- **No agent's cwd vanished under it — but the `--gc` race was not disproved.**
+  522's window between `advance(to='review')` and its tree's removal was ~45 s,
+  and I cannot tell from the outside whether the removal was the agent's own
+  `--release` or the orchestrator's `--gc`; the two are indistinguishable in
+  `git worktree list`. No agent reported a lost directory. Follow-up 2 and card
+  VMCP-71 (519) stand unresolved, neither confirmed nor cleared.
+- **No review tree was observed being released.** Both `review-522` and
+  `review-524` were still on disk when this record was written; their verdicts
+  had not landed. The `--release <id> --role review` half of the lifecycle, and
+  follow-up 8's "unreleasable review tree", remain unobserved.
+- **No rejected push, and no `>3 rounds` `call_human` escalation** (see above).
+- **The queue was never surveyed, and cannot be.** `next_task` offers one card at
+  a time and `exclude` does not filter the free-queue branch
+  (`workflow.py:580-584`), so no agent in this window — including me — was in a
+  position to say what the queue held. This is the same limitation that produced
+  card 522; it is a property of the tool, not a gap in this run.
+- **`kept` was never non-empty** in any `--gc` output I had sight of, so
+  follow-ups 5–8 (the release guards' bounds) got no live exercise.
+
+### Inferred, not observed
+
+Labelled separately on purpose:
+
+- That a `--gc` ran during my window at all is inferred from SKILL.md's tick
+  order plus the orchestrator's own recorded `{"released": [], "kept": []}` from
+  the start of this tick. I did not see the invocation.
+- That `task-524`'s and `task-522`'s removals were their agents' own `--release`
+  calls (rather than `--gc`) is inferred from the ~45 s gap after each push and
+  from SKILL.md's instruction to the per-task agent.
+- The hunk-distance explanation of why `SKILL.md` conflicted while `workflow.py`
+  auto-merged is my reading of the two diffs, not a statement from git.
+
+### This card's own integration
+
+Recorded because the instruction asked for it. This card edits the very file 524
+rewrote and pushed mid-window, so **518 is itself an instance of undeclared
+overlap.** I rebased onto the live `origin/main` *before* writing, so the text
+above is appended to 524's current version rather than to the `29e8847` copy my
+tree was cut from; that first rebase was a pure fast-forward (`Successfully
+rebased and updated refs/heads/task/518`, no commits of my own to replay).
+`main` had advanced five commits under this docs-only task by the time it was
+written.
+
+The **push-time rebase was real, not a no-op**: the commit was replayed from base
+`0ba7780` onto `6651eb7`, which changed its sha (`9ec979f` → the sha in this
+card's `evidence`). Two more commits had landed underneath in the meantime —
+`f7f0eaf test(cli): make four workspace-CLI pins able to fail (tracker #515)`,
+the third task of this drain, plus CI's `chore: v0.2.53`. It replayed **without
+conflict**, because 515 touched only `tests/unit/test_workspace_cmd.py` and this
+change is a pure append (+247/-0) to a file nobody else held. That is the benign
+shape of the same mechanism that conflicted for 522 — worth recording precisely
+because it shows the conflict there was not bad luck but hunk overlap, and its
+absence here is not virtue but distance.
+
+By the end of the window `main` carried exactly four task commits from this
+drain, one each:
+
+```
+$ git log --oneline -24 origin/main | grep -o 'tracker #[0-9]*' | sort | uniq -c
+   1 tracker #514
+   1 tracker #515
+   1 tracker #522
+   1 tracker #524
+```
+
+### Verdict
+
+The mechanism works. Isolation, per-task commits, release, the `wip` accounting
+and the "not ours" guard all behaved as designed on a real board, and the one
+genuinely dangerous case — a silent clean auto-merge alongside a loud conflict,
+between two tasks the tracker had no way to know were related — was caught by the
+re-verify step exactly where §2 said it would be. What this run did **not**
+exercise is the failure edges: a rejected push, the retry ceiling, review-tree
+release, and the `--gc` grace race. Those are still theory.
