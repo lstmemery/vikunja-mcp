@@ -836,6 +836,141 @@ def test_argparse_own_errors_still_exit_rather_than_print_json(monkeypatch, tmp_
         run_workspace(["42", "--role", "bogus"])
 
 
+# --- VMCP-66 (514): a killed `worktree add` leaves `locked initializing` — refuse, don't reuse ---
+
+def _half_created_tree(repo, monkeypatch, task_id=42):
+    """CONSTRUCT the state, do not simulate it: `git worktree add` killed mid-checkout.
+
+    Driven through the REAL entry point with the module's own timeout, because that is the point
+    of the finding — since `_GIT_TIMEOUT` landed, `ensure_workspace` can manufacture this state
+    BY ITSELF, with no external killer. A `* filter=slow` smudge filter that sleeps parks the
+    checkout after git has already written `.git/worktrees/task-<id>/locked` = "initializing" and
+    before it has written any file, and `subprocess.run(timeout=...)` SIGKILLs it there.
+
+    Measured on git 2.50.1: the entry stays listed as `locked initializing`, `git worktree prune`
+    exits 0 and keeps it, and the directory holds nothing but `.git`. Returns its path.
+
+    ONE property to know before touching the assertions below: the half-populated directory is a
+    TRANSIENT phase, not the state. `worktree add` checks out in a CHILD (`git reset --hard`), and
+    SIGKILLing the parent orphans that child onto PID 1, where it keeps smudging — measured filling
+    the tree in one file per sleep until COMPLETE, while the lock marker (cleared only by the dead
+    parent) stays forever. So the "only .git landed" assertion holds at construction time and is
+    checked there; nothing afterwards may depend on a file being absent, and nothing may key off
+    file contents to recognise the state. `test_ensure_refuses_any_locked_worktree_...` is the
+    complementary case — a FULLY checked-out tree that is merely locked must be refused too, which
+    is precisely phase two of this one.
+    """
+    slow_smudge = repo.parent / "slow-smudge.sh"
+    slow_smudge.write_text("#!/bin/sh\nsleep 30\ncat\n")
+    slow_smudge.chmod(0o755)
+    (repo / ".gitattributes").write_text("* filter=slow\n")
+    _git(repo, "add", ".gitattributes")
+    _git(repo, "commit", "-m", "slow smudge filter")
+    _git(repo, "push", "origin", "main")
+    _git(repo, "config", "filter.slow.smudge", str(slow_smudge))
+
+    original = workspace_cmd._GIT_TIMEOUT
+    monkeypatch.setattr(workspace_cmd, "_GIT_TIMEOUT", 2.0)
+    with pytest.raises(WorkspaceError, match="worktree add .* timed out"):
+        ensure_workspace(task_id, cwd=repo)
+    # put both back: everything AFTER this point must run at full speed and un-smudged, so the
+    # tests below exercise the guards and not a second timeout.
+    monkeypatch.setattr(workspace_cmd, "_GIT_TIMEOUT", original)
+    _git(repo, "config", "filter.slow.smudge", "cat")
+
+    path = worktree_root(repo) / f"task-{task_id}"
+    # the state itself, asserted where it is built so every test below inherits the guarantee
+    assert path.is_dir() and not (path / "README.md").exists()   # partial: only .git landed
+    assert "D" in _git(path, "status", "--porcelain")             # index full of staged deletions
+    _git(repo, "worktree", "prune")                               # exits 0 and does NOT drop it
+    assert "locked initializing" in _git(repo, "worktree", "list", "--porcelain")
+    return path
+
+
+def test_list_worktrees_surfaces_the_lock_it_used_to_drop(repo, monkeypatch):
+    """The one line the card called the fix: the porcelain's `locked` key was parsed and thrown
+    away, so no caller could tell a usable tree from a half-created one."""
+    path = _half_created_tree(repo, monkeypatch)
+    entries = {wt["path"]: wt for wt in list_worktrees(repo)}
+
+    assert entries[path]["locked"] is True
+    assert entries[path]["lock_reason"] == "initializing"
+    assert entries[repo]["locked"] is False and entries[repo]["lock_reason"] is None
+
+
+def test_list_worktrees_reports_a_reasonless_lock_as_locked_with_no_reason(repo):
+    """The other porcelain shape: `git worktree lock` with no reason emits a BARE `locked` line,
+    so the reason must come back None while `locked` still says True. Gate on the bool."""
+    path = Path(ensure_workspace(42, cwd=repo)["path"])
+    _git(repo, "worktree", "lock", str(path))
+    wt = {w["path"]: w for w in list_worktrees(repo)}[path]
+    assert wt["locked"] is True and wt["lock_reason"] is None
+
+
+def test_ensure_refuses_a_half_created_worktree_instead_of_reusing_it(repo, monkeypatch):
+    """THE finding. `_find` returns the entry and the idempotency early-return handed it back as
+    `created: false` — dispatching an agent into a directory whose tracked files are missing and
+    whose index is all staged deletions. Refuse; and prove the refusal did not become a new
+    destruction path (the partial tree is the only trace of what killed the add)."""
+    path = _half_created_tree(repo, monkeypatch)
+
+    with pytest.raises(WorkspaceError, match="HALF-CREATED"):
+        ensure_workspace(42, cwd=repo)
+    # the recovery a human actually needs, in the message itself
+    with pytest.raises(WorkspaceError, match=r"worktree unlock .*&& git worktree remove -f -f"):
+        ensure_workspace(42, cwd=repo)
+
+    assert path.is_dir()                                          # NOT silently removed
+    assert "locked initializing" in _git(repo, "worktree", "list", "--porcelain")
+
+
+def test_ensure_refuses_any_locked_worktree_not_only_the_initializing_marker(repo):
+    """The BREADTH of the guard, pinned on its own: it gates on the `locked` BOOL, never on git's
+    marker text. A tree we cannot vouch for must not be handed to an agent even when the lock says
+    something else entirely — and a locked tree is one git will not let `--release`/`--gc` remove,
+    so working in it would leave a tree nothing can reap. Narrow the guard to
+    `lock_reason == "initializing"` and this test goes red."""
+    path = Path(ensure_workspace(42, cwd=repo)["path"])
+    _git(repo, "worktree", "lock", "--reason", "human is inspecting this", str(path))
+
+    with pytest.raises(WorkspaceError, match="LOCKED worktree .human is inspecting this."):
+        ensure_workspace(42, cwd=repo)
+    assert path.is_dir()
+
+
+def test_release_names_a_half_created_tree_instead_of_calling_it_dirty(repo, monkeypatch):
+    """The reported symptom: release/gc keep it forever "(dirty)" and report that every tick. The
+    OUTCOME was already right (keep, never destroy) — the DIAGNOSIS was not: `git status` inside
+    the tree reports the staged deletion of every missing file, so a human was sent looking for
+    uncommitted work that does not exist."""
+    path = _half_created_tree(repo, monkeypatch)
+
+    res = release_workspace(42, cwd=repo)
+
+    assert res["released"] is False
+    assert "half-created" in res["reason"] and "killed `worktree add`" in res["reason"]
+    assert "dirty" not in res["reason"]
+    assert "remove -f -f" in res["reason"]                        # the human's actual next step
+    assert path.is_dir()
+
+
+def test_gc_reports_a_half_created_tree_and_keeps_sweeping(repo, tracker, monkeypatch):
+    """End to end through the unattended path, which is where this state is actually met: --gc
+    runs every tick, so the half-created tree must produce ONE actionable `kept` line and must not
+    cost the sweep its other verdicts."""
+    api, wf = tracker
+    half = _half_created_tree(repo, monkeypatch)
+    other = Path(ensure_workspace(43, cwd=repo)["path"])          # dead, clean, pushed
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert [r["task_id"] for r in res["released"]] == [43]
+    assert not other.exists()
+    assert [k["task_id"] for k in res["kept"]] == [42]
+    assert "half-created" in res["kept"][0]["reason"]
+    assert half.is_dir()
+
+
 # --- final whole-branch review, Minor 9: a broken config must surface, not relocate trees ---
 
 def test_a_malformed_repo_toml_is_not_swallowed_into_the_default_root(repo):

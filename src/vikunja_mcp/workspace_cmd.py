@@ -57,6 +57,26 @@ _ROLE_BY_PREFIX = {"task": "build", "review": "review"}
 _GIT_TIMEOUT = 600.0
 _GIT_NET_TIMEOUT = 120.0
 
+# git's OWN lock reason, written into `.git/worktrees/<n>/locked` by `worktree add` BEFORE it
+# checks anything out and removed once the checkout finishes. A surviving one therefore means
+# exactly one thing: that add never got to the end. Constructed and measured on git 2.50.1 (a
+# smudge filter that sleeps + the _GIT_TIMEOUT kill above, no external killer needed): the entry
+# stays listed as `locked initializing`, `git worktree prune` exits 0 and REFUSES to drop it, and
+# the directory holds nothing but `.git` — every tracked file missing, the index all staged
+# deletions. Which is why `_release_locked` used to call it "working tree is dirty (N entries)".
+#
+# MEASURED AND COUNTER-INTUITIVE, so do not "simplify" the guard on the assumption of a missing
+# file: the state does NOT stay half-populated. `git worktree add` does the checkout in a CHILD
+# (`git reset --hard --no-recurse-submodules`), and SIGKILLing the parent orphans that child onto
+# PID 1, where it keeps going — files appeared 30s and 60s after the kill, one sleeping smudge
+# each, until the tree was COMPLETE. What never happens is the marker being cleared, because the
+# process that clears it is the parent we killed. So there are two phases and only the second is
+# stable: a tree that may look perfectly fine and is locked FOREVER — which means git will refuse
+# `--release`/`--gc` removal for good, and it leaks until a human intervenes. Hence a guard keyed
+# on the lock's PRESENCE (any file-content heuristic would pass in phase two) and a message that
+# does not promise which phase the reader is looking at.
+_LOCK_INITIALIZING = "initializing"
+
 
 class WorkspaceError(Exception):
     """The message is printed as the CLI's JSON error line."""
@@ -188,7 +208,8 @@ def list_worktrees(root: Path) -> list[dict]:
         if key == "worktree":
             if current:
                 entries.append(current)
-            current = {"path": Path(value), "branch": None, "detached": False, "head": None}
+            current = {"path": Path(value), "branch": None, "detached": False, "head": None,
+                       "locked": False, "lock_reason": None}
         elif key == "HEAD" and current is not None:
             # the checked-out COMMIT sha, same meaning as ensure_workspace's "head" (never the
             # "detached" BOOL below — one key, one meaning, per round 1's Finding 4). Taken from
@@ -202,9 +223,49 @@ def list_worktrees(root: Path) -> list[dict]:
             current["branch"] = value.removeprefix("refs/heads/")
         elif key == "detached" and current is not None:
             current["detached"] = True
+        elif key == "locked" and current is not None:
+            # The key this parser used to DROP on the floor, and the whole finding: an entry can
+            # be listed and unprunable and still be unusable. Two porcelain shapes, both measured:
+            # a reason-less `git worktree lock` emits the bare line `locked` (partition gives an
+            # empty value -> lock_reason None), a lock with a reason emits `locked <reason>`.
+            # `locked` is the BOOL callers must gate on; `lock_reason` only refines the message
+            # (see _locked_refusal). Deliberately NOT unescaped: git c-quotes a reason containing
+            # newlines/control chars, and nothing here parses the reason — it is human-facing text,
+            # while the only reason we ever COMPARE (git's own `initializing`) is always bare.
+            current["locked"] = True
+            current["lock_reason"] = value or None
     if current:
         entries.append(current)
     return entries
+
+
+def _locked_refusal(task_id: int, role: str, wt: dict) -> str:
+    """The message for a worktree that is registered, unprunable, and must NOT be handed back.
+
+    Two wordings because the two causes need different things from the human. Note which one the
+    CALLER gates on, though: `_ensure_locked` refuses on `wt["locked"]` alone and only asks this
+    helper how to phrase it. Being wrong about the marker TEXT then costs a less specific message;
+    being wrong about whether to refuse at all costs an agent working in a tree with no files in
+    it. So the string comparison lives here, in the message, and never in the guard.
+    """
+    path = wt["path"]
+    if wt["lock_reason"] == _LOCK_INITIALIZING:
+        return (
+            f"{path} is a HALF-CREATED worktree — git's own `locked {_LOCK_INITIALIZING}` marker, "
+            f"left when a `git worktree add` is killed mid-checkout (a timeout, SIGKILL, ^C). Its "
+            f"checkout may be incomplete (files missing, the index full of staged deletions) and "
+            f"the marker is PERMANENT either way, so `git worktree prune` will not drop it and "
+            f"`--release`/`--gc` can never reap it. Refusing to hand it back for task {task_id} "
+            f"({role}). Nothing was removed: inspect it, then "
+            f"`git worktree unlock {path} && git worktree remove -f -f {path}`"
+        )
+    reason = wt["lock_reason"] or "no reason given"
+    return (
+        f"{path} is a LOCKED worktree ({reason}) — refusing to hand it back for task {task_id} "
+        f"({role}). A lock is a deliberate hands-off marker and git will not let `--release`/"
+        f"`--gc` remove it either, so working in it would leave a tree nothing can reap. "
+        f"`git worktree unlock {path}` to make it usable again"
+    )
 
 
 def _find(root: Path, task_id: int, role: str) -> dict | None:
@@ -236,6 +297,24 @@ def _ensure_locked(root: Path, task_id: int, role: str, at: str | None) -> dict:
 
     existing = _find(root, task_id, role)
     if existing is not None:
+        if existing["locked"]:
+            # REFUSE, never reuse and never remove — same shape as the review-pinning refusal
+            # below, for the same reason. `git worktree add` killed mid-checkout leaves an entry
+            # that IS listed (so `_find` returns it) and that `prune` will NOT drop, so this
+            # early-return used to hand back a directory containing nothing but `.git` as
+            # `created: false`; the agent dispatched into it stands in a tree whose files are
+            # missing and whose index is all staged deletions, and it commits from there.
+            # Since `_GIT_TIMEOUT` landed, our OWN timeout can manufacture that state — no
+            # external killer required — so this is a reachable path, not a theoretical one.
+            #
+            # Gated on the BOOL, not on the reason: a lock we cannot explain is still a tree we
+            # cannot vouch for, and over-refusing degrades the pump to one slot with a legible
+            # error (SKILL.md's "не завелось — цикл НЕ роняем"), while under-refusing silently
+            # produces work built on an absent tree. Asymmetric, so fail toward the refusal.
+            # And do NOT self-heal it by unlocking + force-removing: the partial checkout may be
+            # the only trace of what killed the add, and "housekeeping must never be how work
+            # disappears" applies to setup exactly as it does to reaping.
+            raise WorkspaceError(_locked_refusal(task_id, role, existing))
         payload = {
             "role": role, "task_id": task_id, "path": str(existing["path"]),
             "branch": existing["branch"], "created": False,
@@ -311,6 +390,23 @@ def _release_locked(root: Path, task_id: int, role: str) -> dict:
         return {"released": False, "task_id": task_id, "role": role,
                 "path": str(worktree_root(root) / name), "reason": "no worktree for this task"}
     path = wt["path"]
+    if wt["lock_reason"] == _LOCK_INITIALIZING:
+        # The OUTCOME here is unchanged — a half-created tree was already kept, on every tick,
+        # forever. What was wrong is the DIAGNOSIS: `git status` inside it reports the staged
+        # deletions of every missing file, so the guard below called it "working tree is dirty
+        # (N entries)" and sent a human looking for uncommitted work that does not exist.
+        # Say what it actually is, once, in a line `--gc`'s `kept` can be acted on.
+        #
+        # Keyed on the marker TEXT (unlike _ensure_locked's guard, which keys on the bool): both
+        # branches KEEP the tree, so a miss costs only wording. Deliberately narrow, because a
+        # human `git worktree lock` should keep falling through to `git worktree remove`'s own
+        # refusal ("is a locked working tree, use 'remove -f -f' if you insist") — that message is
+        # already correct and specific, and swallowing it into a synthesised reason would replace
+        # git's report with our guess about it.
+        return {"released": False, "task_id": task_id, "role": role, "path": str(path),
+                "reason": f"half-created worktree (git's own `locked {_LOCK_INITIALIZING}` "
+                          f"marker from a killed `worktree add`) — needs a human: "
+                          f"`git worktree unlock {path} && git worktree remove -f -f {path}`"}
     dirty = _git("status", "--porcelain", cwd=path)
     if dirty:
         return {"released": False, "task_id": task_id, "role": role, "path": str(path),
