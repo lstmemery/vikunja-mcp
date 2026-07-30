@@ -317,3 +317,73 @@ step 4.
 Step 4 is the one that matters: per the house lesson, tests share the
 implementation's model of the world and a dogfood run is what finds the bug they
 all agreed on.
+
+## Deferred follow-ups (recorded at landing, 2026-07-30)
+
+Everything below was found by review, triaged as safe to carry, and deliberately
+NOT fixed before landing. Kept here because the SDD ledger that held them is
+scratch and does not survive; the git history alone would not preserve them.
+
+**Highest value first:**
+
+1. **The live parallel drain has never run.** The plan named this the step that
+   matters; the tracker MCP tools would not connect in the implementing session,
+   so the first real parallel tick is still pending. Watch the first one.
+2. **Mechanical guard for the `--gc` race.** `--gc` at tick start sees a build
+   tree as dead the instant its task reaches Review, while its agent may still
+   be standing in it — nothing is destroyed (only clean, pushed trees go) but a
+   cwd can vanish mid-turn. Shape: skip, silently and in neither list, a dead
+   tree whose dir/index mtime is younger than N minutes. **Rejected** (recorded
+   so it is not re-proposed): treating a build tree as alive while its card sits
+   in Review would suspend the reaper indefinitely, since a card waits there for
+   a human's Done.
+3. **A killed local git call can manufacture an unrecoverable worktree.**
+   `_GIT_TIMEOUT = 600` makes the `locked "initializing"` half-checkout reachable
+   without an external killer, and nothing detects it: `_find` hands it back as
+   `created: false` and it is dirty-forever, so release and gc keep and report it
+   every tick. Hardening is one line — `list_worktrees` already parses the
+   porcelain and currently ignores the `locked` key.
+4. **The gc hold is bounded per request, not in total.** The tracker read sits
+   inside the repo-wide flock by design (moving it out reopens a race where a
+   tree created between the read and the reap is destroyed under a
+   just-dispatched agent). It now uses a 10s/no-retry client, but total hold
+   still scales with page count.
+
+**Known bounds, accepted:**
+
+5. The dirty guard has no ignore-awareness. A gitignored per-worktree secret or
+   notes file is destroyed by a successful release; conversely a consumer whose
+   build byproducts are *not* gitignored gets a refusal after a clean push.
+   `--ignored` is strictly worse — `.venv`/`__pycache__` would block every release.
+6. Both release guards inspect only `HEAD`, so work moved off HEAD inside a tree
+   (`reset --hard HEAD~1`) is lost. Symmetric on the branch path; a bound of the
+   "HEAD is the work" model, not a gap in one branch.
+7. Two holes fail toward KEEP (safe, but the tree is unreapable): a sha reachable
+   only from *another* worktree's detached HEAD, and a review tree whose only ref
+   is later deleted or rebased away.
+8. `kept` is routinely non-empty in two expected states — a Your Call card with
+   an unpushed commit (every tick until the human answers) and an unreleasable
+   review tree (forever). Documented; a `reason`-based severity split would help.
+9. Dormant in a single-identity setup: a saturated pump never sees pending review
+   offers, and the pull-path review recipe needs a `get_task` to find the
+   evidence sha (the offer payload carries none).
+
+**Test hygiene:**
+
+10. One test mutates `os.environ` directly and `del`s it in `finally` (it would
+    delete an ambient value) and asserts `GIT_TERMINAL_PROMPT == "0"`, so it
+    passes spuriously on a machine exporting that variable. Two other pins cannot
+    fail for the property they name (both honestly labelled), and one
+    `pytest.raises` matcher would accept any exception containing "expected".
+11. The sweep's `parent != wt_root` guard is **not** load-bearing — deleting it
+    left all workspace tests green, because `_release_locked` re-derives the
+    canonical path. Commented in place; a refactor that lets `_release_locked`
+    trust the enumerated path would silently lose the protection.
+
+**Cosmetic:** this plan's fenced SKILL.md excerpt still quotes the pre-fix
+`call_human` wording with the correction outside the fence (an agent
+re-executing that step would copy the fence); SKILL.md over-lists
+«эпик-контейнер» among refusals a tick can meet, which `next_task` never offers;
+a comment line-wrap garble in `workspace_cmd.py`; `worktree_root` recomputation;
+a `kept` entry can name an already-removed tree; the WIP refusal message no
+longer says which knob set the limit.
