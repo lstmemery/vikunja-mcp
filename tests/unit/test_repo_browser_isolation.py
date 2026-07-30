@@ -26,8 +26,24 @@ tests/unit/test_skill_contract.py, which is the module that owns SKILL.md.
 configured. Its proposal — `PLAYWRIGHT_MCP_STORAGE_STATE`, upstream's documented complement to
 `--isolated` — was measured, composes, and still does not ship, because the file it points at
 is LIVE SESSION COOKIES and this repo is PUBLIC. So the pins below run the other way round:
-that the committed settings never carry such a path, and that git cannot be made to carry the
-file itself.
+that the committed settings never carry such a path, and that such a file does not reach git.
+
+That second half is deliberately TWO guards of different kinds, because a name-based one
+cannot do the job alone — and claiming it could was this card's own first defect, caught in
+review by CONSTRUCTING the leak it did not cover. `browser_storage_state` accepts any filename
+anywhere under its root, so `.gitignore` can only exclude a LIST of names. Hence both
+directions are pinned: `COVERED_NAMES` are excluded, `UNCOVERED_NAMES` are NOT, so the prose
+that describes the guard is falsifiable against it either way and cannot quietly drift into
+promising completeness again. The guarantee that does NOT depend on the name is
+`test_no_file_of_storage_state_shape_is_reachable_by_git`, which asks git what `git add -A`
+would publish and reads each candidate's SHAPE.
+
+It is a gate, not a lock: it turns a leak red in the pre-push run this repo's integration
+recipe already requires and in CI; it cannot stop a `git commit`. A `.git/hooks` pre-commit
+hook could, and is deliberately not used — hooks live in `.git/`, which no clone materialises,
+so the guarantee would exist only on whichever machine ran an installer. That is precisely the
+"correct on the author's disk and reaching nobody" failure the settings-delivery pin below was
+written after being bitten by.
 """
 import json
 import subprocess
@@ -43,13 +59,41 @@ GITIGNORE_NEGATION = "!.claude/settings.json"
 ISOLATION_ENV = "PLAYWRIGHT_MCP_ISOLATED"
 STORAGE_STATE_ENV = "PLAYWRIGHT_MCP_STORAGE_STATE"
 
-# What `browser_storage_state` writes when it is given no filename, and the shape a human
-# would reach for. Both are LIVE session cookies; this repo is public.
-STORAGE_STATE_FILES = (
-    "storage-state-2026-07-30T12-00-00-000Z.json",   # the tool's own default, at the root
-    "playwright_storage_state.json",                 # the underscore spelling, also at the root
+# Names the `.gitignore` list is claimed to cover. Every one was CONSTRUCTED in a worktree and
+# put to `git check-ignore --no-index -v` while answering the rework, not read off the pattern.
+COVERED_NAMES = (
+    # the tool's real default, measured: OUTPUT DIR, not the repo root
+    ".playwright-mcp/storage-state-2026-07-30T20-35-12-331Z.json",
+    "storage-state-2026-07-30T12-00-00-000Z.json",   # the same shape if pointed at the root
+    "playwright_storage_state.json",                 # the underscore spelling
+    "storagestate.json",                             # and the run-together one
     "docs/my-storage-state.json",                    # nested: the rule must not be root-anchored
+    "state.json",                                    # "the obvious way" to ask the tool
+    "state585.json",                                 # the leak review actually constructed
+    "auth.json",
+    "cookies.json",
+    "session.json",
+    "playwright/.auth/user.json",                    # Playwright's own documented convention
 )
+
+# Names it is claimed NOT to cover. Pinned on purpose: this list is the honesty half of the
+# guard. Widening `.gitignore` over one of these is welcome, but it must be a DECISION that
+# also updates the prose promising only partial coverage — so it has to turn this red first.
+UNCOVERED_NAMES = (
+    "tracker-login.json",     # an arbitrary plausible name; nothing safe would catch it
+    "creds.json",             # plausible, simply not on the list
+    "storage-state.json5",    # the right words, the wrong extension
+)
+
+# Playwright's storage-state schema, measured off a real export: a JSON object with exactly
+# these two list-valued keys (cookie entries carry name/value/domain/path/expires/httpOnly/
+# secure/sameSite; origin entries carry origin/localStorage). This is what the name-independent
+# guard matches on.
+STORAGE_STATE_SHAPE_KEYS = ("cookies", "origins")
+
+# A storage state is ~450 bytes. The cap keeps the scan from reading anything large; a
+# credential export that big is not a thing, and the tracked tree has no JSON near it.
+SHAPE_SCAN_MAX_BYTES = 1 << 20
 
 # playwright-core's `envToBoolean`: only these two strings are true. "false"/"0" are false and
 # ANYTHING ELSE is ignored entirely — which is why the value, not the key, is what gets pinned.
@@ -274,54 +318,209 @@ def test_the_committed_settings_never_carry_a_path_to_live_session_cookies():
         "makes every browser_* call fail with `Error reading storage state … ENOENT`"
 
 
-@pytest.mark.parametrize("path", STORAGE_STATE_FILES)
-def test_a_storage_state_file_can_never_become_committed(path):
-    """The one thing #585 ships: the accident it forecloses.
+@pytest.mark.parametrize("path", COVERED_NAMES)
+def test_the_listed_storage_state_names_are_excluded_by_this_repos_gitignore(path):
+    """Layer one of the guard: the NAMES it forecloses — no more, and this test says no more.
 
-    Measured while answering the card: `browser_storage_state` — the ONLY way to produce one
-    of these — refuses every path outside the MCP client's workspace root (`File access
-    denied: … is outside allowed roots`). Its workspace root IS the repository the session
-    was opened in, so a live-cookie file can land in exactly one place: inside this public
-    repo. Asked the obvious way (`filename: "state.json"`) it wrote to the repo ROOT; asked
-    with no filename at all it writes `storage-state-<timestamp>.json` there. That artifact
-    is untracked, plausible-looking, and one `git add -A` away from being published forever.
+    Measured while answering the card (@playwright/mcp 0.0.78, own stdio client, throwaway
+    origin): `browser_storage_state` is the only producer, it is behind
+    `PLAYWRIGHT_MCP_CAPS=storage`, and it resolves a relative `filename` against the MCP
+    server's cwd — the main checkout. With no filename it writes
+    `.playwright-mcp/storage-state-<timestamp>.json`; asked the obvious way
+    (`filename: "state585.json"`) it dropped 455 bytes containing a live cookie in the repo
+    root. Untracked, plausible-looking, one `git add -A` from being published forever.
 
-    So the guard is a `.gitignore` rule, and this asks GIT rather than grepping the file —
-    the same lesson its sibling above records twice over: a pattern can be present and
-    defeated (by an earlier blanket rule, by a stray negation), and a green that comes from
-    the machine's own `~/.config/git/ignore` is not a property of this repository at all.
-    Hence both halves: git excludes the path, AND the rule that decided lives in THIS repo.
+    This asks GIT rather than grepping .gitignore — the lesson its siblings above record
+    twice: a pattern can be present and defeated (by an earlier blanket rule, by a stray
+    negation), and a green that comes from the machine's own `~/.config/git/ignore` is not a
+    property of this repository at all. Hence both halves: git excludes the path, AND the rule
+    that decided lives in THIS repo.
 
-    MUTATION-CHECKED (`__pycache__` cleared, exactly 1 test id selected per round, .gitignore
-    restored from a COPY): control PASS; delete the `*storage-state*.json` line -> FAIL for
-    the two hyphenated paths; delete `*storage_state*.json` -> FAIL for the underscore one;
-    anchor the rule as `/storage-state*.json` -> FAIL for the nested path, which is the round
-    that proves the rule is not root-only; rewrite the explanatory comment above the rules
-    -> PASS.
+    What this does NOT establish is completeness — see `UNCOVERED_NAMES` and the shape scan
+    below. The first version of this test was called `..._can_never_become_committed`, and
+    review disproved the "never" by constructing a leak under a name the list missed.
+
+    MUTATION-CHECKED, one round per RULE, deleting that rule's whole LINE (`__pycache__`
+    cleared each round, the parametrised count verified with `--collect-only`, .gitignore
+    restored from a COPY). Failing ids transcribed from the runs, not predicted:
+
+    * control -> 11 passed
+    * drop `*storage-state*.json` -> FAIL for `storage-state-…Z.json` and
+      `docs/my-storage-state.json` (the `.playwright-mcp/` copy survives on the dir rule)
+    * drop `*storage_state*.json` -> FAIL for `playwright_storage_state.json`
+    * drop `*storagestate*.json`  -> FAIL for `storagestate.json`
+    * drop `state*.json`          -> FAIL for `state.json` AND `state585.json`
+    * drop `auth.json` / `cookies.json` / `session.json` -> FAIL for exactly that one each
+    * drop `.auth/`               -> FAIL for `playwright/.auth/user.json`
+    * drop `.playwright-mcp/`     -> PASS, all 11: the default export is still caught by the
+      storage-state glob. That is why #607 gets its own pin below rather than riding on this
+      one — deleting the directory rule has to be able to turn something red.
+    * re-anchor as `/storage-state*.json` -> FAIL for `docs/my-storage-state.json` only,
+      proving the rules are not root-only
+    * rewrite the explanatory comment -> PASS
+
+    A round-one driver deleted rules by SUBSTRING and reported the same clean result, but
+    `state*.json` is a substring of `*storage-state*.json`, so the round labelled "drop
+    `state*.json`" had actually mutated a different rule and nothing held `state*.json` at
+    all. Rules here are therefore removed by exact line match. A mutation round is evidence
+    only for the edit it really made.
     """
     ignored, source, pattern = _ignore_rule(path)
     assert ignored, \
         f"git would happily commit {path!r} — that file is a Playwright storage state: live " \
-        "session cookies for whatever the browser was logged into, in a PUBLIC repo. " \
-        "`browser_storage_state` cannot write anywhere BUT inside this repo, so .gitignore " \
-        "is the only thing standing between an export and a permanent leak"
+        "session cookies for whatever the browser was logged into, in a PUBLIC repo. This " \
+        "name is on the list .gitignore is supposed to cover, so either the rule was dropped " \
+        "or an earlier pattern now overrides it"
     assert source == ".gitignore", \
         f"{path!r} is ignored by {pattern!r} from {source}, not by this repo's own .gitignore " \
         "— the protection then exists only on machines whose global ignore file happens to " \
         "cover it, and vanishes silently in a fresh clone"
 
 
-def test_no_storage_state_file_is_tracked_today():
-    """The ignore rule above prevents the NEXT accident; this one checks there was no last one.
+@pytest.mark.parametrize("path", UNCOVERED_NAMES)
+def test_the_name_list_is_known_to_be_incomplete(path):
+    """The honesty half — it pins what the guard does NOT do, so the prose cannot outrun it.
 
-    Cheap, and it is the assertion that would actually fire on the day it matters: an ignore
-    pattern does nothing to a path git already tracks, so a file added before the rule existed
-    would keep travelling to every clone while every pin above stayed green.
+    A name list cannot be complete: `browser_storage_state` takes any filename anywhere under
+    its root, and no pattern that would catch `tracker-login.json` is safe to write in a repo
+    that also holds legitimate JSON. That is stated as a limit in `.gitignore` and in
+    CLAUDE.md, and a stated limit with nothing holding it is how the first attempt at this
+    card shipped "makes accidental commit impossible" over a guard that did not.
+
+    So this fails if one of these ever BECOMES ignored. That is not a vote against widening
+    the list — it is the requirement that widening be deliberate and land together with the
+    sentence that describes the coverage. The failure message says exactly that.
+
+    MUTATION-CHECKED in the only direction that tests it — by ADDING the rule it forbids
+    (same discipline; .gitignore restored from a COPY): control 3 passed; append
+    `tracker-login.json` -> FAIL on `[tracker-login.json]` alone, other two green; append
+    `creds.json` -> FAIL on `[creds.json]` alone. Two separate rounds because a single one
+    cannot tell "each name is checked on its own" from "the trio stands or falls together".
+    """
+    ignored, source, pattern = _ignore_rule(path)
+    assert not ignored, \
+        f"{path!r} is now ignored by {pattern!r} from {source}. If that was deliberate, this " \
+        "is the intended tripwire, not a bug: move the name into COVERED_NAMES and update " \
+        "the coverage sentences in .gitignore and CLAUDE.md, which currently tell the reader " \
+        "this name is NOT protected. The guard and the claim about it move together"
+
+
+@pytest.mark.parametrize("path", (
+    ".playwright-mcp/page-2026-07-30T20-35-12-319Z.yml",
+    ".playwright-mcp/storage-state-2026-07-30T20-35-12-331Z.json",
+))
+def test_the_playwright_output_dir_is_excluded(path):
+    """#607, absorbed here because #585's own measurement lands in this exact directory.
+
+    The MCP browser writes auto-named artifacts to `.playwright-mcp/` relative to the SERVER's
+    cwd — the main checkout, not the per-task worktree the agent is standing in. Measured on
+    one navigate: a `page-<timestamp>.yml` snapshot, which contains the page's TEXT, so a
+    logged-in page is quoted into it verbatim. With the storage capability on, the default
+    storage-state export lands there too. Until this rule the directory was `?? untracked`
+    with nothing but agent discipline ("не коммить", SKILL.md) between it and `git add -A`.
+
+    Pinned as two paths because they fail for different reasons: the `.yml` is covered ONLY by
+    the directory rule (no storage-state glob can see it), while the `.json` would survive the
+    directory rule's deletion via `*storage-state*.json` — so without the first parameter,
+    deleting `.playwright-mcp/` would leave the whole file green.
+
+    MUTATION-CHECKED (line-precise rule removal, `__pycache__` cleared, .gitignore restored
+    from a COPY): control 2 passed; drop the `.playwright-mcp/` line -> `1 failed, 1 passed`,
+    the failure being exactly the `.yml` id. Measured, not predicted — and it is the round
+    that shows the `.json` parameter alone would have left this pin unable to fail.
+    """
+    ignored, source, pattern = _ignore_rule(path)
+    assert ignored, \
+        f"git would carry {path!r} — playwright's output dir is untracked artifact spill: " \
+        "page snapshots quote the TEXT of whatever page was open, which for a logged-in page " \
+        "is not something to publish from a PUBLIC repo"
+    assert source == ".gitignore", \
+        f"{path!r} is ignored by {pattern!r} from {source} rather than this repo's own " \
+        ".gitignore, so it is not protected in a fresh clone"
+
+
+def test_no_file_of_storage_state_shape_is_reachable_by_git():
+    """Layer two: the guard that does NOT depend on the name, and the reason the card shipped.
+
+    A name list forecloses names somebody thought of. This forecloses the SHAPE. Playwright's
+    storage state is a JSON object with two list-valued keys, `cookies` and `origins`
+    (measured off a real 455-byte export; cookie entries carry name/value/domain/path/
+    expires/httpOnly/secure/sameSite). Any file of that shape is a credential regardless of
+    what it is called, so `tracker-login.json` — the exact name the ignore list cannot
+    safely cover — is caught here.
+
+    The candidate set is git's own answer to "what would `git add -A` publish": the index
+    (`ls-files`, which already includes anything staged) plus untracked-and-not-ignored
+    (`ls-files --others --exclude-standard`). Using `--exclude-standard` is deliberate and not
+    a weakening: a path some machine's global ignore hides is a path `git add -A` will not
+    take on that machine either, so the scan's scope tracks the actual risk. The index half is
+    immune to ignore rules altogether, which is what makes this also cover the two cases the
+    name layer structurally cannot — a `git add -f`, and a file committed before any rule
+    existed. In CI, where the checkout is clean, the index half is the whole scan.
+
+    Honest boundary, stated because this card is about claims outrunning evidence: this is a
+    GATE, not a lock. It goes red in the pre-push `uv run pytest tests/unit -q` the
+    integration recipe already requires, and in CI. It does not stop `git commit`, and it
+    cannot see a file that never reaches this working tree.
+
+    Offending PATHS are reported; contents never are. Reading one to classify it is
+    unavoidable, printing it would defeat the purpose.
+
+    MUTATION-CHECKED (`__pycache__` cleared, exactly 1 test selected per round, no
+    `git checkout --` anywhere near an untracked subject): control PASS; write a real
+    storage-state-shaped file (synthetic values) as `tracker-login.json`, which NO ignore rule
+    covers -> FAIL naming that path; the same content under `state.json`, which IS ignored ->
+    PASS, correctly, since `git add -A` cannot take it; that same ignored file then `git add
+    -f`-ed into the index -> FAIL, the round that proves the index half is not decorative; a
+    non-storage-state JSON object carrying only one of the two keys -> PASS, so the matcher is
+    not "any JSON".
+    """
+    candidates = set()
+    for args in (("ls-files", "-z"), ("ls-files", "--others", "--exclude-standard", "-z")):
+        listed = _git(*args)
+        assert listed.returncode == 0, f"git {' '.join(args)} failed: {listed.stderr.strip()}"
+        candidates.update(p for p in listed.stdout.split("\0") if p)
+
+    offenders = []
+    for rel in sorted(candidates):
+        path = REPO_ROOT / rel
+        try:
+            if not path.is_file() or not 0 < path.stat().st_size <= SHAPE_SCAN_MAX_BYTES:
+                continue
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue  # unreadable, not text, or not JSON — cannot be a storage state
+        if isinstance(data, dict) and all(
+            isinstance(data.get(key), list) for key in STORAGE_STATE_SHAPE_KEYS
+        ):
+            offenders.append(rel)
+
+    assert not offenders, \
+        f"{offenders} — git can publish {'a file' if len(offenders) == 1 else 'files'} shaped " \
+        f"like a Playwright storage state (a JSON object with {list(STORAGE_STATE_SHAPE_KEYS)} " \
+        "lists), i.e. LIVE session cookies, from a PUBLIC repo. The .gitignore name list did " \
+        "not cover this name, which is expected — that is why this check reads shape instead. " \
+        "Delete the file (and `git rm --cached` it if it is tracked); do not just rename it"
+
+
+def test_no_storage_state_file_is_tracked_today():
+    """The name-shaped version of the same question, kept because it answers a wider one.
+
+    The shape scan above needs a file to still parse as a storage state. This one fires on a
+    tracked file that merely bears one of the guarded names — truncated, re-encoded, wrapped —
+    where the shape scan would shrug. Cheap, and it is the assertion that would actually fire
+    on the day it matters: an ignore pattern does nothing to a path git already tracks, so a
+    file added before the rules existed keeps travelling to every clone while the layer-one
+    pins stay green.
 
     MUTATION-CHECKED: control PASS; `git add -f` a file named `storage-state-x.json` -> FAIL
     (then unstaged, and the file deleted).
     """
-    listed = _git("ls-files", "--", "*storage-state*.json", "*storage_state*.json")
+    listed = _git(
+        "ls-files", "--",
+        "*storage-state*.json", "*storage_state*.json", "*storagestate*.json",
+        "state*.json", "auth.json", "cookies.json", "session.json", "*/.auth/*",
+    )
     assert listed.returncode == 0, f"git ls-files failed: {listed.stderr.strip()}"
     assert not listed.stdout.split(), \
         f"git already carries {listed.stdout.split()} — a Playwright storage state is a live " \
@@ -337,18 +536,25 @@ def test_claude_md_records_why_storage_state_is_not_configured_here():
     #558 paid. The next reader of that README will reach the same conclusion, so the measured
     reason it is NOT the cure has to sit next to the cost it appears to answer.
 
-    Two clauses, both instructions rather than tokens: that the variable is set NOWHERE here
-    (the decision), and that it is never written back (the measurement the decision rests on —
+    Three clauses, all instructions rather than tokens: that the variable is set NOWHERE here
+    (the decision), that it is never written back (the measurement the decision rests on —
     without it the decision reads as caution, and caution is exactly what a later reader
-    overrides). Deliberately not pinned: the ENOENT detail, the capability name, the file-size
-    evidence — prose that a rewrite should be free to reshape.
+    overrides), and that the `.gitignore` guard REDUCES rather than forecloses the accident.
+    The third was added by the rework: the first version of this card told CLAUDE.md, the
+    commit message and a test name alike that a leak was impossible, which measurement then
+    disproved. An overstated guard invites exactly the "then I need not think about it" the
+    first two clauses exist to prevent, so the honest bound is pinned next to them.
+    Deliberately not pinned: the ENOENT detail, the capability name, the file-size evidence —
+    prose that a rewrite should be free to reshape.
 
     MUTATION-CHECKED (`__pycache__` cleared, exactly 1 test selected, CLAUDE.md restored from a
     COPY): control PASS; delete the whole paragraph while leaving `PLAYWRIGHT_MCP_STORAGE_STATE`
     mentioned in the paragraph above it -> FAIL, which is the round that proves this pin is not
     a keyword grep; keep the paragraph but soften "does NOT buy that cost back" into "may not
-    help" -> FAIL; delete only the never-written sentence -> FAIL; re-wrap the paragraph across
-    both pinned phrases -> PASS.
+    help" -> FAIL; delete only the never-written sentence -> FAIL; delete only the guard-bound
+    sentence while leaving `.gitignore` discussed in the same slice -> FAIL; restore the old
+    overclaim ("makes accidental commit impossible") in its place -> FAIL; re-wrap the
+    paragraph across all three pinned phrases -> PASS.
     """
     text = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
     start = text.find("**Committed `.claude/settings.json` sets")
@@ -367,6 +573,12 @@ def test_claude_md_records_why_storage_state_is_not_configured_here():
         "CLAUDE.md no longer carries the measurement the refusal rests on (the file is read " \
         "and never written back, so a login does not survive into the next session). Without " \
         "it the refusal reads as mere caution and the next reader will overrule it"
+    assert "The `.gitignore` guard reduces that accident; it does not make it impossible." \
+        in section, \
+        "CLAUDE.md no longer states the BOUND on the .gitignore guard. That sentence is the " \
+        "correction this card was bounced for: a name-based rule cannot cover a filename " \
+        "nobody listed, and the first version of this text promised it could. A reader who " \
+        "believes the guard is total stops checking what they commit"
 
 
 @pytest.mark.parametrize("value", ["yes", "True", "on", "", "false", "0"])

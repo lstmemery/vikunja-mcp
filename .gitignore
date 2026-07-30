@@ -18,12 +18,43 @@ dist/
 # Stray saved web pages (e.g. docroot.html); no .html is tracked or ever has been.
 *.html
 
-# Playwright storage state = LIVE session cookies + localStorage, i.e. a credential for
-# whatever the browser was logged into. This repo is PUBLIC, so it must never be commitable.
-# Measured (#585): the only thing that can produce one is the `browser_storage_state` tool,
-# and it REFUSES any path outside the MCP client's workspace root ("File access denied: …
-# is outside allowed roots") — so it can only ever write INTO this repo, and with no
-# filename given it writes `storage-state-<timestamp>.json` at the root. Nothing here sets
-# PLAYWRIGHT_MCP_STORAGE_STATE; a machine-local opt-in keeps its file outside the repo.
+# Playwright artifacts (#607). The MCP browser writes auto-named output to `.playwright-mcp/`
+# relative to the SERVER's cwd — the main checkout, not the per-task worktree the agent runs
+# in. Measured (#585): one navigate produced `page-<timestamp>.yml`, and a page snapshot
+# carries the page's TEXT, so a logged-in page ends up quoted in it. With the storage
+# capability on, the same directory is also where a storage-state export lands by default.
+.playwright-mcp/
+
+# Playwright storage state = LIVE session cookies + localStorage: a credential for whatever
+# the browser was logged into, this project's tracker included. THIS REPO IS PUBLIC.
+#
+# Measured (#585, @playwright/mcp 0.0.78, driven by a purpose-built stdio client against a
+# throwaway origin): the only producer is the `browser_storage_state` tool, behind
+# PLAYWRIGHT_MCP_CAPS=storage. Given no filename it writes
+# `.playwright-mcp/storage-state-<timestamp>.json` — the OUTPUT DIR, not the repo root.
+# Given one, it resolves it against the server's cwd, so `state585.json` lands in the root.
+# By default it refuses paths outside the MCP client's roots (cwd + cwd/.playwright-mcp) —
+# but that is a DEFAULT, not a law: with PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS=true
+# the same call wrote a usable seed straight outside the repo.
+#
+# WHAT THE LIST BELOW DOES AND DOES NOT DO — read this before trusting it. It excludes a
+# fixed set of NAMES: the tool's own default, the spellings a human reaches for, and
+# Playwright's documented `playwright/.auth/user.json` convention. That forecloses the
+# `git add -A` accident for those names and nothing more. It CANNOT be complete — the tool
+# accepts ANY filename anywhere under the root, so e.g. `tracker-login.json` is not covered,
+# and no pattern broad enough to catch that is safe to write here. The non-name-based half
+# of the guard lives in tests/unit/test_repo_browser_isolation.py: it asks git what
+# `git add -A` would publish and fails on any file of storage-state SHAPE under ANY name.
+# That is a GATE (red suite before push, red CI after), not a lock on `git commit`.
+#
+# Price of the bare names below: a legitimate file called exactly `state.json`/`auth.json`/
+# `cookies.json`/`session.json` is skipped by `git add -A`. A plain `git add <path>` still
+# refuses out loud and points at `-f`, so the failure mode is visible, not silent.
 *storage-state*.json
 *storage_state*.json
+*storagestate*.json
+state*.json
+auth.json
+cookies.json
+session.json
+.auth/

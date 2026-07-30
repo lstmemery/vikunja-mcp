@@ -368,11 +368,35 @@ file does not exist yet makes EVERY `browser_*` call fail (`Error reading storag
 ENOENT`), which is worse than the status quo for anyone who clones; and the value is a
 machine-local path to LIVE SESSION COOKIES — a secret of the same class as
 `.vikunja-mcp.env` and `VIKUNJA_NOTIFY_WEBHOOK`, which this repo keeps out of committed
-files on principle. The only writer, the `browser_storage_state` tool (hidden behind
-`PLAYWRIGHT_MCP_CAPS=storage`, which also exposes 16 other cookie/storage tools), refuses
-to write outside the MCP client's workspace root — i.e. it can only drop live cookies
-INSIDE this public repo, which is what the `*storage-state*.json` rule in `.gitignore`
-exists to make un-commitable.
+files on principle. The only writer is the `browser_storage_state` tool (hidden behind
+`PLAYWRIGHT_MCP_CAPS=storage`, which also exposes 16 other cookie/storage tools). BY
+DEFAULT it refuses paths outside the MCP client's roots — the server's cwd, i.e. this
+checkout, plus its `.playwright-mcp/` output dir — but that confinement is a default, not a
+law: with `PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS=true` (the same flag SKILL.md
+offers agents for `file://`) the identical call wrote a working seed straight outside the
+repo, and it restored correctly next session. So a machine-local opt-in that never touches
+this repository IS constructible; it is still not worth shipping, for the reason above
+rather than for a safety reason — what it yields is a hand-maintained seed that never
+updates itself, which is not what the card asked for.
+
+**The `.gitignore` guard reduces that accident; it does not make it impossible.** Claiming
+otherwise was this card's own first defect — review disproved it by constructing the leak
+under a name the rule missed, and a guard oversold is worse than one honestly described.
+`browser_storage_state` takes ANY filename anywhere under its root, so a name-based rule can
+only ever cover a LIST: here that is the tool's default
+(`.playwright-mcp/storage-state-<timestamp>.json` — the output dir, NOT the repo root, and
+`.playwright-mcp/` is ignored wholesale, which also settles #607's page snapshots), all three
+spellings of `storage-state`, `state*.json`, `auth.json`/`cookies.json`/`session.json`, and
+`.auth/` for Playwright's documented `playwright/.auth/user.json`. It does NOT cover
+`tracker-login.json`, and no pattern that would is safe to write here. The guarantee that
+does not depend on the name is a unit test: it asks git what `git add -A` would publish and
+fails on any file of storage-state SHAPE (`{"cookies": […], "origins": […]}`) under any name,
+tracked or untracked. That is a GATE — red in the pre-push `pytest` run the integration
+recipe already requires, and red in CI — not a lock on `git commit`. A `.git/hooks`
+pre-commit hook would be a lock, and is deliberately not used: hooks live in `.git/`, which
+no clone materialises, so the protection would exist only on whichever machine ran an
+installer. Both halves, including the list of names deliberately left uncovered, are pinned
+in `tests/unit/test_repo_browser_isolation.py`.
 
 ## Live instance notes
 
