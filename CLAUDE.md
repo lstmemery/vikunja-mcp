@@ -162,13 +162,27 @@ no per-consumer bumps). Immutable `vX.Y.Z` tags = history + rollback.
 **Patch releases are automatic** during active development. Every green push
 to `main` fires the `release` job in `.github/workflows/ci.yml`
 (`needs: [lint-and-unit, integration]`): it runs `scripts/bump_version.py`
-(bumps the patch in BOTH `pyproject.toml` and `src/vikunja_mcp/__init__.py`),
-commits `chore: vX.Y.Z [skip ci]`, tags `vX.Y.Z`, and force-moves `stable`
-onto that version-only bump commit. The job holds `permissions: contents:
-write` (least-privilege, that job only) and a `release` concurrency group
-(serializes racing pushes); the bump commit is pushed with `GITHUB_TOKEN`,
-which by design does NOT re-trigger CI (plus `[skip ci]` as a second belt).
-So `stable` always tracks the latest green `main`, patch-bumped, hands-off.
+(bumps the patch in ALL THREE version files — `pyproject.toml`,
+`src/vikunja_mcp/__init__.py` and `uv.lock`'s self-entry; the lock is easy to
+forget and it is a *dependency-resolution* file, so "version-only" does not mean
+"touches nothing that matters"), commits `chore: vX.Y.Z [skip ci]`, tags
+`vX.Y.Z`, and force-moves `stable` onto that bump commit. The job holds
+`permissions: contents: write` (least-privilege, that job only) and a `release`
+concurrency group (serializes racing pushes); the bump commit is pushed with
+`GITHUB_TOKEN`, which by design does NOT re-trigger CI (plus `[skip ci]` as a
+second belt). So `stable` always tracks the latest green `main`, patch-bumped,
+hands-off.
+
+**That bump commit is also a racer, and sizing the drain's retry loop is its
+job.** Because it lands 37 s–2 m 55 s after the task commit that triggered it
+(median 1 m 41 s; on 2026-07-30 **17 of the 46 commits that reached `main` were
+this bot's**), a per-task agent's freshly-completed rebase goes stale within
+about two minutes of *any* landing — so under a parallel drain a rejected `git
+push origin HEAD:main` is the expected outcome, not an anomaly. The
+`GITHUB_TOKEN`/`[skip ci]` property above is what BOUNDS it: the release never
+triggers itself, so it never pushes twice in a row and can cost an agent at most
+one round. That bound is what sizes SKILL.md's integration ceiling at 6 rounds
+(2·(`wip_limit`−1) mechanical losses + 1); see "Отбитый пуш — это НОРМА" there.
 
 Manual procedure remains for:
 - **Rollback**: `git branch -f stable vX.Y.Z && git push -f origin stable`

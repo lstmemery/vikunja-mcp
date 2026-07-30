@@ -283,9 +283,11 @@ in the main checkout. Integration recipe replaces today's plain push:
 ```sh
 git add <files of this task>
 git commit -m "type(scope): … (tracker #N)"
-git fetch origin && git rebase origin/main
-<re-run this task's done criteria>    # catches what the merge swallowed
-git push origin HEAD:main             # rejected → repeat the block, max 3 rounds
+# one chain, not separate turns: `&&` refuses to push on red criteria, and it
+# shrinks the window a race can be lost in from agent-think-time to machine time
+git fetch origin && git rebase origin/main \
+  && <re-run this task's done criteria> \
+  && git push origin HEAD:main        # rejected → repeat the block, max 6 rounds
 git rev-parse HEAD                    # the CANDIDATE sha — read AFTER a successful push
 git cat-file -e "<sha>^{commit}"                  # 0 = the commit exists; 128 = it does not
 git merge-base --is-ancestor "<sha>" origin/main  # 0 = it is REALLY on main; 1 = it is not
@@ -326,7 +328,7 @@ refuses to delete unpushed work. After `advance(to='review')` the agent calls
 | Not a git repo / no `origin` / git missing | `{"error": …}`, exit 1. The orchestrator does **not** kill the loop — it falls back to one slot in the main checkout, i.e. exactly today's behavior. |
 | `--release` refuses (dirty/unpushed) | The worktree stays; `--gc` reports it on the next tick so a human can see it. |
 | Rebase conflict | The agent resolves it, or `call_human`. Never force-push, never `--skip`. |
-| Push rejected repeatedly (>3 rounds) | `call_human`; the card parks in **Your Call**, so the worktree reads DEAD to `--gc` — what keeps it is the unpushed work in it, not the stage. Cleaned up before asking (`rebase --abort`), it is clean and pushed and will be reaped mid-question; the agent re-runs `workspace <id>` after the human answers. |
+| Push rejected repeatedly (>6 rounds — resized from 3, see "The retry ceiling, resized from measurement") | `call_human`; the card parks in **Your Call**, so the worktree reads DEAD to `--gc` — what keeps it is the unpushed work in it, not the stage. Cleaned up before asking (`rebase --abort`), it is clean and pushed and will be reaped mid-question; the agent re-runs `workspace <id>` after the human answers. |
 | Per-task agent crashes | The task stays active, its worktree keeps the work, and `workspace <id>` returns that same tree to the resume agent. Strictly better than today, where the diff sat in the shared checkout. |
 | No free slots *and* the free queue is gated | `wip_saturated` wins and is reported alone. `starving` describes a chain that cannot start; with zero slots that is not the actionable fact, and computing it would cost a board escalation for nothing. |
 
@@ -806,6 +808,9 @@ rebase stale almost as soon as it succeeds, and makes a rejected push the expect
 outcome for anyone who rebases immediately after a sibling lands rather than an
 edge case. Round two — rebase onto `43f3df9`, re-run the checks, push — carried it
 in. The 3-round ceiling and the `call_human` escalation past it are still untested.
+*(That ceiling has since been resized to 6 by VMCP-81 (531), on the measurement this
+very paragraph motivated — see "The retry ceiling, resized from measurement" below.
+The escalation past it remains untested, and is now expected to stay that way.)*
 
 That paragraph was written after this commit was first created and folded into it
 with `git commit --amend` — the same operation the table above faults the original
@@ -821,3 +826,111 @@ between two tasks the tracker had no way to know were related — was caught by 
 re-verify step exactly where §2 said it would be. What this run did **not**
 exercise is the failure edges: a rejected push, the retry ceiling, review-tree
 release, and the `--gc` grace race. Those are still theory.
+
+## The retry ceiling, resized from measurement (2026-07-30, VMCP-81 (531))
+
+The section above ends by noting that the retry ceiling was never exercised. It
+also, one paragraph earlier, records *why* the one rejected push happened: the
+commit that won was CI's own auto-release. That card asked whether 3 rounds is
+the right number. It is not, and the reason is structural rather than a matter
+of taste.
+
+### What was measured
+
+All figures from `git log origin/main` (committer dates, UTC 2026-07-30 — the
+day of the drain above), so any reader can re-derive them:
+
+| Quantity | Value |
+|---|---|
+| Commits landing on `main` that day | **46** |
+| …of which real task commits | 29 |
+| …of which machine `chore: vX.Y.Z [skip ci]` (all `github-actions[bot]`) | **17 (37 %)** |
+| Task commit → its bump commit, in the window where CI kept up (n=16) | **min 37 s, median 1 m 41 s, max 2 m 55 s** |
+| Landing rate over that window (11:24Z–14:16Z, 172 min, 32 landings) | 0.186/min — **mean** gap 5.4 min |
+| **Median** gap between consecutive landings | **2.03 min**; 65 % of gaps ≤ 3 min |
+| Rounds a real agent actually needed (the one recorded rejection) | **2** |
+
+The card that filed this quoted 53 s–2 m 30 s; the true spread is wider at both
+ends. More interesting is the gap between the *mean* (5.4 min) and the *median*
+(2.03 min) inter-landing interval: the mean is set by how fast the queue drains,
+the median by the fact that a bump trails each task landing within one to three
+minutes. That asymmetry **is** the pairing, and it is what a retry ceiling has to
+be sized against.
+
+### Why 3 was the worst possible number
+
+The machine is a *bounded* adversary, and the bound is exact:
+
+- it pushes **one** commit per landing; and
+- that push carries `[skip ci]` and is made with `GITHUB_TOKEN`, which by design
+  does not re-trigger CI — so **it never triggers itself and never pushes twice
+  in a row**.
+
+A bot that cannot push twice in a row can cost an agent at most **one** round on
+its own. Three rounds only becomes reachable through *pairing*: at `wip_limit =
+N`, each of the N−1 siblings that lands during your integration brings its own
+bump along. The worst purely mechanical run is therefore
+
+> 2·(N−1) lost rounds, plus the trailing bump of the landing that beat you to
+> the `fetch` — **5 at the default `wip_limit = 3`**.
+
+So the old ceiling sat *below* the routine worst case. Worse, 3 is precisely the
+length of the *commonest* bad run — bump(A) → commit(B) → bump(B) — which means
+it did not fire on the pathological case at all. It fired on the second-most
+ordinary one, and it fired at the exact moment the loop was about to converge,
+handing a human a purely arithmetic problem while the agent's worktree sat
+pinned in Your Call (dirty/unpushed, so `--gc` cannot reap it) for the hours it
+takes a human to answer.
+
+**6 = 5 + 1**: strictly greater than the worst mechanical run, so it fires only
+on something mechanics cannot explain. The independent check agrees — with λ =
+0.186/min and a window W of 1–2 min, P(a round is lost) is 17–31 %, P(>3 rounds)
+0.5–3 %, P(>6 rounds) 0.002–0.09 %: roughly a 30× cut in spurious escalations. 6
+is an upper bound rather than a tuning knob: a repo with no auto-release faces
+siblings only and will never approach it, so there is nothing to lower.
+
+### Why the re-verify still runs on a version-only rebase
+
+The card's second candidate — exempt a rebase over a bump commit from the
+re-verify — was considered on the strongest form of its own argument (the commit
+is machine-generated and mechanically identifiable: bot author, `chore:
+v<semver> [skip ci]` subject) and **declined**. Mechanical identifiability turns
+out to be necessary but not sufficient:
+
+1. **You do not rebase over a commit; you rebase over a range.** What would have
+   to be classified is everything that landed since your `fetch`. With 65 % of
+   inter-landing gaps ≤ 3 min, that range routinely holds a bump *and* a
+   sibling's real commit. The case where the exemption is safe is the case where
+   it saves almost nothing.
+2. **The classification would be executed by an agent, in prose.** Every other
+   rule in SKILL.md that agents branch on has a pin in `test_skill_contract.py`
+   anchored on a code token. "The incoming range is version-only" has no code
+   counterpart to anchor on, and getting it wrong does not raise — it silently
+   removes the guarantee, in a rulebook that self-heals onto every consumer over
+   a moving `stable` with no review gate.
+3. **"Inert on inspection" has already failed here, twice.** The bump commit
+   touches **three** files, not the two both the card and `CLAUDE.md` stated:
+   `pyproject.toml`, `src/vikunja_mcp/__init__.py`, **and `uv.lock`**'s
+   self-entry — a dependency-resolution file, on a day when a dependency
+   migration (`feat(deps): migrate to the mcp 2.0 SDK`) landed on the same
+   branch. And the drain above already watched a *clean auto-merge* produce a
+   wrong result in `workflow.py`, hunks eight lines apart, staged without
+   comment. Both are exactly the shape of "the diff looks harmless".
+
+The cost the exemption was meant to buy back is bought instead by the two
+changes that trade nothing: a ceiling that no longer fires on arithmetic, and
+chaining `fetch && rebase && <criteria> && push` so the window a race can be
+lost in shrinks from the agent's own think-time to machine time. The `&&`
+preserves the gate exactly — the push simply does not run on red criteria — and
+by the measured rate it moves P(round lost) from 61 % at W = 5 min to 17 % at
+W = 1 min. It is the largest lever available and it costs nothing.
+
+### What an agent that *does* hit 6 should say
+
+Six consecutive losses cannot be produced by the machine alone, nor by the
+machine plus two siblings. Hitting the ceiling therefore no longer means "busy
+repo" — it means the loop is not converging (a conflict being re-resolved into
+itself, a sibling stuck in its own push loop, a criteria run that has become
+flaky under rebase). The `call_human` question must carry that framing: what
+landed on each of the six rounds, and why it is not arithmetic — not "please
+push for me".

@@ -268,3 +268,46 @@ def test_empty_queue_wakeup_interval_is_pinned():
     code counterpart to anchor it — it lives only in the rulebook. Pin the value so an unrelated
     skill edit can't silently revert it; a deliberate change updates this one line on purpose."""
     assert "600" in _skill_text(), "the empty-queue ScheduleWakeup interval (600s, #80) vanished"
+
+
+def test_the_integration_retry_ceiling_is_pinned():
+    """VMCP-81: how many `fetch → rebase → re-verify → push` rounds a per-task agent runs before
+    escalating via `call_human` is — like the wakeup interval above — a hand-set human number with
+    NO code counterpart: nothing in workflow.py counts rounds, so this test is the only thing that
+    can hold it. And it is DERIVED, not preferred. CI's auto-release pushes a `chore: vX.Y.Z [skip
+    ci]` bump after every green landing (measured 2026-07-30 on this repo's first live parallel
+    drain: 17 of the 46 commits that reached main that day were the bot's, arriving 37 s–2 m 55 s
+    behind the task commit, median 1 m 41 s), so a losing push is the EXPECTED outcome, not an edge
+    case — but that racer is BOUNDED: `[skip ci]` + GITHUB_TOKEN means it never triggers itself, so
+    it never pushes twice in a row and costs at most one round on its own. The ceiling must exceed
+    the worst purely MECHANICAL run, which at `wip_limit = N` is 2·(N−1) sibling+bump losses plus
+    the trailing bump of the landing that beat you to the `fetch` — 5 at the default limit of 3.
+    Hence 6 = 5 + 1: below it the loop is still converging, at it the loop provably is NOT.
+
+    Why it needs a pin at all: the rulebook self-heals onto every consumer over the moving `stable`
+    branch with no per-consumer pin and no review gate (see this module's docstring), so a silent
+    walk-back ships to every agent everywhere. And the walk-back is the LIKELY edit, not a typo —
+    the old 3 was exactly the length of the commonest bad run (bump(A) → commit(B) → bump(B)), so
+    it reads as a sane-looking number to anyone re-tidying this prose without the derivation in
+    hand, while restoring it calls a human onto pure arithmetic at the moment the next round would
+    almost certainly have won.
+
+    Pinned in all three places that carry the RULE, not once against the whole file (see
+    `_gc_section` on why a whole-file substring is the weak form of this): the parallel-drain
+    paragraph, the shell recipe's round count, and the escalation sentence that spends the ceiling
+    on `call_human`. Deleting any ONE of the three then fails instead of coasting on the others —
+    a recipe with no escalation sentence, or an escalation with no round count, is exactly the
+    half-stated rule an agent would fill in with its own guess. The negative half pins the EXACT
+    old spellings a revert brings back; a bare `"3" not in text` would be vacuous (`wip_limit`
+    defaults to 3 and the measurements above quote 3 min), and it would forbid the derivation
+    prose that has to name the number it replaced."""
+    text = _skill_text()
+    assert "ещё круг, до 6)" in text, \
+        "the parallel-drain rule no longer states the 6-round integration retry ceiling"
+    assert "до 6 кругов" in text, \
+        "the integration recipe's push step no longer states the 6-round retry ceiling"
+    assert "отбило 6 раз подряд" in text, \
+        "the escalation sentence no longer spends 6 rounds before call_human"
+    for old in ("ещё круг, до 3)", "до 3 кругов", "отбило 3 раза подряд"):
+        assert old not in text, \
+            f"the reverted 3-round ceiling is back in SKILL.md ({old!r}) — see this test's docstring"
