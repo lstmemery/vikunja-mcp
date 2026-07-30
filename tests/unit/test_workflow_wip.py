@@ -525,6 +525,15 @@ def test_the_resume_note_says_nothing_extra_at_or_below_the_limit():
 # prose stays a one-file edit. An UNCONDITIONAL clause cannot hide inside it: _clause_free_base
 # re-asserts the base's byte-exact tail before handing it over, so a clause appended on every
 # resume moves the base's ending and fails there instead.
+#
+# Both tests run over BOTH resume stages. An equality table is a set of points, not a property, so
+# it only sees a clause keyed on a dimension some point actually varies: as first written, both
+# envs happened to hand back a DESIGN card, and a clause guarded by `stage == "Build"` inside the
+# free == 0 branch would have walked past both. Design/Build are the two stages the resume branch
+# can offer, and `stage` is in scope right where the clauses are appended, so the parametrisation
+# closes the cross-product of the dimensions a clause here could plausibly key on. The
+# `res["stage"] == stage` assertion is what keeps that true — without it a reordering could
+# quietly collapse both cases back onto one stage.
 
 _BASE_TAIL = "continue from where it left off"
 
@@ -561,7 +570,8 @@ def _clause_free_base() -> str:
     return res["note"]
 
 
-def test_the_exactly_full_resume_note_is_the_base_plus_527s_clause_and_nothing_else():
+@pytest.mark.parametrize("stage", ["Design", "Build"])
+def test_the_exactly_full_resume_note_is_the_base_plus_527s_clause_and_nothing_else(stage):
     """At free == 0 and active == limit exactly ONE clause is justified — #527's "check your
     exclude, not the board". Equality, not `in`: this is the assertion that goes red when a third
     clause is appended there, which is the coverage VMCP-106 was filed to restore. The `wip`
@@ -569,13 +579,17 @@ def test_the_exactly_full_resume_note_is_the_base_plus_527s_clause_and_nothing_e
     refactor that quietly moved this env under the limit could not turn the test into a
     restatement of the base."""
     api, wf = _env(wip_limit=1)
-    _hold(api, wf, "exactly full")
+    held = _hold(api, wf, "exactly full")
+    if stage == "Build":
+        wf.advance(held["id"], to="build", spec="carrying on")
     res = wf.next_task()
     assert res["wip"] == {"active": 1, "limit": 1, "free": 0}
+    assert res["stage"] == stage
     assert res["note"] == _clause_free_base() + _ZERO_FREE_CLAUSE, res["note"]
 
 
-def test_the_over_budget_resume_note_is_the_base_plus_both_clauses_in_that_order():
+@pytest.mark.parametrize("stage", ["Design", "Build"])
+def test_the_over_budget_resume_note_is_the_base_plus_both_clauses_in_that_order(stage):
     """The other half of free == 0, where BOTH clauses are legitimate — and the only test that
     says which comes first. Order carries meaning: the over-budget disclosure explains the state
     the pump is in, the exclude clause tells it what to do about the resume it just got, so the
@@ -584,8 +598,17 @@ def test_the_over_budget_resume_note_is_the_base_plus_both_clauses_in_that_order
     clause; this can."""
     api, wf = _env(wip_limit=3)
     _bounce_to_over_budget(api, wf, 3)
+    if stage == "Build":
+        # EVERY active card has to move, not just the offered one: _my_active_tasks walks
+        # ACTIVE_STAGES in order, so at equal priority a Design card always outranks a Build one
+        # and advancing just the head merely promotes the next Design card behind it. (Measured —
+        # the first draft of this test did exactly that and handed back Design anyway.)
+        for tid in wf.active_task_ids():
+            if api.stage_of(tid) == "Design":
+                wf.advance(tid, to="build", spec="carrying on")
     res = wf.next_task()
     assert res["wip"] == {"active": 4, "limit": 3, "free": 0}
+    assert res["stage"] == stage
     assert res["note"] == (
         _clause_free_base() + _OVER_BUDGET_CLAUSE_4_OF_3 + _ZERO_FREE_CLAUSE
     ), res["note"]
