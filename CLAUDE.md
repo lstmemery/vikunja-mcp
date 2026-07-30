@@ -23,7 +23,7 @@ guardrails for agents; the real security boundary is the scoped API token.
 
 ```bash
 uv sync                                   # env (Python 3.11+, uv)
-uv run pytest tests/unit -q               # 520 unit tests (FakeAPI, MockTransport)
+uv run pytest tests/unit -q               # 528 unit tests (FakeAPI, MockTransport)
 uv run ruff check .                       # lint (line-length 100)
 uv run vikunja-mcp --version              # smoke
 uv run vikunja-mcp claimable              # one JSON line: is there claimable work for this
@@ -156,7 +156,8 @@ docker rm -f vikunja-test
   branch leaked), which is why the rulebook says read `kept` AND scan `released`.
 - `src/vikunja_mcp/skills/tracker/SKILL.md` — process rules for agents
   (queue discipline, orchestrator-dispatches-subagents, report format,
-  independent bug review, and — when `wip.limit > 1` — the parallel drain:
+  independent review of EVERY task and not just bugs («Независимое ревью
+  изменений»), and — when `wip.limit > 1` — the parallel drain:
   `exclude`/`wip_saturated`, one worktree per task, rebase-then-recheck-then-push).
   Ships inside the wheel; root `skills` is a symlink.
 
