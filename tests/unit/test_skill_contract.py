@@ -563,3 +563,95 @@ def test_the_integration_retry_ceiling_is_pinned():
     for old in ("ещё круг, до 3)", "до 3 кругов", "отбило 3 раза подряд"):
         assert old not in text, \
             f"the reverted 3-round ceiling is back in SKILL.md ({old!r}) — see this test's docstring"
+
+
+def _shared_resources_section(text: str) -> str:
+    """The shared-resource rules a per-task agent follows under the parallel drain.
+
+    Sliced like `_gc_section` / `_tick_step_3`, and for the same measured reason: `attach_file`,
+    `Page URL` and `browser` would each be satisfiable somewhere else in a 800-line rulebook, so a
+    whole-file substring could not tell "the rule is still stated where an agent reads it" from
+    "the word survives in an unrelated paragraph". Width is asserted, not assumed — a slice that
+    silently widened to the whole file would restore exactly the weakness it exists to remove."""
+    start = text.find("## Общие ресурсы: worktree изолирует ФАЙЛЫ")
+    assert start != -1, "the shared-resource section is no longer where this pin can find it"
+    end = text.find("\n## ", start + 1)
+    assert end != -1, "the shared-resource section no longer ends at the next top-level heading"
+    section = text[start:end]
+    assert 0 < len(section) < len(text), "the slice is not a proper subset of SKILL.md"
+    assert "## Кто выполняет работу" not in section, "the slice swallowed the following section"
+    return section
+
+
+def test_the_shared_browser_rule_stays_detectable_rather_than_wishful():
+    """VMCP-97 (554): the worktree isolates the working copy and NOTHING else, so a per-task agent
+    under the parallel drain shares the browser, the scratch dir and any fixed port/container name
+    with its siblings. Measured while writing the card: one `@playwright/mcp` per `claude` process
+    (siblings are subagents of that one session, so one browser / one profile / one current page
+    for all of them); no isolation parameter on any browser tool; `--isolated` / `--user-data-dir`
+    are SERVER LAUNCH args, i.e. out of an agent's reach — and even there they isolate per MCP
+    client, not per subagent. Interference therefore cannot be PREVENTED from inside an agent,
+    only DETECTED, and every browser response prints `Page URL:` to detect it with.
+
+    That asymmetry is what this pins, because it is the clause a later tidy-up would drop as
+    belt-and-braces while leaving the reassuring half ("work in one burst") in place — turning a
+    detectable failure into a silent one. And it is not merely inconvenient: the rulebook tells
+    agents to ATTACH a verification screenshot as evidence, so a stolen page becomes a sibling's
+    screenshot approved as this card's proof. `attach_file` is the two-sided anchor (the rule
+    hands it a path in the MAIN checkout, since artifacts land in the MCP server's cwd, not in the
+    agent's worktree) — rename it in workflow.py and `test_attachment_upload_rule_names_the_tool`
+    goes red alongside this.
+
+    MUTATION-CHECKED (`__pycache__` cleared between rounds, each round confirmed to select exactly
+    1 test, and the section restored from a COPY rather than `git checkout` — the section is
+    uncommitted while it is being written, so a git restore silently deletes the very thing under
+    test and every later round then "fails" from the slicer instead of from its mutation, which is
+    how the first attempt at this list produced three worthless greens-in-red):
+    control PASS; soften the `Page URL` check to "compare the address" -> FAIL; drop the
+    `attach_file` clause -> FAIL; drop the "не зови вовсе" ban on browser_close/browser_resize ->
+    FAIL; drop the `browser_tabs` "a tab is not isolation" clause -> FAIL; rename the section
+    heading -> FAIL loudly from the slicer, never silently green; reword the surrounding prose
+    without touching the pinned clauses -> PASS (by design: wording is review's job, per this
+    module's docstring). Each failure was read for its MESSAGE, not just its colour — a round that
+    fails from the slicer proves nothing about the clause it claims to pin."""
+    section = _shared_resources_section(_skill_text())
+    assert "Page URL" in section, \
+        "the browser rule no longer tells agents to VERIFY the page is still theirs"
+    assert "attach_file" in section, \
+        "the browser rule no longer says which path attach_file must be given"
+    for tool in ("browser_close", "browser_resize"):
+        assert tool in section, f"the rule no longer bans {tool} — it destroys a sibling's state"
+    assert "browser_tabs" in section, \
+        "the rule no longer explains that a tab is not isolation (global, shifting indices)"
+
+
+def test_the_shared_resource_rules_name_a_knob_the_agent_can_actually_reach():
+    """The sibling failure this card was warned about: a rule that names a knob the agent cannot
+    reach is worse than no rule. So the two collisions that ARE fixable from inside must keep
+    their concrete recipe, not a platitude — a fixed container name and a fixed host port were
+    both reproduced (`Conflict. The container name … is already in use`, `Bind for 0.0.0.0:3456
+    failed: port is already allocated`), and the scratch dir was measured shared (179 entries
+    written by different agents of one session in a day).
+
+    The fenced recipe is checked to be a DIFFERENT fence from the integration recipe: `sh` blocks
+    are what agents copy, and `_integration_recipe` asserts there is exactly one containing the
+    push refspec. Adding a second `sh` fence to this file is safe only while it stays clear of
+    that string, and this makes the two invariants fail independently instead of one silently
+    invalidating the other's slice.
+
+    MUTATION-CHECKED alongside the test above, same discipline: control PASS; replace `docker rm
+    -f` with a "clean up afterwards" comment -> FAIL; replace the id-derived name and port with
+    fixed ones (`vikunja-test-agent`, `PORT=23456`) -> FAIL; paste the push refspec into this
+    section's fence -> FAIL here AND in
+    `test_the_recipe_verifies_the_evidence_sha_actually_landed_on_main` ("expected exactly 1
+    fenced integration recipe, found 2"), which is precisely the cross-invariant collision this
+    assertion exists to make loud."""
+    section = _shared_resources_section(_skill_text())
+    assert "id" in section and "$ID" in section, \
+        "the isolate-by-task-id recipe lost the task id it derives every shared name from"
+    assert "docker rm -f" in section, \
+        "the recipe no longer cleans up — a leaked container holds its name and port all day"
+    assert "git push origin HEAD:main" not in section, \
+        "this section's sh fence must not contain the push refspec — it would break the " \
+        "exactly-one-integration-recipe invariant (_integration_recipe)"
+    _integration_recipe(_skill_text())  # still exactly one, and still not this one
