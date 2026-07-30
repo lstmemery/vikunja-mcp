@@ -1346,48 +1346,127 @@ def test_neither_reader_takes_a_SHORT_page_for_an_exhausted_one():
 # (`_could_be_full(5, 9) == 5`). The phrase is that assert's, not the helper's: `fluke` appears
 # nowhere in api.py and never has, and an earlier draft of this paragraph credited it there.
 #
-# THAT SERVER IS REAL, AND THIS PARAGRAPH USED TO SAY IT WAS NOT. Until VMCP-124 (603) it read
-# "CONSTRUCTED, not measured against a real 2.3.0 ... which a real container also refused to
-# produce", and offered an under-reported max_items_per_page as merely the same CLASS of fact as
-# `_total_pages` being wrong in both directions. 603 replaced the analogy with direct evidence and
-# then re-scoped its own first draft of it (see the api.py note above `_page_size`, and
-# test_the_degraded_read_never_loses_a_task_the_healthy_read_saw in this same file far above): on a
-# 2.3.0 instance stating max_items_per_page=5, GET /projects serves pages of EIGHT — five real rows
-# plus a CONSTANT 3-row pseudo tail appended after the SQL limit — while paging the real ids
-# honestly. Read every row count in that note as one instance's CONTENT and never as an endpoint
-# constant: the same card measured 10 views and 11 buckets on one container and 4 and 63 on
-# another, both stating 5.
+# THAT SERVER IS REAL, AND THIS PARAGRAPH USED TO SAY IT WAS NOT. Until VMCP-124 (603) FALSIFIED
+# it, this paragraph read "CONSTRUCTED, not measured against a real 2.3.0 ... which a real
+# container also refused to produce", and offered an under-reported max_items_per_page as merely
+# the same CLASS of fact as `_total_pages` being wrong in both directions. 603 replaced the analogy
+# with direct evidence and then re-scoped its own first draft of it (see the api.py note above
+# `_page_size`, and test_the_degraded_read_never_loses_a_task_the_healthy_read_saw in this same
+# file far above): on a 2.3.0 instance stating max_items_per_page=5, GET /projects serves pages of
+# EIGHT — five real rows plus a CONSTANT 3-row pseudo tail appended after the SQL limit — while
+# paging the real ids honestly. Read every row count in that note as one instance's CONTENT and
+# never as an endpoint constant: 603 measured 4 views and 63 buckets on its container, and
+# VMCP-108 (577) had already measured 10 views and 11 buckets on another, both stating 5. THAT
+# SPLIT IS api.py's OWN, and this clause used to hand both pairs to 603: the 10/11 survey is 577's,
+# under the "FOURTH MEMBER OF THE 543/548/562 FAMILY" heading in the note above `_paged_list`
+# (entered in c66057c), and the sentence immediately after it there assigns ONLY the 4/63 to 603.
+# 603's own first probe DID re-see 10 and 11 independently — recorded verbatim in the DESCRIPTION
+# of VMCP-127 (608), the card 603's agent filed, under "not cited from VMCP-108" — so those numbers
+# were never invented; only their provenance was wrong.
 #
-# AND THE BAND THESE TWO TESTS ARE BUILT ON IS OBSERVED THERE TOO, not just the long page. That
+# AND THE BAND THESE TWO TESTS ARE BUILT ON WAS OBSERVED THERE TOO, not just the long page. That
 # same read's page 7 serves SEVEN rows: full by the stated measure, SHORT of the served 8 — the
-# exact window the fixtures below construct. Through this client, `projects()` returns 34
-# rows in 8 requests with /info up and 7 with /info down, the degraded bar of 8 stopping a page
-# earlier than the healthy min(5, 8). The bar difference is not a thought experiment; it costs a
-# request on a real endpoint today.
+# exact BAND the fixtures below construct. Band, not window: they serve 5 and 6, and what all
+# three share is [stated 5, served 8). Through this client BEFORE VMCP-127 (608), `projects()`
+# returned 34 rows in 8 requests with /info up and 7 with /info down, the degraded bar of 8
+# stopping a page earlier than the healthy min(5, 8). That difference was never a thought
+# experiment; it cost a request on a real endpoint. PAST TENSE SINCE 8b4bfa5 — there is no bar on
+# either branch now, so both /info states read that shape identically, and api.py's own copy of
+# this measurement carries exactly that instruction ("Read it in the past tense") above it.
 #
-# WHAT IS STILL UNOBSERVED IS THE ONE REMAINING INGREDIENT — ROWS BEHIND THAT SHORT PAGE, i.e. the
-# LOSS. Live, the pseudo tail is constant, so the page short of the bar is the LAST one carrying
+# WHAT WAS STILL UNOBSERVED IS THE ONE REMAINING INGREDIENT — ROWS BEHIND THAT SHORT PAGE, i.e. the
+# LOSS. Live, the pseudo tail is constant, so the page short of the bar was the LAST one carrying
 # real rows and the read was over anyway; 603 had to move that page off the end before anything
-# disappeared. Do not restate the reason this comment used to give for the gap — that the endpoints
-# which over-serve are PRECISELY the ones ignoring `?page=`, so their next page is always a pure
-# repeat — because 603 measured it FALSE, /projects being the counterexample. (VMCP-103's separate
-# probe still stands, and is a DIFFERENT shape: a page short of the STATED size with rows behind it
-# could not be produced on the kanban tasks endpoint. Welding those two together is precisely what
-# the old parenthetical got wrong.) So nobody has yet watched this client lose a task here, and
-# these tests do not claim otherwise: what they pin is that once the rows ARE behind it, the stated
-# operand is what keeps ONE long page from raising the bar for every page after it.
+# disappeared. Do not restate the reason API.PY'S `_page_size` NOTE used to give for the gap — that
+# the endpoints which over-serve are PRECISELY the ones ignoring `?page=`, so their next page is
+# always a pure repeat — because 603 measured it FALSE, /projects being the counterexample. (That
+# warning used to read "the reason THIS COMMENT used to give", and THIS comment never gave it:
+# `git log -S'PRECISELY the ones' -- tests/unit/test_api_kanban.py` dates the phrase's ARRIVAL in
+# this file to ea4e059, the commit that wrote the warning, with nothing before it, and the block it
+# replaced says nothing about `?page=` at all. (Its SECOND hit is this correction, which quotes the
+# phrase back — writing a `git log -S` command into the file it interrogates changes that command's
+# answer, so read it as "arrived at", not as "returns exactly one".) The
+# sentence lived in api.py under its own "THE REASON THIS COMMENT USED TO GIVE IS MEASURED FALSE"
+# heading and was lifted across without re-pointing the deictic — worse here than anywhere, because
+# "that note" two sentences earlier already means api.py's. VMCP-103's separate probe still stands,
+# and is a DIFFERENT shape: a page short of the STATED size with rows behind it could not be
+# produced on the kanban tasks endpoint. Welding those two together is precisely what the old
+# parenthetical got wrong.) So nobody had watched this client lose a task here, and these tests did
+# not claim otherwise: what they pinned WHILE THE BAR EXISTED is that once the rows ARE behind it,
+# the stated operand is what keeps ONE long page from raising the bar for every page after it. What
+# they pin NOW is at the top of this section — the same server, read WHOLE, no bar left to raise.
 #
 # AND THE WAY THAT SENTENCE WENT WRONG IS THIS CARD'S OWN SUBJECT. What a sibling falsified was
-# PROSE, not a number. Three rounds re-measured 2767/1383/1384 and the SEVEN against each rebased
-# tree and left the non-numeric claim standing — including the round that read 603's diff and cited
-# it in the paragraph on the SEVEN's drift rate, above. "Re-measure the seven; do not inherit it"
-# was written for the counts and is owed to the sentences too. Third over-claim this card has had
-# to retract; the other two are quoted in the SHORTER-window docstring's closing parenthetical.
+# PROSE, not a number. TWO rounds re-measured 2767/1383/1384 and the SEVEN against each rebased
+# tree and left the non-numeric claim standing — d1fc4ea and f00f1e6. Round 1 instrumented nothing
+# at all (no 2767, no SEVEN anywhere in 6e4de09) and round 4 is the retraction, so the COMPOUND is
+# true of exactly two; this sentence used to say three. One of the two is the round that read 603's
+# diff and cited it in the paragraph on the SEVEN's drift rate, above. "Re-measure the seven; do
+# not inherit it" was written for the counts and is owed to the sentences too.
 #
-# FORWARD LINK, because it aims at the two tests below: VMCP-127 (608) is open on this exact shape,
-# and the fix it proposes DELETES the stated operand from both bars (api.py's `_page_size` note
-# carries the w-table and the four costs). If it lands, these two go red BY DESIGN — read that note
-# before "fixing" them.
+# THIS CARD'S OWN FALSE SENTENCES, ENUMERATED RATHER THAN COUNTED. The ordinal that used to stand
+# here said "Third over-claim", and the file already recorded more than three. Each entry is a
+# sentence this card SHIPPED in this file that a later round MEASURED false; the round it entered
+# and the round that retracted it are named so the whole ledger can be re-derived with `git log -S`:
+#
+#   r1 -> r2  "each reader still routes through it"                     universal from ONE reader
+#   r1 -> r2  "every server ... serves AT MOST what /info states"       universal, shipped at TWO
+#                                                                       sites; r2 added the "ALMOST"
+#   r1 -> r3  "the only shape where the two operands disagree"          universal
+#   r1 -> r4  the "fluke-long page" credited to the helper's docstring  PROVENANCE
+#   r1 -> r4  "CONSTRUCTED, not measured against a real 2.3.0"          universal negative
+#   r4 -> r5  "If it lands, these two go red BY DESIGN"                 PREDICTION
+#   r4 -> r5  "the reason THIS COMMENT used to give"                    PROVENANCE (deictic)
+#   r4 -> r5  "the same card measured 10 views and 11 buckets"          PROVENANCE
+#   r4 -> r5  "Three rounds re-measured ... and left it standing"       COUNT of itself
+#   r4 -> r5  "Third over-claim this card has had to retract"           COUNT of itself
+#
+# The "AT MOST" and "only shape" entries are the two quoted verbatim in the SHORTER-window
+# docstring's closing parenthetical; "each reader still routes through it" is recorded by the
+# shared-rule docstring's "corrected that claim twice", and "AT MOST" also by the "ALMOST, not
+# every" line above; the rest are corrected in place above. Grep the phrases case-SENSITIVELY at your peril — the "AT MOST" universal was
+# shipped in capitals and quoted back in lower case, so a `git log -S` on either form alone dates
+# it to the wrong round, which is how a draft of this very list put it at r2 -> r3.
+# NOT counted, deliberately: the three `_short_non_final_pages` attributions re-pointed in round 3.
+# The round-3 review measured them and ruled them harmless ("true of every caller in the file"),
+# asking for no action — a re-pointing, not a retraction. Excluded on that ruling, not by oversight.
+# TEN sentences and NOT ONE MEASURED NUMBER — 2767/1383/1384, the SEVEN over the same four tests
+# and the 3x2 mutation table all reproduced exactly under two independent reviewers. The last two
+# entries are this card's disease turned on itself: a sentence ABOUT the retractions, retracted.
+#
+# Three of the ten are provenance and `git log -S` on the exact phrase settles all three in seconds;
+# two more are counts over this card's own commits, settled by `git show <rev>:<path> | grep`; the
+# PREDICTION needed nothing but running the two tests below against the sibling's api.py. That
+# discipline HAS been applied here exactly once — round 4 counted `fluke` at five separate revisions
+# and got that claim right — and the same rewrite then shipped five unchecked sentences across four
+# of its paragraphs. Doing it once is not doing it. Run it before writing "X says", "this used to",
+# or "card N measured" — an attribution is a claim like any other.
+#
+# WHAT THE FORWARD LINK SAID, AND WHAT ACTUALLY HAPPENED — kept rather than quietly deleted,
+# because a false "by design" is how a live pin gets deleted with a green suite as cover. It read:
+# "VMCP-127 (608) is open on this exact shape, and the fix it proposes DELETES the stated operand
+# from both bars ... If it lands, these two go red BY DESIGN — read that note before 'fixing'
+# them." 608 landed as 8b4bfa5 eight and a half minutes after this section's own commit (AUTHOR
+# timestamps, ea4e059 00:48:33 -> 8b4bfa5 00:57:07; the committer stamps a rebase rewrote are
+# 6 min 27 s apart), and the prediction is false on both halves. MEASURED here rather than
+# inherited: `git archive ea4e059` with ONLY src/vikunja_mcp/api.py swapped for 8b4bfa5's — these
+# two tests exactly as they shipped, against 127's fix —
+#
+#   ..._still_reads_the_board_whole   PASSED, untouched
+#   ..._still_reads_the_list_whole    FAILED at `assert seen == [1, 2, 3]` and nowhere else; its
+#                                     row assertion on the line above passed
+#
+# — so ONE test moved, not two, and in that one only the REQUEST COUNT. Both DATA assertions stood,
+# which is why 127 needed ONE assertion changed across the pair (`[1, 2, 3]` -> `[1, 2, 3, 4]`) and
+# nothing at all in the board test's body. The accurate account is the header at the TOP of this
+# section, written by 127 itself, and it is deliberately not restated here.
+#
+# ITS POINTER, SEPARATELY, WAS NOT WRONG — a sibling moved the target under a correct citation, and
+# that is a different thing from the retractions above, so it is not one of the ten. "(api.py's
+# `_page_size` note carries the w-table and the four costs)" was accurate at ea4e059: that note held
+# the w RESULT and the whole cost discussion and closed by naming 608 as the card carrying the full
+# table. 127 rewrote it and put the table and the costs in api.py's block above
+# `_MAX_UNPROVEN_PAGES`, which is where to look now.
 
 
 def test_a_server_serving_MORE_than_it_stated_still_reads_the_board_whole():
