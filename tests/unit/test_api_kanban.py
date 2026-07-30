@@ -5,7 +5,6 @@ import httpx
 import pytest
 
 from tests.unit.test_api import make_api
-from vikunja_mcp import api as api_mod
 from vikunja_mcp.api import _MAX_UNPROVEN_PAGES as MAX_UNPROVEN_PAGES
 from vikunja_mcp.api import VikunjaError
 
@@ -648,7 +647,14 @@ def test_a_required_bucket_repeating_a_full_window_no_longer_truncates(info_stat
 
 
 def test_a_required_bucket_repeating_a_window_SHORTER_than_the_stated_size():
-    """VMCP-92's repeat-window edge, moved onto the HEALTHY branch — and the shape that pins the
+    """VMCP-127 (608) FIRST: the `min(stated, served)` cap this docstring is about no longer
+    exists, so everything below it describing operands is history, kept for the reasoning rather
+    than as a live mutation guide. What the test still pins is its BEHAVIOUR, and it pins it
+    against a wider rule now — a required bucket re-serving a window must not end the read whatever
+    the window's length is, which is what test_the_board_is_read_whole_whatever_the_repeat_window_is
+    sweeps across the whole band at the end of this file. This read is the w = 3 case of it.
+
+    VMCP-92's repeat-window edge, moved onto the HEALTHY branch — and the shape that pinned the
     SERVED operand of the `min(stated, served)` cap. Build re-serves its window of 3 while /info
     states 5, so the window is short by the STATED measure but exactly full by the PROVEN one;
     Done keeps adding, so "no new required task" alone cannot save the read.
@@ -1123,7 +1129,14 @@ def test_a_paged_read_never_stops_on_the_total_pages_header():
     UNDER-reporting on this very server (the kanban tasks endpoint sent total-pages 1 while the
     bucket behind it held 3 pages), so a reader that believed it would truncate exactly like the
     bug this card fixes. Here the server insists total-pages=1 on every response and goes right
-    on serving full pages: the fullness rule has to carry the read to the end on its own."""
+    on serving full pages.
+
+    VMCP-127 (608) made that structural rather than a rule: `_paged_list` no longer reads the
+    header AT ALL — it went with the fullness inference it was the complement of (see the block
+    above `_MAX_UNPROVEN_PAGES` in api.py). So this stands as the regression pin against
+    RE-INTRODUCING a header-driven stop, which is what VMCP-116's option (b) keeps proposing. Its
+    request count moved from 3 to 4 with that card: the read no longer ends on page 3 BEING SHORT,
+    it ends on page 4 bringing nothing new."""
     api, seen = _flat({
         1: [{"id": 1}, {"id": 2}, {"id": 3}],
         2: [{"id": 4}, {"id": 5}, {"id": 6}],
@@ -1131,23 +1144,36 @@ def test_a_paged_read_never_stops_on_the_total_pages_header():
     }, page_size=3, total_pages=1)
 
     assert [x["id"] for x in api.labels()] == [1, 2, 3, 4, 5, 6, 7]
-    assert seen == [1, 2, 3]
+    assert seen == [1, 2, 3, 4]
 
 
-def test_a_short_non_final_page_is_followed_when_the_header_says_there_is_more():
-    """What the header BUYS — the one shape min(size stated, longest page served) cannot see, and
-    the flat-list twin of VMCP-103's bug: a page SHORT of the page size with more behind it. The
-    fullness rule calls page 2 the end; total-pages says there is a third, and a signal used only
-    to keep going can be believed without ever risking data. Delete the header clause and this
-    read silently returns 7 rows instead of 9."""
+@pytest.mark.parametrize("total_pages, why", [
+    (3, "the server also says there is a third page"),
+    (None, "the server says NOTHING about how many pages there are"),
+])
+def test_a_short_non_final_page_is_followed(total_pages, why):
+    """The flat-list twin of VMCP-103's bug: a page SHORT of the page size with more behind it.
+
+    WHY TWO PARAMETERS, and why the second is the whole point. Until VMCP-127 (608) only the first
+    was covered, and it was covered by the `x-pagination-total-pages` HEADER: the fullness
+    inference called page 2 the end, and the header was the one signal that could overrule it. But
+    the header is not always sent, and it is measured wrong in BOTH directions on this same 2.3.0,
+    so the shape it rescued was only ever half the shape.
+
+    MEASURED with the whole pre-127 rule put back on this tree (the bar AND the header, applied
+    together, this test run alone): the header row returns all 9 rows and differs only in spending
+    one request fewer; the no-header row returns SEVEN — 8 and 9 silently gone. That is the split
+    that matters, and it is why the second row exists. Both rows' request counts move under that
+    mutation, because the confirming request is what this card costs everywhere, so a red COUNT is
+    not evidence of a truncated read — read the row assertion for that."""
     api, seen = _flat({
         1: [{"id": i} for i in range(1, 6)],        # full
         2: [{"id": 6}, {"id": 7}],                  # SHORT — but not the last
         3: [{"id": 8}, {"id": 9}],
-    }, page_size=5, total_pages=3)
+    }, page_size=5, total_pages=total_pages)
 
-    assert [x["id"] for x in api.labels()] == [1, 2, 3, 4, 5, 6, 7, 8, 9]
-    assert seen == [1, 2, 3]
+    assert [x["id"] for x in api.labels()] == [1, 2, 3, 4, 5, 6, 7, 8, 9], why
+    assert seen == [1, 2, 3, 4], why
 
 
 def test_an_endpoint_that_ignores_page_terminates_without_duplicating_rows():
@@ -1187,50 +1213,37 @@ def test_a_list_that_never_finishes_paging_raises_instead_of_truncating():
     assert "/projects" in exc.value.message and "NOTHING is returned" in exc.value.message
 
 
-def test_the_page_size_threshold_is_one_shared_rule_not_a_copy():
-    """VMCP-89/92/103 were three cards spent fixing ONE expression in one branch at a time, and
-    VMCP-103 was entirely the story of the branch nobody re-read keeping the deleted rule. So the
-    threshold is a single module-level function and BOTH readers call it.
+def test_neither_reader_takes_a_SHORT_page_for_an_exhausted_one():
+    """WAS `test_the_page_size_threshold_is_one_shared_rule_not_a_copy`, and its subject is gone:
+    VMCP-127 (608) DELETED `_could_be_full`, so there is no threshold left to share. The four
+    arithmetic asserts that stood here went with it — a helper that no longer exists cannot be
+    mutated — and what is left is the BEHAVIOUR both readers were meant to have all along.
 
-    What THIS test pins, exactly: the helper's arithmetic (all four rows below — mutate `min()` to
-    either operand alone and one of them goes red), and that THE FLAT READER still routes through
-    it. Its read serves 2 at a time while /info states 5, so a reader taking a short first page as
-    proof of exhaustion stops dead on page 1 — MEASURED with the threshold made unreachable at
-    `_paged_list`'s call site: 1 request and rows [1, 2], against 3 requests and [1, 2, 3, 4]
-    shipped. Weakening that call site to stated-only is red here too.
+    HISTORY, because it is the reason the deletion is the fix and not a simplification. VMCP-89/92/
+    103 were three cards spent correcting ONE expression in one branch at a time; VMCP-108 made it
+    a single module-level function so the next correction would land in both readers; VMCP-111
+    (582) then measured that only ONE of the two operands was load-bearing; VMCP-124 (603) measured
+    that the surviving "superset by construction" argument was FALSE on a server that serves more
+    than it states. VMCP-127 measured the rest: BOTH readers truncated, both /info branches spelled
+    one and the same unsound inference, and no choice of threshold repairs it.
 
-    THE NESTED READ BELOW PINS NO ROUTING AT ALL — not one direction of it. VMCP-111 corrected this
-    docstring TWICE, because the first correction replaced "deleting the call from either reader
-    has to fail a test" with the equally false "each reader still routes through it". MEASURED,
-    this test run alone under one mutation of `view_tasks`' call site at a time: stated-only GREEN,
-    served-only GREEN, and the threshold made ENTIRELY unreachable (`10**9`) GREEN.
+    WHAT THIS PINS NOW. Both servers below serve 2 rows at a time while /info states 5 — every page
+    after the first is SHORT of the stated size, and the last one is empty. Re-introduce any
+    length-based stop and the flat read comes back [1, 2] in 1 request (MEASURED on the pre-127
+    tree with the threshold made unreachable at `_paged_list`'s call site).
 
-    That is structural, not a fixture accident. `view_tasks`' stop rule is a DISJUNCTION —
-    `added_new_required or (maybe_full_required and added_new)` — and the windows the read below
-    hands `_short_non_final_pages` never repeat, so every page continuing it brings fresh REQUIRED
-    ids and `added_new_required` carries the read single-handed: with the threshold unreachable, so
-    that `maybe_full_required` can never be True, the read still requests 3 pages and still returns
-    [1, 2, 3, 4], identical to shipped. `_paged_list`'s rule is a CONJUNCTION (`added_new and
-    (maybe_full or header_more)`), which is exactly why the flat half above does bite.
+    (VMCP-111 (582) landed one more correction on the deleted asserts while this card was in
+    build — a note that "pins the SERVED operand" and "catches the SERVED-ONLY direction" name
+    opposite ends of one mutation and must not be mixed. It is retired with them: there is no
+    call to substitute an operand into. Recorded so the collision is not re-discovered.)
 
-    What NEITHER read catches is the SERVED-ONLY direction — substituting `longest_served` for the
-    whole call: both serve 2 against a stated 5, so `min(5, 2)` and the served length are the same
-    number and the substitution is a no-op. That direction is caught only by the two reads at the
-    end of this file, which put the operands in DISAGREEMENT. The value table here is the helper's
-    arithmetic, and arithmetic survives a reader that quietly stops calling it.
-
-    (Named as a DIRECTION on purpose. The sibling docstring on
-    test_a_required_bucket_repeating_a_window_SHORTER_than_the_stated_size says "pins the SERVED
-    operand", meaning the operand whose REMOVAL that test catches — the opposite end of the same
-    mutation. Carry that convention into this paragraph and it reads false, because the flat read
-    here does catch the removal of the served operand — this same docstring says so above,
-    "Weakening that call site to stated-only is red here too". Both sentences are true under the
-    convention each supplies; only mixing them is not.)"""
-    assert api_mod._could_be_full(5, 0) == 0        # nothing served yet -> page 1 proves nothing
-    assert api_mod._could_be_full(5, 2) == 2        # the SERVED length wins when it is smaller
-    assert api_mod._could_be_full(5, 9) == 5        # the STATED size caps a fluke-long page
-    assert api_mod._could_be_full(None, 2) == 2     # /info down -> only what was proven
-
+    THE NESTED READ BELOW STILL PINS LESS THAN IT LOOKS — VMCP-111 corrected that claim twice, and
+    it survives the deletion unchanged. `view_tasks`' stop rule is a DISJUNCTION whose first term
+    is `added_new_required`, and these windows never repeat, so fresh required ids carry the read
+    single-handed whatever the second term says. It is kept as the both-readers half of the
+    statement, not as a mutation-tight pin; the reads that DO bite on the nested side are in the
+    VMCP-127 section at the end of this file, which repeat a window so that the second term has to
+    decide."""
     flat, seen = _flat({1: [{"id": 1}, {"id": 2}], 2: [{"id": 3}, {"id": 4}], 3: []}, page_size=5)
     assert [x["id"] for x in flat.labels()] == [1, 2, 3, 4]
     assert seen == [1, 2, 3]
@@ -1243,6 +1256,27 @@ def test_the_page_size_threshold_is_one_shared_rule_not_a_copy():
 
 
 # --- VMCP-111 (582): the STATED operand of the cap, on BOTH readers -----------------------------
+#
+# READ THIS FIRST — VMCP-127 (608) DELETED THE CAP THIS SECTION WAS WRITTEN ABOUT, and the two
+# tests survive it with their DATA assertions untouched. `_could_be_full(stated, longest_served)`
+# no longer exists; neither reader infers exhaustion from a page's length at all, so there are no
+# longer two operands to keep load-bearing. What is preserved below is the SERVER — the only
+# fixture in this file where /info's stated size and the length the server actually serves
+# DISAGREE — and the property that a read of it must come back WHOLE. That property is now
+# guaranteed for a much wider class of servers (the VMCP-127 section at the end of this file
+# measures the whole band), so these two are no longer the boundary; they are the shape that first
+# proved the old rule could not hold it.
+#
+# MEASURED when 127 landed, whole unit suite, each of the two run on the changed tree: the nested
+# test passes BYTE-IDENTICALLY (Build[1..11] in 4 requests — the deleted cap was doing nothing for
+# it that `added_new_required` was not); the flat one keeps its 12 rows and its request count moves
+# 3 -> 4, because the read no longer ends on page 3 being short. That +1 is the whole of what this
+# card cost these two tests, and it is the same +1 the cost table in the VMCP-127 section names.
+#
+# EVERYTHING BELOW THIS LINE IS THE ORIGINAL 582 RATIONALE, KEPT AS HISTORY, and every mutation it
+# describes is a mutation of code that is gone. It is not maintained against the current tree; the
+# one sentence still worth acting on is its last paragraph's warning about the sweeps, which 127
+# re-measured and made WORSE (see the VMCP-127 section).
 #
 # A cap with two operands needs both of them load-bearing, and until this section only one was.
 # MEASURED on the tree at c66057c, each mutation applied alone with __pycache__ cleared between
@@ -1362,11 +1396,19 @@ def test_a_server_serving_MORE_than_it_stated_still_reads_the_board_whole():
     Page 2 then REPEATS a window of five: full by the stated measure, SHORT of the served one. Done
     adds a new task on every page, so "nothing new arrived" alone cannot end the read.
 
-    MEASURED on this exact server (real httpx, real api.py): shipped reads Build[1..11] in 4
-    requests; drop the stated cap so the bar becomes the served 8 and the repeat of five reads as
-    short, the read ends after 2 requests, and Build comes back [1..8] — 9, 10 and 11 silently
-    gone. A required bucket cut off while it is still PRODUCING is the exact defect of 543/548/562,
-    and it is what `workspace --gc` turns into a reaped LIVE worktree (VMCP-89)."""
+    MEASURED on this exact server when it was written (real httpx, real api.py): shipped read
+    Build[1..11] in 4 requests; dropping the stated cap so the bar became the served 8 made the
+    repeat of five read as short, the read ended after 2 requests, and Build came back [1..8] —
+    9, 10 and 11 silently gone. A required bucket cut off while it is still PRODUCING is the exact
+    defect of 543/548/562, and it is what `workspace --gc` turns into a reaped LIVE worktree
+    (VMCP-89).
+
+    VMCP-127 (608) deleted both operands, and this read is UNCHANGED by that — same 4 requests,
+    same Build[1..11]. The mutation it used to describe no longer has a call site to be applied at;
+    what breaks this read now is re-introducing ANY length-based stop into `view_tasks`, which is
+    what the VMCP-127 section at the end of this file mutation-checks directly. Kept because w = 5
+    (a repeat exactly as long as the stated size) is the one column of that card's table where the
+    OLD rule happened to be right, and a boundary is worth pinning from the safe side too."""
     def handler(request):
         page = int(request.url.params.get("page", 1))
         build = {1: list(range(1, 9)), 2: [1, 2, 3, 4, 5], 3: [9, 10, 11]}.get(page, [])
@@ -1390,19 +1432,26 @@ def test_a_server_serving_MORE_than_it_stated_still_reads_the_list_whole():
     alive there). So the repeat here is PARTIAL — five seen rows and one new one.
 
     /info states 5, page 1 serves EIGHT, page 2 serves six (>= the stated 5, short of the served
-    8) of which only row 9 is new. MEASURED: shipped reads all 12 rows in 3 requests; with the bar
-    raised to the served 8 the six-row page reads as short and the read stops at 2 requests with 9
-    rows. Not cosmetic for a flat list either — every caller of these endpoints acts on ABSENCE
-    (setup creates the project it cannot see, get_or_create_label mints a duplicate, and a short
-    comment read hides the NEWEST rows, which is where the [worklog] and the human's answer are)."""
+    8) of which only row 9 is new. MEASURED when it was written: shipped read all 12 rows in 3
+    requests; with the bar raised to the served 8 the six-row page read as short and the read
+    stopped at 2 requests with 9 rows. Not cosmetic for a flat list either — every caller of these
+    endpoints acts on ABSENCE (setup creates the project it cannot see, get_or_create_label mints a
+    duplicate, and a short comment read hides the NEWEST rows, which is where the [worklog] and the
+    human's answer are).
+
+    VMCP-127 (608) MOVED THE REQUEST COUNT 3 -> 4 and left the rows alone. Page 3 is partial, and a
+    partial last page no longer ends a flat read — the read now ends on page 4 bringing nothing.
+    That is the one shape where this card is measurably not free (live equivalent: labels() over 22
+    labels at max_items_per_page=5, 6 requests -> 7); it is stated in full in the VMCP-127 section
+    below and in the block above `_MAX_UNPROVEN_PAGES` in api.py."""
     api, seen = _flat({
         1: [{"id": i} for i in range(1, 9)],            # EIGHT served against a stated 5
         2: [{"id": i} for i in (1, 2, 3, 4, 5, 9)],     # full by the STATED measure, short of 8
         3: [{"id": i} for i in (10, 11, 12)],
     }, page_size=5)
 
-    assert [x["id"] for x in api.labels()] == list(range(1, 13))     # mutant: [1..9]
-    assert seen == [1, 2, 3]                                         # mutant: [1, 2]
+    assert [x["id"] for x in api.labels()] == list(range(1, 13))
+    assert seen == [1, 2, 3, 4]         # 3 before VMCP-127: the partial page 3 used to end it
 
 
 # --- VMCP-116 (589): a page with NO ROWS ends a flat read, header or no header -------------------
@@ -1525,3 +1574,254 @@ def test_pages_the_stated_page_size_justifies_cost_a_flat_read_nothing():
     # ... and the read really did outrun the ceiling — below it the mutation is invisible (see the
     # 119-page row above), so a fixture that shrank would leave this test green and pinning nothing
     assert len(seen) > MAX_UNPROVEN_PAGES
+
+
+# --- VMCP-127 (608): the FULLNESS INFERENCE is gone, on BOTH readers ----------------------------
+#
+# `_could_be_full(stated, longest_served)` is deleted. Both readers used to stop on one and the
+# same inference — "a page shorter than the bar means this bucket/list is exhausted" — and the bar
+# only ever decided which servers they got away with, because a page short of the server's real
+# page size can still have rows behind it. VMCP-89/92/103/108/111/124 are six cards spent on that
+# threshold; this one removes the thing they were correcting.
+#
+# THE TABLE THE TESTS BELOW ARE. MEASURED on the pre-127 tree at f4faab5 (2026-07-31, real httpx
+# over MockTransport, real api.py) — /info states 5, page 1 serves EIGHT, page 2 repeats a window
+# of w already-seen rows, page 3 holds three more, and a second bucket / one new row per page keeps
+# "nothing new arrived" from ending the read on its own:
+#
+#     w      nested healthy  nested degraded  flat healthy  flat degraded
+#     1..4   LOSS            LOSS             LOSS          LOSS
+#     5..7   whole           LOSS             whole         LOSS
+#     8      whole           whole            whole         whole
+#
+# — the healthy read lost rows for every w < the STATED size, the degraded one for every w < the
+# longest SERVED. On the current tree every one of those sixteen cells reads WHOLE, in 4 requests,
+# which is what test_the_board_is_read_whole_whatever_the_repeat_window_is and its flat twin pin.
+#
+# AND THE CONTROL, which is what makes the pins parametrize over a server that does NOT over-serve:
+# page 1 serving EXACTLY the stated 5 loses the same rows on the HEALTHY read for every w < 5.
+# Over-serving is one way to reach the defect, not its condition — the trigger is a short non-final
+# REPEAT window. Fixtures built only from over-serving servers would cover half the surface.
+#
+# WHAT IT COSTS, pinned from BOTH sides by test_the_extra_request_is_paid_only_by_a_partial_last_
+# page: +1 request on a flat read whose last content page is short, +0 everywhere else, including
+# the shapes a live 2.3.0 actually serves. The nested read pays nothing at all. And a NEW 508 on
+# two shapes that used to complete — pinned deliberately, not tolerated, by the two `_RAISES_`
+# tests below: this module's standing rule is that a truncated read must never pass for a complete
+# one, and the client cannot tell the server that stops legitimately from the one hiding rows.
+#
+# THE SWEEPS CANNOT SEE ANY OF THIS, AND ARE NOW WORSE THAN 111 RECORDED. Both cross-check a
+# HEALTHY read against a DEGRADED one; 582 measured that a served-only mutant made that comparison
+# a tautology. It is no longer a property of a mutant: the stop rule mentions no page size at all,
+# so healthy and degraded execute the SAME expression and `assert healthy == degraded` cannot fail
+# for any read that stays under the ceiling, on any seed. MEASURED — `keep_going =
+# added_new_required` (drop VMCP-92's repeat clause entirely), applied alone with __pycache__
+# cleared: test_the_degraded_read_never_loses_a_task_the_healthy_read_saw and
+# test_the_healthy_read_never_loses_a_task_a_server_serves_short both GREEN (2 passed) while 30
+# other tests in this file go RED. Do not read those sweeps as coverage of the stop rule; the pins
+# in this section are constructed for exactly that reason.
+
+
+def _assert_branch_really_taken(api, info_status):
+    """A parametrization over "/info up" and "/info down" is worth nothing if both rows end up on
+    the same branch, and that is the exact failure this card's own subject matter is made of. So
+    every row below states which branch it reached, read off the client AFTER the read: the
+    degraded rows must have resolved the page size to None, the healthy ones to the stated 5."""
+    assert api._page_size_resolved is True
+    assert api._page_size_cache == (None if info_status != 200 else 5)
+
+
+def _over_serving_board(w):
+    """/info states 5, Build serves EIGHT on page 1, REPEATS a window of w on page 2, and holds
+    9, 10, 11 on page 3. Done adds one new task per page so `added_new` alone cannot end the read.
+    """
+    def handler(request):
+        page = int(request.url.params.get("page", 1))
+        build = {1: list(range(1, 9)), 2: list(range(1, w + 1)), 3: [9, 10, 11]}.get(page, [])
+        return httpx.Response(200, json=[
+            {"id": 4, "title": "Build", "tasks": [{"id": i} for i in build]},
+            {"id": 9, "title": "Done", "tasks": [{"id": 900 + page}] if page <= 6 else []},
+        ])
+    return handler
+
+
+def _honest_board(w):
+    """The CONTROL: no over-serving anywhere. Page 1 serves EXACTLY the stated 5, page 2 repeats a
+    window of w, page 3 holds 6, 7, 8."""
+    def handler(request):
+        page = int(request.url.params.get("page", 1))
+        build = {1: [1, 2, 3, 4, 5], 2: list(range(1, w + 1)), 3: [6, 7, 8]}.get(page, [])
+        return httpx.Response(200, json=[
+            {"id": 4, "title": "Build", "tasks": [{"id": i} for i in build]},
+            {"id": 9, "title": "Done", "tasks": [{"id": 900 + page}] if page <= 6 else []},
+        ])
+    return handler
+
+
+@pytest.mark.parametrize("info_status", [200, 503], ids=["healthy", "degraded"])
+@pytest.mark.parametrize("w", [1, 2, 3, 4, 5, 6, 7, 8])
+def test_the_board_is_read_whole_whatever_the_repeat_window_is(w, info_status):
+    """The nested half of the table above, all sixteen cells. Build produces 1..11 and the read
+    must return all eleven however long the repeat on page 2 is and whether or not /info answered.
+
+    Pre-127 this was RED for w in 1..4 healthy and w in 1..7 degraded, returning Build[1..8] in 2
+    requests — a required bucket cut off while it is still producing, which is the defect of
+    543/548/562 and what `workspace --gc` turns into a reaped LIVE worktree (VMCP-89).
+
+    Re-introduce any length-based stop into `view_tasks` and the low-w rows go red again. Cannot
+    hang whatever is mutated: `_tracker` carries the harness cap."""
+    api, pages = _tracker(_over_serving_board(w), info_status=info_status, page_size=5)
+
+    board = api.view_tasks(3, 11, require_titles={"Build"})
+
+    _assert_branch_really_taken(api, info_status)
+    by_title = {b["title"]: sorted(t["id"] for t in b["tasks"]) for b in board}
+    assert by_title["Build"] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    assert len(pages) == 4          # page 4: Build empty -> the read ends there, not on a length
+
+
+@pytest.mark.parametrize("info_status", [200, 503], ids=["healthy", "degraded"])
+@pytest.mark.parametrize("w", [1, 2, 3, 4])
+def test_the_board_is_read_whole_WITHOUT_ANY_OVER_SERVING_EITHER(w, info_status):
+    """THE CONTROL, and the reason this section does not model over-serving alone. Page 1 serves
+    EXACTLY the size /info stated, so `min(stated, served)` and `served` are the same number and
+    nothing about this server is unusual — yet pre-127 the HEALTHY read lost 6, 7 and 8 here for
+    every w < 5, identically to the degraded one (MEASURED at f4faab5: 5 rows in 2 requests).
+
+    So the trigger is a short non-final REPEAT window; an over-serving server merely widens the
+    band on the degraded side. A test suite built only from over-serving fixtures would have
+    covered half of it, which is how VMCP-124 (603) came to be filed against the degraded branch."""
+    api, pages = _tracker(_honest_board(w), info_status=info_status, page_size=5)
+
+    board = api.view_tasks(3, 11, require_titles={"Build"})
+
+    _assert_branch_really_taken(api, info_status)
+    by_title = {b["title"]: sorted(t["id"] for t in b["tasks"]) for b in board}
+    assert by_title["Build"] == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert len(pages) == 4
+
+
+@pytest.mark.parametrize("info_status", [200, 503], ids=["healthy", "degraded"])
+@pytest.mark.parametrize("w", [1, 2, 3, 4, 5, 6, 7, 8])
+def test_the_list_is_read_whole_whatever_the_repeat_window_is(w, info_status):
+    """The flat half of the same table, and it needs its OWN shape: `_paged_list` dedupes one list,
+    so a window of PURE repeats brings nothing new and `added_new` ends the read before any
+    threshold could matter (the board's Done bucket is what keeps `added_new` alive there). Page 2
+    is therefore w rows of which exactly ONE (row 9) is new.
+
+    Pre-127: rows 10, 11, 12 lost for w in 2..4 healthy and w in 2..7 degraded, 9 rows in 2
+    requests. Every caller of these endpoints acts on ABSENCE — `setup` creates the project it
+    cannot see, `get_or_create_label` mints a duplicate, and a short comment read hides the NEWEST
+    rows, which is where the [worklog] and the human's answer live."""
+    api, seen = _flat({
+        1: [{"id": i} for i in range(1, 9)],                    # EIGHT against a stated 5
+        2: [{"id": i} for i in list(range(1, w)) + [9]],        # w rows, exactly one of them new
+        3: [{"id": 10}, {"id": 11}, {"id": 12}],
+    }, page_size=5, info_status=info_status)
+    api._MAX_RETRIES = 0                    # as `_tracker` does: one /info attempt, no backoff
+
+    rows = [x["id"] for x in api.labels()]
+
+    _assert_branch_really_taken(api, info_status)
+    assert rows == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    assert seen == [1, 2, 3, 4]
+
+
+@pytest.mark.parametrize("pages, page_size, requests, rows, before, why", [
+    ({1: [1, 2, 3]}, 5, 2, [1, 2, 3], 2,
+     "ONE PARTIAL PAGE: unchanged. The bar was 0 on page 1, so the confirming request was always "
+     "paid — this is the shape most live reads have at Vikunja's default page size of 50"),
+    ({1: [1, 2, 3, 4, 5]}, 5, 2, [1, 2, 3, 4, 5], 2,
+     "one FULL page then an empty one: unchanged"),
+    ({}, 5, 1, [], 1, "an empty list: unchanged, one request"),
+    ({1: [1, 2, 3, 4, 5], 2: [6, 7, 8, 9, 10]}, 5, 3, list(range(1, 11)), 3,
+     "two FULL pages: unchanged — the read already had to confirm past the last full page"),
+    ({p: list(range(5 * (p - 1) + 1, 5 * p + 1)) for p in range(1, 5)}, 5, 5, list(range(1, 21)), 5,
+     "the live /labels shape at max_items_per_page=5 — 20 rows in four FULL pages: unchanged"),
+    ({p: list(range(11)) for p in range(1, 40)}, 5, 2, list(range(11)), 2,
+     "the live views/buckets shape — whole list every page, ?page= IGNORED: unchanged, the repeat "
+     "brings nothing new"),
+    ({1: [1, 2, 3, 4, 5], 2: [6, 7]}, 5, 3, [1, 2, 3, 4, 5, 6, 7], 2,
+     "THE COST. The last content page is SHORT, so it used to end the read and now does not"),
+    ({1: list(range(1, 51)), 2: list(range(51, 61))}, 50, 3, list(range(1, 61)), 2,
+     "THE COST at Vikunja's default page size: 60 rows in 50 + 10"),
+])
+def test_the_extra_request_is_paid_only_by_a_partial_last_page(
+    pages, page_size, requests, rows, before, why
+):
+    """The cost of deleting the inference, pinned from BOTH sides so nobody has to re-derive it —
+    the card that filed this work claimed "+1 request on EVERY flat read" and that is measurably
+    false. `before` is what the pre-127 tree at f4faab5 spent on the same server.
+
+    The rule the eight rows spell: +1 exactly when the read spans two or more pages AND its last
+    content page is shorter than the page size. Everything else is unchanged, including every shape
+    a live 2.3.0 was measured serving. Live equivalents on a real 2.3.0 container the same day, at
+    max_items_per_page=5: labels() over 20 labels 6 requests -> 6; over 22 labels 6 -> 7;
+    projects() over 35 real projects 10 -> 10; over 37 real projects 10 -> 10 healthy and 8 -> 9
+    degraded; views(), buckets(), comments() and view_tasks() all unchanged; and
+    Workflow.next_task() end to end 7 requests -> 7."""
+    api, seen = _flat({p: [{"id": i} for i in ids] for p, ids in pages.items()},
+                      page_size=page_size)
+
+    assert [x["id"] for x in api.labels()] == rows, why
+    assert len(seen) == requests, why
+    assert before <= requests, why           # this card only ever ADDS requests, never removes
+
+
+def test_a_required_bucket_repeating_forever_RAISES_instead_of_returning_a_board():
+    """THE PRICE OF THE FIX, PINNED AS A DELIBERATE TRADE RATHER THAN LEFT AS A SURPRISE.
+
+    Build holds exactly 1..5 and really is finished, but this server re-serves a SHORT window of it
+    on every page instead of an empty one, while Done keeps producing. Pre-127 the read stopped
+    after 2 requests and returned a board that happened to be COMPLETE; now it spends the whole
+    `_MAX_UNPROVEN_PAGES` budget and RAISES 508 (measured: 121 requests).
+
+    WHY THAT IS THE RIGHT DIRECTION AND NOT A REGRESSION: this server is INDISTINGUISHABLE, from
+    inside the client, from the one in test_the_board_is_read_whole_whatever_the_repeat_window_is,
+    where the same repeat hides 9, 10 and 11 — there the old rule returned a SHORT BOARD and called
+    it complete. A truncated board is indistinguishable from tasks that are genuinely gone, and
+    `workspace --gc` reaps worktrees from exactly this read. Raising is how every other bound in
+    this module fails.
+
+    AND IT IS NOT WHAT A REAL SERVER DOES: measured on a live Vikunja 2.3.0 the same day, the
+    nested endpoint serves honest offset windows and an EMPTY one past a bucket's end (To-Do
+    5, 5, 2, 0), and a `?page=`-ignoring server repeats EVERY bucket, so nothing is new anywhere and
+    the read still ends after 2 requests (test_a_server_that_ignores_the_page_param_still_stops_
+    without_raising)."""
+    def handler(request):
+        page = int(request.url.params.get("page", 1))
+        build = [1, 2, 3, 4, 5] if page == 1 else [1, 2, 3]      # never empty, never new
+        return httpx.Response(200, json=[
+            {"id": 4, "title": "Build", "tasks": [{"id": i} for i in build]},
+            {"id": 9, "title": "Done", "tasks": [{"id": 900 + page}]},
+        ])
+
+    api, pages = _tracker(handler, info_status=200, page_size=5)
+
+    with pytest.raises(VikunjaError) as exc:
+        api.view_tasks(3, 11, require_titles={"Build"})
+
+    assert exc.value.status == 508
+    assert "NOTHING is returned" in exc.value.message
+    assert len(pages) == MAX_UNPROVEN_PAGES + 1         # one page justified by the stated size
+
+
+def test_a_flat_list_that_dribbles_new_rows_forever_RAISES_instead_of_a_partial_list():
+    """The flat twin of the trade above, and the one cost VMCP-127's own card did not name. After
+    one FULL page this server hands out a single NEW row per page and never stops. Pre-127 the read
+    ended on page 2 being short and returned SIX rows of an unbounded list — an answer that was
+    neither complete nor marked; now it spends the budget and raises 508.
+
+    Both outcomes are wrong about the server; only one of them says so. Note the direction this
+    moved in: `test_a_list_that_never_finishes_paging_raises_instead_of_truncating` already pinned
+    the same 508 for a server that never fills a page AT ALL — what changed is that a server which
+    fills its FIRST page and then dribbles no longer gets a quiet partial answer."""
+    api, seen = _flat({1: [{"id": i} for i in range(1, 6)],
+                       **{p: [{"id": 5 + p}] for p in range(2, 200)}}, page_size=5)
+
+    with pytest.raises(VikunjaError) as exc:
+        api.labels()
+
+    assert exc.value.status == 508
+    assert "NOTHING is returned" in exc.value.message
+    assert len(seen) == MAX_UNPROVEN_PAGES + 1
