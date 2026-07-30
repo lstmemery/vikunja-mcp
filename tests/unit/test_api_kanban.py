@@ -610,10 +610,12 @@ def test_a_required_bucket_repeating_a_window_SHORTER_than_the_stated_size():
     tasks early — on a healthy /info, which is the whole complaint of that card.
 
     ONE operand, not the cap (VMCP-111 corrected this docstring, which used to claim the whole
-    cap). Every server on this side of the file serves AT MOST what /info states, and on those
-    `min(stated, served) == served` — so the STATED operand is dead weight here and deleting it
-    changes nothing. Its pin is `test_a_server_serving_MORE_than_it_stated_still_reads_the_board
-    _whole` at the end of this file, on the only shape where the two operands disagree."""
+    cap). THIS server serves 3 against a stated 5, and wherever `served <= stated` the cap collapses
+    to `served` — so the STATED operand is dead weight here and deleting it changes nothing. Its pin
+    is `test_a_server_serving_MORE_than_it_stated_still_reads_the_board_whole` at the end of this
+    file, on the only shape where the two operands disagree. (Stated as a fact about THIS server on
+    purpose: the same correction once over-generalised it to every server in the file, and that is
+    false — see the instrumented count in the VMCP-111 section's comment block.)"""
     def handler(request):
         page = int(request.url.params.get("page", 1))
         build = {1: [1, 2, 3], 2: [1, 2, 3], 3: [4, 5, 6]}.get(page, [])
@@ -1091,17 +1093,30 @@ def test_the_page_size_threshold_is_one_shared_rule_not_a_copy():
     threshold is a single module-level function and BOTH readers call it.
 
     What THIS test pins, exactly: the helper's arithmetic (all four rows below — mutate `min()` to
-    either operand alone and one of them goes red) and that each reader still routes through it on
-    a server that serves 2 at a time while /info states 5, where a reader taking a short first page
-    as proof of exhaustion stops dead on page 1.
+    either operand alone and one of them goes red), and that THE FLAT READER still routes through
+    it. Its read serves 2 at a time while /info states 5, so a reader taking a short first page as
+    proof of exhaustion stops dead on page 1 — MEASURED with the threshold made unreachable at
+    `_paged_list`'s call site: 1 request and rows [1, 2], against 3 requests and [1, 2, 3, 4]
+    shipped. Weakening that call site to stated-only is red here too.
 
-    What it does NOT pin, and used to claim it did (VMCP-111 corrected this docstring): "deleting
-    the call from either reader has to fail a test". MEASURED — with `could_be_full = longest_page`
-    substituted for the call in `view_tasks`, and again in `_paged_list`, the FULL suite stayed
-    green at 591 passed. The two reads below cannot see it: they serve 2 against a stated 5, so
-    `min(5, 2)` and the served length are the same number and the substitution is a no-op. Deleting
-    the call is red now only because the two reads at the end of this file put the operands in
-    DISAGREEMENT; the value table here is the helper's arithmetic, and arithmetic survives a reader
+    THE NESTED READ BELOW PINS NO ROUTING AT ALL — not one direction of it. VMCP-111 corrected this
+    docstring TWICE, because the first correction replaced "deleting the call from either reader
+    has to fail a test" with the equally false "each reader still routes through it". MEASURED,
+    this test run alone under one mutation of `view_tasks`' call site at a time: stated-only GREEN,
+    served-only GREEN, and the threshold made ENTIRELY unreachable (`10**9`) GREEN.
+
+    That is structural, not a fixture accident. `view_tasks`' stop rule is a DISJUNCTION —
+    `added_new_required or (maybe_full_required and added_new)` — and `_short_non_final_pages`
+    never repeats a window, so every page that continues the read below brings fresh required ids
+    and `added_new_required` carries the read single-handed: with the threshold unreachable, so
+    that `maybe_full_required` can never be True, the read still requests 3 pages and still returns
+    [1, 2, 3, 4], identical to shipped. `_paged_list`'s rule is a CONJUNCTION (`added_new and
+    (maybe_full or header_more)`), which is exactly why the flat half above does bite.
+
+    What NEITHER read pins is the SERVED operand: both serve 2 against a stated 5, so `min(5, 2)`
+    and the served length are the same number and substituting one for the other is a no-op. That
+    direction is pinned only by the two reads at the end of this file, which put the operands in
+    DISAGREEMENT. The value table here is the helper's arithmetic, and arithmetic survives a reader
     that quietly stops calling it."""
     assert api_mod._could_be_full(5, 0) == 0        # nothing served yet -> page 1 proves nothing
     assert api_mod._could_be_full(5, 2) == 2        # the SERVED length wins when it is smaller
@@ -1136,14 +1151,41 @@ def test_the_page_size_threshold_is_one_shared_rule_not_a_copy():
 # is precisely the "simplified away by a later refactor" failure the repo's mutation-check
 # discipline exists against, on the ONE expression this repo has now got wrong three times.
 #
-# WHY nothing saw it, and why it is a property of the test data rather than an oversight: every
-# server modelled anywhere above serves AT MOST what /info states. `_offset_pages` cuts windows at
-# `page_size`; `_short_non_final_pages` is drawn from `randint(1, page_size - 1)`. On such a server
-# `longest_served <= stated`, so `min(stated, served) == served` and the stated operand is
-# arithmetically dead — including inside both randomized sweeps, which are the shape that looks
-# like it would catch anything. Those sweeps compare a HEALTHY read against a DEGRADED read, and a
-# mutation that is a no-op on both sides keeps them equal: two sides computed from the same source
-# cannot disagree about a rule they share.
+# WHY nothing saw it, and why it is a property of the test data rather than an oversight. ALMOST
+# every server modelled above serves at most what /info states — `_offset_pages` cuts windows at
+# `page_size`, `_short_non_final_pages` draws from `randint(1, page_size - 1)` — and wherever
+# `longest_served <= stated` the cap collapses to `served`, so the stated operand is arithmetically
+# dead and deleting it is a no-op.
+#
+# "ALMOST", not "every": this section's first draft claimed the universal and it is FALSE.
+# INSTRUMENTED — every call to `_could_be_full` across the whole of tests/unit, at the 613-test tree
+# this paragraph was written against: 2767 calls, 1383 of them degraded (`stated=None`, where the
+# mutation is a no-op by definition) and 1384 with a known stated. Read the three totals as a
+# snapshot, not an invariant — any test that pages moves them, and rebasing this very commit onto a
+# sibling moved them from 2607/1383/1224 without touching anything below. What is NOT a snapshot is
+# the count that matters: exactly SEVEN calls have `stated < served`, five of which are this
+# section's own two tests. Of the other two, one is the arithmetic assert `_could_be_full(5, 9)`
+# above — not a read — and one
+# is a REAL READ that predates this section: test_an_endpoint_that_ignores_page_terminates_without
+# _duplicating_rows serves ELEVEN rows against a stated 5. It is blind for a DIFFERENT reason than
+# arithmetic deadness, and the distinction matters because it is the same reason the flat test
+# below needs a PARTIAL repeat: its page 2 is a pure repeat, `added_new` is False, and
+# `_paged_list`'s stop rule is a conjunction, so the read ends before the threshold can matter.
+# MEASURED on that exact fixture — shipped, served-only, stated-only and an unreachable `10**9` all
+# return 11 rows in 2 requests, identically.
+#
+# THE SWEEPS ARE BLIND FOR A THIRD REASON, and it is the strongest of the three, because it holds
+# for every seed rather than for these fixtures: both sweeps cross-check a HEALTHY read against a
+# DEGRADED one, and the degraded rule IS `longest_served` (stated is None there). So the served-
+# only mutant makes the healthy reader COMPUTE the degraded reader, and `assert healthy ==
+# degraded` becomes a TAUTOLOGY under it — unfalsifiable, not merely unlucky. MEASURED: 200
+# randomized rounds of sweep 1's own generator, healthy identical to degraded (pages AND board) in
+# 200/200 under the mutant. Widening sweep 2 so pages MAY overshoot the stated size — the obvious
+# "randomize harder" answer — does not help either: 300 rounds, still 300/300 identical, and the
+# healthy read never truncates even on shipped code, because `_short_non_final_pages` serves fresh
+# ids on every page and the DISJUNCTION above lets `added_new_required` carry those reads whatever
+# the threshold says. Only a REPEAT window makes the threshold load-bearing, which is why the two
+# tests below are constructed rather than swept.
 #
 # The two operands therefore only separate on a server that serves a page LONGER than /info
 # states — the "fluke-long page" the helper's own docstring says the stated size is there to cap.
