@@ -572,7 +572,7 @@ sha would have passed both `rev-parse` and `cat-file` while naming a commit that
 is not on `main`. The recipe's "read the sha AFTER a successful push" is what
 prevents this, and 522's agent additionally self-invented the right check (`git
 branch -r --contains HEAD`). Neither SKILL.md nor this spec's recipe names a
-post-push verification step; they should. Filed.
+post-push verification step; they should. Filed as **VMCP-77 (526)**.
 
 *(Honest note on method: my own first pass mistyped an abbreviated sha and got
 `fatal: Not a valid object name` — a wrong guess at an abbreviation is
@@ -599,7 +599,12 @@ already requires the orchestrator to maintain `exclude` to avoid double-dispatch
 what it does not say is that the *saturation signal itself* depends on it. It
 also independently confirms, by observation rather than by code-tracing, 524's
 claim that `claimable`'s verdict is unaffected — with an empty `exclude` the
-saturated state cannot be reached at all.
+saturated state cannot be reached at all. Filed as **VMCP-78 (527)**.
+
+*(The `[worklog]` comment on card 518 labels these two findings VMCP-76 and
+VMCP-77 — both off by one. The refs above are the correct ones, read back from
+`get_task(526)` → `VMCP-77 (526)` and `get_task(527)` → `VMCP-78 (527)`; the
+tracker comment cannot be edited, so the correction lives here.)*
 
 **3. The double-dispatch hazard is real, and I walked into it.** An earlier
 `next_task()` at 12:48:34, again with no `exclude`, handed me **task 522** as
@@ -652,20 +657,61 @@ rewrote and pushed mid-window, so **518 is itself an instance of undeclared
 overlap.** I rebased onto the live `origin/main` *before* writing, so the text
 above is appended to 524's current version rather than to the `29e8847` copy my
 tree was cut from; that first rebase was a pure fast-forward (`Successfully
-rebased and updated refs/heads/task/518`, no commits of my own to replay).
-`main` had advanced five commits under this docs-only task by the time it was
-written.
+rebased and updated refs/heads/task/518`, no commits of my own to replay), which
+left the work sitting on `6e5d7f4` (`git log -1 --format=%p 9ec979f` → `6e5d7f4`).
+Between the base this tree was cut from and the base its commit finally landed on,
+`main` advanced six commits (`git rev-list --count 29e8847..6651eb7` → `6`).
 
 The **push-time rebase was real, not a no-op**: the commit was replayed from base
-`0ba7780` onto `6651eb7`, which changed its sha (`9ec979f` → the sha in this
-card's `evidence`). Two more commits had landed underneath in the meantime —
-`f7f0eaf test(cli): make four workspace-CLI pins able to fail (tracker #515)`,
-the third task of this drain, plus CI's `chore: v0.2.53`. It replayed **without
-conflict**, because 515 touched only `tests/unit/test_workspace_cmd.py` and this
-change is a pure append (+247/-0) to a file nobody else held. That is the benign
-shape of the same mechanism that conflicted for 522 — worth recording precisely
-because it shows the conflict there was not bad luck but hunk overlap, and its
-absence here is not virtue but distance.
+`6e5d7f4` onto `6651eb7`, which changed its sha (`9ec979f` → `16821e9`, and see
+the amend below). **Four** commits had landed underneath in the meantime, not two
+(`git log --oneline --reverse 6e5d7f4..6651eb7`):
+
+```
+509d707 docs(skill): fill the free WIP slots — overlap is detected at integration, not predicted (tracker #522)
+0ba7780 chore: v0.2.52 [skip ci]
+f7f0eaf test(cli): make four workspace-CLI pins able to fail (tracker #515)
+6651eb7 chore: v0.2.53 [skip ci]
+```
+
+It replayed **without conflict** — and the first commit it replayed cleanly over
+is `509d707`, task 522's own landing: the very commit this section's centrepiece
+is about. `git show --numstat 509d707` gives `39 6` on `SKILL.md` and `8 4` on
+`workflow.py`, neither of which 518 touches (`git show --name-only 1c295cb` lists
+this design spec and nothing else); 515's commit likewise touched only
+`tests/unit/test_workspace_cmd.py`, and `git log 6e5d7f4..6651eb7 -- <this file>`
+is empty, so nothing in the replayed range held the file this change appends to.
+That makes this the cleanest available demonstration of the point: **522's diff
+collided head-on with 524's and passed under 518's without a mark** — same
+repository, same window, the same total absence of any declared relation. The
+conflict there was not bad luck but hunk overlap, and its absence here is not
+virtue but distance.
+
+The shipped commit is a pure append of **+269/-0** (`git show --numstat 1c295cb`),
+and its history holds three objects rather than two:
+
+```
+$ git log -1 --format='%h %p %ci' 9ec979f   # 9ec979f 6e5d7f4  16:01:11  written,  +247/-0
+$ git log -1 --format='%h %p %ci' 16821e9   # 16821e9 6651eb7  16:01:13  rebased,  +247/-0
+$ git log -1 --format='%h %p %ci' 1c295cb   # 1c295cb 6651eb7  16:01:43  amended,  +269/-0
+$ git merge-base --is-ancestor 16821e9 1c295cb; echo $?   # 1 — not a child, an amend
+$ git diff --numstat 16821e9 1c295cb        # 23 1 — this section, added after the rebase
+```
+
+One caveat on that middle object, stated so a later reader is not misled: `16821e9`
+is reachable from no ref at all (`git branch -a --contains 16821e9` → empty, and
+`git rev-list --all` does not list it). It is an amend orphan, alive only as a loose
+object, and a `git gc --prune` will eventually remove it — after which the two
+commands above stop resolving. It is quoted as it was verified, and it is also an
+accidental second instance of VMCP-77 (526)'s point: the sha satisfies
+`git cat-file -e 16821e9^{commit}` today while belonging to no branch whatsoever,
+so existence and ancestry really are separate questions.
+
+So the real chain is `9ec979f` → rebase → `16821e9` → **amend** → `1c295cb`: this
+section was written *after* the rebase it describes and folded in with `--amend`,
+which is why the pushed diff is 22 lines larger than the one the rebase replayed.
+Nothing about the rebase changes, but a record that documents its own commit has
+to disclose that the commit was rewritten after the events it reports.
 
 By the end of the window `main` carried exactly four task commits from this
 drain, one each:
@@ -677,6 +723,66 @@ $ git log --oneline -24 origin/main | grep -o 'tracker #[0-9]*' | sort | uniq -c
    1 tracker #522
    1 tracker #524
 ```
+
+### Correction to the section above (recorded, not overwritten)
+
+The paragraphs under "This card's own integration" are a correction. As first
+committed in `1c295cb`, that one section — alone in this record — was written from
+recollection instead of from the poller log and `git`, and the independent review
+of this card caught it by re-running the cheapest check in the whole document.
+What it claimed, against what git says:
+
+| Claimed in `1c295cb` | Actual | Check that settles it |
+| --- | --- | --- |
+| replayed from base `0ba7780` | `6e5d7f4` | `git log -1 --format=%p 9ec979f` |
+| "two commits landed underneath" | four | `git rev-list --count 6e5d7f4..6651eb7` |
+| "a pure append (+247/-0)" | `+269/-0` | `git show --numstat 1c295cb` |
+| `9ec979f` → `1c295cb` | `9ec979f` → rebase → `16821e9` → amend → `1c295cb` | `git log -1 --format='%h %p' 16821e9` |
+| `main` "advanced five commits" | six, cut base to landing base | `git rev-list --count 29e8847..6651eb7` |
+
+Not one of these changes a conclusion. The push-time rebase was real and it
+replayed over *more* than was claimed, including the single commit that makes the
+paragraph's own point best. That is exactly why the errors are recorded here
+instead of being quietly overwritten. This document's entire value is that it was
+captured rather than reconstructed; the one paragraph that was reconstructed is
+the one that failed review, and deleting the evidence of that would delete the
+most transferable warning the run produced: **in an evidence document, the section
+about yourself is the section you are likeliest to write from memory rather than
+from the record, and it is also the cheapest one for a reader to falsify.** Five
+wrong figures in twenty lines, none of them load-bearing, were enough to put the
+unfalsifiable 95% of the record — the poller snapshots, the mid-rebase `git
+status`, the `next_task` payloads — under suspicion. Keeping the correction
+visible also keeps the fix itself falsifiable: every figure above now carries the
+command that produced it, so the next reader can re-derive the correction as
+cheaply as the review re-derived the error.
+
+**And one "could not observe" item is closed by this correction's own push.** The
+list above says *"No rejected push"*. The first push attempt of this rework commit
+was rejected, and its cause is worth the record:
+
+```
+$ git push origin HEAD:main
+error: failed to push some refs to 'github.com:ufna/vikunja-mcp.git'
+hint: Updates were rejected because a pushed branch tip is behind its remote
+hint: counterpart.
+$ git fetch origin && git log --oneline --reverse fe18b4a..origin/main
+43f3df9 chore: v0.2.56 [skip ci]
+```
+
+The commit that beat it to `main` was not a sibling task at all — it was **CI's own
+version bump**, the auto-release for the task that had landed moments before,
+racing an agent who had just rebased onto the very commit that triggered it. So the
+race the retry loop exists for is not merely agent-versus-agent: in this repo every
+landing spawns a second, machine push about a minute later, which makes a fresh
+rebase stale almost as soon as it succeeds, and makes a rejected push the expected
+outcome for anyone who rebases immediately after a sibling lands rather than an
+edge case. Round two — rebase onto `43f3df9`, re-run the checks, push — carried it
+in. The 3-round ceiling and the `call_human` escalation past it are still untested.
+
+That paragraph was written after this commit was first created and folded into it
+with `git commit --amend` — the same operation the table above faults the original
+record for hiding. Amending to keep a record true is fine; the defect was never the
+amend, it was the silence about it.
 
 ### Verdict
 
