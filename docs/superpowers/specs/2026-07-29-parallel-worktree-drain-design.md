@@ -24,9 +24,14 @@ Status: approved (brainstorming) → ready for implementation plan
 > that only marks is indistinguishable from a sweep that gave up. Its independent review then
 > found a nineteenth site the sweep had skipped (§3's create path, marked here in two places)
 > **and two of that same sweep's new markers factually wrong** — one of them stating the exact
-> opposite of the code it cited. Both corrected inside the same task. Take that literally: a
+> opposite of the code it cited. A *second* review round then found a **third** wrong marker, in
+> the very passage the first bounce had ordered rewritten: it asserted a `code:` key on a refusal
+> that emits none, and its pre-existing twin 300 lines below said the same wrong thing. Three
+> wrong markers across two passes, all corrected inside the same task. Take that literally: a
 > marked passage carries the claim that someone checked it, which is a *stronger* claim than an
-> unmarked one and can therefore be wrong in a worse way. Assume a third pass finds more.
+> unmarked one and can therefore be wrong in a worse way — and the correction of a wrong marker
+> is itself a marked passage, so it inherits the same risk. "Assume a third pass finds more" was
+> written before the third pass; it found two. Assume a fourth.
 >
 > Two narrower cautions:
 >
@@ -291,8 +296,18 @@ the repo — deliberately not inside it, where pytest collection, ruff and
 > reports as **`locked`** — the `locked "initializing"` half-checkout a killed `worktree add`
 > leaves behind, which `prune` will not drop and which this step used to hand straight back as
 > `created: false`, dispatching an agent into a directory holding nothing but `.git`. It is gated
-> on the lock's PRESENCE, not on its reason, and carries `code: half-created` with the two git
-> commands a human needs to clear it. So the real order for an already-existing tree is: locked →
+> on the lock's PRESENCE, not on its reason, and names the two git commands a human needs to
+> clear it. What it does **not** carry is a `code`. On the CREATE path the refusal is a
+> `WorkspaceError` whose payload is a message *string*, which `run_workspace`'s catch-all renders
+> as `{"error": …}` with **exit 1** — no machine-readable key at all, and the same is true of the
+> detached-build refusal beside it: every create-path refusal is codeless. `code: half-created`
+> exists, but only on the `--release`/`--gc` side (see the `--release` marker below, which is
+> where the grading lives) — the identical half-created tree is codeless from `workspace <id>`
+> and `code: half-created` from `--release`. That contrast is the split SKILL.md tells an
+> orchestrator to branch on: a tool failure (`{"error"}`, exit 1, "не завелось — цикл НЕ роняем")
+> is a different thing from a protection refusal (`released: false` + `code`, exit 0), and on
+> create the exit code is the whole of the machine-readable contract. So the real order for an
+> already-existing tree is: locked →
 > refuse (#514); build tree sitting off its branch → refuse (VMCP-86 / #540); *only then* the
 > `created: false` return described above. Both refusals fail toward refusing, for the reason
 > SKILL.md's «Не завелось — цикл НЕ роняем» gives: a legible error degrades the pump to one slot,
@@ -595,8 +610,11 @@ scratch and does not survive; the git history alone would not preserve them.
 
    > **CLOSED 2026-07-30 (tracker #514).** `list_worktrees` now parses `locked`/`lock_reason`,
    > `_ensure_locked` refuses on the lock's **presence** alone (any file-content heuristic would
-   > pass in phase two of the checkout), and the refusal carries `code: half-created` (constant
-   > named by #516) plus the two git commands a human needs to clear it. It was **not** one
+   > pass in phase two of the checkout), naming the two git commands a human needs to clear it.
+   > That create-path refusal carries **no** `code`: it is a `WorkspaceError` rendered as
+   > `{"error": …}` + exit 1. `code: half-created` (the constant #516 named) belongs to
+   > `--release`/`--gc`, which refuse the same tree from the other side — see §3's step-3 marker
+   > for why the split matters to a caller. It was **not** one
    > line: the estimate above underrated the "phase two looks perfectly fine" case.
 4. **The gc hold is bounded per request, not in total.** The tracker read sits
    inside the repo-wide flock by design (moving it out reopens a race where a
