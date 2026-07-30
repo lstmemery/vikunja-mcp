@@ -600,14 +600,20 @@ def test_a_required_bucket_repeating_a_full_window_no_longer_truncates(info_stat
 
 
 def test_a_required_bucket_repeating_a_window_SHORTER_than_the_stated_size():
-    """VMCP-92's repeat-window edge, moved onto the HEALTHY branch — and the one shape that pins
-    the `min(stated, served)` cap rather than the rule around it. Build re-serves its window of 3
-    while /info states 5, so the window is short by the STATED measure but exactly full by the
-    PROVEN one; Done keeps adding, so "no new required task" alone cannot save the read.
+    """VMCP-92's repeat-window edge, moved onto the HEALTHY branch — and the shape that pins the
+    SERVED operand of the `min(stated, served)` cap. Build re-serves its window of 3 while /info
+    states 5, so the window is short by the STATED measure but exactly full by the PROVEN one;
+    Done keeps adding, so "no new required task" alone cannot save the read.
 
     Compare the threshold against the stated 5 instead of `min(5, longest served)` and Build comes
     back [1,2,3]: the repeat looks short, nothing new arrived in Build, and the read ends three
-    tasks early — on a healthy /info, which is the whole complaint of this card."""
+    tasks early — on a healthy /info, which is the whole complaint of that card.
+
+    ONE operand, not the cap (VMCP-111 corrected this docstring, which used to claim the whole
+    cap). Every server on this side of the file serves AT MOST what /info states, and on those
+    `min(stated, served) == served` — so the STATED operand is dead weight here and deleting it
+    changes nothing. Its pin is `test_a_server_serving_MORE_than_it_stated_still_reads_the_board
+    _whole` at the end of this file, on the only shape where the two operands disagree."""
     def handler(request):
         page = int(request.url.params.get("page", 1))
         build = {1: [1, 2, 3], 2: [1, 2, 3], 3: [4, 5, 6]}.get(page, [])
@@ -1082,10 +1088,21 @@ def test_a_list_that_never_finishes_paging_raises_instead_of_truncating():
 def test_the_page_size_threshold_is_one_shared_rule_not_a_copy():
     """VMCP-89/92/103 were three cards spent fixing ONE expression in one branch at a time, and
     VMCP-103 was entirely the story of the branch nobody re-read keeping the deleted rule. So the
-    threshold is a single module-level function and BOTH readers call it. Deleting the call from
-    either one has to fail a test, which is what the two reads below check on the same shape:
-    /info states 5, the server only ever serves 2 at a time, and a reader that took a short first
-    page as proof of exhaustion would stop dead on page 1."""
+    threshold is a single module-level function and BOTH readers call it.
+
+    What THIS test pins, exactly: the helper's arithmetic (all four rows below — mutate `min()` to
+    either operand alone and one of them goes red) and that each reader still routes through it on
+    a server that serves 2 at a time while /info states 5, where a reader taking a short first page
+    as proof of exhaustion stops dead on page 1.
+
+    What it does NOT pin, and used to claim it did (VMCP-111 corrected this docstring): "deleting
+    the call from either reader has to fail a test". MEASURED — with `could_be_full = longest_page`
+    substituted for the call in `view_tasks`, and again in `_paged_list`, the FULL suite stayed
+    green at 591 passed. The two reads below cannot see it: they serve 2 against a stated 5, so
+    `min(5, 2)` and the served length are the same number and the substitution is a no-op. Deleting
+    the call is red now only because the two reads at the end of this file put the operands in
+    DISAGREEMENT; the value table here is the helper's arithmetic, and arithmetic survives a reader
+    that quietly stops calling it."""
     assert api_mod._could_be_full(5, 0) == 0        # nothing served yet -> page 1 proves nothing
     assert api_mod._could_be_full(5, 2) == 2        # the SERVED length wins when it is smaller
     assert api_mod._could_be_full(5, 9) == 5        # the STATED size caps a fluke-long page
@@ -1100,3 +1117,88 @@ def test_the_page_size_threshold_is_one_shared_rule_not_a_copy():
     board = nested.view_tasks(3, 11, require_titles={"Build"})
     assert sorted(t["id"] for t in board[0]["tasks"]) == [1, 2, 3, 4]
     assert len(pages) == 3
+
+
+# --- VMCP-111 (582): the STATED operand of the cap, on BOTH readers -----------------------------
+#
+# A cap with two operands needs both of them load-bearing, and until this section only one was.
+# MEASURED on the tree at c66057c, each mutation applied alone with __pycache__ cleared between
+# rounds and the WHOLE unit suite run (591 tests):
+#
+#   `could_be_full = _could_be_full(page_size, longest_page)` -> `longest_page`   in view_tasks
+#                                                                                 => 591 passed
+#   the same substitution                                     -> `longest_page`   in _paged_list
+#                                                                                 => 591 passed
+#   -> `page_size if page_size is not None else longest_page` in view_tasks       => RED
+#   -> the same                                               in _paged_list      => RED
+#
+# So the whole stated cap could be deleted from BOTH readers with a green suite as cover — which
+# is precisely the "simplified away by a later refactor" failure the repo's mutation-check
+# discipline exists against, on the ONE expression this repo has now got wrong three times.
+#
+# WHY nothing saw it, and why it is a property of the test data rather than an oversight: every
+# server modelled anywhere above serves AT MOST what /info states. `_offset_pages` cuts windows at
+# `page_size`; `_short_non_final_pages` is drawn from `randint(1, page_size - 1)`. On such a server
+# `longest_served <= stated`, so `min(stated, served) == served` and the stated operand is
+# arithmetically dead — including inside both randomized sweeps, which are the shape that looks
+# like it would catch anything. Those sweeps compare a HEALTHY read against a DEGRADED read, and a
+# mutation that is a no-op on both sides keeps them equal: two sides computed from the same source
+# cannot disagree about a rule they share.
+#
+# The two operands therefore only separate on a server that serves a page LONGER than /info
+# states — the "fluke-long page" the helper's own docstring says the stated size is there to cap.
+# CONSTRUCTED, not measured against a real 2.3.0 (same honesty as VMCP-103's short-non-final page,
+# which a real container also refused to produce): what IS measured on that server is that its
+# self-description is unreliable in both directions — `_total_pages` under-reports on the kanban
+# tasks endpoint and over-reports on views/buckets. An under-reported max_items_per_page is that
+# same class of fact, and the cap is what keeps ONE long page from raising the bar for every page
+# after it.
+
+
+def test_a_server_serving_MORE_than_it_stated_still_reads_the_board_whole():
+    """The nested reader's half. /info states max_items_per_page=5; Build serves EIGHT on page 1,
+    so the longest page the server has PROVEN it can serve (8) overshoots the size it stated (5).
+    Page 2 then REPEATS a window of five: full by the stated measure, SHORT of the served one. Done
+    adds a new task on every page, so "nothing new arrived" alone cannot end the read.
+
+    MEASURED on this exact server (real httpx, real api.py): shipped reads Build[1..11] in 4
+    requests; drop the stated cap so the bar becomes the served 8 and the repeat of five reads as
+    short, the read ends after 2 requests, and Build comes back [1..8] — 9, 10 and 11 silently
+    gone. A required bucket cut off while it is still PRODUCING is the exact defect of 543/548/562,
+    and it is what `workspace --gc` turns into a reaped LIVE worktree (VMCP-89)."""
+    def handler(request):
+        page = int(request.url.params.get("page", 1))
+        build = {1: list(range(1, 9)), 2: [1, 2, 3, 4, 5], 3: [9, 10, 11]}.get(page, [])
+        return httpx.Response(200, json=[
+            {"id": 4, "title": "Build", "tasks": [{"id": i} for i in build]},
+            {"id": 9, "title": "Done", "tasks": [{"id": 900 + page}] if page <= 6 else []},
+        ])
+
+    api, pages = _tracker(handler, info_status=200, page_size=5)     # STATED 5, SERVED 8
+    board = api.view_tasks(3, 11, require_titles={"Build"})
+
+    by_title = {b["title"]: sorted(t["id"] for t in b["tasks"]) for b in board}
+    assert by_title["Build"] == list(range(1, 12))      # mutant: [1..8]
+    assert len(pages) == 4                              # mutant: 2
+
+
+def test_a_server_serving_MORE_than_it_stated_still_reads_the_list_whole():
+    """The flat reader's half, and it needs its OWN shape rather than the board's: `_paged_list`
+    dedupes one flat list, so a window of pure repeats brings nothing new and `added_new` ends the
+    read before the threshold is ever consulted (the board's Done bucket is what keeps `added_new`
+    alive there). So the repeat here is PARTIAL — five seen rows and one new one.
+
+    /info states 5, page 1 serves EIGHT, page 2 serves six (>= the stated 5, short of the served
+    8) of which only row 9 is new. MEASURED: shipped reads all 12 rows in 3 requests; with the bar
+    raised to the served 8 the six-row page reads as short and the read stops at 2 requests with 9
+    rows. Not cosmetic for a flat list either — every caller of these endpoints acts on ABSENCE
+    (setup creates the project it cannot see, get_or_create_label mints a duplicate, and a short
+    comment read hides the NEWEST rows, which is where the [worklog] and the human's answer are)."""
+    api, seen = _flat({
+        1: [{"id": i} for i in range(1, 9)],            # EIGHT served against a stated 5
+        2: [{"id": i} for i in (1, 2, 3, 4, 5, 9)],     # full by the STATED measure, short of 8
+        3: [{"id": i} for i in (10, 11, 12)],
+    }, page_size=5)
+
+    assert [x["id"] for x in api.labels()] == list(range(1, 13))     # mutant: [1..9]
+    assert seen == [1, 2, 3]                                         # mutant: [1, 2]
