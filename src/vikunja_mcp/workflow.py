@@ -502,15 +502,39 @@ class Workflow:
                 0 if st[1]["id"] in rework_first else 1, -st[1].get("priority", 0)
             ))
             stage, task = offerable[0]
+            note = (
+                "this is your active task — don't claim a new one. First reconcile "
+                "the actual state: read the dossier (get_task) and check the "
+                "code/repo — the work may already be done in full or in part. "
+                "Done — verify it and advance(to='review') with honest evidence; "
+                "not — continue from where it left off"
+            )
+            # over-budget disclosure (tracker #529). The WIP limit gates claim(), it is not an
+            # invariant on the active count: review_task(verdict='needs_work') moves a card
+            # Review->Build, and a human moves one out of Your Call (or hand-places an assigned
+            # card), both WITHOUT passing the gate — deliberately, since rework must be
+            # receivable at the limit or reviewed work strands. So active > limit is a correct
+            # state, and this branch is exactly where it surfaces: the card being handed back is
+            # typically the rework that caused it. `free` is max(0, limit - active) and so cannot
+            # show it — "exactly full" and "over budget by two" are both free: 0 — while the
+            # rulebook teaches the pump to branch on `free`. Appended ONLY when active > limit,
+            # so the common case is byte-for-byte the old note (no noise), mirroring the
+            # wip_saturated message, which already puts both numbers side by side in prose.
+            # Pure string building: next_task stays READ-ONLY BY CONTRACT (see the top of this
+            # method) — nothing here touches the tracker.
+            if wip["active"] > limit:
+                note += (
+                    f". NOTE — you hold {wip['active']} active tasks against a limit of "
+                    f"{limit}: that is legitimate, NOT board corruption. The limit gates "
+                    f"claim(); a card bounced back by review_task(verdict='needs_work') or "
+                    f"moved out of Your Call by a human re-enters Build without passing it, "
+                    f"and rework outranks a fresh claim. Drain the rework — the overshoot "
+                    f"clears when it reaches Review. Don't 'fix' the board and don't "
+                    f"call_human about it"
+                )
             return with_wip({
                 "resume": True, "stage": stage, "task": self._summary(task),
-                "note": (
-                    "this is your active task — don't claim a new one. First reconcile "
-                    "the actual state: read the dossier (get_task) and check the "
-                    "code/repo — the work may already be done in full or in part. "
-                    "Done — verify it and advance(to='review') with honest evidence; "
-                    "not — continue from where it left off"
-                ),
+                "note": note,
             })
 
         # skip an epic here too: an epic container assigned to me in Queue (only ever a human's

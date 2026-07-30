@@ -56,7 +56,15 @@ docker rm -f vikunja-test
   else 1 when `enforce_single_wip = true` → else 3, resolved in `workflow._effective_wip_limit`
   (which returns `int`, never `None`) while `Config.wip_limit is None` keeps meaning only "the
   key is absent". `wip_limit = 0` is a `ConfigError`, NOT the unbounded spelling: "no limit" is
-  deliberately not expressible any more. `worktree_root` /
+  deliberately not expressible any more. **It is a gate on ONE transition (`claim`), not an
+  invariant on the active count** (tracker #529): a card re-enters Build without passing it —
+  `review_task(verdict='needs_work')` bounces it Review→Build, a human moves it out of Your Call
+  or hand-places an assigned card, or the toml lowers the number while work is in flight — so
+  `wip.active` legitimately EXCEEDS `wip.limit` (4/3 observed live), and that is correct, because
+  rework must be receivable at the limit. `next_task`'s `free` is `max(0, limit - active)`, so the
+  overshoot is invisible there and readable only from `active`/`limit`; `claim` keeps refusing and
+  reports the true count. Making it impossible, or gating the second path, is deliberately NOT
+  done — both would strand reviewed work. `worktree_root` /
   `VIKUNJA_WORKTREE_ROOT` (where per-task worktrees materialise, default a `<repo>.worktrees`
   sibling) is MACHINE-local, so unlike `wip_limit` the env layers DO win over the toml.
 - `src/vikunja_mcp/api.py` — REST client. **Vikunja gotchas are codified here:

@@ -109,6 +109,20 @@ limit`. It also stops re-fetching: today the gate calls `_my_active_tasks()`
 with no board and pays for a second full board fetch although `claim` already
 holds the snapshot in `board`. Pass it through.
 
+This is a gate on **one transition**, not an invariant on the active count, and
+the difference is load-bearing (tracker #529, added after the state was seen
+live). Three paths put a card into Design/Build *without* passing it:
+`review_task(verdict='needs_work')` (Review → Build — the rework path this very
+document relies on, below); a human moving a card out of Your Call, or
+hand-placing an assigned card into Design/Build; and lowering `wip_limit` in the
+toml while tasks are in flight, which needs no card to move at all. So
+`wip.active` may legitimately **exceed** `wip.limit` — `{"active": 4, "limit": 3,
+"free": 0}` is a correct board, not a corrupt one, and two bounces make it 5.
+Closing those paths is deliberately not proposed: rework must be receivable at
+the limit, or reviewed work strands. `advance(to='build')` is NOT one of them,
+despite the obvious guess — Design and Build are both in `ACTIVE_STAGES`, so it
+moves no card into or out of the count.
+
 **`next_task(exclude: list[int] | None = None)`** — two additions.
 
 1. `exclude` carries the task ids the caller *currently has a live agent on*.
@@ -122,7 +136,13 @@ holds the snapshot in `board`. Pass it through.
    numbers always, never `null`, since #524 removed the unlimited case. The
    free-queue branch is offered only while `free > 0`; otherwise the result is
    `{"task": null, "wip_saturated": true, "wip": {...}}` — "wait for an agent to
-   return; do not claim, do not sleep".
+   return; do not claim, do not sleep". `free` is `max(0, N - K)`, which is the
+   **claim budget, not a census**: since `K` can exceed `N` (see the `claim()`
+   gate above), `free: 0` alone cannot tell "exactly full" from "over budget
+   because two cards bounced back". Only `active`/`limit` can, which is why #529
+   made the resume branch's `note` say so when `K > N` — guarded, so the common
+   case is byte-identical (the `wip_saturated` message already stated both
+   numbers in prose: "all 3 WIP slot(s) are busy (4 active)").
 
 Branch order is unchanged: `mine` → stuck Queue → review offer → free queue.
 A review offer does **not** consume a slot — background review is already "not
@@ -335,7 +355,9 @@ written down. Two constraints belong to the *rule*, because no gate carries them
 `approve` from the orchestrator is never legitimate (the gate would allow it — this
 is a mechanical refusal of unverifiable evidence, not a verdict on code), and the
 returning card re-occupies a WIP slot, which is correct, since it is active work
-again.
+again — **even when there was no free slot to re-occupy.** The bounce goes around
+`claim`, so at a full board it puts `wip.active` *over* `wip.limit`; that is the
+intended trade (see the `claim()` gate above), not a leak to be plugged.
 
 A rebase conflict is resolved by the agent itself (it holds the task's context);
 if it cannot, `call_human` — and the worktree survives, because `--release`

@@ -336,7 +336,16 @@ def claim(task_id: int) -> dict:
     enforce_single_wip = true, else the default of 3. Claim refuses once you already hold N
     active Design/Build tasks — "WIP limit reached (N/N) — you already hold #… Finish one
     (advance to Review) or return_task it before claiming another". next_task's `wip` payload
-    reports the same limit and how many slots are free."""
+    reports the same limit and how many slots are free.
+    The gate guards THIS transition, and is NOT an invariant on the active count: a card
+    re-enters Build WITHOUT passing it when review_task(verdict='needs_work') bounces it back
+    from Review, or when a human moves it out of Your Call (or hand-places an assigned card in
+    Design/Build), or when the toml's wip_limit is lowered while tasks are in flight. So
+    wip.active may legitimately EXCEED wip.limit — 4/3 is a real, correct state, not board
+    corruption: it is rework, which by design outranks a fresh claim (refusing it would strand
+    reviewed work). Claim keeps refusing while over budget and reports the true count
+    ("WIP limit reached (4/3)"), and the overshoot clears itself when the rework reaches
+    Review."""
     return _wf().claim(task_id)
 
 

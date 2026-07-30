@@ -333,3 +333,127 @@ def test_the_breadcrumb_cannot_drift_from_the_number_it_explains(kwargs):
     limit, origin = wf._wip_limit_with_origin()
     assert limit == wf._effective_wip_limit()
     assert origin
+
+
+# --- VMCP-80 (529): the limit gates claim(), it is NOT an invariant on the active count ---
+
+def _bounce_to_over_budget(api, wf, limit):
+    """Fill every slot, then bounce a reviewed card back — the shape seen live at wip_limit 3.
+
+    The bounce is what goes AROUND the gate: review_task needs no ownership and no claim, so
+    the card lands back in Build regardless of how full the board is."""
+    bounced = _hold(api, wf, "will be bounced")
+    wf.advance(bounced["id"], to="build", spec="s")
+    wf.advance(bounced["id"], to="review", worklog="w", evidence="sha")
+    for n in range(limit):                       # the freed slot gets refilled, as the pump does
+        _hold(api, wf, f"held {n}")
+    assert wf.next_task()["wip"] == {"active": limit, "limit": limit, "free": 0}
+    wf.review_task(bounced["id"], verdict="needs_work", report="not yet")
+    return bounced
+
+
+def test_a_review_bounce_pushes_active_past_the_limit():
+    """The state VMCP-80 was filed about, reproduced rather than assumed: four active tasks at a
+    limit of three. It is CORRECT — refusing rework at the limit would strand reviewed work — and
+    the docs (SKILL.md, claim's docstring, CLAUDE.md, the drain design spec) now say so. This test
+    is what makes those sentences true: change the code to make the overshoot impossible (gate
+    review_task on the limit, or count only up to it) and the docs become lies while this goes
+    red."""
+    api, wf = _env(wip_limit=3)
+    _bounce_to_over_budget(api, wf, 3)
+    assert wf.next_task()["wip"] == {"active": 4, "limit": 3, "free": 0}
+
+
+def test_a_second_bounce_overshoots_further():
+    """`free` saturates at 0, so it cannot express "over budget by two" — pin that the raw count
+    keeps climbing, which is the only thing that can."""
+    api, wf = _env(wip_limit=2)
+    first = _hold(api, wf, "first")
+    second = _hold(api, wf, "second")
+    for t in (first, second):
+        wf.advance(t["id"], to="build", spec="s")
+        wf.advance(t["id"], to="review", worklog="w", evidence="sha")
+    _hold(api, wf, "a")
+    _hold(api, wf, "b")
+    wf.review_task(first["id"], verdict="needs_work", report="no")
+    wf.review_task(second["id"], verdict="needs_work", report="no")
+    assert wf.next_task()["wip"] == {"active": 4, "limit": 2, "free": 0}
+
+
+def test_being_over_budget_does_not_loosen_the_claim_gate():
+    """Documenting the overshoot must not read as permission to grow it: claim still refuses, and
+    reports the TRUE count (4/3), not a clamped 3/3."""
+    api, wf = _env(wip_limit=3)
+    _bounce_to_over_budget(api, wf, 3)
+    extra = api.add_task("one too many", "Queue")
+    with pytest.raises(WorkflowError, match=r"WIP limit reached \(4/3\)"):
+        wf.claim(extra["id"])
+
+
+def test_the_overshoot_clears_when_the_rework_reaches_review():
+    """The docs promise it resolves itself rather than needing a human to 'fix the board'."""
+    api, wf = _env(wip_limit=3)
+    bounced = _bounce_to_over_budget(api, wf, 3)
+    wf.advance(bounced["id"], to="review", worklog="reworked", evidence="sha2")
+    assert wf.next_task()["wip"] == {"active": 3, "limit": 3, "free": 0}
+
+
+def test_advance_to_build_cannot_overshoot_because_design_is_already_active():
+    """VMCP-80's dossier GUESSED that advance(to='build') on a Your Call answer was a second
+    overshoot path ("presumably the same shape"). It is not, and the docs now say so, so pin the
+    correction: Design and Build are both ACTIVE_STAGES, so advance moves the card between two
+    counted stages and leaves `active` untouched. The overshoot on that path arrives one step
+    earlier — when the HUMAN moves the card out of Your Call, which no tool mediates."""
+    api, wf = _env(wip_limit=3)
+    parked = _hold(api, wf, "will be parked")
+    wf.call_human(parked["id"], question="which way?")
+    assert wf.next_task()["wip"]["active"] == 0        # Your Call is not an active stage
+    for n in range(3):                                 # the pump refills the freed slot
+        _hold(api, wf, f"held {n}")
+
+    view = api.kanban_view(3)
+    api.move_task(3, view["id"], api.bucket_id("Design"), parked["id"])   # the human's move
+    assert wf.next_task()["wip"] == {"active": 4, "limit": 3, "free": 0}
+
+    wf.advance(parked["id"], to="build", spec="carrying on")
+    assert wf.next_task()["wip"] == {"active": 4, "limit": 3, "free": 0}  # unchanged by advance
+
+
+def test_lowering_the_configured_limit_puts_a_still_board_over_budget():
+    """The third path, and the one no card-move explains: nothing on the board changed, the
+    NUMBER did. It is why the docs frame active > limit as a state to read, not an event to
+    trace back to a transition."""
+    api, wf = _env(wip_limit=3)
+    for n in range(3):
+        _hold(api, wf, f"held {n}")
+    assert wf.next_task()["wip"] == {"active": 3, "limit": 3, "free": 0}
+    wf.wip_limit = 1                                   # a human edits the repo toml
+    assert wf.next_task()["wip"] == {"active": 3, "limit": 1, "free": 0}
+
+
+def test_the_resume_note_discloses_an_over_budget_board():
+    """VMCP-80 scope item 3, decided YES: the pump branches on `wip.free`, and free is
+    max(0, limit - active), so `free: 0` cannot distinguish "exactly full" from "over budget".
+    The resume branch is where that matters — the card it hands back IS the rework that caused
+    the overshoot — so the note states it there, at the moment of the decision."""
+    api, wf = _env(wip_limit=3)
+    _bounce_to_over_budget(api, wf, 3)
+    note = wf.next_task()["note"]
+    assert "4 active tasks against a limit of 3" in note
+    assert "legitimate, NOT board corruption" in note
+    assert "Drain the rework" in note
+
+
+def test_the_resume_note_says_nothing_extra_at_or_below_the_limit():
+    """The no-noise half of that decision, and the half a reviewer should distrust most: the
+    common case must be byte-for-byte the old note. Drop the `if wip["active"] > limit` guard
+    (append unconditionally) and this goes red while the test above stays green."""
+    api, wf = _env(wip_limit=3)
+    _hold(api, wf, "just one")
+    at_limit = _env(wip_limit=1)
+    _hold(*at_limit, "exactly full")
+
+    for wf_under in (wf, at_limit[1]):
+        note = wf_under.next_task()["note"]
+        assert note.endswith("continue from where it left off"), note
+        assert "against a limit of" not in note

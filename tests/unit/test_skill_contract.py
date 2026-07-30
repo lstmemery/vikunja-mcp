@@ -797,3 +797,94 @@ def test_the_shared_resource_rules_name_a_knob_the_agent_can_actually_reach():
         "this section's sh fence must not contain the push refspec — it would break the " \
         "exactly-one-integration-recipe invariant (_integration_recipe)"
     _integration_recipe(_skill_text())  # still exactly one, and still not this one
+
+
+def _drain_width_section(text: str) -> str:
+    """The «Ширина дренажа» bullet that explains what `limit` gates — sliced to that one item.
+
+    Scoped like `_gc_section` / `_tick_step_3`, and for the same measured reason: `wip.limit`,
+    `claim` and `active` appear all over the rulebook (the queue-discipline bullet, the parallel
+    drain, the retry ceiling), so a whole-file substring could not tell "the rule is still stated
+    where the pump reads the payload" from "some other section happens to use the words"."""
+    start = text.find("- **`limit` — гейт на ОДИН переход (`claim`)")
+    assert start != -1, \
+        "the rulebook no longer states that `limit` gates ONE transition, not the active count"
+    end = text.find("\n- **`wip_saturated", start)
+    assert end != -1, "the drain-width slice no longer ends where the wip_saturated bullet begins"
+    section = text[start:end]
+    assert 0 < len(section) < len(text), "the drain-width slice is not a proper subset of SKILL.md"
+    assert "wip_saturated" not in section, \
+        "the slice swallowed the next bullet — the prose it exists to exclude"
+    return section
+
+
+def test_the_wip_overshoot_the_rulebook_describes_is_one_the_code_produces():
+    """VMCP-80 (529): `wip_limit` reads as an invariant on the active count everywhere it is
+    written, but it is a gate on ONE transition — `claim`. `review_task(verdict='needs_work')`
+    moves a card Review→Build without passing it, so `next_task` can honestly report
+    `{"active": 4, "limit": 3}`. That behaviour is correct and deliberately unchanged (rework must
+    be receivable at the limit or reviewed work strands); what shipped wrong was the documentation.
+
+    So this pin does not compare strings alone — it DRIVES the real `Workflow` into the overshoot
+    and checks the rulebook's claims against what came out. That is the point: the four sentences
+    this card added to SKILL.md, `claim`'s tool docstring, CLAUDE.md and the drain design spec all
+    assert a runtime state, and SKILL.md self-heals onto every consumer with no review gate of its
+    own. If a later change makes the overshoot impossible (a second gate on the bounce, a clamped
+    count), the rulebook does not go stale quietly — this goes red first.
+
+    MUTATION-CHECKED (`__pycache__` cleared between rounds, each run confirmed to select exactly
+    1 test): control PASS; clamp `active` to the limit in the wip payload -> FAIL; gate
+    `review_task`'s needs_work bounce on the WIP limit -> FAIL; drop the over-budget clause from
+    next_task's resume note -> FAIL; delete the rule from the drain-width bullet -> FAIL; delete
+    the paragraph from claim's tool docstring -> FAIL; rename the bullet's opening words so the
+    slice cannot find it -> FAIL (loudly, with its own message, never silently green).
+
+    Deliberately NOT pinned: the two OTHER paths into the overshoot (a human moving a card out of
+    Your Call, a lowered `wip_limit`) — neither is a tool call, so neither is expressible as a
+    contract between the rulebook and workflow.py. They are covered behaviourally in
+    tests/unit/test_workflow_wip.py, which is also where the "advance(to='build') is NOT such a
+    path" correction lives."""
+    section = _drain_width_section(_skill_text())
+    assert "гейт" in section and "claim" in section, \
+        "the drain-width rule no longer says WHICH transition the limit gates"
+    assert "`active` ЗАКОННО" in section and "больше" in section, \
+        "the rulebook no longer states that active may legitimately exceed limit"
+    assert "НЕ порча доски" in section, \
+        "the rulebook no longer tells the pump that an overshoot is not board corruption"
+    assert "max(0, limit − active)" in _flat(section), \
+        "the rulebook no longer explains why `free` cannot show the overshoot"
+
+    api = FakeAPI(buckets=workflow.STAGES)
+    wf = workflow.Workflow(api, project_id=3, wip_limit=3)
+
+    def claim_fresh(title):
+        task_id = api.add_task(title, "Queue")["id"]
+        wf.claim(task_id)
+        return task_id
+
+    bounced = claim_fresh("reviewed, then bounced")
+    wf.advance(bounced, to="build", spec="…")
+    wf.advance(bounced, to="review", worklog="…", evidence="0" * 40)
+    for n in range(3):                       # the pump refills the freed slot, as the tick does
+        claim_fresh(f"held {n}")
+    assert wf.next_task()["wip"] == {"active": 3, "limit": 3, "free": 0}, "precondition: full"
+
+    # the bounce goes AROUND the gate — no ownership, no claim, no slot check
+    wf.review_task(bounced, verdict="needs_work", report="not yet")
+    over = wf.next_task()
+    assert over["wip"] == {"active": 4, "limit": 3, "free": 0}, \
+        "the rulebook documents active > limit, but the code no longer produces it"
+    assert over["wip"]["free"] == 0, "free saturates at 0 — the reason the rule has to exist"
+
+    # and the payload says so where the pump reads it, exactly as the rulebook promises
+    assert "against a limit of 3" in over["note"], \
+        "SKILL.md promises next_task's note discloses the overshoot, but the note dropped it"
+
+    # documenting it is not permission: the gate still refuses, with the TRUE count
+    with pytest.raises(workflow.WorkflowError, match=r"WIP limit reached \(4/3\)"):
+        wf.claim(api.add_task("one too many", "Queue")["id"])
+
+    # the same rule must reach an agent reading the TOOL, not just the rulebook
+    claim_doc = inspect.getdoc(server.claim) or ""
+    assert "NOT an invariant on the active count" in claim_doc and "review_task" in claim_doc, \
+        "claim's tool docstring no longer says the WIP gate guards one transition, not the count"
