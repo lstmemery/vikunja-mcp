@@ -1870,32 +1870,46 @@ def test_the_liveness_read_costs_one_more_request_per_page_of_a_human_drained_co
     Measured against the real tracker at 4 requests / ~1 s; modelled here at 3 s per request so
     the arithmetic is visible. (Since VMCP-103 every board read also spends ONE confirming page
     past its last page with content — a short page stopped proving a bucket is exhausted — so the
-    counts here are the old ones plus that flat one, on both boards.)"""
+    counts here are the old ones plus that flat one, on both boards. VMCP-108 adds ONE more, once
+    per read and independent of the board: `views()` is now paged too, and this transport models
+    the real 2.3.0 behaviour of serving the whole list and ignoring `?page=`, so it stops on the
+    confirming page — the flat +1 the uniform rule costs.)"""
     clock, sent, attempted = _FakeClock(), [], []
     wf = _workflow_on(_slow_board_client(clock, 3.0, sent, attempted, review=41, your_call=5))
     _read(wf)
-    assert len(sent) == 5 and clock.t == pytest.approx(15.0)      # today's board (+1 confirming)
+    assert len(sent) == 6 and clock.t == pytest.approx(18.0)      # today's board (+1 confirming)
 
     for column in ({"review": 140}, {"your_call": 140}):          # EITHER one drives it
         clock, sent, attempted = _FakeClock(), [], []
         wf = _workflow_on(_slow_board_client(clock, 3.0, sent, attempted, **column))
         _read(wf)
-        assert len(sent) == 7, f"{column}: {sent}"
-        assert clock.t == pytest.approx(21.0), f"{column} held the lock {clock.t}s"
+        assert len(sent) == 8, f"{column}: {sent}"
+        assert clock.t == pytest.approx(24.0), f"{column} held the lock {clock.t}s"
 
 
 def test_the_sweep_read_is_bounded_overall_not_only_per_request():
     """The fix itself, stated as the delta it buys. The SAME read, at the SAME per-request
-    ceiling: unbounded it holds the lock for six times that ceiling, budgeted it stops at the
+    ceiling: unbounded it holds the lock for eight times that ceiling, budgeted it stops at the
     budget and abandons — refusing the next request BEFORE sending it, so the abandon costs
-    nothing more."""
+    nothing more.
+
+    At this deliberately absurd 10 s/request the budget is now spent before the board pages are
+    reached at all (VMCP-108's paged `views()` costs one of the three requests that fit). That is
+    an artefact of the model, not of production: the same read was MEASURED against the real
+    tracker at ~0.25 s/request, where the extra page is noise against a 30 s budget. What the
+    assertions below pin is the property that does not depend on the rate — the read is abandoned
+    BEFORE any liveness set exists to act on, which is the whole reason the budget is enforced at
+    the request hook rather than around the call."""
     per_request = workspace_cmd._READ_TIMEOUT_SECONDS
     budget = workspace_cmd._READ_DEADLINE_SECONDS
 
     clock, sent, attempted = _FakeClock(), [], []
     wf = _workflow_on(_slow_board_client(clock, per_request, sent, attempted, your_call=140))
     _read(wf)
-    assert len(sent) == 7 and clock.t == pytest.approx(7 * per_request)   # 70s of held lock
+    assert len(sent) == 8 and clock.t == pytest.approx(8 * per_request)   # 80s of held lock
+    # 140 Your Call cards at 50/page = 3 pages + VMCP-103's confirming page; the other four
+    # requests are /info, the two views pages and the /user active_task_ids needs.
+    assert sum("/tasks" in url for url in sent) == 4
 
     clock, sent, attempted = _FakeClock(), [], []
     deadline = workspace_cmd._ReadDeadline(budget, now=clock)
@@ -1903,25 +1917,33 @@ def test_the_sweep_read_is_bounded_overall_not_only_per_request():
                                          your_call=140, hooks=[deadline]))
     with pytest.raises(ReadDeadlineExceeded):
         _read(wf, deadline)
-    assert clock.t == pytest.approx(budget)          # the hold IS the budget, not 60s
+    assert clock.t == pytest.approx(budget)          # the hold IS the budget, not 80s
     assert len(attempted) == len(sent) + 1           # one refused before it went out
-    assert not any("page=3" in url for url in attempted)
+    assert len(sent) == budget / per_request         # and it stopped ON the budget, not past it
+    # abandoned with the board unread — no liveness set was ever built, so nothing could be reaped
+    assert not any("/tasks" in url for url in sent)
 
 
 def test_a_spent_read_budget_is_not_swallowed_by_the_page_size_fallback():
-    """`api._fetch_page_size` catches `(VikunjaError, httpx.HTTPError)` and falls back to a page
-    size of 50. Were `ReadDeadlineExceeded` an httpx exception, a budget that ran out at `/info`
-    would be EATEN right there and the read would carry on past its own deadline — the bound
-    silently gone on exactly the boards big enough to need it. Being a WorkspaceError, it stops
-    the read where it fires: the tasks endpoint is never even attempted."""
+    """`api._fetch_page_size` swallows `(VikunjaError, httpx.HTTPError)` and answers "unknown".
+    Were `ReadDeadlineExceeded` an httpx exception, a budget that ran out at `/info` would be
+    EATEN right there and the read would carry on past its own deadline — the bound silently gone
+    on exactly the boards big enough to need it. Being a WorkspaceError, it stops the read where
+    it fires: nothing after `/info` is even attempted.
+
+    Since VMCP-108 `/info` is the FIRST request of any read — every list GET resolves the page
+    size before it pages — so the way to land the refusal inside that `except` is a budget that is
+    already spent when the read starts, which is exactly the state a caller handed a used-up
+    deadline is in. Nothing else can reach `/info` any more, and a test that let the refusal fall
+    on the NEXT request instead would pass without ever entering the swallowing frame."""
     clock, sent, attempted = _FakeClock(), [], []
-    deadline = workspace_cmd._ReadDeadline(workspace_cmd._READ_TIMEOUT_SECONDS, now=clock)
+    deadline = workspace_cmd._ReadDeadline(0.0, now=clock)
     wf = _workflow_on(_slow_board_client(clock, workspace_cmd._READ_TIMEOUT_SECONDS,
                                          sent, attempted, hooks=[deadline]))
     with pytest.raises(ReadDeadlineExceeded):
         _read(wf, deadline)
-    assert attempted == ["/projects/10/views", "/info"]
-    assert sent == ["/projects/10/views"]
+    assert attempted == ["/info"]     # refused INSIDE _fetch_page_size — and not swallowed there
+    assert sent == []
 
 
 def test_the_read_budget_clamps_each_request_to_what_is_left():

@@ -5,6 +5,7 @@ import httpx
 import pytest
 
 from tests.unit.test_api import make_api
+from vikunja_mcp import api as api_mod
 from vikunja_mcp.api import _MAX_UNPROVEN_PAGES as MAX_UNPROVEN_PAGES
 from vikunja_mcp.api import VikunjaError
 
@@ -421,10 +422,14 @@ def test_get_or_create_label_reuses_existing():
         return httpx.Response(200, json={"id": 6, "title": "epic"})
 
     api = make_api(handler)
+    # the claim is about the WRITE, not the read count: an existing label must not be minted a
+    # second time. How many GETs the lookup costs is a paging detail (VMCP-108 made labels() a
+    # paged read, so it is /info + pages, not one request) and pinning it here only made this
+    # test fail for a reason it is not about.
     assert api.get_or_create_label("blocked")["id"] == 5
-    assert calls == ["GET"]
+    assert calls.count("PUT") == 0                  # reused -> nothing created
     assert api.get_or_create_label("epic")["id"] == 6
-    assert calls == ["GET", "GET", "PUT"]
+    assert calls.count("PUT") == 1                  # absent -> created exactly once
 
 
 def test_share_project_idempotent():
@@ -437,10 +442,14 @@ def test_share_project_idempotent():
         return httpx.Response(200, json={})
 
     api = make_api(handler)
-    api.share_project(3, "agent-infra", 1)          # уже есть -> только GET
-    assert calls == [("GET", "/api/v1/projects/3/users")]
+    api.share_project(3, "agent-infra", 1)          # уже есть -> ни одного PUT
+    # as above: the claim is "no re-share", not a request count. A re-PUT is not harmless here —
+    # real Vikunja answers 409 "This user already has access to this project" and setup dies.
+    assert [m for m, _ in calls] == ["GET"] * len(calls)
+    assert {p for _, p in calls} <= {"/api/v1/info", "/api/v1/projects/3/users"}
     api.share_project(3, "agent-voice", 1)           # нет -> GET + PUT
     assert calls[-1] == ("PUT", "/api/v1/projects/3/users")
+    assert sum(m == "PUT" for m, _ in calls) == 1
 
 
 # --- VMCP-92 (548): the DEGRADED branch is BOUNDED, and it RAISES rather than truncating ------
@@ -901,3 +910,193 @@ def test_a_page_filtered_down_to_nothing_still_ends_the_read(info_status):
 
     assert sorted(t["id"] for t in board[0]["tasks"]) == [1, 2]      # 8,9 past the empty window
     assert len(pages) == 2
+
+
+# --- VMCP-108: the FLAT list reads page too -----------------------------------------------
+# Every one of these models a shape MEASURED against a real Vikunja 2.3.0 configured with
+# max_items_per_page=5 (see the block above `_paged_list` in api.py for the raw numbers).
+
+
+def _flat(pages, *, page_size=5, total_pages=None, info_status=200,
+          harness_cap=3 * MAX_UNPROVEN_PAGES):
+    """A server that answers ONE list endpoint out of `pages` ({page_no: [row, ...]}), with the
+    x-pagination-total-pages header real Vikunja sends on these endpoints.
+
+    The HARNESS CAP is the same honesty device `_tracker` uses: several of these shapes make the
+    loop run forever if its termination guard is removed (a server that ignores `?page=` serves a
+    FULL page every time, so neither the fullness rule nor the unproven-page ceiling can ever end
+    it — only "this page added nothing new" can). With the cap the mutation goes RED here instead
+    of hanging the suite."""
+    seen = []
+
+    def handler(request):
+        if request.url.path.endswith("/info"):
+            return httpx.Response(info_status, json={"max_items_per_page": page_size})
+        page = int(request.url.params.get("page", "1"))
+        seen.append(page)
+        if len(seen) > harness_cap:
+            raise RuntimeError(f"the read issued more than {harness_cap} requests")
+        headers = {} if total_pages is None else {"x-pagination-total-pages": str(total_pages)}
+        return httpx.Response(200, json=pages.get(page, []), headers=headers)
+
+    return make_api(handler), seen
+
+
+def test_projects_reads_past_the_first_page():
+    """THE CARD'S BUG. MEASURED (real 2.3.0, max_items_per_page=5, 9 projects): GET /projects
+    returns 5 rows with x-pagination-total-pages: 2, and ?page=2 returns the other 4. A
+    single-request read therefore reported an EXISTING project as ABSENT — and reconcile acts on
+    absence, so it created a SECOND project with the same title (reproduced end to end against
+    that container: existing id 8 'p6' ignored, new id 18 created). A duplicate project on a real
+    tracker is not something an agent can undo."""
+    api, seen = _flat({
+        1: [{"id": -1, "title": "Favorites"}, {"id": 1, "title": "Inbox"},
+            {"id": 2, "title": "p0"}, {"id": 3, "title": "p1"}, {"id": 4, "title": "p2"}],
+        2: [{"id": 5, "title": "p3"}, {"id": -2, "title": "Filters"},
+            {"id": 6, "title": "p4"}, {"id": 7, "title": "p5"}, {"id": 8, "title": "p6"}],
+    }, total_pages=2)
+
+    titles = [p["title"] for p in api.projects()]
+
+    assert titles == ["Inbox", "p0", "p1", "p2", "p3", "p4", "p5", "p6"]
+    assert "p6" in titles                    # the project reconcile used to duplicate
+    assert seen[:2] == [1, 2]                # it did not stop at the first window
+    assert "Favorites" not in titles and "Filters" not in titles   # pseudo-filter survives paging
+
+
+def test_labels_comments_and_shares_page_too():
+    """THE SWEEP. The card named ONE endpoint; three more paginate identically (MEASURED on the
+    same container: 5 rows then 3 on each of /labels, /tasks/{id}/comments,
+    /projects/{id}/users). None of the truncations is cosmetic, because every caller acts on
+    absence:
+      * a label hidden past the window is minted a SECOND time by get_or_create_label — the very
+        duplicate its docstring records as a real incident, now reachable with no typo at all;
+      * a share hidden past the window makes share_project re-PUT, and real Vikunja answers
+        409 "This user already has access to this project", which ABORTS `vikunja-mcp setup`;
+      * comments come OLDEST FIRST, so a short read drops the NEWEST rows — the reviewer's
+        [review] verdict, the [worklog] next_task's review offering requires (no worklog visible
+        => the card is never offered for review at all), and the human's answer to call_human.
+    The comment assertion checks ORDER, not just membership: the callers read this list
+    positionally and by max(created)."""
+    def handler(request):
+        if request.url.path.endswith("/info"):
+            return httpx.Response(200, json={"max_items_per_page": 5})
+        page = int(request.url.params.get("page", "1"))
+        path = request.url.path
+        if path.endswith("/labels"):
+            rows = {1: ["reviewed", "review-failed", "epic", "epic-ready", "blocked"],
+                    2: ["bug", "wontfix"]}.get(page, [])
+            body = [{"id": i, "title": t} for i, t in enumerate(rows)]
+        elif path.endswith("/comments"):
+            rows = {1: ["[claim]", "[spec]", "[worklog] v1", "[review] NEEDS_WORK", "[spec] v2"],
+                    2: ["[worklog] v2", "[review] APPROVE"]}.get(page, [])
+            body = [{"id": i, "comment": t} for i, t in enumerate(rows)]
+        else:
+            rows = {1: ["u0", "u1", "u2", "u3", "u4"], 2: ["u5", "u6"]}.get(page, [])
+            body = [{"id": i, "username": u} for i, u in enumerate(rows)]
+        # ids restart per page on purpose: dedupe must not confuse "row 0 of page 2" with
+        # "row 0 of page 1" into dropping it. Real ids are global; this is the harsher case.
+        body = [{**row, "id": (page - 1) * 5 + row["id"]} for row in body]
+        return httpx.Response(200, json=body, headers={"x-pagination-total-pages": "2"})
+
+    api = make_api(handler)
+
+    assert [x["title"] for x in api.labels()] == [
+        "reviewed", "review-failed", "epic", "epic-ready", "blocked", "bug", "wontfix"]
+    assert [x["comment"] for x in api.comments(7)] == [
+        "[claim]", "[spec]", "[worklog] v1", "[review] NEEDS_WORK", "[spec] v2",
+        "[worklog] v2", "[review] APPROVE"]          # oldest -> newest, across the page seam
+    assert [x["username"] for x in api.project_users(3)] == [
+        "u0", "u1", "u2", "u3", "u4", "u5", "u6"]
+
+
+def test_a_paged_read_never_stops_on_the_total_pages_header():
+    """The header may only ever say "keep going", never "stop". VMCP-103 MEASURED it
+    UNDER-reporting on this very server (the kanban tasks endpoint sent total-pages 1 while the
+    bucket behind it held 3 pages), so a reader that believed it would truncate exactly like the
+    bug this card fixes. Here the server insists total-pages=1 on every response and goes right
+    on serving full pages: the fullness rule has to carry the read to the end on its own."""
+    api, seen = _flat({
+        1: [{"id": 1}, {"id": 2}, {"id": 3}],
+        2: [{"id": 4}, {"id": 5}, {"id": 6}],
+        3: [{"id": 7}],
+    }, page_size=3, total_pages=1)
+
+    assert [x["id"] for x in api.labels()] == [1, 2, 3, 4, 5, 6, 7]
+    assert seen == [1, 2, 3]
+
+
+def test_a_short_non_final_page_is_followed_when_the_header_says_there_is_more():
+    """What the header BUYS — the one shape min(size stated, longest page served) cannot see, and
+    the flat-list twin of VMCP-103's bug: a page SHORT of the page size with more behind it. The
+    fullness rule calls page 2 the end; total-pages says there is a third, and a signal used only
+    to keep going can be believed without ever risking data. Delete the header clause and this
+    read silently returns 7 rows instead of 9."""
+    api, seen = _flat({
+        1: [{"id": i} for i in range(1, 6)],        # full
+        2: [{"id": 6}, {"id": 7}],                  # SHORT — but not the last
+        3: [{"id": 8}, {"id": 9}],
+    }, page_size=5, total_pages=3)
+
+    assert [x["id"] for x in api.labels()] == [1, 2, 3, 4, 5, 6, 7, 8, 9]
+    assert seen == [1, 2, 3]
+
+
+def test_an_endpoint_that_ignores_page_terminates_without_duplicating_rows():
+    """views() and buckets() go through the pager although 2.3.0 MEASURABLY does not paginate
+    them: both serve the WHOLE list and ignore ?page= entirely, while still advertising
+    x-pagination-total-pages 2 and 3 (the same header being wrong in the OVER-reporting direction
+    this time). Routing them anyway costs exactly ONE confirming request — the repeat brings no
+    new row and `added_new` ends the loop — and it is `added_new`, not the header, that decides:
+    the server here claims a third page and is not followed there."""
+    rows = [{"id": i, "title": f"b{i}"} for i in range(11)]
+    api, seen = _flat({1: rows, 2: rows, 3: rows, 4: rows}, page_size=5, total_pages=3)
+
+    got = api.buckets(3, 11)
+
+    assert [b["id"] for b in got] == list(range(11))     # every row, exactly once
+    assert seen == [1, 2]                                # one confirming request, then done
+
+
+def test_a_list_that_never_finishes_paging_raises_instead_of_truncating():
+    """Same discipline as view_tasks (VMCP-92): on hitting the request ceiling the read RAISES and
+    returns NOTHING. Returning what it had would be the bug one level up — a truncated list is
+    indistinguishable from rows that are genuinely gone, and absence is precisely what these
+    callers act on (setup CREATES the project it cannot see). The server modelled here hands out
+    one brand-new row per page and never fills one, so `max_items_per_page` justifies no page and
+    the whole budget is spent."""
+    def handler(request):
+        if request.url.path.endswith("/info"):
+            return httpx.Response(200, json={"max_items_per_page": 5})
+        page = int(request.url.params.get("page", "1"))
+        return httpx.Response(200, json=[{"id": page, "title": f"p{page}"}])
+
+    api = make_api(handler)
+
+    with pytest.raises(VikunjaError) as exc:
+        api.projects()
+    assert exc.value.status == 508
+    assert "/projects" in exc.value.message and "NOTHING is returned" in exc.value.message
+
+
+def test_the_page_size_threshold_is_one_shared_rule_not_a_copy():
+    """VMCP-89/92/103 were three cards spent fixing ONE expression in one branch at a time, and
+    VMCP-103 was entirely the story of the branch nobody re-read keeping the deleted rule. So the
+    threshold is a single module-level function and BOTH readers call it. Deleting the call from
+    either one has to fail a test, which is what the two reads below check on the same shape:
+    /info states 5, the server only ever serves 2 at a time, and a reader that took a short first
+    page as proof of exhaustion would stop dead on page 1."""
+    assert api_mod._could_be_full(5, 0) == 0        # nothing served yet -> page 1 proves nothing
+    assert api_mod._could_be_full(5, 2) == 2        # the SERVED length wins when it is smaller
+    assert api_mod._could_be_full(5, 9) == 5        # the STATED size caps a fluke-long page
+    assert api_mod._could_be_full(None, 2) == 2     # /info down -> only what was proven
+
+    flat, seen = _flat({1: [{"id": 1}, {"id": 2}], 2: [{"id": 3}, {"id": 4}], 3: []}, page_size=5)
+    assert [x["id"] for x in flat.labels()] == [1, 2, 3, 4]
+    assert seen == [1, 2, 3]
+
+    nested, pages = _tracker(_short_non_final_pages({"Build": [[1, 2], [3, 4]]}),
+                             info_status=200, page_size=5)
+    board = nested.view_tasks(3, 11, require_titles={"Build"})
+    assert sorted(t["id"] for t in board[0]["tasks"]) == [1, 2, 3, 4]
+    assert len(pages) == 3

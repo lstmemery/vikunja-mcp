@@ -31,6 +31,45 @@ class VikunjaError(Exception):
 _MAX_UNPROVEN_PAGES = 120
 
 
+def _could_be_full(stated: int | None, longest_served: int) -> int:
+    """"Could a page of this length still be full?" — the threshold, and the ONE expression this
+    repo has now got wrong three times (VMCP-89, VMCP-92, VMCP-103, each time in a branch the
+    previous card had not touched). It lives here, module level, called from BOTH paginating
+    readers — `view_tasks` (nested board) and `_paged_list` (flat lists) — so the next correction
+    lands in both by construction rather than by whoever edits remembering the other one exists.
+    That drift is not hypothetical: VMCP-103 was entirely the story of the DEGRADED branch being
+    fixed twice while the HEALTHY branch kept the deleted rule and silently truncated.
+
+    `stated` = max_items_per_page as reported by /info, or None when the server never told us.
+    `longest_served` = the longest page this read has actually seen, which is a PROVEN lower bound
+    on the server's real page size (it served that many at once) — evidence, never a guess.
+
+    A page counts as possibly-full if it is full by EITHER measure, which is what makes this one
+    rule a superset of the two it replaced. Crucially `longest_served` starts at 0, so the FIRST
+    page of any read is always inconclusive: a page short of the stated size proves nothing
+    (MEASURED in VMCP-103 — page1=[1,2] with max_items_per_page=5 and 3..9 still behind it), so
+    "the first page was short" may never end a read. That is where the one unavoidable extra
+    request per read comes from, and it is the price of not truncating."""
+    return longest_served if stated is None else min(stated, longest_served)
+
+
+def _total_pages(headers: Any) -> int | None:
+    """`x-pagination-total-pages` as an int, or None when the server did not send a usable one.
+
+    NEVER a stop signal — only ever an extra reason to KEEP READING (see `_paged_list`). Measured
+    on one and the same Vikunja 2.3.0 it is wrong in BOTH directions: VMCP-103 measured it
+    UNDER-reporting on the kanban tasks endpoint (result-count 3 / total-pages 1 while the bucket
+    behind it held 3 pages of tasks), and VMCP-108 measured it OVER-reporting on
+    /projects/{id}/views and .../buckets (total-pages 2 and 3 while every page served the whole
+    list). Used only to keep going, an over-report costs a request and an under-report costs
+    nothing; used to stop, an under-report costs DATA."""
+    try:
+        n = int(headers.get("x-pagination-total-pages", ""))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
 def canonical_base_url(base_url: str) -> str:
     """Canonicalize a Vikunja base URL — the SINGLE normalization shared by the client (which builds
     requests from it) and the 401 repoint guard in server.py (which compares a reloaded config's url
@@ -105,8 +144,13 @@ class VikunjaAPI:
 
     def _req(
         self, method: str, path: str, json: Any = None, params: dict | None = None,
-        raw: bool = False, files: Any = None,
+        raw: bool = False, files: Any = None, with_headers: bool = False,
     ) -> Any:
+        # with_headers (VMCP-108): return `(body, response.headers)` instead of just the body.
+        # ONE caller — `_paged_list`, which needs `x-pagination-total-pages` and must not be a
+        # second request path to get it: the retry/backoff rules above (429 retries any method,
+        # 5xx retries only idempotent ones) are exactly the kind of thing that stops matching
+        # when it exists twice, which is the drift this card is the fourth instance of.
         # files (#137): a MULTIPART form upload (e.g. attach a screenshot) — httpx encodes it as
         # multipart/form-data instead of a JSON body, so it and `json` are mutually exclusive (the
         # upload path always passes json=None). Callers pass file CONTENT as bytes, not a file
@@ -131,9 +175,8 @@ class VikunjaAPI:
             # raw=True: тело — НЕ JSON (эндпоинт скачивания вложения отдаёт сырые байты
             # файла с content-type/content-disposition), поэтому возвращаем r.content как
             # есть, минуя r.json() (который бы упал на бинарнике). См. download_attachment.
-            if raw:
-                return r.content
-            return r.json() if r.content else None
+            body = r.content if raw else (r.json() if r.content else None)
+            return (body, r.headers) if with_headers else body
         raise AssertionError("unreachable: последняя попытка всегда вернёт или поднимет")
 
     def _should_retry(self, method: str, status: int) -> bool:
@@ -148,6 +191,129 @@ class VikunjaAPI:
             except ValueError:
                 pass
         return min(self._BACKOFF_BASE * (2**attempt), self._BACKOFF_CAP)
+
+    # --- postранично читаемые ПЛОСКИЕ списки (VMCP-108) ---
+    #
+    # THE FOURTH MEMBER OF THE 543/548/562 FAMILY: A TRUNCATED READ TAKEN AS COMPLETENESS. Every
+    # list GET in this client except `view_tasks` used to be a SINGLE request, and the server
+    # paginates them. MEASURED against a real Vikunja 2.3.0 with max_items_per_page=5, 8-11 rows
+    # behind each endpoint:
+    #     GET /projects                      -> 5 rows, ?page=2 -> 4 MORE      PAGINATES
+    #     GET /labels                        -> 5 rows, ?page=2 -> 3 MORE      PAGINATES
+    #     GET /tasks/{id}/comments           -> 5 rows, ?page=2 -> 3 MORE      PAGINATES
+    #     GET /projects/{id}/users           -> 5 rows, ?page=2 -> 3 MORE      PAGINATES
+    #     GET /projects/{id}/views           -> ALL 10 rows, ?page= IGNORED
+    #     GET /projects/{id}/views/{v}/buckets -> ALL 11 rows, ?page= IGNORED
+    #
+    # The four that paginate all fail in the WORSE direction — absence, which every caller acts
+    # on. MEASURED end to end: `setup_cmd.reconcile` looks a project up by title over
+    # `projects()`, so an EXISTING project past the window reads as missing and reconcile CREATES
+    # A DUPLICATE PROJECT (existing id 8 'p6' ignored, new id 18 created — the card's harm, and
+    # not something an agent can undo on a real tracker). The other three are the same shape:
+    # `get_or_create_label` mints a SECOND label beside the canonical one (the incident its own
+    # docstring records, now reachable without anyone typing "Bug " at all); `share_project`
+    # re-PUTs a user who is already shared and gets 409 "This user already has access", which
+    # ABORTS `setup`; and `comments()` is the worst of them because page 1 holds the OLDEST rows,
+    # so a short read drops the NEWEST — the reviewer's `[review]` verdict, the `[worklog]`
+    # next_task's review offering keys off (no worklog visible => the card is never offered for
+    # review at all), and the human's answer on a card coming back from Your Call.
+    #
+    # `views()`/`buckets()` are routed through here TOO, though 2.3.0 demonstrably serves them
+    # whole. "This endpoint does not paginate in the version I measured" is precisely the
+    # assumption that rots — and it rots silently, into duplicate BUCKETS out of the same
+    # reconcile and a "project has no kanban view" on a project that has one. The cost is one
+    # bounded extra request (they answer ?page=2 with the same rows, so the read stops on
+    # `added_new` after exactly 2), on two reads that `Workflow` caches per instance anyway. The
+    # uniform rule — every list GET in this client pages — is worth more than the request: it is
+    # what stops the next reader having to re-derive which endpoints are safe.
+    #
+    # THE STOP RULE IS VMCP-103's, REUSED RATHER THAN RE-DERIVED (`_could_be_full` above is
+    # literally the same function `view_tasks` calls). Keep reading while the page ADDED SOMETHING
+    # NEW **and** (it could still be full by min(size STATED by /info, longest page SERVED) **or**
+    # `x-pagination-total-pages` says another page exists). Each conjunct earns its place:
+    #   * `added_new` is what TERMINATES the loop, and it is the only thing that can: the row set
+    #     is finite, so a read that must add a row per page cannot outrun it. It is also what
+    #     makes a `?page=`-ignoring endpoint cost 2 requests instead of looping on its own repeats
+    #     (measured: views/buckets stop there, with no duplicate rows).
+    #   * the fullness half is the inference rule, and it is what survives the header being WRONG
+    #     — which VMCP-103 measured it being, in the UNDER-reporting direction, on this same
+    #     server.
+    #   * the header is a KEEP-GOING signal and NEVER a stop. It is the one thing this endpoint
+    #     family offers that the kanban tasks endpoint did not, and it catches exactly the shape
+    #     the fullness rule cannot: a SHORT non-final page (562's bug) with more behind it. Used
+    #     this way an over-reported total-pages costs a request and an under-reported one costs
+    #     nothing; used as a stop, an under-report would cost DATA. It is never trusted, only
+    #     believed when it says "there is more".
+    #
+    # NOT chosen: paging authoritatively by `x-pagination-total-pages` (what the card suggested,
+    # on the strength of the header being meaningful for /projects). It is meaningful for
+    # /projects — and on the SAME server it over-reports for views/buckets and under-reports for
+    # the kanban tasks endpoint, so "this header is authoritative" is a per-endpoint fact that
+    # nothing in the client can check. A stop rule that is right on the endpoints someone measured
+    # and silently lossy on the rest is the bug this card is about, one level up.
+    #
+    # And as in `view_tasks`, hitting the ceiling RAISES rather than returning what it has. A
+    # truncated list is indistinguishable from rows that are genuinely gone, and absence is what
+    # the callers act on.
+    def _paged_list(self, path: str, params: dict | None = None) -> list:
+        page_size = self._page_size()   # None = the server never told us; see VMCP-89
+        merged: list = []
+        seen: set = set()
+        longest_page = 0                # PROVEN lower bound on the page size — see _could_be_full
+        unproven_pages = 0              # pages `max_items_per_page` did NOT account for
+        page = 1
+        while True:
+            if unproven_pages >= _MAX_UNPROVEN_PAGES:
+                stated = (
+                    "This client could not read max_items_per_page from /info, so it cannot tell "
+                    "a full page from a short one at all."
+                    if page_size is None else
+                    f"/info states max_items_per_page={page_size}, but no page ever reached it, "
+                    f"and a page SHORT of the stated size is no proof the list is exhausted "
+                    f"(VMCP-103) — so the stated size bounds nothing here."
+                )
+                raise VikunjaError(508, (
+                    f"the list at {path} never finished paging: {_MAX_UNPROVEN_PAGES} requests "
+                    f"that the server's own page size did not account for, and it was STILL "
+                    f"adding rows. {stated} NOTHING is returned rather than a partial list: a "
+                    f"truncated list is indistinguishable from rows that are genuinely gone, and "
+                    f"this client's callers act on ABSENCE — `setup` creates a duplicate project "
+                    f"it could not see, get_or_create_label mints a duplicate label, and a short "
+                    f"comment read hides the newest report on a card (VMCP-108). Fix /info so it "
+                    f"reports max_items_per_page — pages that FILL it cost this budget nothing — "
+                    f"or fix the endpoint's `?page=` if it never converges."
+                ))
+            body, headers = self._req(
+                "GET", path, params={**(params or {}), "page": page}, with_headers=True
+            )
+            items = body if isinstance(body, list) else []
+            if not items:
+                break
+            # snapshotted BEFORE this page is folded into `longest_page`: a page may not be used
+            # as evidence that it is itself too short to continue from (same ordering as
+            # view_tasks, where it also keeps the answer independent of bucket order).
+            could_be_full = _could_be_full(page_size, longest_page)
+            added_new = False
+            for item in items:
+                # every list endpoint here returns objects with an `id`; the repr fallback only
+                # has to make a REPEATED row compare equal to itself, so that a `?page=`-ignoring
+                # server still terminates on `added_new` rather than looping on its own echo.
+                key = item["id"] if isinstance(item, dict) and "id" in item else repr(item)
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(item)     # first-seen order kept: comments are read positionally
+                added_new = True
+            maybe_full = len(items) >= could_be_full
+            longest_page = max(longest_page, len(items))
+            if page_size is None or len(items) < page_size:
+                unproven_pages += 1     # not justified by the rate the server advertised
+            total_pages = _total_pages(headers)
+            header_more = total_pages is not None and page < total_pages
+            if not (added_new and (maybe_full or header_more)):
+                break
+            page += 1
+        return merged
 
     # --- identity ---
     def me(self) -> dict:
@@ -201,7 +367,10 @@ class VikunjaAPI:
 
     # --- comments ---
     def comments(self, task_id: int) -> list[dict]:
-        return self._req("GET", f"/tasks/{task_id}/comments") or []
+        # PAGED (VMCP-108): page 1 holds the OLDEST comments, so a single-request read dropped
+        # the NEWEST — the [review] verdict, the [worklog] next_task's review offering requires,
+        # and a human's answer to call_human. Order across pages is preserved.
+        return self._paged_list(f"/tasks/{task_id}/comments")
 
     def add_comment(self, task_id: int, text: str) -> dict:
         # Vikunja's comment field is HTML (#85): agents author plain text with newlines,
@@ -228,13 +397,19 @@ class VikunjaAPI:
 
     # --- projects ---
     def projects(self) -> list[dict]:
-        return [p for p in (self._req("GET", "/projects") or []) if p.get("id", 0) > 0]
+        # PAGED (VMCP-108): the card's own endpoint. A single request stopped at
+        # max_items_per_page, so an EXISTING project past the window read as absent and
+        # setup_cmd.reconcile created a DUPLICATE.
+        return [p for p in self._paged_list("/projects") if p.get("id", 0) > 0]
 
     def create_project(self, title: str) -> dict:
         return self._req("PUT", "/projects", json={"title": title})
 
     def project_users(self, project_id: int) -> list[dict]:
-        return self._req("GET", f"/projects/{project_id}/users") or []
+        # PAGED (VMCP-108): share_project's "is this user already shared?" check reads this, and
+        # a share hidden past page 1 makes it re-PUT — Vikunja answers 409 "This user already
+        # has access to this project", which aborts `setup` outright.
+        return self._paged_list(f"/projects/{project_id}/users")
 
     def share_project(self, project_id: int, username: str, permission: int) -> None:
         for share in self.project_users(project_id):
@@ -247,7 +422,11 @@ class VikunjaAPI:
 
     # --- views & buckets ---
     def views(self, project_id: int) -> list[dict]:
-        return self._req("GET", f"/projects/{project_id}/views") or []
+        # PAGED (VMCP-108) although 2.3.0 serves this whole and ignores ?page= — see _paged_list
+        # for why measured-not-to-paginate is not a licence to single-shot it. A short read here
+        # would surface as `kanban_view` raising "project has no kanban view" on a project that
+        # has one, i.e. as a board that cannot be reconciled.
+        return self._paged_list(f"/projects/{project_id}/views")
 
     def kanban_view(self, project_id: int) -> dict:
         for v in self.views(project_id):
@@ -256,7 +435,10 @@ class VikunjaAPI:
         raise VikunjaError(404, "project has no kanban view — run `vikunja-mcp setup`")
 
     def buckets(self, project_id: int, view_id: int) -> list[dict]:
-        return self._req("GET", f"/projects/{project_id}/views/{view_id}/buckets") or []
+        # PAGED (VMCP-108) although 2.3.0 serves this whole and ignores ?page= — same reasoning
+        # as views(). A short read here is the duplicate-project harm one level down: reconcile
+        # builds {title: bucket} from this and CREATES every canonical column it cannot see.
+        return self._paged_list(f"/projects/{project_id}/views/{view_id}/buckets")
 
     def create_bucket(self, project_id: int, view_id: int, title: str) -> dict:
         return self._req(
@@ -495,7 +677,9 @@ class VikunjaAPI:
             # page the server has PROVEN it can serve, capped by the size it STATED — i.e. a page
             # counts as possibly-full if it is full by EITHER measure, which is what makes this one
             # rule a superset of the two it replaced (VMCP-103).
-            could_be_full = longest_page if page_size is None else min(page_size, longest_page)
+            # VMCP-108: the expression moved to module level and is now SHARED with `_paged_list`
+            # — the rule that drifted across VMCP-89/92/103 exists once, not once per reader.
+            could_be_full = _could_be_full(page_size, longest_page)
             for bucket in buckets:
                 bid = bucket["id"]
                 dest = merged.setdefault(bid, {**bucket, "tasks": []})
@@ -564,7 +748,10 @@ class VikunjaAPI:
 
     # --- labels ---
     def labels(self) -> list[dict]:
-        return self._req("GET", "/labels") or []
+        # PAGED (VMCP-108): get_or_create_label scans this to REUSE an existing label. A label
+        # hidden past page 1 reads as absent and gets minted a second time — the duplicate its
+        # docstring below records as a real incident, reachable here without any typo at all.
+        return self._paged_list("/labels")
 
     def create_label(self, title: str) -> dict:
         return self._req("PUT", "/labels", json={"title": title})

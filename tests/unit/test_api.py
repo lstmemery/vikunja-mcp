@@ -80,6 +80,10 @@ def test_comments_and_assignees_endpoints():
     api.remove_assignee(7, 2)
     api.add_relation(7, 1, "parenttask")
     assert seen == [
+        # VMCP-108: comments() is PAGED now, and the first paged read of a client resolves
+        # max_items_per_page once. This handler answers every GET with `{}`, i.e. not a list,
+        # so the page loop takes it as an empty page and stops after one request.
+        ("GET", "/api/v1/info"),
         ("GET", "/api/v1/tasks/7/comments"),
         ("PUT", "/api/v1/tasks/7/comments"),
         ("PUT", "/api/v1/tasks/7/assignees"),
