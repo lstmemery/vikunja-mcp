@@ -184,11 +184,13 @@ def test_review_payload_head_sha_is_distinct_from_list_worktrees_detached_bool(r
 
 # --- review round 1, Minor A: a review tree's unique-history guard must not misfire ---
 
-def test_release_of_a_review_tree_ignores_the_unpushed_guard(repo):
-    """A review tree is DETACHED and holds no branch of its own — nothing is lost by
-    removing it, so the unpushed-commits guard (which protects a task/<id> BRANCH's unique
-    history) must not apply. Without this, a review pinned at a build branch's tip — which
-    is BY DEFINITION not yet on origin/main — could never be released."""
+def test_release_of_a_review_tree_reachable_from_a_branch_is_allowed(repo):
+    """Case A. A review pinned at a build branch's tip — BY DEFINITION not yet on
+    origin/main — must still be releasable: the commit is reachable from task/<id>, so
+    nothing is lost. (Round 1 called this "ignores the unpushed guard"; round 2 replaced
+    that blanket skip with a reachability check, and this case must keep passing under it —
+    the branch-history guard above still does not apply to a detached tree, but the
+    reachability check in the `else` branch below does, and task/<id> satisfies it.)"""
     build = ensure_workspace(8, cwd=repo)
     build_path = Path(build["path"])
     (build_path / "wip.txt").write_text("wip\n")
@@ -200,6 +202,27 @@ def test_release_of_a_review_tree_ignores_the_unpushed_guard(repo):
     res = release_workspace(8, role="review", cwd=repo)
     assert res["released"] is True
     assert not Path(review["path"]).exists()
+
+
+def test_release_of_a_review_tree_keeps_a_commit_made_inside_it(repo):
+    """Case B — THE regression round 1 introduced: a reviewer can commit INSIDE a detached
+    review tree (the dirty guard only catches uncommitted changes; a fresh commit makes the
+    tree clean again). That commit is reachable from NO ref — `git worktree remove` has no
+    unpushed-commit check for a detached HEAD, and a later `gc` would prune the object
+    outright once the worktree's reflog is gone with it. Must KEEP, and the object must
+    genuinely survive (not just the call returning False)."""
+    review = ensure_workspace(7, role="review", cwd=repo)   # at origin/main by default
+    path = Path(review["path"])
+    (path / "review-notes.md").write_text("looks good, minor nit\n")
+    _git(path, "add", "review-notes.md")
+    _git(path, "commit", "-m", "review notes")
+    sha = _git(path, "rev-parse", "HEAD")
+
+    res = release_workspace(7, role="review", cwd=repo)
+
+    assert res["released"] is False and "reachable from no ref" in res["reason"]
+    assert path.exists()
+    assert _git(repo, "rev-parse", sha) == sha        # the object genuinely survived
 
 
 # --- review round 1, Minor B: an unknown role must be refused, not silently coerced ---
@@ -238,7 +261,10 @@ def test_run_workspace_error_is_one_json_line_exit_1(tmp_path, monkeypatch, caps
     assert "WorkspaceError" in err["error"]
 
 
-def test_run_workspace_with_no_args_is_one_json_error_line_exit_1(capsys):
+def test_run_workspace_with_no_args_is_one_json_error_line_exit_1(tmp_path, monkeypatch, capsys):
+    # Harmless today (run_workspace raises before any git call), but isolate the cwd anyway —
+    # this is one refactor away from touching whatever repo the test happens to run inside.
+    monkeypatch.chdir(tmp_path)
     code = run_workspace([])
     assert code == 1
     err = json.loads(capsys.readouterr().out.strip())

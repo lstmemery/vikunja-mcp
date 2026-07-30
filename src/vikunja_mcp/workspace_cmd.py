@@ -203,19 +203,31 @@ def _release_locked(root: Path, task_id: int, role: str) -> dict:
     if dirty:
         return {"released": False, "task_id": task_id, "role": role, "path": str(path),
                 "reason": f"working tree is dirty ({len(dirty.splitlines())} entries)"}
-    # a review tree is DETACHED and holds no branch of its own (wt["branch"] is None) — its
-    # commit is reachable from wherever `at` pointed regardless of what happens to this tree,
-    # so nothing is ever lost by removing it. The unpushed-commits guard exists to protect a
-    # task/<id> BRANCH's unique history; applying it here only leaks review trees forever
-    # (a review is routinely pinned at a build branch's tip, which is BY DEFINITION not yet
-    # on origin/main). Skip it for a review tree; keep the dirty check above for both roles —
-    # uncommitted edits there are still someone's work.
     if wt["branch"] is not None:
+        # a task/<id> BRANCH's unique history is only safe once it's on origin — the
+        # unpushed-commits guard.
         base = f"origin/{default_base(root)}"
         unpushed = _git("log", "--oneline", f"{base}..HEAD", cwd=path)
         if unpushed:
             return {"released": False, "task_id": task_id, "role": role, "path": str(path),
                     "reason": f"{len(unpushed.splitlines())} commit(s) not on {base}"}
+    else:
+        # a review tree is DETACHED — it holds no branch, so the guard above cannot apply —
+        # but its HEAD is NOT automatically safe either: anyone can commit INSIDE a detached
+        # tree (the dirty check above only catches UNCOMMITTED changes; a fresh commit makes
+        # the tree clean again). Verified against real git: nothing else protects that commit
+        # — `git worktree remove` has no unpushed-commit check for a detached HEAD, and a
+        # later `gc` would prune the object outright once the worktree admin dir (and its
+        # reflog) is gone. The one thing that DOES make removal safe is the commit being
+        # reachable from some other ref — a review pinned at a build branch's tip is exactly
+        # that (task/<id> still names it, BY DEFINITION not yet on origin/main, which is why
+        # the branch-history guard above must not run here); a commit made only inside this
+        # detached tree is reachable from nothing and must be kept.
+        head = _git("rev-parse", "HEAD", cwd=path)
+        reachable = _git("for-each-ref", "--contains", head, "--format=%(refname)", cwd=root)
+        if not reachable:
+            return {"released": False, "task_id": task_id, "role": role, "path": str(path),
+                    "reason": f"detached HEAD {head} is reachable from no ref"}
     _git("worktree", "remove", str(path), cwd=root)
     if wt["branch"]:
         _git("branch", "-D", wt["branch"], cwd=root)
