@@ -240,10 +240,22 @@ at 4, 10 at 5. The worst run and the ceiling are DIFFERENT numbers — quoting t
 first where the second belongs is what card 556 caught in this very paragraph.
 The rulebook self-heals onto every consumer and `wip_limit` is per-project, so a
 pinned constant would call a human onto pure arithmetic in any project running a
-wider drain (card 550). And the count is only the budget: what decides whether a
-lost round was mechanical at all is *what won the race* (`git log --oneline
-HEAD..origin/main` — empty means it was never a race, so retrying is futile and
-the agent escalates without spending the budget). See "Откуда потолок" there.
+wider drain (card 550) — and an agent whose brief omits the limit does not guess
+it either: `wip_limit` is repo-toml-only, the toml is committed and therefore
+present even in a linked worktree, so it READS it, and the bare 6 survives only
+for "there is no toml at all", which is exactly the state that means the default
+(card 559). And the count is only the budget: what decides whether a round was
+owed at all is asked in two steps, in this order. First *did it land anyway?* — a
+server can take the ref update and still leave the client reporting failure, so
+`git merge-base --is-ancestor HEAD origin/main` (after a fetch) comes first, and
+exit 0 means the work is already on `main`: verify the sha and move on, never
+wake anyone. Only exit 1 reaches the second question, *what won the race* (`git
+log --oneline HEAD..origin/main` — empty means it was never a race, so retrying
+is futile and the agent escalates without spending the budget). That order is
+load-bearing rather than tidy: a landed push with a sibling on top shows a
+NON-empty range, and the retry it invites rebases the already-upstream commit
+away, after which `git rev-parse HEAD` names the SIBLING's commit as evidence and
+both landing checks pass on it. See "Откуда потолок" there.
 
 **Never let the literal ci-skip marker into a commit MESSAGE — quoting counts.**
 Writing *about* the release is the trap: the marker is matched anywhere in the

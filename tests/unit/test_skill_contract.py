@@ -725,7 +725,11 @@ def test_the_integration_retry_ceiling_is_pinned():
         variable; drop the fallback and an agent dispatched by a pump that did not name the limit
         has no ceiling at all. Its mirror — the dispatch brief being told to carry the limit — is
         pinned too: lose that and every agent silently falls back to the default forever, i.e. the
-        generalisation ships dead.
+        generalisation ships dead. VMCP-102 (559) put a READ of the repo toml in front of that
+        constant, so the pin below is now on the constant alone (`— **бери 6**`) rather than on the
+        whole sentence around it; what the read must say is pinned by
+        `test_the_brief_less_ceiling_reads_the_repo_toml_before_it_falls_back`, which also
+        re-derives the 6 instead of matching it.
 
     The negative half stays exactly as it was: the EXACT old 3-spellings a revert brings back. A
     bare `"3" not in text` would be vacuous (`wip_limit` defaults to 3, the measurements quote
@@ -739,7 +743,9 @@ def test_the_integration_retry_ceiling_is_pinned():
     the diagnosis command line from the fence -> FAIL; delete the fence's empty-range `call_human`
     branch -> FAIL; revert the escalation to the count-only «шесть кругов подряд» spelling -> FAIL;
     delete the `бери 6` fallback -> FAIL; drop `wip.limit` out of the dispatch brief -> FAIL; rename
-    the `wip` payload key in workflow.py -> FAIL."""
+    the `wip` payload key in workflow.py -> FAIL. (559 re-ran the two rounds its edits touch: delete
+    the reworded fallback constant -> FAIL; delete the fence's empty-range `call_human` branch,
+    which now sits one step further down the diagnosis -> FAIL.)"""
     text = _skill_text()
     flat = _flat(text)
     recipe = _integration_recipe(text)
@@ -764,7 +770,7 @@ def test_the_integration_retry_ceiling_is_pinned():
     # the variable the formula reads, and the fallback for when the brief does not carry it
     assert "`wip.limit` из ответа `next_task`" in flat, \
         "the dispatch brief no longer carries wip.limit — every agent falls back to the default"
-    assert "не назвал — **бери 6**" in flat, \
+    assert "— **бери 6**" in flat, \
         "the brief-less fallback is gone — `2 × wip.limit` is then an unfillable variable"
     assert 'result["wip"] = wip' in src, \
         "SKILL.md computes the ceiling from next_task's `wip`, but with_wip stopped attaching it"
@@ -816,8 +822,12 @@ def _ceiling_derivation_section(text: str) -> str:
 
     Scoped to the one bullet, like `_two_returns_rule`: the neighbouring bullets talk about the
     ceiling too (the escalation bullet spends it, the race-diagnosis bullet decides whether a
-    round is owed at all), and `не назвал — **бери 6**` puts a bare 6 in a THIRD place, so a
-    whole-file number hunt would mix the derivation's numbers with numbers that are not it."""
+    round is owed at all), and the brief-less `**бери 6**` puts a bare 6 in a THIRD place, so a
+    whole-file number hunt would mix the derivation's numbers with numbers that are not it.
+
+    That third place lives INSIDE this slice, so anything added to the fallback sentence is read by
+    the table regexes below. VMCP-102 (559) rewrote it and deliberately kept the `при <n> — <m>`
+    shape out of the new prose; a future edit must do the same or move the regexes."""
     start = text.find("- **Откуда потолок и почему он")
     assert start != -1, (
         "SKILL.md no longer opens its «Откуда потолок» derivation where this pin can find it. If "
@@ -871,13 +881,14 @@ def test_the_ceiling_numbers_in_both_files_re_derive_from_their_own_formula():
     That is the vacuous-pin failure mode this module has measured before (see `_calls_in`), and it
     is the one a numeric pin is most exposed to.
 
-    Deliberately OUT of scope, and NOT pinned here — forward-compat note: the brief-less fallback
-    sentence (`не назвал — **бери 6**`) and the empty-range race diagnosis. Card 559 is open against
-    that exact fallback sentence, and a pin laid over prose another card is about to rewrite is a
-    merge conflict dressed as a test. The fallback's bare 6 is also not a derivation — it is the
-    default's instance quoted for an agent whose brief carried no limit — so re-deriving it would
-    assert a different rule than this test's. `test_the_integration_retry_ceiling_is_pinned` above
-    keeps its own string pin on it; this test stays off it.
+    Deliberately OUT of scope, and NOT pinned here: the brief-less fallback sentence and the
+    empty-range race diagnosis. Card 559 (since landed) rewrote both, and a pin laid over prose
+    another card is about to rewrite is a merge conflict dressed as a test. That reasoning survives
+    the landing on its own merits — the fallback's bare 6 is not a step of THIS derivation but the
+    default's instance quoted for an agent whose brief carried no limit, so re-deriving it here
+    would assert a different rule. 559 re-derives it in its own test, against
+    `2 × config.DEFAULT_WIP_LIMIT`; `test_the_integration_retry_ceiling_is_pinned` above keeps a
+    string pin on the constant surviving at all. This test stays on the (limit -> ceiling) table.
 
     MUTATION-CHECKED (`__pycache__` cleared between rounds, each run confirmed to select exactly 1
     test, both files restored to a clean `git diff` after): control PASS; CLAUDE.md's ceiling at the
@@ -1307,3 +1318,173 @@ def test_the_browser_answer_leads_with_the_isolation_an_agent_can_launch_itself(
         assert old not in section, \
             f"the disproved framing is back in SKILL.md ({old!r}) — an agent CAN launch its " \
             "own isolated browser; see this test's docstring"
+
+
+def _landed_check() -> str:
+    """The one command that tells "my push landed after all" from "it really did not"."""
+    return "git merge-base --is-ancestor HEAD origin/main"
+
+
+def _race_check() -> str:
+    """550's diagnosis: WHO won the race, once the work is known not to be on main."""
+    return "git log --oneline HEAD..origin/main"
+
+
+def test_a_rejected_push_asks_whether_the_work_landed_before_it_escalates():
+    """VMCP-102 (559): 550 taught the rulebook that an EMPTY `HEAD..origin/main` after a rejected
+    push means there was no race at all — protected branch, no push rights, a hook — so retrying is
+    futile and the agent should escalate at once. Correct, and its reviewer constructed every one of
+    those cases. It is one state short: an empty range ALSO means the push LANDED and the client
+    reported failure anyway (a 502, a dropped connection). Constructed against real local repos two
+    independent ways — a multi-ref push where `main` is accepted while a second ref is declined, and
+    a successful push whose remote-tracking ref is then rewound (what a client holds when the
+    response is lost) — both produce an empty range, indistinguishable from the genuine `pre-receive`
+    refusal used as a control. So the rule as written woke a human about finished work, in an
+    unattended loop: the precise failure 550 exists to remove, one state to the left.
+
+    `git merge-base --is-ancestor HEAD origin/main` separates them — 0 in both landed constructions,
+    1 in the control — and this test pins the two properties of HOW that got written down, both of
+    which were measured rather than reasoned:
+
+    * **ORDER.** The check runs BEFORE the range is looked at, not inside its empty branch. A push
+      that landed and then had a sibling land on top shows a NON-EMPTY range, reads as honest
+      mechanics, and is sent round again — and that retry silently corrupts the evidence: `git
+      rebase origin/main` DROPS the already-upstream commit, HEAD moves to the sibling's tip, the
+      push prints "Everything up-to-date", and `git rev-parse HEAD` then reports the SIBLING's sha,
+      on which both of the recipe's landing checks pass. (This is also why the card's premise that
+      the old blind-retry rule "self-healed" the case is wrong: it mis-attributed evidence.) Asking
+      the landed question first answers both range shapes with one command. The order assertion is
+      the load-bearing one here and it is not a tautology — the two positions come from two
+      different substrings and swapping the lines makes it fail, which was measured.
+    * **The fetch travels WITH it.** On a stale remote-tracking ref the same command answers 1 about
+      work that is on main. Staleness can only produce a false 1, never a false 0 (an old value of
+      main cannot contain an unpushed commit), so it is fail-safe — but it defeats the fix, so the
+      pin is on the chained `git fetch origin && …`, not on the bare command.
+
+    The exit-1 branch is pinned UNCHANGED by `test_the_integration_retry_ceiling_is_pinned` above,
+    and that is deliberate: the wording risk here is the mirror of the bug. "An empty range is
+    ambiguous, check before escalating" would teach an agent to read emptiness optimistically and
+    stop escalating when it should. It is not ambiguous once fetched — the control gives empty AND
+    exit 1 — so the decision is the exit code, and 550's branch keeps its wording verbatim.
+
+    CLAUDE.md is checked for the same ORDER because it carries the second write-up of this rule and
+    two copies of one rule drift (the lesson of 556, one card earlier).
+
+    MUTATION-CHECKED (`__pycache__` cleared between rounds, each run confirmed to select exactly 1
+    test, both files restored to a clean `git diff` after): control PASS; delete the landed check
+    from the fence -> FAIL; SWAP the two commands in the fence so the range is read first -> FAIL on
+    the order assertion, which is the round that proves the two sides can disagree; strip `git fetch
+    origin && ` off the landed check -> FAIL; delete the fence's exit-0 "spend no round, wake no
+    one" branch -> FAIL; delete the prose bullet's exit-0 verdict -> FAIL; swap the two commands in
+    CLAUDE.md's paragraph -> FAIL on the cross-file order."""
+    text = _skill_text()
+    flat = _flat(text)
+    recipe = _integration_recipe(text)
+
+    assert f"git fetch origin && {_landed_check()}" in recipe, (
+        "the recipe no longer asks whether the push LANDED before diagnosing the race (or it "
+        "dropped the fetch that makes the answer true — a stale tracking ref reports 'not landed'"
+    )
+    assert _race_check() in recipe, "the recipe lost 550's race diagnosis entirely"
+    assert recipe.index(_landed_check()) < recipe.index(_race_check()), (
+        "the recipe reads the race range BEFORE asking whether the work landed. A landed push with "
+        "a sibling on top has a NON-empty range, so that order sends it round again — and the "
+        "retry rebases the already-upstream commit away and mis-attributes the evidence sha"
+    )
+    assert "человека НЕ зови" in recipe, (
+        "the recipe no longer says that a landed push spends no round and wakes nobody — the exit-0 "
+        "branch without its verdict is the half-stated rule an agent fills in with a guess"
+    )
+
+    assert "**Код 0 — работа НА ГЛАВНОЙ**" in flat, \
+        "the prose lost the exit-0 verdict: a landed push is evidence, not an escalation"
+    assert "**Код 1 — работы там нет**" in flat, \
+        "the prose lost the exit-1 verdict, which is the branch that must still escalate"
+    assert "ВЫБРАСЫВАЕТ твой коммит" in flat, (
+        "the prose no longer says WHY the landed check comes first — without the dropped-commit "
+        "measurement the order reads as arbitrary and gets tidied back"
+    )
+
+    claude = _flat(_claude_ceiling_paragraph(_claude_md_text()))
+    assert _landed_check() in claude and _race_check() in claude, (
+        "CLAUDE.md's racer paragraph no longer states both steps of the rejected-push diagnosis"
+    )
+    assert claude.index(_landed_check()) < claude.index(_race_check()), (
+        "CLAUDE.md states the two diagnosis steps in the opposite order to the shipped rulebook. "
+        "Only SKILL.md reaches agents, so the copies must not drift; move BOTH or neither"
+    )
+
+
+def test_the_brief_less_ceiling_reads_the_repo_toml_before_it_falls_back():
+    """VMCP-102 (559), the second half: `2 × wip.limit` needs the limit, and a per-task agent does
+    not call `next_task`, so 550 told an agent whose brief omitted it to assume 6. That constant is
+    safe at limits 1-3 (worst mechanical runs 1, 3, 5, all below it) and breaks from 4 up, where the
+    worst run is 7 — so at `wip_limit = 4` the fallback calls a human onto the pure arithmetic the
+    formula was introduced to stop. 4 is the flip point, not the only bad value.
+
+    It does not need fixing so much as demoting: `wip_limit` is repo-toml-ONLY by design (config.py
+    — never env, because it is committed team policy), and the toml is COMMITTED, so git materialises
+    it into every linked worktree. Verified by looking rather than assuming, since that is exactly
+    where a per-task agent stands: in `…worktrees/task-<id>` the toml is present and the gitignored
+    `.vikunja-mcp.env` is not. So an agent with no limit in its brief READS one, and the constant
+    survives only for "there is no toml at all".
+
+    On that remaining domain the constant is no longer a guess but the derivation evaluated: no toml
+    implies no `wip_limit` (it cannot live anywhere else) implies the documented default, whose
+    ceiling is 2 × it. That is what this test asserts, and it asserts it ACROSS SOURCES rather than
+    within one — the number SKILL.md prints versus `config.DEFAULT_WIP_LIMIT` doubled in Python, and
+    the filename SKILL.md sends the agent to versus `config.REPO_FILE`. Both pairs can move
+    independently, which is the property the same-source assertion this repo keeps re-inventing
+    (two sides computed from one origin, therefore unable to disagree) does not have. Re-value
+    `DEFAULT_WIP_LIMIT` and the prose goes red; rename the config file and the rulebook stops
+    pointing agents at a file that exists.
+
+    The ORDER inside the sentence is asserted too, for the same reason as the sibling test above: a
+    fallback quoted before the read is a fallback that gets taken.
+
+    MUTATION-CHECKED (`__pycache__` cleared between rounds, each run confirmed to select exactly 1
+    test, all files restored to a clean `git diff` after): control PASS; `config.DEFAULT_WIP_LIMIT`
+    3 -> 4 with the prose untouched -> FAIL (this is the round proving the two sides are independent
+    and can disagree); SKILL.md's `бери 6` -> `бери 8` -> FAIL, the same assertion from the other
+    side; `config.REPO_FILE` renamed -> FAIL; delete the toml-read clause, leaving the bare constant
+    -> FAIL; move the constant ahead of the read -> FAIL on the order."""
+    text = _skill_text()
+    section = _flat(_ceiling_derivation_section(text))
+
+    assert config.REPO_FILE in section, (
+        f"SKILL.md's brief-less ceiling no longer names {config.REPO_FILE} as the place to READ "
+        f"`wip_limit` from — either the clause was dropped, or config.py renamed the file and the "
+        f"rulebook now sends every agent to one that does not exist"
+    )
+    assert "wip_limit" in section, "the derivation no longer names the key an agent must read"
+    assert config.REPO_ENV_FILE in section, (
+        f"the derivation no longer contrasts {config.REPO_FILE} with the gitignored "
+        f"{config.REPO_ENV_FILE}. That contrast is the whole reason the read WORKS from a linked "
+        f"worktree — the toml is committed and materialised there, the env file is not — and "
+        f"without it the instruction reads like a guess about a file that might be absent"
+    )
+
+    m = re.search(r"— \*\*бери (\d+)\*\*", section)
+    assert m, (
+        "SKILL.md's last-resort ceiling is no longer stated in a shape this pin can read. Reword "
+        "freely — but update this regex, do not drop the check"
+    )
+    fallback = int(m.group(1))
+    expected = 2 * config.DEFAULT_WIP_LIMIT
+    assert fallback == expected, (
+        f"SKILL.md tells a brief-less agent with no repo toml to use a ceiling of {fallback}, but "
+        f"'no toml' means no `wip_limit` at all, i.e. config.DEFAULT_WIP_LIMIT = "
+        f"{config.DEFAULT_WIP_LIMIT}, whose ceiling by the formula both files state is {expected}. "
+        f"The constant is only legitimate while it EQUALS the derivation on that one domain"
+    )
+
+    assert section.index(config.REPO_FILE) < section.index("**бери "), (
+        "the brief-less rule quotes its constant before it tells the agent to read the real limit. "
+        "A fallback offered first is a fallback taken first — which is how a consumer at "
+        "wip_limit = 4 ends up escalating on arithmetic despite having the number on disk"
+    )
+
+    assert "он прочитает `wip_limit` из репо-конфига" in _flat(text), (
+        "the orchestrator's dispatch brief still promises the agent a bare default when the limit "
+        "is not named. Both halves have to agree, or the brief keeps teaching the old behaviour"
+    )

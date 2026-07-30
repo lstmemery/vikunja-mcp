@@ -421,9 +421,12 @@ fresh resume agent" rule picks them back up.
 in the main checkout. Integration recipe replaces today's plain push:
 
 ```sh
-# ⛔ SUPERSEDED 2026-07-30 (tracker #550) — DO NOT COPY THIS BLOCK. The ceiling is not a
-# ⛔ literal 6: it is 2 × wip.limit, and a rejected push must first be DIAGNOSED with
-# ⛔ `git fetch origin && git log --oneline HEAD..origin/main` (empty ⇒ no race at all —
+# ⛔ SUPERSEDED 2026-07-30 (tracker #550, refined by #559) — DO NOT COPY THIS BLOCK. The
+# ⛔ ceiling is not a literal 6: it is 2 × wip.limit, and a rejected push must first be
+# ⛔ DIAGNOSED — in two steps, in this order. (1) `git fetch origin && git merge-base
+# ⛔ --is-ancestor HEAD origin/main`: exit 0 ⇒ the push LANDED and the client merely
+# ⛔ reported failure, so verify the sha and proceed — do not retry, do not escalate.
+# ⛔ (2) only on exit 1, `git log --oneline HEAD..origin/main` (empty ⇒ no race at all —
 # ⛔ escalate NOW instead of spending the budget). Current recipe: SKILL.md, «Коммит+пуш».
 git add <files of this task>
 git commit -m "type(scope): … (tracker #N)"
@@ -1214,7 +1217,10 @@ The deeper point, though, is that the round count was carrying **two** jobs at
 once: *is this loss mechanical?* (a diagnosis) and *how much am I willing to
 spend?* (a budget). Only the second is a number. Splitting them:
 
-1. **Diagnosis — what won the race, not how often you lost.** On a rejected push,
+1. **Diagnosis — what won the race, not how often you lost.** *(Refined by VMCP-102
+   (559): this question is the SECOND one. A push can land and still report failure,
+   which shows up here as an empty range and would escalate — see §"The diagnosis,
+   ordered" below.)* On a rejected push,
    `git fetch origin && git log --oneline HEAD..origin/main` names the winners
    exactly (HEAD is your commit on the *old* base). **Empty means there was no
    race at all** — protected branch, missing push rights, a pre-receive hook, the
@@ -1227,7 +1233,10 @@ spend?* (a budget). Only the second is a number. Splitting them:
    above, stated as the formula: 2 at `wip_limit = 1`, 6 at 3, 8 at 4, 10 at 5.
    The per-task agent does not call `next_task`, so the orchestrator (which sees
    `wip` in every response) passes the limit in the dispatch brief; absent that,
-   the agent uses 6, i.e. today's behaviour at the default. Because the diagnosis
+   the agent uses 6, i.e. today's behaviour at the default. *(Refined by VMCP-102
+   (559): the brief-less agent READS `wip_limit` out of the repo toml instead, and
+   6 survives only as the no-toml case — see §"The diagnosis, ordered" below.)*
+   Because the diagnosis
    now decides whether a round was mechanical, the budget's exactness matters
    less — which is precisely what makes it safe when reality exceeds the model
    (humans pushing to main, several orchestrators).
@@ -1297,3 +1306,83 @@ Pinned by `test_skill_contract.py::test_the_two_ways_a_task_comes_back_hand_back
 which runs **both** paths against real git rather than comparing prose: a rulebook
 that states one thing while the code does another is exactly what this card fixed,
 and only running the code can tell those apart.
+
+## The diagnosis, ordered: did it land, then who won (2026-07-30, VMCP-102 (559))
+
+The section above split a rejected push into a diagnosis and a budget, and both
+halves are right about the case they model. Both are also one clause short, and the
+gaps were found by **constructing the states against real local repos** (bare origin
+plus clones) rather than by reasoning over the rule.
+
+**1. An empty range also means "your push actually landed".** A server can take the
+ref update and leave the client reporting failure — HTTP 502, a dropped connection.
+Two independent constructions produced that state: a multi-ref push where `main` is
+accepted while a second ref is declined (`main` really moves, `git push` still exits
+non-zero with `! [remote rejected]`), and a successful push whose remote-tracking ref
+is then rewound, which is precisely what a client holds when the response is lost.
+Measured, both give **an EMPTY `HEAD..origin/main`** — identical to the genuine
+"declined, nothing landed" control (a `pre-receive` that refuses). So the rule as
+written sent already-landed work to `call_human`: a false escalation, in an
+unattended loop, on work that is finished. The discriminator is
+`git merge-base --is-ancestor HEAD origin/main`: **0** in both landed constructions,
+**1** in the control.
+
+Two measurements shaped how that is written down:
+
+* **The fix is a REORDER, not a new branch inside the empty case.** A push that landed
+  and then had a sibling land on top shows a NON-empty range, i.e. it reads as honest
+  mechanics and is sent round again — and the retry silently corrupts the evidence:
+  `git rebase origin/main` DROPS the already-upstream commit, `HEAD` moves to the
+  sibling's tip, `git push` prints "Everything up-to-date", and `git rev-parse HEAD`
+  then hands back the SIBLING's sha, on which `cat-file -e` and `merge-base
+  --is-ancestor` both pass. Measured. So the old blind-retry rule did **not** quietly
+  self-heal this case, as the card that filed it assumed; it mis-attributed evidence.
+  Asking "did it land?" FIRST answers both range shapes with one command, and leaves
+  550's race diagnosis textually untouched — it now runs only on exit 1, the one
+  situation it was ever meant to explain.
+* **The `fetch` is load-bearing for the new check too.** On a stale remote-tracking ref
+  the same `is-ancestor` answers 1 about work that IS on `main`. Staleness can only
+  produce a false 1, never a false 0 (an old value of `main` cannot contain an unpushed
+  commit), so it is fail-safe — but it defeats the fix, hence the check lives in the
+  same `&&` chain as the fetch.
+
+The wording risk is the mirror of the bug: a rule that says "an empty range is
+AMBIGUOUS, check before escalating" teaches an agent to read emptiness optimistically
+and stop escalating when it should. It is not ambiguous once fetched — the control
+gives empty AND exit 1 — so the rulebook makes the **exit code** the decision and
+leaves the exit-1 branch verbatim. One more state was constructed to bound the
+false-positive class: an agent with no commit of its own (`HEAD == origin/main`) also
+gets exit 0, but that state cannot reach the diagnosis at all, because its push exits
+**0** with "Everything up-to-date" rather than being rejected. A single clause ("HEAD
+here is YOUR commit") closes it anyway.
+
+**2. The brief-less fallback reads the toml instead of guessing.** `wip_limit` is
+repo-toml-only by design (`config.py`: never env, because it is committed team policy),
+and — verified by looking, since a per-task agent stands in a LINKED worktree — the toml
+is present there while the gitignored `.vikunja-mcp.env` is not: the key is committed, so
+git materialises it into every worktree. The fallback therefore becomes a chain: brief →
+`wip_limit` from `.vikunja-mcp.toml` (absent key ⇒ 3, `enforce_single_wip = true` ⇒ 1,
+matching `_wip_limit_with_origin`) → and only "no toml at all" ⇒ 6.
+
+That last step stops being a guess. Because `wip_limit` exists ONLY in the toml, "no
+toml" *implies* "no `wip_limit`" *implies* the default 3, whose ceiling is exactly 6 —
+the constant is now the derivation evaluated on the only domain it still covers. The
+card's `wip_limit = 4` consumer never reaches it: its toml says 4 and it computes 8. On
+"wrong at 4" precisely: 6 is SAFE at limits 1–3 (worst mechanical runs 1, 3, 5, all below
+6) and breaks from 4 up, where the worst run is 7 — 4 is the flip point, not the only bad
+value.
+
+This is a new option, not one of §"The ceiling generalised"'s rejected alternatives:
+(c) rejected having the per-task agent call `next_task` itself, which hands an implementer
+the pump's branch logic. Reading a committed config file needs no tool, no token, no
+network and no role confusion.
+
+Pinned by two tests in `test_skill_contract.py`:
+`test_a_rejected_push_asks_whether_the_work_landed_before_it_escalates`, whose load-bearing
+assertion is the ORDER of the two commands inside the fence (two positions that can genuinely
+disagree — swapping the lines fails it), and
+`test_the_brief_less_ceiling_reads_the_repo_toml_before_it_falls_back`, which is arithmetic
+across two SOURCES: the number SKILL.md prints as the last-resort ceiling versus
+`2 × config.DEFAULT_WIP_LIMIT` computed in Python, plus the toml's filename versus
+`config.REPO_FILE`. Both sides can move independently, which is the property the same-source
+tautology this repo keeps producing does not have.
