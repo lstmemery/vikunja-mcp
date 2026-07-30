@@ -47,6 +47,11 @@ docker rm -f vikunja-test
   Token is NEVER read from the repo toml (so it can't be committed and used); optional
   `VIKUNJA_NOTIFY_WEBHOOK` (`notify.py` — best-effort Slack-shaped ping when `call_human`
   parks a card in Your Call) is a secret of the same class: env layers only, never the toml.
+  Two parallel-drain keys sit on opposite sides of that split: `wip_limit` (how many
+  Design/Build tasks one token may hold at once; generalises `enforce_single_wip`, which is
+  exactly 1) is committed TEAM POLICY — repo toml ONLY, never env; `worktree_root` /
+  `VIKUNJA_WORKTREE_ROOT` (where per-task worktrees materialise, default a `<repo>.worktrees`
+  sibling) is MACHINE-local, so unlike `wip_limit` the env layers DO win over the toml.
 - `src/vikunja_mcp/api.py` — REST client. **Vikunja gotchas are codified here:
   PUT = create, POST = FULL-REPLACE update** → every update is
   read-modify-write; kanban view updates must always send
@@ -95,9 +100,28 @@ docker rm -f vikunja-test
   — while `next_task` rightly offered nothing (you never review your own work). The JSON
   keys and the exit-code split are a public cross-repo contract; changing them breaks the
   hub's check (fail-closed: its loops go red until both sides move together).
+- `src/vikunja_mcp/workspace_cmd.py` — `vikunja-mcp workspace`: per-task git worktrees for
+  the parallel drain (`wip_limit > 1`). **The ONLY module in the package that runs git** —
+  `server.py`/`workflow.py`/`api.py` stay git-free by rule, not by accident (a subprocess in
+  the stdio server's path is a new class of crash). `git worktree add` refuses a branch that
+  is already checked out, so each agent gets its own throwaway `task/<id>` branch and pushes
+  with `git push origin HEAD:main` — "one task = one commit on main" and the CI auto-release
+  survive untouched. Create (`<id>`, `--role review --at <sha>` for a detached review tree)
+  and `--release <id>` need neither token nor network; only `--gc` reads the tracker, because
+  only the board can say whether the task behind an orphaned tree is still alive (build tree
+  ⇔ Design/Build assigned to me via `Workflow.active_task_ids`, review tree ⇔ card in Review
+  via `review_task_ids`, one shared `liveness_board()` fetch, read-only like `claimable`).
+  Every entry point canonicalises to the MAIN worktree first (`_main_worktree`), so create /
+  release / gc agree on paths and config even when invoked from INSIDE a linked tree — the
+  normal place for a per-task agent, and where the gitignored `.vikunja-mcp.env` does not
+  exist. Safety invariant taken from hgdev-acp's reaper: push OK → remove, push FAIL → KEEP
+  (dirty, unpushed, or reachable-from-no-ref ⇒ reported in `kept`, never destroyed).
+  Housekeeping is never how an agent's work disappears.
 - `src/vikunja_mcp/skills/tracker/SKILL.md` — process rules for agents
   (queue discipline, orchestrator-dispatches-subagents, report format,
-  independent bug review). Ships inside the wheel; root `skills` is a symlink.
+  independent bug review, and — when `wip.limit > 1` — the parallel drain:
+  `exclude`/`wip_saturated`, one worktree per task, rebase-then-recheck-then-push).
+  Ships inside the wheel; root `skills` is a symlink.
 
 ## Testing Philosophy
 
@@ -141,7 +165,12 @@ per-task agent for the WHOLE task → drain next. That agent owns the whole
 lifecycle (`get_task` → spec/`advance(to='build')` → implement, possibly spawning
 its own sub-agents → commit+push → `advance(to='review')`); the orchestrator does
 no task content itself. Bugs get independent agent review (orchestrator dispatches
-a sibling reviewer).
+a sibling reviewer). With `wip_limit > 1` in `.vikunja-mcp.toml` the same pump keeps
+several per-task agents in flight at once — up to the limit `next_task` reports in its
+`wip` payload — each in its OWN worktree from `vikunja-mcp workspace <id>`, and the pump
+passes `exclude=[ids it has a live agent on]` so `next_task` doesn't re-offer them. Any
+`workspace` failure degrades to one slot in this checkout, never a stopped loop. Rules
+for agents live in SKILL.md («Параллельный дренаж»).
 Run it under `/loop` for continuous operation — the agent drains the queue and,
 instead of stopping when idle, waits for its next tick. Pick the mode by
 supervision: self-paced (`/loop`, no interval) is fine WHEN SUPERVISED, but for

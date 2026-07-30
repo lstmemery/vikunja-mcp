@@ -86,6 +86,34 @@ def test_attachment_upload_rule_names_the_tool_that_backs_it():
     assert "attach_file" in _skill_text(), "SKILL.md no longer names the attach_file tool"
 
 
+def test_the_parallel_drain_rules_cite_real_signals():
+    """The parallel drain (wip_limit > 1) is the first feature where the rulebook tells the pump to
+    BRANCH on a payload key AND to shell out to a CLI — and the rulebook reaches every consumer by
+    itself (see this module's docstring), with no per-consumer pin and no review gate. So pin both
+    directions of the three tokens the whole mode hangs off: named in SKILL.md, and still produced
+    by workflow.py. `wip_saturated` is the "wait, don't idle" discriminator, `exclude` the
+    caller-maintained liveness set next_task cannot infer, `wip_limit` the config key that turns
+    the mode on at all — rename any of them in code and a rulebook still teaching the old name
+    would tell every agent everywhere to key off a signal that never arrives."""
+    text = _skill_text()
+    src = _workflow_src()
+    for token in ("wip_saturated", "exclude", "wip_limit"):
+        assert token in src, f"{token!r} is documented in SKILL.md but gone from workflow.py"
+        assert token in text, f"{token!r} is not documented in SKILL.md"
+
+
+def test_the_integration_recipe_pushes_to_the_main_branch_and_names_gc():
+    """Under the parallel drain a per-task agent sits in its own worktree on a THROWAWAY task/<id>
+    branch, so a bare `git push` pushes that branch and leaves the main branch — and therefore the
+    release pipeline — without the work, while every tool still reports success. The explicit
+    refspec is the whole point of the integration recipe, so pin it verbatim. `workspace --gc` is
+    pinned for the mirror-image reason: without it every crashed agent's tree leaks forever, and
+    the only place that rule can live is the orchestrator's tick in this rulebook."""
+    text = _skill_text()
+    assert "git push origin HEAD:main" in text, "the explicit push-to-main refspec vanished"
+    assert "workspace --gc" in text, "the tick no longer reaps dead worktrees (workspace --gc)"
+
+
 def test_empty_queue_wakeup_interval_is_pinned():
     """The idle-loop wakeup interval is a hand-set human decision (#80: 20→10 min = 600s) with no
     code counterpart to anchor it — it lives only in the rulebook. Pin the value so an unrelated
