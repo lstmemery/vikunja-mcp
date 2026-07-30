@@ -14,6 +14,7 @@ stale on either side.
 import ast
 import inspect
 import re
+import subprocess
 import textwrap
 from importlib.resources import files
 from pathlib import Path
@@ -430,6 +431,147 @@ def test_the_released_entrys_branch_leak_is_documented_where_agents_will_read_it
         assert key in text, f"SKILL.md no longer tells agents about the {key!r} key"
     assert "branch_deleted" in _gc_section(text), \
         "the --gc reading rule stopped covering `branch_deleted` — a leaked branch is invisible"
+
+
+def _two_returns_rule(text: str) -> str:
+    """The «Два возврата, два дерева» bullet — the rule that splits the two ways a task
+    comes back to an agent.
+
+    Sliced to its own top-level bullet, like `_gc_section` / `_tick_step_3`: `created`,
+    `--release` and `task/<id>` are named all over the parallel-drain section, so a whole-file
+    substring could not tell "the split is still stated" from "the words survive somewhere"."""
+    start = text.find("- **Два возврата, два дерева.**")
+    assert start != -1, "SKILL.md no longer splits the two ways a task comes back to an agent"
+    end = text.find("\n- **", start + 1)
+    assert end != -1, "the two-returns rule no longer ends where the next top-level bullet begins"
+    section = text[start:end]
+    assert 0 < len(section) < len(text), "the two-returns slice is not a proper subset of SKILL.md"
+    assert "Ревью слот не занимает" not in section, "the slice swallowed the following bullet"
+    return section
+
+
+def _git(cwd, *args) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+@pytest.fixture
+def git_repo(tmp_path, monkeypatch):
+    """A clone on `main` with a local bare origin it has already pushed to — enough to run
+    both return paths for real, with no network.
+
+    A local copy rather than an import of `test_workspace_cmd`'s `repo` fixture: this module
+    proves the RULEBOOK against the code, and a pin that goes red when an unrelated test module
+    reshuffles its fixtures is a pin nobody trusts. `ENV_WORKTREE_ROOT` is cleared for that
+    module's own measured reason — the pump exports it machine-wide, so an agent running this
+    suite inside its own worktree would otherwise steer these trees at the AMBIENT root."""
+    monkeypatch.delenv(config.ENV_WORKTREE_ROOT, raising=False)
+    workspace_cmd._main_worktree.cache_clear()
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", "-b", "main", str(origin)],
+                   check=True, capture_output=True)
+    work = tmp_path / "work"
+    work.mkdir()
+    _git(work, "init", "-b", "main")
+    _git(work, "config", "user.email", "t@example.com")
+    _git(work, "config", "user.name", "Tester")
+    (work / "README.md").write_text("hi\n")
+    _git(work, "add", "README.md")
+    _git(work, "commit", "-m", "init")
+    _git(work, "remote", "add", "origin", str(origin))
+    _git(work, "push", "-u", "origin", "main")
+    return work
+
+
+def test_the_two_ways_a_task_comes_back_hand_back_the_trees_the_rulebook_promises(git_repo):
+    """VMCP-82 (532): the rulebook used to describe ONE way a task comes back — "you return to
+    the same worktree with your unfinished work" — while the code has two, so a rework agent
+    could hunt for uncommitted work that was never there.
+
+    * CRASH: nothing was released, so `_ensure_locked`'s early-return hands the same tree back
+      (`created: false`) with everything in it, committed and not.
+    * BOUNCE after review: the predecessor pushed and called `--release`, which removed the tree
+      AND deleted `task/<id>`. There is nothing to reattach to, so a fresh tree is cut from the
+      CURRENT `origin/main` — several commits ahead of the original base, clean, and already
+      carrying the predecessor's work because a bounce can only follow a successful push.
+
+    Pinned on BEHAVIOUR, not on prose, because the failure this card fixes is a rulebook that
+    states one thing while the code does another — and only running the code can tell those
+    apart. So both paths are executed against real git, and the rulebook's two payload tokens
+    plus its two-command check ride along: change either side alone and this goes red.
+
+    The load-bearing assertion is the sibling commit's presence in the reworked tree. It is what
+    distinguishes "cut fresh from current main" from "reattached to a surviving branch" —
+    `created: true` alone cannot, since a tree whose DIRECTORY was removed by hand takes the
+    same value while reattaching to its old branch.
+
+    MUTATION-CHECKED (`__pycache__` cleared between rounds, each run confirmed to select exactly
+    1 test, SKILL.md and workspace_cmd.py restored from copies kept aside — never `git checkout
+    --`): control PASS; delete the rule from SKILL.md -> FAIL on the slice; drop `created: false`
+    out of the rule -> FAIL; make `_release_locked` keep the branch (the change this card
+    explicitly does NOT propose) -> FAIL on the leftover `task/22`, and again on the missing
+    sibling commit when that first assertion is neutralised, so both halves of the bounce claim
+    are load-bearing rather than one covering for the other."""
+    rule = _two_returns_rule(_skill_text())
+    repo = git_repo
+
+    # --- return 1: the agent crashed. Nothing was released, so the tree comes back as it was.
+    tree = Path(workspace_cmd.ensure_workspace(11, cwd=repo)["path"])
+    (tree / "half.txt").write_text("committed, unfinished\n")
+    _git(tree, "add", "half.txt")
+    _git(tree, "commit", "-m", "wip")
+    (tree / "scratch.txt").write_text("never committed\n")
+
+    resumed = workspace_cmd.ensure_workspace(11, cwd=repo)
+    assert resumed["created"] is False and Path(resumed["path"]) == tree, \
+        "the crash path no longer hands back the SAME tree — SKILL.md promises `created: false`"
+    assert (tree / "scratch.txt").exists(), "the resumed tree lost its uncommitted work"
+    assert _git(tree, "log", "--oneline", "origin/main..HEAD"), \
+        "the resumed tree lost the unfinished commits the rule tells the agent to expect"
+
+    # --- return 2: the agent pushed, released its tree, and a reviewer bounced the card.
+    done = Path(workspace_cmd.ensure_workspace(22, cwd=repo)["path"])
+    (done / "shipped.txt").write_text("landed\n")
+    _git(done, "add", "shipped.txt")
+    _git(done, "commit", "-m", "done")
+    _git(done, "push", "origin", "HEAD:main")
+    shipped = _git(done, "rev-parse", "HEAD")
+    assert workspace_cmd.release_workspace(22, cwd=repo)["released"] is True
+    assert _git(repo, "branch", "--list", "task/22") == "", \
+        "--release no longer deletes task/<id> — the bounce would reattach, not cut fresh"
+
+    # a sibling lands on main while the card waits in Review
+    _git(repo, "fetch", "origin")
+    _git(repo, "merge", "--ff-only", "origin/main")
+    (repo / "sibling.txt").write_text("someone else's task\n")
+    _git(repo, "add", "sibling.txt")
+    _git(repo, "commit", "-m", "sibling")
+    _git(repo, "push", "origin", "main")
+
+    rework = workspace_cmd.ensure_workspace(22, cwd=repo)
+    fresh = Path(rework["path"])
+    assert rework["created"] is True, "the bounced task no longer gets a freshly created tree"
+    assert _git(fresh, "status", "--porcelain") == "", \
+        "SKILL.md tells the rework agent there is no uncommitted work here — there now is"
+    assert _git(fresh, "log", "--oneline", "origin/main..HEAD") == "", \
+        "SKILL.md tells the rework agent nothing unpushed is here — there now is"
+    assert (fresh / "sibling.txt").exists(), \
+        "the reworked tree is NOT cut from the current origin/main (the sibling commit is absent)"
+    assert (fresh / "shipped.txt").exists(), \
+        "the predecessor's own work is missing — the rule says the bounce follows a landed push"
+    landed = subprocess.run(["git", "merge-base", "--is-ancestor", shipped, "origin/main"],
+                            cwd=fresh, capture_output=True)
+    assert landed.returncode == 0, \
+        "the predecessor's pushed commit is not on the main branch the fresh tree was cut from"
+
+    # and the rulebook says both outcomes in the payload's own vocabulary, plus the two-command
+    # check that answers "is there unfinished work here?" without the agent having to guess
+    assert "`created: false`" in rule, "the rule no longer names the crash path's `created: false`"
+    assert "`created: true`" in rule, "the rule no longer names the bounce path's `created: true`"
+    assert "git status --porcelain" in rule and \
+        "git log --oneline origin/<главная ветка>..HEAD" in _flat(rule), \
+        "the rule lost the two commands that settle it without guessing"
 
 
 def test_empty_queue_wakeup_interval_is_pinned():

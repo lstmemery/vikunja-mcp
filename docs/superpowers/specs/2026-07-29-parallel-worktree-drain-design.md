@@ -204,7 +204,9 @@ the repo — deliberately not inside it, where pytest collection, ruff and
 2. `git fetch origin` — the base is always a fresh `origin/main`, never local;
 3. a worktree for `task/<id>` already exists → print its path, `created: false`
    (this is the resume-after-crash path: the agent walks back into its own tree
-   with its unfinished work);
+   with its unfinished work — but see "Two ways a task comes back", which is the
+   only path that behaves this way, and VMCP-86's detached refusal, which is
+   where it stops behaving this way);
 4. branch exists, worktree does not → `worktree add <path> task/<id>` — do
    **not** recreate the branch, it may carry commits;
 5. neither exists → `worktree add -b task/<id> <path> origin/main`;
@@ -327,7 +329,8 @@ strands silently. The channel that does work from Review is `review_task(<id>,
 verdict='needs_work', report=…)` — no ownership gate, stage gate satisfied — which
 labels `review-failed`, keeps the assignee and moves the card to **Build**, where
 `next_task` hands it straight back as `resume: true` and the ordinary resume-agent
-rule applies. All five steps were run against the real `Workflow` before being
+rule applies — on the tracker. Not on disk: see "Two ways a task comes back", since
+a card bounced after a successful push has no tree and no branch left to resume into. All five steps were run against the real `Workflow` before being
 written down. Two constraints belong to the *rule*, because no gate carries them:
 `approve` from the orchestrator is never legitimate (the gate would allow it — this
 is a mechanical refusal of unverifiable evidence, not a verdict on code), and the
@@ -350,7 +353,7 @@ refuses to delete unpushed work. After `advance(to='review')` the agent calls
 | `--release` refuses (dirty/unpushed) | The worktree stays; `--gc` reports it on the next tick so a human can see it. |
 | Rebase conflict | The agent resolves it, or `call_human`. Never force-push, never `--skip`. |
 | Push rejected repeatedly (past the ceiling — `2 × wip_limit` rounds, 6 at the default 3; resized from 3, then generalised — see "The retry ceiling, resized from measurement" and "The ceiling generalised") | `call_human`; the card parks in **Your Call**, so the worktree reads DEAD to `--gc` — what keeps it is the unpushed work in it, not the stage. Cleaned up before asking (`rebase --abort`), it is clean and pushed and will be reaped mid-question; the agent re-runs `workspace <id>` after the human answers. |
-| Per-task agent crashes | The task stays active, its worktree keeps the work, and `workspace <id>` returns that same tree to the resume agent. Strictly better than today, where the diff sat in the shared checkout. |
+| Per-task agent crashes | The task stays active, its worktree keeps the work, and `workspace <id>` returns that same tree to the resume agent. Strictly better than today, where the diff sat in the shared checkout. Two later exceptions, both in "Two ways a task comes back": a tree left DETACHED by an interrupted rebase is refused rather than handed back (VMCP-86), and a card bounced from Review after a landed push has no tree at all. |
 | No free slots *and* the free queue is gated | `wip_saturated` wins and is reported alone. `starving` describes a chain that cannot start; with zero slots that is not the actionable fact, and computing it would cost a board escalation for nothing. |
 
 ## Testing
@@ -1025,3 +1028,46 @@ consumer at `wip_limit ≥ 4` and they cannot fix it locally.
 the prose: same three sites, now pinning the formula's single spelling
 (`2 × wip.limit`), plus the diagnosis command and the brief-less fallback, and
 keeping the negative pins against the old 3-round spellings.
+
+## Two ways a task comes back (2026-07-30, VMCP-82 (532))
+
+This spec, and the rulebook it produced, described **one** way a task returns to
+an agent: it crashed, its tree survived, `workspace <id>` hands it back with the
+unfinished work in it. The code has had two since the day `--release` landed, and
+the second one is where a rework agent goes looking for work that was never there.
+
+**What each path actually does** — re-measured 2026-07-30 against real git and the
+real `workspace_cmd`, in a throwaway repo, because the card was hours old and the
+code had moved under it (task 540 landed the detached refusal in between):
+
+| Coming back after | `workspace <id>` returns | What is in the tree |
+|---|---|---|
+| a crash, tree intact on `task/<id>` | `created: false`, same path | everything — commits *and* uncommitted files |
+| a crash mid-`rebase` (tree clean but DETACHED) | **refuses** — `build worktree … DETACHED` | the work is safe on `task/<id>`; the agent runs `rebase --continue`/`--abort`, then asks again (VMCP-86, task 540) |
+| the directory being deleted by hand (not `--release`) | `created: true`, reattached to the surviving branch | committed work only; uncommitted is gone |
+| a `needs_work` bounce after a landed push + `--release` | `created: true`, **fresh** cut of current `origin/main` | nothing of the predecessor's *in progress* — its work is already on `main`, and the base is several sibling commits ahead |
+
+So the crash path is no longer a single story either, and the discriminator is not
+*why* the card came back but **whether `--release` ran** — which only succeeds on a
+clean, fully-pushed tree. "The tree is gone" and "the work is on `main`" are one
+statement, not two; the safety invariant at the top of `workspace_cmd.py` is what
+makes them the same one.
+
+The rulebook cannot ask an agent to reason that out mid-task, so it prescribes the
+two-command check instead: `git status --porcelain` and `git log --oneline
+origin/<main>..HEAD`. Both empty ⇒ there is no unfinished work here, stop looking;
+either non-empty ⇒ there it is. That answer stays true on the leaked-branch path
+too (`branch_deleted: false`, where the tree reattaches to an older base) — and the
+older base is corrected by the integration recipe's `fetch && rebase` before the
+push, which every agent runs anyway.
+
+**Deliberately not done** (recorded so it is not re-proposed): keeping `task/<id>`
+alive past `--release` so a bounce could reattach. It would defeat the release
+guard — the branch is deleted precisely because the work it carried is on `main` —
+and leave a branch behind for every completed task. A fresh tree from the current
+`main` is the better behaviour; the defect was only that nothing said so.
+
+Pinned by `test_skill_contract.py::test_the_two_ways_a_task_comes_back_hand_back_the_trees_the_rulebook_promises`,
+which runs **both** paths against real git rather than comparing prose: a rulebook
+that states one thing while the code does another is exactly what this card fixed,
+and only running the code can tell those apart.
