@@ -30,7 +30,7 @@ import uuid
 import httpx
 import pytest
 
-from tests.integration.conftest import BASE
+from tests.integration.conftest import BASE, seed_row
 from vikunja_mcp.api import VikunjaAPI
 from vikunja_mcp.setup_cmd import reconcile
 
@@ -91,7 +91,9 @@ def test_a_project_past_the_page_boundary_is_not_duplicated_by_setup(boss_jwt):
 
     made = [f"pg-{tag}-{i:03d}" for i in range(page_size + 3)]
     for title in made:
-        api.create_project(title)
+        seed_row(lambda title=title: api.create_project(title),
+                 lambda title=title: title in {p["title"]
+                                               for p in _oracle(boss_jwt, "/projects")})
 
     target = made[-1]        # highest id => last page => the row a single request cannot reach
     assert target not in {p["title"] for p in _first_page(boss_jwt, "/projects")}, (
@@ -120,7 +122,9 @@ def test_labels_past_the_page_boundary_are_reused_not_minted_again(boss_jwt):
 
     made = [f"lb-{tag}-{i:03d}" for i in range(page_size + 3)]
     for title in made:
-        api.create_label(title)
+        seed_row(lambda title=title: api.create_label(title),
+                 lambda title=title: title in {x["title"]
+                                               for x in _oracle(boss_jwt, "/labels")})
 
     target = made[-1]
     assert target not in {x["title"] for x in _first_page(boss_jwt, "/labels")}, (
@@ -150,8 +154,11 @@ def test_comments_past_the_page_boundary_are_read_and_stay_in_order(boss_jwt):
     pid = api.create_project(f"cm-{tag}")["id"]
     task = api.create_task(pid, "card with a long history")
     made = [f"c-{tag}-{i:03d}" for i in range(page_size + 3)]
+    comments_path = f"/tasks/{task['id']}/comments"
     for text in made:
-        api.add_comment(task["id"], text)
+        seed_row(lambda text=text: api.add_comment(task["id"], text),
+                 lambda text=text: any(text in (c.get("comment") or "")
+                                       for c in _oracle(boss_jwt, comments_path)))
 
     newest = made[-1]
     first = _first_page(boss_jwt, f"/tasks/{task['id']}/comments")

@@ -5,6 +5,8 @@ import time
 import httpx
 import pytest
 
+from vikunja_mcp.api import VikunjaError
+
 BASE = os.environ.get("VIKUNJA_TEST_URL", "").rstrip("/")
 PASSWORD = "integr4tion-Pass!"
 
@@ -62,6 +64,50 @@ def _with_retry(request):
         time.sleep(min(wait, 30.0) + 0.5)
         r = request()
     return r
+
+
+def seed_row(create, landed, *, attempts=4, backoff=0.25):
+    """Create ONE seed row, absorbing the transient 500 a SQLite-backed Vikunja returns under an
+    unpaced write burst — VMCP-129 (615).
+
+    WHY IT IS NOT A FLAKE-SILENCER. The 500 lands in a test's SEEDING loop, before a single
+    assertion runs: `test_comments_past_the_page_boundary_are_read_and_stay_in_order` never got
+    as far as the thing it is about. Measured 2026-07-31 over full-suite runs against FRESH
+    containers: 5 of 9 failed, always the same signature. The server side cannot be configured
+    out of it — Vikunja 2.3.0 already puts `_busy_timeout=5000` on its SQLite DSN (it appends
+    that string itself; feed a second one through VIKUNJA_DATABASE_PATH and the driver reports
+    `Invalid _journal: WAL?_busy_timeout=5000`), and yet every captured 500 came back in
+    0.4-1.9 ms, nowhere near 5 s. The busy handler was never invoked, which is SQLite's
+    documented behaviour when a DEFERRED transaction that has already read tries to PROMOTE its
+    lock to a write while another connection holds RESERVED: waiting could only deadlock, so
+    SQLITE_BUSY is returned at once and no timeout can absorb it. Pinning the pool to a single
+    connection (`VIKUNJA_DATABASE_MAXOPENCONNECTIONS=1`) was measured too: 2 of 10 still failed.
+    So the write burst has to be survived by the writer.
+
+    WHY IT DOES NOT BLIND-RETRY. PUT=create here, and a write that APPLIED and then failed on
+    the way back would be minted twice — which is exactly what these tests assert against
+    (`len(got) == len(made)`, `len(same_title) == 1`). So `landed()` — an INDEPENDENT read, not
+    the client under test — is consulted first, and the create is re-issued only when the row is
+    genuinely absent. This is deliberately NOT a retry in `api.py`: the client's rule that a PUT
+    is never retried on 5xx is correct and stays.
+
+    Re-issue happens IN PLACE, on the spot, rather than in a repair pass after the loop, because
+    the comment test asserts ORDER across the page seam — a row rebuilt at the end would land
+    newest and break it.
+
+    A non-5xx failure is raised untouched (a 4xx is a real refusal, not contention), and the last
+    attempt raises rather than swallowing, so a server that is genuinely broken still fails the
+    suite loudly."""
+    for attempt in range(attempts):
+        try:
+            return create()
+        except VikunjaError as err:
+            if err.status < 500 or attempt == attempts - 1:
+                raise
+            if landed():
+                return None          # the write DID apply — re-issuing it would duplicate it
+            time.sleep(backoff * (attempt + 1))
+    raise AssertionError("unreachable: the last attempt either returns or raises")
 
 
 def register_and_login(username: str) -> str:
