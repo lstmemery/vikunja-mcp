@@ -880,30 +880,74 @@ def test_next_task_offers_free_task_despite_off_board_gated_candidate(env):
 # keeps a rewording of the shared sentence a one-file edit, and a clause inserted INSIDE the base
 # is by construction emitted in every state — a wording change, not a state-dependent hazard. The
 # endswith anchor is what stops an unconditional clause from hiding in the derived base.
+#
+# THE COUNT, and why this env holds THREE waiting tasks (VMCP-125 / #606). The escalation
+# interpolates `len(retriage)`, the base interpolates `len(waiting)`. This test's first env built
+# one gated task behind one head, so both rendered as `1` and the two interpolations were
+# indistinguishable: swapping the escalation to `len(waiting)` passed the whole suite (693 passed,
+# exit 0, on e171c8d). The clause was pinned; the NUMBER inside it was not. On a five-tail board
+# with ONE head in Backlog that swap renders ". 5 of these are stalled behind a chain HEAD returned
+# to Backlog" where the truth is ". 1 of these". The waiting lines still annotate that one head and
+# only it, so the message contradicts itself rather than lying outright — but the escalation is the
+# one place the payload states the retriage count as a NUMERAL, and it is where a reader who does
+# not enumerate the list takes the number from.
+#
+# NOT REPAIRED BY A NEW PAYLOAD KEY. There is no TOP-LEVEL retriage count (`waiting_count` is
+# `len(waiting)`; the top-level `needs_retriage` is a BOOLEAN), and adding one was rejected on two
+# grounds: it is a production change made to serve a test, and it would carry no information the
+# payload lacks — the per-tail `waiting[].needs_retriage` flags already sum to that number, which is
+# what this test asserts below. Not for fear of the hub, which never sees this payload: it reads
+# only the flat verdict line, built by `classify_next` from task/review/resume/stage/cycle/starving
+# and nothing else (claimable_cmd.py:69-80).
+#
+# WHAT MAKES THE PIN BITE is that both sides of the count are ABSOLUTE — the escalation literal
+# spells the number and `_RETRIAGE_N` spells it again for the env. A RELATIVE check ("the numeral in
+# the message equals the payload's own count") would have caught the measured swap too, but it
+# passes any edit moving the count and the prose together, which is #570's same-source trap. The env
+# is what makes the absolute form possible: 3 waiting != 2 retriaged, so the swap renders 3 against
+# a pinned 2; 2 != 1, so a hard-code to 1 — the value the old env's number happened to equal — also
+# goes red. It kills THOSE two, not every constant: a hard-coded 2 would still pass, exactly as a
+# hard-coded 1 passed before.
 
 _IN_BUILD = "in 'Build'"
 _IN_BACKLOG = "in 'Backlog'"
 _RETRIAGE_ANNOTATION = " [sent back to Backlog via return_task — needs human re-triage]"
-# spelled with the count this env actually reaches (one waiting task): the clause interpolates it,
-# and pinning the RENDERED form keeps the breadcrumb honest, exactly as #570's clause literals do.
-_RETRIAGE_ESCALATION_1 = (
-    ". 1 of these are stalled behind a chain HEAD returned to Backlog (return_task) — a human "
+# Spelled with the count this env actually reaches, exactly as #570's clause literals do — but the
+# count is RETRIAGE's, and this env holds it apart from the waiting count and from 1 (VMCP-125/606).
+_RETRIAGE_ESCALATION_2 = (
+    ". 2 of these are stalled behind a chain HEAD returned to Backlog (return_task) — a human "
     "must re-triage the head before the tail can resume."
 )
+
+# The counts this env must keep APART, asserted below as a pair. Three waiting tasks, two of them
+# behind a returned head: 3 != 2 kills the swap, and 2 != 1 kills the degenerate hard-code.
+_WAITING_N, _RETRIAGE_N = 3, 2
+
+
+def _blocker_moved_to_backlog(msg: str, blocker_ref: str) -> str:
+    """Rewrite ONE waiting line — the one naming `blocker_ref` — from a Build predecessor to a head
+    returned to Backlog. Anchored on the ref, so WHICH line the differential rewrites is not a
+    silent premise; at one waiting task the old blanket `.replace()` was position-free only by
+    degeneracy. The premise that survives — both states listing `waiting` in the SAME ORDER, since
+    the differential rewrites the plain message in place — is asserted at the call site."""
+    was = f"{blocker_ref} {_IN_BUILD}"
+    assert msg.count(was) == 1, (was, msg)
+    return msg.replace(was, f"{blocker_ref} {_IN_BACKLOG}{_RETRIAGE_ANNOTATION}")
 
 
 def test_the_starving_message_is_the_plain_tail_plus_the_retriage_escalation_and_nothing_else(env):
     """The retriage escalation and its per-blocker annotation appear IF AND ONLY IF a blocker sits
-    in Backlog, in that position, and nothing else may follow the waiting list.
+    in Backlog, in that position, with the count of RETRIAGED tails and nothing else may follow.
 
-    The two next_task calls differ in exactly one attribute — the chain head's stage — so every
+    The two next_task calls differ in exactly one attribute — the chain heads' stage — so every
     other byte of the message is common to both and cancels out of the differential. `_move` is the
     call return_task itself makes on a returned head (workflow.py:1313); the label it also adds is
     irrelevant here, since the retriage condition reads the blocker's STAGE and nothing else."""
     api, wf = env
-    head = api.add_task("chain head", "Build")
-    tail = api.add_task("tail", "Queue")
-    api.add_relation(tail["id"], head["id"], "follows")
+    heads = [api.add_task(f"chain head {i}", "Build") for i in range(_WAITING_N)]
+    tails = [api.add_task(f"tail {i}", "Queue") for i in range(_WAITING_N)]
+    for tail, head in zip(tails, heads):
+        api.add_relation(tail["id"], head["id"], "follows")
 
     plain = wf.next_task()
     assert plain["starving"] is True and plain["needs_retriage"] is False
@@ -913,14 +957,30 @@ def test_the_starving_message_is_the_plain_tail_plus_the_retriage_escalation_and
     # unconditional clause appended anywhere after it moves this ending and fails right here
     # instead of cancelling out of the equality below.
     assert plain_msg.endswith(_IN_BUILD), plain_msg
-    assert plain_msg.count(_IN_BUILD) == 1, plain_msg
+    assert plain_msg.count(_IN_BUILD) == _WAITING_N, plain_msg
     assert _RETRIAGE_ANNOTATION not in plain_msg, plain_msg
 
-    wf._move(head["id"], "Backlog")          # the one changed attribute — what return_task does
+    returned = heads[:_RETRIAGE_N]           # the one changed attribute — what return_task does
+    for head in returned:
+        wf._move(head["id"], "Backlog")
 
     retriage = wf.next_task()
     assert retriage["starving"] is True and retriage["needs_retriage"] is True
-    assert retriage["waiting_count"] == plain["waiting_count"] == 1
-    assert retriage["message"] == (
-        plain_msg.replace(_IN_BUILD, _IN_BACKLOG + _RETRIAGE_ANNOTATION) + _RETRIAGE_ESCALATION_1
-    ), retriage["message"]
+    # The property this env EXISTS for, pinned so it cannot be lost in silence the way it was: the
+    # base's count and the escalation's count must be DIFFERENT numbers. Collapse the env back to
+    # one-blocked-by-one and this fails here, instead of quietly re-blinding the equality below.
+    assert retriage["waiting_count"] == plain["waiting_count"] == _WAITING_N
+    assert sum(w["needs_retriage"] for w in retriage["waiting"]) == _RETRIAGE_N
+    assert _WAITING_N != _RETRIAGE_N != 1
+
+    # `expected` rewrites the plain message IN PLACE, so the equality below assumes both states
+    # list the waiting tasks in the same order. At one waiting task that was vacuous; at three it
+    # is a real premise, so assert it here rather than let a reorder surface as a wall of diff.
+    ids = [w["task"]["id"] for w in retriage["waiting"]]
+    assert ids == [w["task"]["id"] for w in plain["waiting"]], ids
+
+    blocker_ref = {w["task"]["id"]: w["blocked_by"][0]["ref"] for w in plain["waiting"]}
+    expected = plain_msg
+    for tail in tails[:_RETRIAGE_N]:
+        expected = _blocker_moved_to_backlog(expected, blocker_ref[tail["id"]])
+    assert retriage["message"] == expected + _RETRIAGE_ESCALATION_2, retriage["message"]
