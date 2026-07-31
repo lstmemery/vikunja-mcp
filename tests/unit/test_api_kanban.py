@@ -1235,11 +1235,60 @@ def _flat(pages, *, page_size=5, total_pages=None, info_status=200,
     callable for exactly this reason. Mappings remain right for the FINITE lists everything else
     here models; the coupling only bites a fixture whose job is to have no last page.
 
-    The HARNESS CAP is the same honesty device `_tracker` uses: several of these shapes make the
-    loop run forever if its termination guard is removed (a server that ignores `?page=` serves a
-    FULL page every time, so neither the fullness rule nor the unproven-page ceiling can ever end
-    it — only "this page added nothing new" can). With the cap the mutation goes RED here instead
-    of hanging the suite."""
+    The HARNESS CAP is the same honesty device `_tracker` uses, and MEASURED it is earned by the
+    CALLABLE fixtures against the CEILING — the mutation `_tracker`'s own paragraph names, taken
+    at THIS reader's site rather than the board's. Ceiling -> `if False:` inside `_paged_list`
+    (that expression occurs TWICE in api.py; the `view_tasks` twin is left alone, and measurably
+    no board test notices): the two tests whose server has NO last page — the only two
+    CALLABLE-backed fixtures here — go RED on `RuntimeError: the read issued more than 360
+    requests`, both in under 2 s, instead of hanging the suite. Whole file 2 failed against an
+    unmutated control round of 0, stated as a delta and with NO pass total, for the reason the
+    parenthetical on the `>=` -> `>` measurement in
+    test_a_list_that_never_finishes_paging_raises_instead_of_truncating gives.
+
+    IT IS NOT EARNED BY THE `?page=`-IGNORING SHAPES MODELLED HERE, which is worth saying because
+    the mechanism sounds like it should be. That mechanism is real but CONDITIONAL, and the
+    condition is easy to drop: a server that serves the whole list on every page fills every page
+    only while that list is at least `page_size` long, and only then can neither the fullness rule
+    nor the unproven-page ceiling end it, leaving "this page added nothing new" as the sole exit.
+    MEASURED with `if not added_new:` -> `if False:` (its only literal site in api.py, inside
+    `_paged_list`; `view_tasks` spells the same rule as its own `keep_going`) on a CONSTRUCTED
+    `_flat(lambda page: rows)` at page_size 5: 11 rows and 5 rows run to the cap at 361 requests,
+    while 4 rows and 2 rows do NOT — every page is SHORT then, so the CEILING ends the read with a
+    508 at 120. Below `page_size` THIS mutation has no runaway left to bound, because the ceiling
+    gets there first — a fact about the MUTATION, not about the shape. Remove the CEILING instead
+    and the region below the line turns out to be where the runaways actually live: it is where
+    BOTH callable fixtures named above sit, at ONE row per page against page_size 5. MEASURED with
+    the ceiling gone and the cap lifted to 1e9: neither read TERMINATES — a 20 s alarm cut both
+    off, each six figures of requests deep and still climbing. That depth is throughput and is
+    deliberately not pinned to a figure (the same shape gave 96,882 on one run of this measurement
+    and 191,269 on the next); what reproduces is that no bound is reached at all. Under the
+    `added_new` mutation those same two shapes stop at 120 and 121.
+
+    AND NOTHING IN THIS FILE REACHES THE CAP UNDER IT — for two DIFFERENT reasons, which is the
+    part a single count hides. The same mutation turns this file red in SEVEN places and reaches
+    the cap in NONE of them: 7 failed against a control round of 0, and the cap's own message
+    occurs ZERO times, here and across all of tests/unit. Two are the `_flat` MAPPINGS, and those
+    are ABOVE the line — 11 rows against page_size 5, so every page is FULL, none is ever unproven
+    and the ceiling is structurally unreachable for them. They end by EXHAUSTION instead, running
+    out of named pages onto `if not items:` —
+    test_an_endpoint_that_ignores_page_terminates_without_duplicating_rows after 5 requests on
+    `assert [1, 2, 3, 4, 5] == [1, 2]`, and the "live views/buckets shape" row of
+    test_the_extra_request_is_paid_only_by_a_partial_last_page after 40 on `assert 40 == 2`, i.e.
+    355 and 320 SHORT of the cap. (That they are above the line is MEASURED, not read off the
+    fixture: with the budget cut 120 -> 2 on TOP of the same mutation, the first STILL reaches 5
+    requests and never 508s, which is possible only if no page was ever unproven — while
+    test_projects_filters_pseudo, the control in that same round, 508s at 2.) The other five —
+    test_projects_filters_pseudo, test_kanban_view_picks_kanban_kind,
+    test_kanban_view_missing_raises_actionable_error, test_get_or_create_label_reuses_existing,
+    test_share_project_idempotent — sit BELOW it: bare `make_api` servers whose /info is NOT
+    stubbed, so no page is ever justified and the CEILING stops them at 120 requests with a 508
+    (test_kanban_view_missing_raises_actionable_error surfaces that 508 as a regex mismatch inside
+    its `pytest.raises` rather than as the raise itself — same stop, different failing line). The
+    seven are NAMED because the bare count is ambiguous: ceiling -> `if False:` at BOTH api.py
+    sites is also 7 failed on this file, over a DISJOINT set. The two mappings stay mappings
+    deliberately: a request-count assert that names the guard is a better failure than a
+    RuntimeError 356 requests later."""
     seen = []
 
     def handler(request):
