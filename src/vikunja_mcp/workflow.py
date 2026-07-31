@@ -1415,6 +1415,32 @@ class Workflow:
         if any(not (st.get("title") or "").strip() for st in subtasks):
             raise WorkflowError("every subtask must have a title")
         task, stage = self._find_task(task_id)
+        # Review (#663): the shape #590 gated for `return_task`, still open on the sibling tool —
+        # #649 shut Done here and said so in this very block. Measured through the real `Workflow`
+        # over a FakeAPI board, on a card driven the NORMAL way (Queue -> claim -> Design -> Build
+        # -> Review): decompose did not refuse and left the parent in Backlog with NO assignee and
+        # `epic`, two children in Queue and a `[decompose]` comment — work under review pulled out
+        # of the pipeline and re-declared an unfinished container before anyone ruled on it. On an
+        # APPROVED card still waiting for a human's Done the same run produced `reviewed` AND
+        # `epic` at once: the Done block's own end state, one stage early. Per-tool for the reason
+        # spelled out below, and the PLACEMENT is measured, not chosen by taste: a guard inside
+        # `_move` fires LAST — both children already on the board, assignee off, comment posted —
+        # so its refusal would LIE to the caller. It also runs BEFORE `_require_mine`, because in
+        # multi-identity the card under review is the IMPLEMENTER's: measured, the ungated tool
+        # answered "not assigned to you — claim it first", the one answer a reviewer must never be
+        # given (you never claim work you are reviewing).
+        if stage == "Review":
+            raise WorkflowError(
+                "decompose is not available from Review: it would unassign the card, stack `epic` "
+                "on top of the verdict label and drop fresh children into Queue, so work that is "
+                "under review (or already approved) would be pulled out of the pipeline and "
+                "re-declared an unfinished container before anyone ruled on it. Deciding that work "
+                "needs splitting is a Build-time call, so the card has to come back to Build "
+                "first: a reviewer sends it there with review_task(task_id, verdict='needs_work', "
+                "report=<why it should be split>), and its implementer, who owns it in Build, "
+                "decomposes from there; a human can also move it back themselves. A finding "
+                "outside this card's slice goes to file_task instead."
+            )
         # Done (#649): the second half of the same bypass #626 closed for `return_task`, and the
         # LAST measured instance of it. Measured on a card driven the normal way (Queue -> claim
         # -> Design -> Build -> Review -> approve -> a human moves it to Done): decompose did not
@@ -1435,8 +1461,9 @@ class Workflow:
         # refuse (advance, claim, call_human, review_task, return_task) plus this one, and the six
         # that never move it (next_task, get_task, comment, file_task, attach_file,
         # download_attachment). The count is spelled out because #626 shipped this same claim off
-        # a sweep of 5 of 12. Review is a different question and stays open here — decompose
-        # does walk a card out of Review, the shape #590 gated for return_task, filed as #663.
+        # a sweep of 5 of 12. Review WAS a different question, left open here and filed as #663;
+        # the gate directly above shut it, so this block is now the SECOND of decompose's two
+        # stage gates rather than its only one, and five stages stay open, not six.
         # Ownership cannot stand in: a human moving a card into Done does not unassign it, so
         # `_require_mine` passes on the very card that must be untouchable — and it runs SECOND
         # here so that a Done card belonging to someone else reads the stage refusal instead of

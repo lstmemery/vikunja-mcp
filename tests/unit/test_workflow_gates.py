@@ -290,14 +290,134 @@ def test_return_task_refuses_from_done_the_human_only_transition_run_backwards(e
         assert api.stage_of(open_task["id"]) == "Backlog", f"return_task broke from {stage}"
 
 
+def test_decompose_refuses_from_review_including_a_card_already_approved(env):
+    """#663: the hole #649 measured on this very tool and deliberately left open — `decompose`
+    walking a card out of REVIEW, which is the shape #590 gated for `return_task`. Measured through
+    the real `Workflow` over a FakeAPI board (not a live tracker), on a card driven the NORMAL way
+    (Queue -> claim -> Design -> Build -> Review): it did not refuse, answered
+    a success payload whose `parent` reported moved_to=Backlog, labeled=epic (beside the two
+    `created` children), and left the card in Backlog with NO assignee and `epic`, two fresh
+    children in Queue and a `[decompose]` comment — work that is under review, pulled out of the
+    pipeline and re-declared an unfinished container before anyone ruled on it.
+
+    The APPROVED cell below is the stronger measurement and is why this test does not stop at a
+    bare Review card: on a card whose review already returned `approve` (label `reviewed`, waiting
+    only for a human's Done) the same run produced `reviewed` AND `epic` at once — the end state
+    #649's Done gate exists to prevent, reached one stage earlier, by a card the human has not
+    touched yet.
+
+    Same FORM as #590/#626/#649: a stage check straight after `_find_task` and BEFORE
+    `_require_mine`, refusing with the channel that does work — `review_task(verdict='needs_work')`,
+    because deciding that work needs splitting is a Build-time call and its implementer owns it
+    there. The placement is measured rather than tasteful: #649's own reasoning records that a
+    guard inside `_move` fires only AFTER both children exist and `epic`/unassign have landed, so
+    its refusal would lie to the caller. This gate is per-tool for the same reason #649's is, and
+    the CLASS (no single rule anywhere for "stages an agent may not move a card out of") stays open
+    by construction — filed as #662, out of this card's slice.
+
+    Five parts, all load-bearing. The refusal must leave the board untouched AND create NOTHING:
+    decompose's side effects start with children on the board, so a guard placed after them would
+    leave orphans no refusal can take back. The multi-identity branch pins the check ORDER, and for
+    this gate it is not hypothetical — measured before the gate, that cell answered "task 107 is
+    not assigned to you — claim it first", which is the one answer a reviewer can never act on (you
+    never claim work you are reviewing). The OWNERSHIP control stops that negative assertion from
+    passing for a decompose with no `_require_mine` at all, and the CONTROL sweep stops the whole
+    test from passing for a decompose that refuses unconditionally.
+
+    MUTATION-CHECKED, each round naming the assertion it actually reddens, read out of pytest's raw
+    output rather than guessed: control PASS; delete this Review gate -> FAIL at the first
+    `pytest.raises` (DID NOT RAISE), while the #590/#626/#627/#649 pins stay GREEN on that same
+    mutant, which is what shows this hole was a SEPARATE one and not a regression of theirs; put
+    `_require_mine` before the stage gates -> FAIL on the multi-identity branch; delete
+    `_require_mine` -> FAIL on the ownership control; widen the gate to ("Review", "Backlog") ->
+    FAIL inside the sweep loop. Backlog is named deliberately: it is the sweep's FIRST stage, and
+    #649 recorded why that matters — the ownership control's card stands in Build, so a mutant
+    widened to Build (or an unconditional gate) reddens THERE instead and proves nothing about the
+    sweep."""
+    api, wf, _t = env
+
+    # driven the NORMAL way, so the state the refusal protects is the real one
+    reviewed = api.add_task("work under review", "Queue")
+    wf.claim(reviewed["id"])
+    wf.advance(reviewed["id"], to="build", spec="сделаю X")
+    wf.advance(reviewed["id"], to="review", worklog="сделано", evidence="abc123")
+    assert api.stage_of(reviewed["id"]) == "Review"
+    cards_before = len(api.tasks)
+
+    with pytest.raises(WorkflowError) as excinfo:
+        wf.decompose(reviewed["id"], [{"title": "часть A"}, {"title": "часть B"}])
+    msg = str(excinfo.value)
+    assert "review_task" in msg and "needs_work" in msg, \
+        f"the refusal must name the door back to Build, not just say no: {msg}"
+
+    # nothing happened: the gate fires BEFORE any child is created and before label/unassign/move
+    assert len(api.tasks) == cards_before, "the refused decompose still put children on the board"
+    assert api.stage_of(reviewed["id"]) == "Review", "the refused decompose walked reviewed work out"
+    assert api.tasks[reviewed["id"]]["assignees"], "the refused decompose still unassigned the card"
+    assert not any(lb["title"] == "epic" for lb in api.tasks[reviewed["id"]]["labels"])
+    assert not any(c.startswith("[decompose]") for c in api.comments_text(reviewed["id"]))
+
+    # APPROVED and still in Review — the verdict is in, only a human's Done is missing. Measured
+    # before the gate: this card came out of Backlog carrying `reviewed` AND `epic` at once.
+    approved = api.add_task("approved, waiting for a human's Done", "Queue")
+    wf.claim(approved["id"])
+    wf.advance(approved["id"], to="build", spec="сделаю Y")
+    wf.advance(approved["id"], to="review", worklog="сделано", evidence="def456")
+    wf.review_task(approved["id"], verdict="approve", report="ок")
+    cards_before = len(api.tasks)
+    with pytest.raises(WorkflowError) as ok:
+        wf.decompose(approved["id"], [{"title": "A"}, {"title": "B"}])
+    assert "review_task" in str(ok.value) and "needs_work" in str(ok.value)
+    assert len(api.tasks) == cards_before, "the refused decompose still put children on the board"
+    assert api.stage_of(approved["id"]) == "Review"
+    labels = [lb["title"] for lb in api.tasks[approved["id"]]["labels"]]
+    assert "epic" not in labels, f"the board now says approved AND unfinished container: {labels}"
+    assert "reviewed" in labels, "the verdict label vanished"
+
+    # multi-identity: the card in Review is the IMPLEMENTER's. THIS is the cell that pins the check
+    # ORDER — measured before the gate, it answered "not assigned to you — claim it first", advice
+    # a reviewer must never be given.
+    theirs = api.add_task("someone else's card in review", "Review")
+    api.tasks[theirs["id"]]["assignees"] = [{"id": 77, "username": "agent-impl"}]
+    with pytest.raises(WorkflowError) as multi:
+        wf.decompose(theirs["id"], [{"title": "A"}, {"title": "B"}])
+    multi_msg = str(multi.value)
+    assert "review_task" in multi_msg and "needs_work" in multi_msg, \
+        f"the reviewer must read the STAGE refusal, not an ownership one: {multi_msg}"
+    assert "not assigned to you" not in multi_msg, \
+        f"ownership ran first — 'claim it first' is the wrong advice for a reviewer: {multi_msg}"
+    assert api.stage_of(theirs["id"]) == "Review"
+    assert api.tasks[theirs["id"]]["assignees"][0]["id"] == 77
+
+    # OWNERSHIP CONTROL: the assertion above is a NEGATIVE one about a guard it never reaches, so
+    # pin that the guard is still live — from an OPEN stage someone else's card is refused BY
+    # OWNERSHIP.
+    not_mine = api.add_task("someone else's card in Build", "Build")
+    api.tasks[not_mine["id"]]["assignees"] = [{"id": 77, "username": "agent-impl"}]
+    with pytest.raises(WorkflowError) as owned:
+        wf.decompose(not_mine["id"], [{"title": "A"}, {"title": "B"}])
+    assert "not assigned to you" in str(owned.value), \
+        f"_require_mine no longer guards decompose from an open stage: {owned.value}"
+
+    # CONTROL: the five stages that stay open still decompose — the gate is Review+Done, not
+    # "anything someone else might be looking at"
+    for stage in ("Backlog", "Queue", "Design", "Build", "Your Call"):
+        open_task = api.add_task(f"big job in {stage}", stage, assignee=api.me_user)
+        wf.decompose(open_task["id"], [{"title": "A"}, {"title": "B"}])
+        assert api.stage_of(open_task["id"]) == "Backlog", f"decompose broke from {stage}"
+        assert any(lb["title"] == "epic" for lb in api.tasks[open_task["id"]]["labels"])
+
+
 def test_decompose_refuses_from_done_the_other_half_of_the_same_bypass(env):
     """#649: the sibling hole #626 measured and deliberately left open — `decompose` walking a
     card OUT of Done — and the last instance of that bypass known when this landed. Measured
     through the real `Workflow` over a FakeAPI board, on a card driven the NORMAL way (Queue ->
     claim -> Design -> Build -> Review -> approve -> a human moves it to Done): it did not refuse,
-    answered {"parent": {"moved_to": "Backlog", "labeled": "epic"}}, and left the card in Backlog
-    with NO assignee, carrying `reviewed` AND `epic` at once, with two fresh children in Queue —
-    the board claiming work a human accepted is now an unfinished container.
+    answered a success payload whose `parent` reported moved_to=Backlog, labeled=epic (beside the
+    two `created` children — #663 re-ran this and corrected the shape, which used to be quoted
+    here as if verbatim), and left the card in Backlog with NO assignee, carrying `reviewed` AND
+    `epic` at once, with two fresh children in Queue — the board claiming work a human accepted is
+    now an unfinished container.
 
     Not a regression, and that was RUN rather than inherited: at 51ab50d^ (the parent of #590's
     commit) `decompose` reads the same `_find_task` -> `_require_mine` with no stage check at all.
@@ -338,10 +458,11 @@ def test_decompose_refuses_from_done_the_other_half_of_the_same_bypass(env):
     case answered "not assigned to you — claim it first", the one answer that can never be right
     for a card a human accepted), the OWNERSHIP control stops that negative assertion from passing
     for a decompose with no `_require_mine` at all, and the CONTROL sweep stops the whole test from
-    passing for a decompose that refuses unconditionally. Review is IN that sweep: `decompose`
-    does walk a card out of Review today, which is the same shape #590 gated for `return_task` —
-    measured, out of this card's slice (its subject is Done) and filed as #663, so read the sweep
-    as "this diff did not touch it", not as a ruling that it is fine.
+    passing for a decompose that refuses unconditionally. Review USED to be in that sweep, because
+    `decompose` walked a card out of Review too — the same shape #590 gated for `return_task`,
+    measured then, out of this card's slice (its subject is Done) and filed as #663. That card has
+    since landed its own gate and its own test above, so the sweep here is over the FIVE stages
+    that are still open.
 
     MUTATION-CHECKED, each round naming the assertion it actually reddens, read out of the
     driver's raw output rather than guessed — guessing the site is how a pin gets miscredited, and
@@ -406,9 +527,9 @@ def test_decompose_refuses_from_done_the_other_half_of_the_same_bypass(env):
     assert "not assigned to you" in str(owned.value), \
         f"_require_mine no longer guards decompose from an open stage: {owned.value}"
 
-    # CONTROL: the six stages that stay open still decompose — the gate is Done, not "anything
-    # a human might be looking at"
-    for stage in ("Backlog", "Queue", "Design", "Build", "Review", "Your Call"):
+    # CONTROL: the five stages that stay open still decompose — the gate is Review+Done, not
+    # "anything a human might be looking at"
+    for stage in ("Backlog", "Queue", "Design", "Build", "Your Call"):
         open_task = api.add_task(f"big job in {stage}", stage, assignee=api.me_user)
         wf.decompose(open_task["id"], [{"title": "A"}, {"title": "B"}])
         assert api.stage_of(open_task["id"]) == "Backlog", f"decompose broke from {stage}"

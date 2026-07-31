@@ -2418,15 +2418,21 @@ def _decompose_bullet(text: str) -> str:
     return bullet
 
 
-def test_the_rulebook_says_decompose_refuses_from_done_too():
-    """#649: the sibling hole #626 measured and left open. Until this landed, `decompose` walked a
-    card a human had ACCEPTED out of Done — to Backlog, unassigned, carrying `reviewed` and `epic`
-    at once, with fresh children in Queue — while the rulebook said nothing about it in the place
-    an agent reads decompose. The gate and the sentence land together because prose and gate
-    drifting apart is the failure this whole file exists to catch: #626's own bullet advertised
-    the Done path as normal for a year of nobody noticing.
+def test_the_rulebook_names_BOTH_stages_decompose_refuses_from():
+    """#649 shut Done here; #663 shut Review, and this pin now carries both. Until #649 landed,
+    `decompose` walked a card a human had ACCEPTED out of Done — to Backlog, unassigned, carrying
+    `reviewed` and `epic` at once, with fresh children in Queue — while the rulebook said nothing
+    about it in the place an agent reads decompose. #649 then wrote «ОТКАЗЫВАЕТ из ОДНОЙ стадии —
+    Done, — а работает из шести остальных (… Review …)», true of the code and false as advice:
+    `decompose` did the same thing to a card in REVIEW — the shape #590 had already gated for
+    `return_task` — so the rulebook was POSITIVELY promising that path, the exact failure mode
+    #626's own bullet had before it. Measured for #663 on a card driven the normal way to Review:
+    the parent left for Backlog with `epic` and no assignee, two children in Queue; on an APPROVED
+    card (label `reviewed`, waiting only for a human's Done) with `reviewed` AND `epic` at once.
+    The gate and the sentence land together because prose and gate drifting apart is the failure
+    this whole file exists to catch.
 
-    Pinned against the TOOL as well as the words. The rule (WHICH stage is shut) is asserted
+    Pinned against the TOOL as well as the words. The rule (WHICH stages are shut) is asserted
     verbatim, because token presence is measurably not enough — that was proven on #626's pin,
     where a mutant inverting the rule kept every token and sailed through green. The open list is
     derived from `workflow.STAGES`, so adding a stage or shutting another one fails here until the
@@ -2435,48 +2441,76 @@ def test_the_rulebook_says_decompose_refuses_from_done_too():
     The `return_task` bullet's caveat is checked from here too, and it is the reason this pin is
     not just about decompose: that caveat is what stops a reader concluding «из Done теперь не
     уводит ничто» from a clean sweep. #626 wrote it naming decompose as the live counter-example;
-    this card removes that counter-example, so the caveat now has to carry the CLASS instead (the
-    rule is nowhere written once — the next mutating tool reopens the hole). A caveat that decayed
-    into «all doors are shut» would be worse than none, so it is pinned, not trusted.
+    #649 removed that counter-example, so the caveat carries the CLASS instead (the rule is nowhere
+    written once — the next mutating tool reopens the hole). #663 does not change that: it shuts a
+    REVIEW door, and the Done class the caveat describes is untouched. A caveat that decayed into
+    «all doors are shut» would be worse than none, so it is pinned, not trusted.
 
     MUTATION-CHECKED (`__pycache__` cleared between rounds, restore sha256-verified): control
-    PASS; drop decompose's Done gate -> FAIL on the code half (DID NOT RAISE); delete the Done
-    sentences from the decompose bullet -> FAIL on the rule assertion (which reddens at either
-    scope — it is the TOKEN assertions the bullet slice protects, and on that same mutant a
-    section-wide token check was measured GREEN); INVERT the
-    rule keeping every token -> FAIL; drop `Review` from the open list -> FAIL, and this one only
-    reddens because the list is sliced: measured on the deletion mutant, «Review», «Backlog» and
-    «Queue» all still occur in this bullet for unrelated reasons, so a bullet-wide `in` would have
-    stayed green; soften the return_task caveat into "nothing walks a card out of Done any more"
-    -> FAIL."""
+    PASS; drop decompose's Done gate -> FAIL on the code half (DID NOT RAISE); drop its Review gate
+    -> FAIL on the Review half of the code (DID NOT RAISE); delete the whole rule+stages block from
+    the decompose bullet -> FAIL on the rule assertion (that one reddens at either scope, so it is
+    the TOKEN assertions the bullet slice protects — the section-vs-bullet measurement behind that
+    belongs to #649 and is recorded in `_decompose_bullet`, on ITS mutant, and is NOT re-derived
+    here); delete ONLY the «Из Done (#649) …» explanation, leaving the bold rule ->
+    FAIL on the `#649` assertion, and that assertion exists BECAUSE the same mutant was measured
+    GREEN first: adding the Review half put `file_task` in both halves, so #649's inherited
+    `file_task in bullet` check silently stopped covering the Done one; delete ONLY the «Из Review
+    (#663) …» explanation -> FAIL on `needs_work`, the door that half names; INVERT the rule
+    keeping every token -> FAIL; soften the return_task caveat into "nothing walks a card out of
+    Done any more" -> FAIL.
+
+    The mutant that shows the open list must be SLICED is `drop Build`, and picking it took a
+    measurement rather than a guess — an earlier draft named `Your Call`, which cannot show it.
+    Both scopes were run for all five open stages (stage removed from the parenthesised promise,
+    and `open_list = bullet` to simulate the unsliced pin). Sliced: all five FAIL. Bullet-wide:
+    dropping Backlog, Queue or Build still PASSES — each of those words occurs three more times in
+    this bullet's prose — while dropping Design or `Your Call` FAILS anyway, because neither
+    appears anywhere outside the list. So those two redden at any scope and prove nothing about
+    scope; the three blind ones are the only usable mutants here. One of the three is this diff's
+    own doing and is worth knowing before editing the prose again: before the Review half was
+    written «Build» occurred 0 times outside the list, and the sentences routing a reviewer back to
+    Build («принимается в Build», «вернётся ИМПЛЕМЕНТЕРУ в Build», «вернуть карточку в Build») put
+    it at 3."""
     text = _skill_text()
     bullet = _decompose_bullet(text)
 
-    # the RULE, not its vocabulary: which stage is shut, spelled out
-    rule_at = bullet.find("**Он ОТКАЗЫВАЕТ из ОДНОЙ стадии — Done")
+    # the RULE, not its vocabulary: which stages are shut, spelled out
+    rule_at = bullet.find("**Он ОТКАЗЫВАЕТ из ДВУХ стадий — Review и Done")
     assert rule_at != -1, \
-        "the decompose bullet no longer states WHICH stage decompose refuses from (#649 Done)"
+        "the decompose bullet no longer states WHICH stages decompose refuses from " \
+        "(#663 Review, #649 Done)"
     assert "file_task" in bullet, \
         "the bullet no longer routes work an accepted card revealed to file_task"
+    assert "needs_work" in bullet, \
+        "the bullet no longer routes a reviewer who wants the card split back to Build"
+    # each half must still say WHY, and the card refs are what anchor them. Not decoration: with
+    # the Review half added, `file_task` occurs in BOTH halves, so the assertion above stopped
+    # covering the Done half — measured, deleting the whole «Из Done (#649) …» explanation while
+    # leaving the bold rule intact was GREEN until these two lines existed.
+    assert "#663" in bullet, "the bullet no longer explains WHY Review is shut (#663)"
+    assert "#649" in bullet, "the bullet no longer explains WHY Done is shut (#649)"
     # ...and the open list must be exactly the complement, straight out of the code. Scoped to the
-    # parenthesised list, NOT the whole bullet: this bullet talks about Backlog, Queue and Review
-    # for unrelated reasons ("подзадачи встанут в Queue", "доехала до Review"), so a bullet-wide
-    # `in` would stay green with a stage quietly dropped from the promise. Measured, not assumed.
+    # parenthesised list, NOT the whole bullet: «Backlog», «Queue» and «Build» each occur three
+    # more times in this bullet's prose ("подзадачи встанут в Queue", "вернётся ИМПЛЕМЕНТЕРУ в
+    # Build"), so an unsliced `in` stays GREEN with any of those three quietly dropped from the
+    # promise — measured at both scopes for all five open stages. «Design» and «Your Call» occur
+    # nowhere else and would redden either way, so neither can demonstrate this.
     open_list = bullet[rule_at:bullet.find(")", rule_at) + 1]
     for stage in workflow.STAGES:
-        if stage == "Done":
+        if stage in ("Review", "Done"):
             continue
         assert stage in open_list, \
             f"the bullet promises the OTHER stages keep working but never names {stage!r}"
 
-    # the caveat next door must now carry the CLASS, not a counter-example this card just removed
+    # the caveat next door must still carry the CLASS, not a counter-example #649 removed
     stuck = _return_task_bullet(text)
     assert "#649" in stuck, \
         "the return_task caveat still names decompose as an OPEN bypass, or stopped naming it"
     assert "следующий мутирующий тул" in stuck, \
         "the caveat decayed into 'every door is shut' — the class is still open by construction"
 
-    # the code: the door really is shut, and the six others really are open
+    # the code: both doors really are shut, and the five others really are open
     api = FakeAPI(buckets=workflow.STAGES)
     wf = workflow.Workflow(api, project_id=3)
 
@@ -2487,7 +2521,14 @@ def test_the_rulebook_says_decompose_refuses_from_done_too():
         "SKILL.md says decompose refuses from Done and points at file_task; it no longer does"
     assert api.stage_of(accepted["id"]) == "Done", "the refusal split the accepted card anyway"
 
-    for stage in ("Backlog", "Queue", "Design", "Build", "Review", "Your Call"):
+    under_review = api.add_task("under review", "Review", assignee=api.me_user)
+    with pytest.raises(workflow.WorkflowError) as review:
+        wf.decompose(under_review["id"], [{"title": "A"}, {"title": "B"}])
+    assert "needs_work" in str(review.value), \
+        "SKILL.md says decompose refuses from Review and points at review_task; it no longer does"
+    assert api.stage_of(under_review["id"]) == "Review", "the refusal split the card under review"
+
+    for stage in ("Backlog", "Queue", "Design", "Build", "Your Call"):
         card = api.add_task(f"big job in {stage}", stage, assignee=api.me_user)
         assert wf.decompose(card["id"], [{"title": "A"}, {"title": "B"}])["parent"]["moved_to"] \
             == "Backlog", f"the bullet promises decompose still works from {stage}; it does not"

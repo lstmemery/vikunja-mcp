@@ -486,10 +486,16 @@ def decompose(task_id: int, subtasks: list[dict], ordered: bool = False) -> dict
     they are chained in ARRAY ORDER so only the head is claimable immediately and each later
     child unlocks when its predecessor reaches Review. Leave ordered=False (default) when the
     subtasks are independent and may be worked in parallel.
-    REFUSES from Done (#649): a human accepted that card, and splitting accepted work back out
-    to Backlog is the human's transition too — file_task the follow-ups instead (they are NEW
-    work, not a split of this one). It still works from Backlog/Queue/Design/Build/Review/Your
-    Call, where the ownership guard applies as usual."""
+    REFUSES from TWO stages. From Review (#663) — never split a card that is under review (or
+    already approved): it would unassign it, stack `epic` on the verdict label and drop children
+    into Queue, i.e. pull work out of the pipeline before anyone ruled on it. Splitting is a
+    Build-time call, so the card goes back to Build first — a reviewer sends it there with
+    review_task(verdict='needs_work', report=<why it should be split>) and its implementer
+    decomposes from there; a finding outside that card's slice goes in file_task. From Done
+    (#649) — a human accepted that card, and splitting accepted work back out to Backlog is the
+    human's transition too; file_task the follow-ups instead (they are NEW work, not a split of
+    this one). It still works from Backlog/Queue/Design/Build/Your Call, where the ownership
+    guard applies as usual."""
     return _wf().decompose(task_id, subtasks, ordered)
 
 
