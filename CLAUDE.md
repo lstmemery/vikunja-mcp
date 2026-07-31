@@ -283,7 +283,44 @@ succeeds, both evidence-sha checks pass, and the task looks landed, but there is
 no run, no auto-release, and the change never reaches `stable`, i.e. never
 reaches consumers. Name the marker descriptively in messages (in a *file* the
 literal is harmless), and after pushing confirm a run actually EXISTS for your
-sha (`gh run list`) — "no run" and "green run" look identical from git.
+sha (`gh run list --commit "$(git rev-parse HEAD)"` — the FULL 40-char sha; an
+abbreviated one returns `[]` and exit 0, which reads exactly like "no run" and
+raises a false marker alarm) — "no run" and "green run" look identical from git.
+
+**A run that EXISTS is not a run that PASSED, and that gap silently cost seven
+landings in one night** (tracker #614). Measured 2026-07-31 on this repo: 7 of 15
+consecutive runs on `main` were red, every one of them `lint-and-unit` success +
+`integration` failure + `release` **skipped**, so `stable` never moved — while
+every agent had truthfully reported "a run exists". Seven is a FLOOR: that window
+ended on its own last red, and the same night held at least one more (`d6195e1`).
+The count is also read-at-the-time — `gh run list` reports a run's CURRENT verdict
+and `gh run rerun` rewrites it in place, so `8b4bfa5`, one of the seven, reads
+`success` today. The two checks are two because their DEADLINES differ: existence
+asks about a fact that does not ripen — the run is created or it never will be —
+while the outcome does. (How fast GitHub *creates* the run was NOT measured here,
+so the rulebook says to ask a second time before raising the marker alarm on a
+push that is seconds old, rather than assert a number it does not have.) Measured
+over 40 runs timed on their FIRST attempt (two were later re-run by hand, and a
+re-run's `updatedAt` carries the HUMAN's delay — 31 min and 3 h 26 min — not CI's;
+the runner queue itself was 0 s on 35 of 38 and never above 80 s), a run concludes
+42–120 s after it appears, median 60 s. So the outcome is read ONCE and LAST —
+after `advance(to='review')` and `workspace --release`, which cost about that long
+anyway — and never by waiting: `gh run view <id> --json status,conclusion,jobs`,
+branching on `status` FIRST, because `conclusion` is meaningful only at
+`status == "completed"` — an in-flight run renders it as the EMPTY STRING (caught
+live: `{"conclusion":"","status":"in_progress"}`), which is not `null`, so a jq
+`// "unknown"` fallback does not fire either. A still-running run is therefore
+reported as UNKNOWN, never as green, and the card's independent reviewer is the
+backstop — late by construction. The bias helps but does not SEPARATE: red runs
+are 42–55 s (median 46) against 53–120 s for green (median 65), so the bands
+overlap at 53–55 s. And the reason is not that `integration` fails early — per-job
+timing says it is never the critical path (16–29 s against `lint-and-unit`'s
+38–46 s); a run's length is set by `lint-and-unit`, and a GREEN run additionally
+runs `release` (8–15 s), which a red one skips. Urgency is bounded but not zero: a later green
+landing moves `stable` with the red commit already included (verified — red
+`8fc53f8` is an ancestor of today's `stable`; that night the catch-up took
+1–48 min), so what actually costs is the LAST landing of a session, which nothing
+later heals and nobody can identify in advance.
 
 Manual procedure remains for:
 - **Rollback**: `git branch -f stable vX.Y.Z && git push -f origin stable`

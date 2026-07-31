@@ -2772,3 +2772,221 @@ def test_only_the_review_tool_writes_a_comment_that_opens_with_its_verdict_line(
     assert not written.startswith(("[review] APPROVE", "[review] NEEDS WORK")), \
         "a hand-written note now opens with a verdict line — the rulebook's way of telling a " \
         "post-verdict note from a recorded verdict no longer separates them"
+
+
+def _post_push_ci_bullet(text: str) -> str:
+    """SKILL.md's bullet on what to check AFTER the push — existence and outcome, in that order.
+
+    Sliced, not scanned whole-file, for the reason `_gc_section` records having MEASURED: every
+    token below occurs elsewhere in this file. `gh run list` and the run's `status`/`conclusion`
+    are named a second time in the REVIEWER's own backstop bullet (deliberately — it re-reads the
+    same run later), `[skip ci]` and its family live in the marker bullet above, and «прогон» is
+    everywhere. A file-wide substring could not tell "the build-side rule is still stated" from
+    "the reviewer's copy of it survives", which is exactly the drift these pins exist to catch."""
+    start = text.find("  - **После пуша проверок ДВЕ")
+    assert start != -1, (
+        "SKILL.md no longer opens its post-push bullet where this pin can find it. If the bullet "
+        "was legitimately reworded, move this anchor — do not delete the check"
+    )
+    end = text.find("\n  - **Пуш обязателен", start)
+    assert end != -1, "the post-push bullet no longer ends where the «Пуш обязателен» bullet begins"
+    bullet = text[start:end]
+    assert 0 < len(bullet) < len(text), "the post-push slice is not a proper subset of SKILL.md"
+    assert "Пуш обязателен" not in bullet, "the slice swallowed the following bullet"
+    return bullet
+
+
+def _claude_ci_outcome_paragraph(text: str) -> str:
+    """CLAUDE.md's paragraph carrying the SECOND copy of the same two-check rule.
+
+    Scoped like `_claude_ceiling_paragraph`, and for its measured reason: `stable`, `integration`
+    and `release` all appear elsewhere in this file (the whole Releases section is about them), so
+    a whole-file scan could not tell "the outcome rule is still stated" from "those words survive
+    somewhere"."""
+    start = text.find("**A run that EXISTS is not a run that PASSED")
+    assert start != -1, (
+        "CLAUDE.md no longer opens its CI-outcome paragraph where this pin can find it. If the "
+        "paragraph was legitimately reworded, move this anchor — do not delete the check"
+    )
+    end = text.find("\n\n", start)
+    assert end != -1, "the CI-outcome paragraph no longer ends where the next paragraph begins"
+    paragraph = text[start:end]
+    assert 0 < len(paragraph) < len(text), "the outcome slice is not a proper subset of CLAUDE.md"
+    assert "Manual procedure" not in paragraph, "the slice swallowed the following section"
+    return paragraph
+
+
+def test_the_post_push_check_reads_the_runs_OUTCOME_and_not_only_its_existence():
+    """VMCP-128 (614): the post-push rule required a CI run to EXIST for your sha — the right guard
+    against a swallowed ci-skip marker, and it says nothing about whether the run PASSED. Measured
+    hole, not a feared one: overnight into 2026-07-31, 7 of 15 consecutive runs on `main` ended red
+    (all seven `lint-and-unit` success + `integration` failure + `release` skipped, so `stable`
+    never moved), and on every one of them an agent truthfully reported "a run exists".
+
+    Naively strengthening it breaks both ways, because the run is ASYNCHRONOUS: "wait for green"
+    blocks an agent for minutes and dies with a killed turn, while "read `conclusion` right after
+    the push" reads a run that has not started answering. The measurements that decide the shape,
+    taken on this repo's 40 most recent `main` runs and timed on each run's FIRST attempt (two
+    were later re-run by hand; a re-run's `updatedAt` measures how long a HUMAN took to press
+    `gh run rerun` — 31 min and 3 h 26 min — not CI, while the runner queue itself was 0 s on 35
+    of 38 and never above 80 s):
+
+    * EXISTENCE asks about a fact that does not ripen — the run is created or it never will be —
+      so it stays where it was, right after the push. How long GitHub takes to CREATE the run was
+      NOT measured here (a committer-date proxy is polluted by the agent's own criteria re-run in
+      between), so the rule says to ask twice before raising the marker alarm rather than pretend
+      a number it does not have;
+    * the OUTCOME does ripen: a run concludes 42–120 s after it appears, median 60 s — but an
+      agent's own tail (`advance(to='review')`, the report, `--release`) costs about that long,
+      so reading it LAST costs nothing and usually answers;
+    * red runs lean fast but do NOT separate: 42–55 s (n=9, median 46) against 53–120 s (n=31,
+      median 65) for green — the bands OVERLAP at 53–55 s, so duration alone never tells a slow
+      red from a fast green. The first version of this test claimed a clean 42–48 vs 53–120 split;
+      that was an artifact of dropping the two re-run runs entirely, and `8b4bfa5`'s FIRST attempt
+      is an ordinary push-triggered red at 55 s (`run_started_at == created_at`, no queue) sitting
+      inside the green band. The MECHANISM was wrong too, and per-job timing says so: `integration`
+      is never the critical path (16–29 s against `lint-and-unit`'s 38–46 s), so it cannot make a
+      run shorter by failing early. A run's length is set by `lint-and-unit`; a GREEN run then also
+      runs `release` (8–15 s), which a red one skips. Both corrections came from the second
+      independent pass over this prose, which is why the lean is now stated as a lean;
+    * `gh run list --commit <SHORT sha>` returns `[]` with exit code 0 — indistinguishable from
+      "no run", i.e. a false ci-skip alarm. The full 40-char sha is load-bearing, so the rule
+      quotes `"$(git rev-parse HEAD)"` rather than a bare sha;
+    * an in-flight run renders `conclusion` as the EMPTY STRING, caught live:
+      `{"conclusion":"","databaseId":30636770459,"status":"in_progress"}`. Empty is not `null`, so
+      a jq `// "unknown"` fallback silently does not fire — which is the second reason the rule
+      branches on `status` rather than dressing up `conclusion`;
+    * urgency is bounded but not zero: a later green landing moves `stable` with the red commit
+      already in it (verified — red `8fc53f8` is an ancestor of today's `stable`; that night the
+      catch-up ran 1–48 min), so the lasting cost is the LAST landing of a session.
+
+    What this pins is the SHAPE of the answer, in both files, because two copies of one rule drift
+    (the lesson of 556):
+
+    * both checks are stated, and the existence one is not weakened into the outcome one — the
+      marker bullet it guards must still be there;
+    * the branch is on `status` FIRST. This is the load-bearing bit and it is not decoration: a
+      running run's `conclusion` carries neither verdict, so `conclusion != "success" ⇒ not green`
+      reads every in-flight run as red, and a rule that cries wolf on the common case is a rule
+      agents learn to ignore;
+    * the third state has a name that is NEITHER verdict (`НЕИЗВЕСТНО`), and the rule says not to
+      wait for it — otherwise it collapses back into one of the two broken naive forms;
+    * the deferral has a real addressee. The build side hands the unknown case to the card's
+      independent reviewer, who is late BY CONSTRUCTION (starts later, works for minutes, against a
+      run that concludes in ≤2 min) — so the reviewer's own bullet must exist, or the hand-off
+      dangles. It is not invented ceremony: the implementer AND the reviewer of VMCP-129 (615) both
+      checked CI this way unprompted.
+
+    MUTATION-CHECKED — 13 rounds, `__pycache__` cleared between them, every round confirmed to
+    select exactly 1 test, both files restored from copies afterwards with `git diff` clean.
+    Controls before and after: PASS. Each of these turns it RED: delete SKILL.md's
+    `status == "completed"` premise; delete the not-completed branch head; reword that branch to
+    «считай, что прогон в порядке»; drop the full-sha caveat; delete the reviewer's backstop bullet
+    head; drop the reviewer's «САМ ПО СЕБЕ ещё не `needs_work`» grading; delete CLAUDE.md's
+    outcome-paragraph anchor; drift CLAUDE.md's window to 42–130 s while SKILL.md keeps 42–120;
+    delete the ci-skip marker bullet head; drop CLAUDE.md's `status` FIRST ordering; drift
+    CLAUDE.md's median to 95 s alone; replace CLAUDE.md's per-job `16–29 s` with a vague phrase;
+    regress SKILL.md's red band to the falsified 42–48.
+
+    Three of those thirteen exist BECAUSE the round found the pin missing, not to confirm it. The
+    median drift and the per-job mechanism were gaps the second independent pass demonstrated on
+    the green suite; the «прогон в порядке» rewrite was found by this matrix itself — naming the
+    third state «НЕИЗВЕСТНО» and then telling the agent to treat it as fine satisfied every other
+    assertion here, which is the precise failure the whole card exists to remove."""
+    text = _skill_text()
+    bullet = _flat(_post_push_ci_bullet(text))
+
+    # 1. the existing marker guard is DEEPENED, not replaced: its bullet must still be there
+    assert "**В СООБЩЕНИИ КОММИТА не должно быть литерального ci-skip-маркера" in text, (
+        "the ci-skip marker bullet is gone. The outcome check was added ALONGSIDE it, not instead "
+        "of it — a green-looking task with no run at all is still the louder failure"
+    )
+
+    # 2. both checks are named, and the sha-precise form carries its measured caveat
+    assert "**СУЩЕСТВОВАНИЕ — сразу после пуша.**" in bullet, \
+        "the post-push bullet no longer states the existence check — the ci-skip guard lost its home"
+    assert "**ИСХОД — ОДИН взгляд, ПОСЛЕДНИМ действием хода.**" in bullet, (
+        "the post-push bullet no longer states the OUTCOME check, which is the whole of 614: "
+        "'a run exists' was true on all seven red runs nobody noticed"
+    )
+    assert 'gh run list --commit "$(git rev-parse HEAD)"' in bullet, \
+        "the existence check no longer quotes a form that produces the FULL sha"
+    assert "40-символьный" in bullet and "`[]`" in bullet, (
+        "the full-sha caveat is gone. `gh run list --commit <short sha>` returns [] with exit 0 — "
+        "measured — so without it the recipe manufactures a false 'no run' ci-skip alarm"
+    )
+
+    # 3. THE load-bearing property: `status` decides, `conclusion` only means something after it
+    assert "`conclusion` осмыслен ТОЛЬКО при `status == \"completed\"`" in bullet, (
+        "the rule no longer says `conclusion` is meaningful only once `status` is completed. "
+        "Without that premise an agent branches on `conclusion` and reads every in-flight run as "
+        "not-green — the naive form this card exists to rule out"
+    )
+    assert "сломанная проверка" in bullet, (
+        "the bullet no longer NAMES the broken form (`conclusion` != success ⇒ not green). "
+        "Stating the right rule without the wrong one is what gets tidied back"
+    )
+
+    # 4. three states, and the third is neither verdict and is not waited on
+    for branch in ("`completed` + `success`", "`completed` + `failure`", "не `completed`"):
+        assert branch in bullet, f"the post-push bullet no longer answers the {branch} state"
+    assert "не `completed` — это **НЕИЗВЕСТНО**, а не «зелёно» и не «красно»" in bullet, (
+        "the in-flight state lost its own name. Calling it green hides the measured hole; calling "
+        "it red cries wolf on the common case — it has to be reported as unknown"
+    )
+    assert "Не жди" in bullet, (
+        "the in-flight branch no longer forbids waiting — 'wait for green' is the other naive form, "
+        "and it blocks an agent for minutes and dies with a killed turn"
+    )
+    assert "не пиши «прогон в порядке»" in bullet, (
+        "the in-flight branch no longer FORBIDS reporting the run as fine. Naming the state "
+        "«НЕИЗВЕСТНО» and then telling the agent to treat it as fine passes every other pin here "
+        "— measured: that exact rewrite kept this test green until this assertion was added"
+    )
+
+    # 5. the deferral needs a real addressee: the reviewer's backstop must exist
+    review = _flat(_independent_review_section(text))
+    assert "ты единственный, кто по построению ОПОЗДАЛ" in review, (
+        "the reviewer's CI-outcome backstop is gone, so the build side's «не дождался» branch now "
+        "hands the unknown case to nobody — which is the original hole with an extra step"
+    )
+    assert "--commit <ПОЛНЫЙ sha из evidence>" in review, \
+        "the reviewer's backstop no longer names a sha-precise command it can actually run"
+    assert "САМ ПО СЕБЕ ещё не `needs_work`" in review, (
+        "the reviewer's backstop lost the grading. A red run bounced without reading `jobs` turns "
+        "an environment failure into a round trip through the implementer"
+    )
+
+    # 6. CLAUDE.md carries the same rule, with the same numbers (two copies of one rule drift)
+    claude = _flat(_claude_ci_outcome_paragraph(_claude_md_text()))
+    assert 'status == "completed"' in claude and "`status` FIRST" in claude, (
+        "CLAUDE.md's copy no longer states the status-before-conclusion order that SKILL.md ships. "
+        "Only SKILL.md reaches agents, so the copies must not drift; move BOTH or neither"
+    )
+    assert "UNKNOWN, never as green" in claude, \
+        "CLAUDE.md's copy no longer says what an in-flight run is reported as"
+    for window in ("42–120", "42–55", "53–120"):
+        assert window in claude and window in bullet, (
+            f"the measured window {window} s is missing from one of the two files. These are one "
+            f"measurement written down twice — re-measure BOTH or neither"
+        )
+    # The MEDIAN gets its own re-derivation rather than a place in that loop, and it is here
+    # because the second independent pass over this card's prose FOUND IT UNGUARDED: it set
+    # CLAUDE.md's median to 95 s, left SKILL.md's at 60, and the suite stayed green — while this
+    # test's own message promised "one measurement written down twice". A bare "60" substring
+    # would not fix that either (it matches any number containing 60), so each file is read
+    # through its own phrasing and the two values are compared.
+    skill_median = re.search(r"медиана (\d+) с", bullet)
+    claude_median = re.search(r"median (\d+) s", claude)
+    assert skill_median, "SKILL.md's outcome bullet no longer states a median run duration"
+    assert claude_median, "CLAUDE.md's outcome paragraph no longer states a median run duration"
+    assert skill_median.group(1) == claude_median.group(1), (
+        f"the two files disagree on the median run duration: SKILL.md says "
+        f"{skill_median.group(1)} s, CLAUDE.md says {claude_median.group(1)} s. One measurement, "
+        f"two write-ups — re-measure BOTH or neither"
+    )
+    assert "16–29" in claude and "16–29" in bullet, (
+        "the per-job timing that explains WHY red runs lean fast is missing from one of the two "
+        "files. Without it the lean reads as `integration` failing early — which is measurably "
+        "false, and was this card's own first defect"
+    )
