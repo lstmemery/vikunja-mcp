@@ -2335,8 +2335,10 @@ def test_the_rulebook_names_BOTH_stages_return_task_refuses_from():
     """#626: after #590 this bullet said «Из Review он ОТКАЗЫВАЕТ … Из остальных стадий он
     по-прежнему работает» — a sentence that POSITIVELY described the Done path as normal, and it
     self-heals onto every consumer. Measured at the time: `return_task` really did walk a card out
-    of Done (the transition CLAUDE.md calls human-only) — it was the ONLY agent tool that could,
-    so the rulebook was advertising the single agent bypass of that invariant as supported.
+    of Done (the transition CLAUDE.md calls human-only) — one of SEVERAL agent tools that could,
+    never the only one, so the rulebook was advertising an agent bypass of that invariant as
+    supported. `decompose` is the other known one — measured on the same card, untouched by this
+    diff, filed as #649 — so shutting this door does not shut them all.
 
     Both halves are pinned against the TOOL, not just as words, because prose and gate drifting
     apart is the failure this card is about: the gate must refuse from Done AND the bullet must say

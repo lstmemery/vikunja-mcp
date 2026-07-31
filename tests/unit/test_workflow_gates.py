@@ -189,20 +189,22 @@ def test_return_task_refuses_from_review_and_still_works_everywhere_else(env):
 
 
 def test_return_task_refuses_from_done_the_human_only_transition_run_backwards(env):
-    """#626: `return_task` was the ONE agent tool that moved a card OUT of Done. Measured through
-    the real `Workflow` over a FakeAPI board, on a card driven the NORMAL way (Queue -> claim ->
-    Design -> Build -> Review -> approve -> a human moves it to Done): it did not refuse, answered
+    """#626: `return_task` was ONE OF SEVERAL agent tools that moved a card OUT of Done — never
+    the only one, and this test does not pin that it is. Measured through the real `Workflow` over
+    a FakeAPI board, on a card driven the NORMAL way (Queue -> claim -> Design -> Build ->
+    Review -> approve -> a human moves it to Done): it did not refuse, answered
     {"moved_to": "Backlog", "labeled": "blocked"}, and left the card in Backlog with NO assignee
     and BOTH labels — `reviewed` and `blocked` — the board claiming "approved" and "blocked" at
     once. On that same card advance (build/review/done), call_human, claim and review_task (both
     verdicts) all refuse — the transition CLAUDE.md calls human-only, run BACKWARDS, and an
     invariant that holds in only one direction is not an invariant.
 
-    It is NOT, however, the last such door, and this test does not pin that it is: human-only Done
-    is nowhere expressed as one rule, so any tool that moves a card without checking its stage
-    reproduces the hole. `decompose` measurably does (it walks the parent to Backlog with `epic`)
-    and is filed separately. The first draft of this docstring called return_task "the ONE agent
-    tool that moves a Done card"; probing the tools the first repro had skipped disproved it.
+    Shutting this door does not shut them all: human-only Done is nowhere expressed as one rule,
+    so any tool that moves a card without checking its stage reproduces the hole. `decompose`
+    measurably does — on the same card it walks the parent to Backlog with `epic`, and this diff
+    does not touch it — and is filed as #649. An earlier draft of this docstring opened by calling
+    return_task "the ONE agent tool that moves a Done card"; probing the tools the first repro had
+    skipped disproved it, and the opening sentence above is the corrected one.
 
     Same FORM as the Review gate (#590): a stage check BEFORE `_require_mine`, with a refusal that
     names the channel that does work. Done is not "stuck", so the door it points at is `file_task`
