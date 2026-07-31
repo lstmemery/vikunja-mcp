@@ -773,11 +773,58 @@ def test_overlapping_pages_cost_no_extra_request_on_the_degraded_path():
 
 
 def test_the_degraded_stop_rule_does_not_depend_on_bucket_order():
-    """The proven-lower-bound page size is read from the longest page seen on EARLIER pages, not
-    from a running maximum updated mid-page — otherwise the same board read differently depending
-    on the order the server happened to list its buckets in, which no consumer can control. Here
-    Done first serves 4 tasks on the very page where Build repeats its window: both orders must
-    return the same board."""
+    """Both bucket orders must return the same tasks in the same buckets. Done first serves 4 tasks
+    on the very page where Build repeats its window, so a reader that judged a bucket against a bar
+    the buckets listed BEFORE it had already raised would answer differently for each order.
+
+    ITS ORIGINAL SUBJECT IS GONE, and recording that is half the job of this note. It opened with
+    "the proven-lower-bound page size is read from the longest page seen on EARLIER pages, not from
+    a running maximum updated mid-page" — and VMCP-127 (608) deleted that page size from BOTH
+    readers, so there is no running maximum left to snapshot and no line of `view_tasks` the old
+    wording describes. Kept as written it would be prose asserting a safety property about deleted
+    code, which is precisely what the next reader preserves blindly or deletes blindly.
+
+    WHAT IT PINS NOW — MEASURED, not argued (VMCP-121 (596): shadow copies of src/ on PYTHONPATH,
+    the tree never edited, whole file run per mutant, __pycache__ cleared between rounds). Put the
+    deleted length rule BACK two ways — the running maximum updated MID-PAGE (order-dependent)
+    against the same bar snapshotted BEFORE the bucket loop (order-independent) — and of the 107
+    tests in this file THIS IS THE ONLY ONE THAT TELLS THEM APART: 21 failed / 86 passed against
+    20 failed / 87 passed, with this test the whole of the difference and nothing red the other
+    way. So the pin is live — but it is a REGRESSION pin. It guards a SHAPE nobody has
+    re-introduced, not any line standing in the reader today.
+
+    WHAT IT DOES NOT HOLD. The NAME is exact — the degraded STOP RULE really is order-independent
+    — but "the board does not depend on bucket order" would not be, and three things sit outside it:
+      (1) The board's BUCKET ORDER does follow the server's. MEASURED on this tree: the two orders
+          come back ['Build', 'Done'] and ['Done', 'Build'], because `merged` is a dict keyed in
+          first-seen order. This test cannot see that, deliberately — it compares a {title: ids}
+          dict, which ignores order. It holds that the same TASKS land in the same BUCKETS.
+      (2) It does not cover the order-sensitive line that IS here today, the last-bucket-wins
+          dedupe `owner[task["id"]] = bid`. Flipping it to first-wins leaves THIS test GREEN and
+          reddens exactly test_view_tasks_dedupes_moved_task_globally_keeping_last_bucket and
+          test_a_task_moving_buckets_mid_read_still_lands_once_on_the_degraded_path.
+      (3) A red here is not by itself an ordering regression: dropping the second term of
+          `keep_going` reddens it too, along with 29 others in this file. Read it beside them.
+
+    NO FLAT TWIN OF *THIS* TEST EXISTS, AND NONE SHOULD BE WRITTEN — the reason VMCP-121 (596) is
+    recorded here rather than in api.py. `_paged_list` carried the same "snapshotted BEFORE this
+    page" comment and pointed HERE for its reason; 608 deleted the comment along with the operand.
+    Keep the claim narrow: plenty about the flat reader IS pinned — put its deleted length stop back
+    and 23 tests go red. What no fixture can pin is that stop's ORDERING, and 596 measured it twice.
+    On THIS tree, re-adding the stop in BOTH orderings — the bar snapshotted before the page, and
+    the page folded into it first — reddens the SAME 23 tests, with nothing red either way round.
+    On the pre-127 tree, where the code still existed, the same move was INERT rather than merely
+    green: 0 of 3015 constructed servers (15 named shapes plus a 3000-server randomized sweep, real
+    httpx over real api.py, shipped and mutant run in SEPARATE processes) differed in rows OR
+    request count, and the whole suite's failure set was identical to the control's — while a
+    positive control at the same call site (the threshold made unreachable) differed on 2199 of
+    those servers and reddened 7 tests. The reason is arithmetic and holds for every input,
+    which is why no fixture could have pinned it: the threshold f(P) = min(stated, P) — or P itself
+    on the degraded path, where /info stated nothing — never exceeds P, so folding the page in first
+    turns `len >= f(P)` into `len >= f(max(P, len))`, and those are identical when P >= len and true
+    on BOTH sides when P < len. All 18252 (stated, P, len) triples enumerated agree, degraded rows
+    included. A flat list has no second axis for an ordering to show up on; the board has one, which
+    is why the pin lives here and only here."""
     def make(order):
         def handler(request):
             page = int(request.url.params.get("page", 1))
@@ -1360,9 +1407,19 @@ def test_neither_reader_takes_a_SHORT_page_for_an_exhausted_one():
     one and the same unsound inference, and no choice of threshold repairs it.
 
     WHAT THIS PINS NOW. Both servers below serve 2 rows at a time while /info states 5 — every page
-    after the first is SHORT of the stated size, and the last one is empty. Re-introduce any
-    length-based stop and the flat read comes back [1, 2] in 1 request (MEASURED on the pre-127
-    tree with the threshold made unreachable at `_paged_list`'s call site).
+    is SHORT of the stated size, and the last one is empty. Re-introduce a STATED-ONLY length stop
+    and the flat read comes back [1, 2] in 1 request (MEASURED on this tree). A threshold made
+    UNREACHABLE at `_paged_list`'s call site did the same on the pre-127 tree, where this test still
+    went by its old name — that is the measurement the parenthetical here used to cite.
+
+    IT USED TO SAY "ANY length-based stop", AND THAT WAS FALSE — VMCP-121 (596) measured it on this
+    tree. Put back the stop 127 actually DELETED — `len(items) >= min(stated, longest served)`, in
+    either of its two orderings — and this test stays GREEN, because that bar is 0 on the first page
+    and 2 after it, and this server never serves less than it. 23 other tests in this file catch
+    that re-introduction; this one does not. The over-broad word is not a detail: it invited exactly
+    the "the rule was put back and my test stayed green, so the rule is decorative" reading that 596
+    was filed to settle. What this server is built to catch is a bar that consults the STATED size,
+    and that is the claim it can carry.
 
     (VMCP-111 (582) landed one more correction on the deleted asserts while this card was in
     build — a note that "pins the SERVED operand" and "catches the SERVED-ONLY direction" name
