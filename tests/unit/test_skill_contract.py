@@ -2554,3 +2554,138 @@ def test_the_container_name_recipe_says_the_reviewers_id_is_not_its_own():
         "warning describes would not exist"
     assert 'docker rm -f "$NAME"' in section, \
         "the recipe no longer prescribes the removal that makes the collision destructive"
+
+
+def _second_pass_section(text: str) -> str:
+    """The «Второй независимый проход по СВОЕМУ тексту» section — the prose rule, and the only
+    place that says how a finding arriving AFTER the verdict is recorded.
+
+    Sliced like `_stuck_section` / `_independent_review_section`, and here the slicing is MEASURED
+    rather than stylistic: `[review] APPROVE` occurs a SECOND time in this file, in the reviewer's
+    rubric («человек прочитает `[review] APPROVE` и примет решение о Done»), so a whole-file
+    substring cannot tell "the discriminator is still taught here" from "the words survive in the
+    rubric". The heading is anchored WITH its `## ` prefix because the section's title is also
+    cited from two other places (the implementer's `advance(to='review')` bullet and the reviewer's
+    `review_kind` rubric) — a bare title match would land on one of those pointers instead."""
+    start = text.find("\n## Второй независимый проход по СВОЕМУ тексту\n")
+    assert start != -1, \
+        "SKILL.md no longer has the section on a second independent pass over one's own prose"
+    end = text.find("\n## ", start + 1)
+    assert end != -1, "the second-pass section no longer ends where the next section begins"
+    section = text[start:end]
+    assert 0 < len(section) < len(text), "the second-pass slice is not a proper subset of SKILL.md"
+    assert "Декомпозиция и файлинг" not in section, "the slice swallowed the following section"
+    return section
+
+
+def test_the_post_verdict_note_rides_on_a_comment_tool_with_no_stage_or_ownership_gate():
+    """#618: the second-pass rule ends by telling an agent NOT to hold a late finding for a second
+    `review_task` — fix the verdict as soon as you are sure, then append the finding with a plain
+    `comment`, because «гейтов по стадии и владению у него нет, он работает и из Review, и после
+    вердикта». That clause is a claim about CODE, and it is the half the whole instruction rests
+    on: grow a stage or an ownership gate on `Workflow.comment` and the rulebook keeps teaching a
+    flow that now raises — to every consumer, since SKILL.md self-heals onto them at server start
+    with no per-consumer pin and no review gate (see this module's docstring).
+
+    Today `comment` checks exactly two things — the text is not blank, and the task is on this
+    project's board — and neither is a stage or an owner. So the pin is BEHAVIOURAL: it builds the
+    state the rule is actually about (a card sitting in Review, assigned to somebody ELSE, whose
+    verdict is already recorded) and appends the note through the real Workflow. A substring pin
+    over `comment`'s source could not carry this — an added gate is new code, not a missing token,
+    so the assertion would stay green through the very drift it claims to catch.
+
+    The prose half is deliberately thin (short substrings, read from the flattened section): the
+    wording of this section is still being polished, and pinning sentences is review's job — this
+    module only holds the section open and checks it still promises the property.
+
+    MUTATION-CHECKED (`__pycache__` cleared between rounds, selection confirmed at exactly 1 test):
+    control PASS; add a stage gate to `Workflow.comment` (raise when the task is in Review) ->
+    FAIL; delete the clause from SKILL.md -> FAIL; rename the heading -> FAIL loudly, with its own
+    message. Re-wrapping the paragraph -> PASS by design (`_flat`)."""
+    flat = _flat(_second_pass_section(_skill_text()))
+    assert "`comment`" in flat, \
+        "the second-pass rule no longer names the tool a post-verdict finding is appended with"
+    assert "по стадии и владению" in flat, \
+        "the rule no longer says the comment tool is free of stage/ownership gates — the reason " \
+        "it can be used at all once the verdict is in"
+    assert "после вердикта" in flat, \
+        "the rule no longer says the note may be written AFTER the verdict is recorded"
+
+    # the state the rule is about: someone ELSE's card, in Review, already judged
+    api = FakeAPI(buckets=workflow.STAGES)
+    wf = workflow.Workflow(api, project_id=3)
+    implementer = {"id": 99, "username": "agent-implementer"}
+    assert implementer["id"] != api.me_user["id"], "control: the card must not be the reviewer's"
+    card = api.add_task("prose deliverable, reviewed", "Review", assignee=implementer)
+    wf.review_task(card["id"], verdict="approve", report="прогнал tests/unit -q, зелено")
+
+    note = "[review] post-verdict: второй проход вернулся, одна находка — атрибуция"
+    assert wf.comment(card["id"], note) == {"commented": card["id"]}, \
+        "SKILL.md tells an agent to append a post-verdict finding with `comment`; it no longer " \
+        "accepts a card in Review that belongs to someone else"
+    assert api.comments_text(card["id"])[-1] == note, \
+        "the post-verdict note did not reach the card's comment stream verbatim"
+    assert api.stage_of(card["id"]) == "Review", "appending a note moved the card"
+
+    # ...and the second `review_task` the rule says is unnecessary is genuinely not what happened
+    assert sum(c.startswith("[review] APPROVE") for c in api.comments_text(card["id"])) == 1, \
+        "control: the note must be an extra comment, not a second verdict"
+
+
+def test_only_the_review_tool_writes_a_comment_that_opens_with_its_verdict_line():
+    """#618: the same rule tells an agent HOW to tell a tool verdict from a note appended by hand —
+    «их видно по тому, что тулза печатает `[review] APPROVE`/`[review] NEEDS WORK` первой строкой,
+    а у этих трёх её нет». That is the reader's only discriminator, and it is grounded entirely in
+    two f-strings inside `review_task`. Reword either one and every agent (and every human reading
+    the journal) keeps applying a test that no longer separates anything, silently — a hand-written
+    note and a recorded verdict would look alike.
+
+    Pinned on the comment the tool actually WRITES, not on the source that formats it: the claim is
+    about the FIRST LINE a reader sees, which is a property of the stored comment after the
+    text->HTML->text round trip every agent comment makes (#85), so it is read back through
+    `comments_text` exactly as an agent would. Both verdicts are driven, because they are separate
+    f-strings and a mutation of one is invisible in the other.
+
+    The other half of the discriminator is that `comment` writes the agent's text through
+    UNCHANGED — it prepends no marker of its own — so a note carrying the `[review]` marker in its
+    body still does not open with a verdict line. That is asserted here too: without it "the tool
+    prints X first" would be a fact about one tool rather than a test a reader can apply.
+
+    MUTATION-CHECKED (`__pycache__` cleared between rounds, selection confirmed at exactly 1 test):
+    control PASS; re-spell the approve line `[review] approved` -> FAIL; re-spell the needs_work
+    line `[review] NEEDS-WORK` -> FAIL (each verdict is its own f-string, and the two rounds are
+    what proves neither is covering for the other); delete the clause from SKILL.md -> FAIL, with
+    the reviewer's rubric still citing `[review] APPROVE`, so a whole-file substring on THAT token
+    was measured GREEN on the same mutant — which is what `_second_pass_section` slices for (the
+    `первой строкой` half would have gone red either way); rename the heading -> FAIL loudly."""
+    section = _second_pass_section(_skill_text())
+    flat = _flat(section)
+    assert "`[review] APPROVE`" in flat and "`[review] NEEDS WORK`" in flat, \
+        "the rule no longer quotes the two verdict lines a reader tells the tool's comment by"
+    assert "первой строкой" in flat, \
+        "the rule no longer says the verdict line is the FIRST line — the discriminator is gone"
+
+    api = FakeAPI(buckets=workflow.STAGES)
+    wf = workflow.Workflow(api, project_id=3)
+    implementer = {"id": 99, "username": "agent-implementer"}
+
+    approved = api.add_task("verdict: approve", "Review", assignee=implementer)
+    wf.review_task(approved["id"], verdict="approve", report="перепрогнал замеры, сходится")
+    bounced = api.add_task("verdict: needs_work", "Review", assignee=implementer)
+    wf.review_task(bounced["id"], verdict="needs_work", report="утверждение шире своего замера")
+
+    assert api.comments_text(approved["id"])[-1].splitlines()[0] == "[review] APPROVE", \
+        "the approve verdict no longer opens with the line SKILL.md tells readers to look for"
+    assert api.comments_text(bounced["id"])[-1].splitlines()[0] == "[review] NEEDS WORK", \
+        "the needs_work verdict no longer opens with the line SKILL.md tells readers to look for"
+
+    # ...and a hand-written note, marker and all, is still distinguishable from both
+    note = "[review] post-verdict: находка приехала после вердикта, решения не меняет"
+    wf.comment(approved["id"], note)
+    written = api.comments_text(approved["id"])[-1]
+    assert written.splitlines()[0] == note, \
+        "`comment` no longer writes the agent's first line through unchanged — SKILL.md's " \
+        "discriminator assumes a hand-written note opens with whatever the agent typed"
+    assert not written.startswith(("[review] APPROVE", "[review] NEEDS WORK")), \
+        "a hand-written note now opens with a verdict line — the rulebook's way of telling a " \
+        "post-verdict note from a recorded verdict no longer separates them"
