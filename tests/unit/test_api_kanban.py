@@ -1101,9 +1101,28 @@ def _flat(pages, *, page_size=5, total_pages=None, info_status=200,
 
     `pages` is either a mapping {page_no: [row, ...]} — every page it does not name is EMPTY, which
     is how a finite list ends — or a CALLABLE page -> [row, ...] for a server that HAS no last page.
-    The callable form exists because a dict cannot express the shape the runaway-read tests are
-    about: `.get(page, [])` hands back an empty page eventually, and an empty page ends the read all
-    by itself (`if not items: break`), so a dict-backed server can never exercise the ceiling at all.
+
+    WHY THE CALLABLE FORM EXISTS, and it is NOT that a mapping cannot reach the ceiling: it can, and
+    test_a_flat_list_that_dribbles_new_rows_forever_RAISES_instead_of_a_partial_list below is a
+    mapping that does. A mapping of N pages ends the read itself on page N+1 (`.get(page, [])` ->
+    `[]` -> `if not items: break`), so it reaches the ceiling only while N is at least what the
+    ceiling COSTS on that shape — the budget when no page is ever full, one MORE when the server
+    fills its first page, which buys a request the budget is never charged for. MEASURED with the
+    budget edited in a scratch copy and this harness otherwise untouched: on the never-fills-a-page
+    shape, mappings of 119 / 120 / 121 pages at budget 120 give NO RAISE (119 rows) / 508 / 508, and
+    499 / 500 / 501 at budget 500 give NO RAISE (499 rows) / 508 / 508; the full-first-page shape of
+    the 199-page test named above is green up to budget 198 and DID NOT RAISE at 199. A mapping
+    fixture is therefore BUDGET-COUPLED, and past that point it does not merely fail — it stops
+    PINNING, because the guard no longer changes what it does:
+
+        budget edited 120 -> 500    ceiling as shipped       ceiling -> `if False:`
+        callable, no last page      508 at request 500       harness cap at 1501 (cap = 3 * budget)
+        mapping of 499 pages        499 rows, DID NOT RAISE  499 rows, DID NOT RAISE  <- the same
+
+    So the callable tells the two states apart at every budget measured — it has no page count to
+    outgrow, which is the whole point — while a mapping does so only below its own. That is exactly
+    why the 199-page test named above is safe at today's budget of 120 and dead at 199: filed as
+    VMCP-135 (624), out of this card's slice.
 
     The HARNESS CAP is the same honesty device `_tracker` uses: several of these shapes make the
     loop run forever if its termination guard is removed (a server that ignores `?page=` serves a
@@ -1274,12 +1293,15 @@ def test_a_list_that_never_finishes_paging_raises_instead_of_truncating():
     the ONE runaway-read test in this file built on a bare `make_api`, and a server with no last
     page is exactly the fixture that cannot survive losing the guard it pins: MEASURED on the tree
     before this card, ceiling -> `if False:`, __pycache__ cleared — this test produced NO RESULT AT
-    ALL, killed by SIGALRM at 60 s, while the identical mutation of the nested twin went RED in 5 s
-    (the first sweep that hit it blew a ten-minute tool timeout and left api.py mutated on disk).
+    ALL, killed by SIGALRM at 60 s, while the identical mutation of the nested twin went RED — the
+    two halves of that sentence are different scopes, so both re-measured here: 5 failed / 102
+    passed for the whole file in 4.5 s, and 0.15 s for the twin on its own (the first sweep that hit
+    the hang blew a ten-minute tool timeout and left api.py mutated on disk).
     A guard whose deletion HANGS is pinned in no way a reviewer or CI can use — a hang is
     indistinguishable from a slow suite, and nothing in this repo bounds a pytest run. With the cap
-    the same mutation now FAILS, in 0.23 s of test time (1 s wall including interpreter start), on
-    `RuntimeError: the read issued more than 360 requests` at `GET /projects?page=361`.
+    the same mutation now FAILS, its own test call taking 0.04 s (pytest --durations, re-measured on
+    this tree), on `RuntimeError: the read issued more than 360 requests` at
+    `GET /projects?page=361`.
 
     THE CAP IS `_flat`'S OWN DEFAULT, 3 * MAX_UNPROVEN_PAGES = 360, deliberately NOT tuned down: the
     correct read spends 120 requests here, so the cap sits at 3x what passing costs. A cap near the
@@ -1294,15 +1316,26 @@ def test_a_list_that_never_finishes_paging_raises_instead_of_truncating():
     the cap — MEASURED by deleting this line and running that mutation, which left this test PASSING.
 
     TWO THINGS IT IS NOT, both measured rather than assumed. It is NOT the sole guard on that
-    mutation: `>=` -> `>` over the whole unit suite is 2 failed / 688 passed, and the other is
-    test_a_flat_list_that_dribbles_new_rows_forever_RAISES_instead_of_a_partial_list. That is worth
+    mutation: `>=` -> `>` in `_paged_list`'s ceiling — that expression occurs TWICE in api.py, and
+    the `view_tasks` twin is left alone — fails exactly TWO tests in the whole unit suite and leaves
+    every other one green: this one and
+    test_a_flat_list_that_dribbles_new_rows_forever_RAISES_instead_of_a_partial_list. (The FAILURE
+    count is the claim on purpose: re-measured on this tree it is 2 failed / 691 passed against an
+    unmutated control of 693 passed, and it read 688 when this paragraph was written a few commits
+    ago — the pass count moves with every test the repo adds, the failure count does not.) That is
+    worth
     keeping anyway, because the two pin DIFFERENT numbers for the same budget — 120 here, 121 there
     — and the gap IS the accounting rule: that server fills its first page, so `max_items_per_page`
     justifies one request and the ceiling is reached one later; this one never fills a page at all,
     so nothing is justified and the budget buys 120. And it does NOT pin the budget's VALUE: the
     constant is imported from the code under test, so both sides of the assert move together if
     _MAX_UNPROVEN_PAGES is edited. It pins WHERE the guard fires relative to the budget. No test in
-    this file claims the latter, and this one should not be read as doing so."""
+    this file claims the latter, and this one should not be read as doing so.
+
+    THAT LAST PROPERTY IS THE FIXTURE'S DOING AS MUCH AS THE IMPORT'S, and it is the reason this
+    server is a CALLABLE rather than a mapping: MEASURED with the budget edited 120 -> 500, this
+    test raises at exactly 500 and PASSES, while a 499-page mapping in its place returns 499 rows,
+    raises nothing, and is red whether or not the ceiling exists (`_flat` carries the table)."""
     api, seen = _flat(lambda page: [{"id": page, "title": f"p{page}"}], page_size=5)
 
     with pytest.raises(VikunjaError) as exc:
