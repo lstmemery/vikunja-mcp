@@ -1332,11 +1332,11 @@ def test_a_paged_read_never_stops_on_the_total_pages_header():
     on serving full pages.
 
     VMCP-127 (608) made that structural rather than a rule: `_paged_list` no longer reads the
-    header AT ALL — it went with the fullness inference it was the complement of (see the block
-    above `_MAX_UNPROVEN_PAGES` in api.py). So this stands as the regression pin against
-    RE-INTRODUCING a header-driven stop, which is what VMCP-116's option (b) keeps proposing. Its
-    request count moved from 3 to 4 with that card: the read no longer ends on page 3 BEING SHORT,
-    it ends on page 4 bringing nothing new."""
+    header AT ALL — it went with the fullness inference it was the complement of (see api.py's
+    module-level `VMCP-127 (608) — THE FULLNESS INFERENCE IS GONE` block). So this stands as the
+    regression pin against RE-INTRODUCING a header-driven stop, which is what VMCP-116's option (b)
+    keeps proposing. Its request count moved from 3 to 4 with that card: the read no longer ends on
+    page 3 BEING SHORT, it ends on page 4 bringing nothing new."""
     api, seen = _flat({
         1: [{"id": 1}, {"id": 2}, {"id": 3}],
         2: [{"id": 4}, {"id": 5}, {"id": 6}],
@@ -1746,9 +1746,13 @@ def test_neither_reader_takes_a_SHORT_page_for_an_exhausted_one():
 # the w RESULT and the whole cost discussion and closed by naming 608 as the card that would carry
 # the full table. 127 then WROTE that table into api.py — as a pure addition, not a move — in its
 # own `# VMCP-127 (608) — THE FULLNESS INFERENCE IS GONE` block, which is where to look now. Find it
-# by that heading, not by a direction word: the block sits just BELOW `_MAX_UNPROVEN_PAGES`, while
-# api.py's own cross-reference to it says "the block above `_MAX_UNPROVEN_PAGES`" (127's text, left
-# alone here — it is that card's slice, and it is under review).
+# by that heading, not by a direction word: the block sits just BELOW `_MAX_UNPROVEN_PAGES`, and
+# the cross-references to it USED to say "the block above `_MAX_UNPROVEN_PAGES`" — 127's text, left
+# alone here because it was that card's slice. VMCP-132 (621) then retired all five of them for
+# this same heading form: THREE in api.py and TWO in this file, in the docstrings of
+# test_a_paged_read_never_stops_on_the_total_pages_header and
+# test_a_server_serving_MORE_than_it_stated_still_reads_the_list_whole. One site on each side was
+# LINE-WRAPPED across two physical lines, which is why 621's own card found only three of the five.
 
 
 def test_a_server_serving_MORE_than_it_stated_still_reads_the_board_whole():
@@ -1804,7 +1808,7 @@ def test_a_server_serving_MORE_than_it_stated_still_reads_the_list_whole():
     partial last page no longer ends a flat read — the read now ends on page 4 bringing nothing.
     That is the one shape where this card is measurably not free (live equivalent: labels() over 22
     labels at max_items_per_page=5, 6 requests -> 7); it is stated in full in the VMCP-127 section
-    below and in the block above `_MAX_UNPROVEN_PAGES` in api.py."""
+    below and in api.py's module-level `VMCP-127 (608) — THE FULLNESS INFERENCE IS GONE` block."""
     api, seen = _flat({
         1: [{"id": i} for i in range(1, 9)],            # EIGHT served against a stated 5
         2: [{"id": i} for i in (1, 2, 3, 4, 5, 9)],     # full by the STATED measure, short of 8

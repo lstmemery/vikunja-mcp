@@ -68,8 +68,16 @@ _MAX_UNPROVEN_PAGES = 120
 # WHERE a read stops, so healthy and degraded now execute the same stop rule by construction rather
 # than by a claim — which is what VMCP-103 was for and what 603 found broken.
 #
-# WHAT IT COSTS, measured rather than assumed (the card's own bullets were re-measured and three of
-# the four were wrong as stated):
+# WHAT IT COSTS, measured rather than assumed. Three entries, and they are the costs AS MEASURED
+# rather than a point-by-point reply to the card's four bullets — so do not read the colon as a
+# promise of four. Of those four, TWO were wrong as stated: "+1 request on EVERY flat `_paged_list`
+# read" (the first entry below carries the rule that actually holds) and "both of VMCP-111 (582)'s
+# constructed tests would need rewriting" (measured: ONE assertion in ONE test — the nested pin's
+# docstring was rewritten, not one of its assertions). The other two held. Two costs have no entry
+# here: the card's test rewrite, because it is not a runtime cost, and the randomized sweeps'
+# healthy-vs-degraded cross-check going tautological, recorded in test_api_kanban.py where those
+# sweeps live. The third entry below carries one the card never named at all — the FLAT twin of
+# the RAISE:
 #   * flat reads: +1 request only when the read spans >=2 pages AND its last content page is short
 #     of the old bar. +0 on a single partial page (the bar was 0 on page 1, so that request was
 #     always paid), on full-page lists, on `?page=`-ignoring endpoints, on an empty list. LIVE on
@@ -277,12 +285,12 @@ class VikunjaAPI:
     # what makes a `?page=`-ignoring endpoint cost 2 requests instead of looping on its own repeats
     # (measured: views/buckets stop there, with no duplicate rows).
     #
-    # The two conjuncts it USED to carry are gone together, and the block above `_MAX_UNPROVEN_
-    # PAGES` has the measurement: the fullness half (`len >= min(stated, longest served)`) was an
-    # unsound inference that truncated this reader on a short non-final REPEAT window, and the
-    # `x-pagination-total-pages` half existed to catch exactly the shape the fullness half could
-    # not — so with the inference gone the header could no longer change an outcome, and it went
-    # rather than staying as inert code.
+    # The two conjuncts it USED to carry are gone together, and the measurement lives in the
+    # module-level `VMCP-127 (608) — THE FULLNESS INFERENCE IS GONE` block: the fullness half
+    # (`len >= min(stated, longest served)`) was an unsound inference that truncated this reader on
+    # a short non-final REPEAT window, and the `x-pagination-total-pages` half existed to catch
+    # exactly the shape the fullness half could not — so with the inference gone the header could
+    # no longer change an outcome, and it went rather than staying as inert code.
     #
     # NOT chosen, and still not: paging authoritatively by `x-pagination-total-pages` (what
     # VMCP-108 suggested, on the strength of the header being meaningful for /projects). It is
@@ -605,10 +613,11 @@ class VikunjaAPI:
     # VMCP-89/92/103/111/124 are five cards spent on that one threshold. It was an unsound
     # inference — a page short of the server's real page size can still have tasks behind it — and
     # both /info branches spelled the same one, so an over-serving server truncated BOTH of them.
-    # The block above `_MAX_UNPROVEN_PAGES` carries the w-table that measures it, the control that
-    # names the trigger (a short non-final REPEAT window, over-serving or not) and the price of
-    # removing it. What is left over-reads rather than under-reads: dropping a guard from a
-    # keep-going can only make it fire more often, so this rule is a strict superset of the one it
+    # The module-level `VMCP-127 (608) — THE FULLNESS INFERENCE IS GONE` block carries the w-table
+    # that measures it, the control that names the trigger (a short non-final REPEAT window,
+    # over-serving or not) and the price of removing it. What is left over-reads rather than
+    # under-reads: dropping a guard from a keep-going can only make it fire
+    # more often, so this rule is a strict superset of the one it
     # replaced on EVERY server. And it consults no page size at all, so /info being up or down
     # can no longer change WHERE this read stops — the property VMCP-103 was for and VMCP-124 (603)
     # found broken, now structural instead of argued.
@@ -855,9 +864,10 @@ class VikunjaAPI:
                 required = require_titles is None or bucket.get("title") in require_titles
                 if required and tasks:
                     # NOT "and the page looked full": that length test was the inference VMCP-127
-                    # deleted (see the block above `_MAX_UNPROVEN_PAGES`). A required bucket that
-                    # came back with ANYTHING has not demonstrated it is finished, whatever /info
-                    # said about how much it would have served.
+                    # deleted; the measurement is in the module-level
+                    # `VMCP-127 (608) — THE FULLNESS INFERENCE IS GONE` block. A required bucket
+                    # that came back with ANYTHING has not demonstrated it is finished, whatever
+                    # /info said about how much it would have served.
                     required_had_tasks = True
                     if page_size is not None and len(tasks) >= page_size:
                         stated_full_required = True     # the server delivered at its OWN stated rate
