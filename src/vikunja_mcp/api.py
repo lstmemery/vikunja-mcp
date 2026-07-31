@@ -513,12 +513,27 @@ class VikunjaAPI:
     # эмпирически против vikunja 2.3.0 (см. отчёт F1): GET .../views/{v}/tasks пагинирует
     # tasks[] ВНУТРИ каждого бакета независимо через params={"page": n} с фиксированным
     # page size = max_items_per_page сервера (per_page на эту вложенную пагинацию не влияет).
-    # Порог «полной страницы» читаем из /info (_page_size, кэш на клиенте).
+    # Заявленный размер читаем из /info (_page_size, кэш на клиенте) — но ЗДЕСЬ ОН БЮДЖЕТ, А НЕ
+    # ОРАКУЛ: КОРОТКАЯ страница больше не значит «бакет кончился» (VMCP-127 (608) убрал этот
+    # вывод из ОБОИХ ридеров; направление легко перевернуть, поэтому явно: останавливала чтение
+    # КОРОТКАЯ страница, полная его ПРОДОЛЖАЛА). В этом цикле заявленный размер отвечает не на
+    # «кончился ли бакет», а только на «сколько ещё страниц этому чтению позволено потратить»:
+    # страница, на которой требуемый бакет отдал НЕ МЕНЬШЕ заявленного, потолку ничего не стоит
+    # (`stated_full_required` -> `unproven_pages` -> `_MAX_UNPROVEN_PAGES`; подробно — в абзаце
+    # «AND THE STATED PAGE SIZE STILL EARNS ITS KEEP — AS A BUDGET, NOT AS AN ORACLE» этой же
+    # заметки). Само правило остановки заявленный размер не спрашивает вовсе, и здесь оно НЕ
+    # пересказывается: описано там, где живёт, — у `keep_going` в цикле view_tasks и в модульном
+    # блоке «VMCP-127 (608) — THE FULLNESS INFERENCE IS GONE FROM BOTH READERS» (ищи по
+    # заголовку: файл длинный). Но «не спрашивает» — это про то, ГДЕ сработает keep_going, а НЕ
+    # про исход чтения целиком: через потолок /info на исход влияет, и ветки расходятся ровно на
+    # `_MAX_UNPROVEN_PAGES` неоправданных страниц. ИЗМЕРЕНО (real httpx over MockTransport, real
+    # api.py): 119 полных страниц и пустая — обе ветки отдают 595 задач за 120 запросов; 120
+    # полных и пустая — живой /info отдаёт 600 за 121 запрос, а упавший ПАДАЕТ 508 после 120.
     # Страницы могут перекрываться на 1-2 задачи из-за нестабильной сортировки при равных
     # ключах (без ORDER BY тайбрейкера) — наблюдался дубль, ни разу не пропуск. Мёржим по
-    # (bucket_id, task_id), останавливаемся когда ни один бакет не отдал полную страницу
-    # (значит дальше для всех пусто) ИЛИ страница не принесла ни одной новой задачи (защита
-    # от зацикливания на нестабильной сортировке).
+    # (bucket_id, task_id), а перед возвратом дедупим ещё раз ГЛОБАЛЬНО по task id, оставляя
+    # задачу только в последнем бакете, где её видели (#41, сразу после цикла): в возвращённой
+    # доске каждая задача встречается ровно один раз.
     #
     # VMCP-89 — THE PAGE SIZE IS KNOWN OR UNKNOWN, NEVER GUESSED, and that is a data-loss fix.
     # `_fetch_page_size` used to swallow an unreachable or silent `/info` and return a hardcoded
@@ -536,11 +551,21 @@ class VikunjaAPI:
     # way it can fail to (the request errored, or the payload carries no usable
     # max_items_per_page) — and an UNKNOWN size simply forbids concluding a bucket is complete
     # from a SHORT page: the loop then keeps going until a page brings no NEW task in the required
-    # buckets, which is a fact about the DATA and needs no page size at all. It costs exactly one
-    # extra request, only while /info is broken. A KNOWN size keeps the cheap fullness rule
-    # unchanged, so the healthy path pays nothing (this includes #43's require_titles win). Both
-    # outcomes are resolved ONCE per client (`_page_size_resolved`), so a broken /info does not
-    # add a probe per call either.
+    # buckets, which is a fact about the DATA and needs no page size at all. AS VMCP-89 LEFT IT
+    # that cost exactly one extra request and only while /info was broken, because a KNOWN size
+    # still kept the cheap fullness rule and the healthy path paid nothing. THAT SPLIT IS HISTORY:
+    # VMCP-127 (608) deleted the fullness rule from the HEALTHY branch too, so neither branch
+    # concludes anything from a page's LENGTH any more, and the two spend the SAME requests on the
+    # same board — MEASURED on an honest 5,5,2 board (real httpx over MockTransport, real api.py):
+    # 12 tasks in 4 requests with /info up, and 12 in 4 with /info down. BELOW THE CEILING, that
+    # is: `_MAX_UNPROVEN_PAGES` is now the only thing that still makes the two branches READ
+    # differently, and it does so loudly rather than silently (the numbers are in the header
+    # paragraph of this note, under «ЗДЕСЬ ОН БЮДЖЕТ»). What survives untouched is
+    # #43's require_titles win — an exhausted Queue beside a Done handing out five brand-new tasks
+    # every page still stops at ONE request on BOTH branches (measured the same way), because
+    # required buckets that come back EMPTY end the read whatever /info said; see «THE COST IS REAL
+    # AND IS NOT HIDDEN» in this note. Both outcomes are resolved ONCE per client
+    # (`_page_size_resolved`), so a broken /info does not add a probe per call either.
     #
     # NOT chosen: making the failure fail-CLOSED (propagate, so gc abandons the sweep — the shape
     # VMCP-72 used for its read deadline). It keeps gc at KEEP, but it leaves the identical
