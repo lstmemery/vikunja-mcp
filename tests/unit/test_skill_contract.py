@@ -2124,3 +2124,79 @@ def test_the_rulebook_quotes_the_saturated_message_and_the_payload_still_renders
 
     assert _SATURATED_NUMBERS_4_OF_3 in res["message"], res["message"]
     assert "ScheduleWakeup" in res["note"] and "Do NOT claim" in res["note"], res["note"]
+
+
+def _stuck_section(text: str) -> str:
+    """The «Застрял? Выход зависит от РОЛИ» section — where a stuck agent is told which door is
+    its own.
+
+    Sliced like `_freshness_section` / `_wip_saturated_bullet`, and here the slicing is MEASURED,
+    not stylistic: `review_task`, `needs_work` and `file_task` each occur several times elsewhere
+    in this rulebook (the review sections, the push recipe's Review-stage escalation, the
+    independent-review rules). A whole-file substring therefore stays GREEN with the reviewer's
+    bullet deleted outright — it cannot tell "the reviewer is told where to go" from "the words
+    exist somewhere". Verified by running exactly that mutation both ways."""
+    start = text.find("\n## Застрял? Выход зависит от РОЛИ\n")
+    assert start != -1, "SKILL.md no longer has the section that routes a stuck agent by role"
+    end = text.find("\n## ", start + 1)
+    assert end != -1, "the stuck section no longer ends where the next section begins"
+    section = text[start:end]
+    assert 0 < len(section) < len(text), "the stuck slice is not a proper subset of SKILL.md"
+    return section
+
+
+def test_the_rulebook_routes_a_stuck_REVIEWER_to_the_only_door_that_is_open_to_it():
+    """#590: the rulebook offered a stuck agent exactly two doors, `call_human` and `return_task`,
+    and a REVIEWER has neither. It works exclusively from Review, where `call_human` is gated to
+    Design/Build and (as of this card) `return_task` refuses too — and in multi-identity the card
+    isn't even theirs. Measured before the gate landed: `return_task` from Review passed with no
+    refusal and walked reviewed work to Backlog, unassigned and labeled `blocked` (the journal and
+    any `reviewed` label survive — it is the STAGE and the assignment that are walked back, and
+    `next_task` stops offering the card). That was the rulebook's own "stuck?" advice quietly
+    resetting the pipeline state it never mentioned.
+
+    So the prose now names the reviewer's ONE channel — `review_task(verdict='needs_work')`, which
+    hands the card back to its implementer in Build, who owns it and may `call_human` from there —
+    plus `file_task` for a finding outside the card's slice.
+
+    Pinned against the TOOLS, not just as words: both refusals are exercised through the real
+    Workflow below, so if a future change reopens either door the rulebook's "оба выхода
+    нерабочие" cannot keep shipping to every consumer as truth. (The reverse drift — code gates
+    that the prose stops mentioning — is what the sliced substring half catches.)
+
+    MUTATION-CHECKED (`__pycache__` cleared between rounds, selection confirmed at exactly 1 test):
+    control PASS; delete the reviewer bullet from the section while LEAVING `review_task` /
+    `needs_work` / `file_task` everywhere else in the file -> FAIL (and the whole-file substring
+    this slice replaces was measured GREEN on that same mutation); drop return_task's Review gate
+    -> FAIL; drop call_human's Review pointer -> FAIL; rename the heading -> FAIL loudly."""
+    text = _skill_text()
+    section = _stuck_section(text)
+
+    # the prose: the reviewer's door, and the two it is NOT
+    assert "review_task" in section and "needs_work" in section, \
+        "the stuck section no longer names the reviewer's only working channel"
+    assert "file_task" in section, \
+        "the stuck section no longer routes an out-of-slice finding to file_task"
+    assert "return_task" in section and "call_human" in section, \
+        "the stuck section no longer contrasts the reviewer's door with the implementer's two"
+
+    # the code: both doors really are shut from Review, which is what the prose asserts
+    api = FakeAPI(buckets=workflow.STAGES)
+    wf = workflow.Workflow(api, project_id=3)
+    card = api.add_task("under review", "Review", assignee=api.me_user)
+
+    with pytest.raises(workflow.WorkflowError) as returned:
+        wf.return_task(card["id"], reason="не понимаю задачу")
+    assert "review_task" in str(returned.value), \
+        "SKILL.md says return_task refuses from Review and points at review_task; it no longer does"
+    assert api.stage_of(card["id"]) == "Review", "the refusal moved the card anyway"
+
+    with pytest.raises(workflow.WorkflowError) as called:
+        wf.call_human(card["id"], question="какой из двух вариантов правильный?")
+    assert "review_task" in str(called.value), \
+        "SKILL.md says call_human refuses from Review and points at review_task; it no longer does"
+
+    # ...and the door the prose sends them to is genuinely open
+    assert wf.review_task(
+        card["id"], verdict="needs_work", report="вопрос человеку: какой из двух вариантов?"
+    )["moved_to"] == "Build"

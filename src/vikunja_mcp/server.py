@@ -452,6 +452,9 @@ def call_human(task_id: int, question: str) -> dict:
     calling, don't wait for an answer: take the next task; the human replies with a
     comment and moves the card back to Design/Build themselves, and next_task hands it
     back as "your active" task. This is NOT review and NOT an external block.
+    Works ONLY from Design/Build: if you are REVIEWING a card, put your question in
+    review_task(task_id, verdict='needs_work', report=<the question>) instead — the card
+    goes back to its implementer in Build, who owns it and calls call_human from there.
     When a notification webhook is configured (VIKUNJA_NOTIFY_WEBHOOK), the human is also
     pinged about the parked card — best-effort: the result's `notified` key reports
     delivery, and notified=false only means the PING was lost (the question IS parked;
@@ -464,7 +467,9 @@ def call_human(task_id: int, question: str) -> dict:
 def return_task(task_id: int, reason: str) -> dict:
     """Return a task because of an EXTERNAL block (no access/dependency/someone else's
     service): unassigns you, adds label 'blocked', moves it to Backlog for human
-    re-triage."""
+    re-triage. REFUSES from Review — never use it to get rid of a card you are reviewing;
+    a reviewer's block or question goes in review_task(verdict='needs_work'), and a finding
+    outside that card's slice goes in file_task."""
     return _wf().return_task(task_id, reason)
 
 

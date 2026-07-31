@@ -105,6 +105,94 @@ def test_return_task_unassigns_labels_and_moves_to_backlog(env):
     assert any(c.startswith("[blocked]") for c in api.comments_text(t["id"]))
 
 
+def test_return_task_refuses_from_review_and_still_works_everywhere_else(env):
+    """#590: `return_task` had NO stage gate at all — measured through the real `Workflow` over a
+    FakeAPI board (not a live tracker), a card in Review passed with NO refusal and walked to
+    Backlog, unassigned and labeled `blocked`. That is the door a reviewer reaches
+    for once `call_human` refuses them (it is gated to Design/Build), and it quietly evicts someone
+    else's finished, reviewed work from the pipeline for human re-triage.
+
+    The gate is Review-ONLY and sits BEFORE `_require_mine`, so the multi-identity reviewer — whose
+    card is the IMPLEMENTER's — reads the same stage refusal instead of "claim it first", advice
+    that would be actively wrong (you never claim work you are reviewing).
+
+    Both halves below are load-bearing. The refusal must leave the BOARD untouched: a guard that
+    raises after the comment/label/unassign already landed is not a guard. And the CONTROL sweep is
+    what makes the "must NOT happen" half mean anything — without it the first assertion stays
+    green for a `return_task` that raises unconditionally, which is not the ruling: every stage
+    except Review keeps working, because returning a half-claimed Queue/Design/Build card really is
+    the "externally blocked" case this tool exists for.
+
+    MUTATION-CHECKED: control PASS; delete the Review gate -> FAIL (the card walks to Backlog)."""
+    api, wf, _t = env
+    reviewed = api.add_task("someone else's finished work", "Review", assignee=api.me_user)
+
+    with pytest.raises(WorkflowError) as excinfo:
+        wf.return_task(reviewed["id"], reason="я не понимаю, чего от меня хотят")
+    msg = str(excinfo.value)
+    assert "review_task" in msg and "needs_work" in msg, \
+        f"the refusal must name the reviewer's actual channel, not just say no: {msg}"
+
+    # nothing happened: the gate fires BEFORE the comment / label / unassign / move
+    assert api.stage_of(reviewed["id"]) == "Review"
+    assert api.tasks[reviewed["id"]]["assignees"], "the refused return still unassigned the card"
+    assert not any(lb["title"] == "blocked" for lb in api.tasks[reviewed["id"]]["labels"])
+    assert not any(c.startswith("[blocked]") for c in api.comments_text(reviewed["id"]))
+
+    # CONTROL: every stage I deliberately left open still returns the card
+    for stage in ("Design", "Build", "Queue", "Backlog", "Your Call"):
+        open_task = api.add_task(f"blocked in {stage}", stage, assignee=api.me_user)
+        wf.return_task(open_task["id"], reason="чужой сервис лежит")
+        assert api.stage_of(open_task["id"]) == "Backlog", f"return_task broke from {stage}"
+        assert api.tasks[open_task["id"]]["assignees"] == []
+        assert any(lb["title"] == "blocked" for lb in api.tasks[open_task["id"]]["labels"])
+
+
+def test_call_human_refuses_from_review_and_the_stage_check_precedes_ownership(env):
+    """#590: the second half of the reviewer's dead end. `call_human` was already gated to
+    Design/Build, but its refusal only said WHERE it doesn't work, and `_require_mine` ran FIRST —
+    so the realistic reviewer (multi-identity: the card in Review is the implementer's) got
+    "not assigned to you — claim it first" and was pointed at the one thing they must never do.
+
+    Reordering changes no refusal SET (both checks are conjunctive) — only which message the
+    "in Review AND not mine" case gets. The prefix is kept BYTE-IDENTICAL because SKILL.md quotes
+    it verbatim, and the Review-only pointer is appended after it.
+
+    Why a pointer instead of opening the gate: measured, parking from Review is LOSSY. This
+    method's body `_move`s the card to Your Call, and from Your Call `review_task` refuses both
+    verdicts — the verdict would die with the question.
+
+    MUTATION-CHECKED: control PASS; drop the Review append -> FAIL; restore the old
+    `_require_mine`-before-stage order -> FAIL on the multi-identity assertion."""
+    api, wf, t = env
+    prefix = "call_human works only from Design/Build; task is in Review"
+
+    # solo: the card in Review is mine (I implemented it) -> stage refusal + the real channel
+    mine = api.add_task("my own card, awaiting review", "Review", assignee=api.me_user)
+    with pytest.raises(WorkflowError) as solo:
+        wf.call_human(mine["id"], question="кто из двух вариантов правильный?")
+    assert prefix in str(solo.value), \
+        f"SKILL.md quotes this prefix verbatim — it must not drift: {solo.value}"
+    assert "review_task" in str(solo.value), \
+        f"the refusal must send the reviewer to the channel that works: {solo.value}"
+
+    # multi-identity: the card is the IMPLEMENTER's. THIS is what pins the check order —
+    # under the old order this said "claim it first" and never mentioned the stage at all.
+    theirs = api.add_task("someone else's card in review", "Review")
+    api.tasks[theirs["id"]]["assignees"] = [{"id": 77, "username": "agent-impl"}]
+    with pytest.raises(WorkflowError) as multi:
+        wf.call_human(theirs["id"], question="кто из двух вариантов правильный?")
+    assert prefix in str(multi.value), \
+        f"the reviewer must read the STAGE refusal, not an ownership one: {multi.value}"
+    assert "not assigned to you" not in str(multi.value), \
+        f"ownership ran first again — 'claim it first' is the wrong advice here: {multi.value}"
+
+    # CONTROL: from Design, where the tool IS the right door, it still parks the card
+    parked = wf.call_human(t["id"], question="какой вариант деплоя выбрать?")
+    assert parked["moved_to"] == "Your Call"
+    assert api.stage_of(t["id"]) == "Your Call"
+
+
 def test_decompose_creates_children_in_queue_parent_epic(env):
     api, wf, t = env
     with pytest.raises(WorkflowError, match="2"):

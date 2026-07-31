@@ -1268,9 +1268,25 @@ class Workflow:
                 "state your question: what you need from the human and which options you weighed"
             )
         task, stage = self._find_task(task_id)
-        self._require_mine(task)
+        # Stage BEFORE ownership (#590). The refused SET is unchanged — both checks are
+        # conjunctive — but the ORDER decides which refusal a REVIEWER reads, and a reviewer's
+        # card is in Review and (multi-identity) assigned to the implementer, so the old order
+        # answered "claim it first": advice that is actively wrong here. You never claim work
+        # you are reviewing. The stage message below tells them where the question really goes.
         if stage not in ACTIVE_STAGES:
-            raise WorkflowError(f"call_human works only from Design/Build; task is in {stage}")
+            msg = f"call_human works only from Design/Build; task is in {stage}"
+            if stage == "Review":
+                # Measured (#590): parking from Review is not merely disallowed, it is lossy —
+                # this method's body would _move the card to Your Call, and from Your Call
+                # review_task refuses BOTH verdicts, so the verdict dies with the question.
+                msg += (
+                    " — a reviewer's question goes in review_task(task_id, verdict='needs_work', "
+                    "report=<the question>): the card returns to its implementer in Build, who can "
+                    "call_human from there. Parking it from here would move it OUT of Review, and "
+                    "review_task then refuses — your verdict would die with your question."
+                )
+            raise WorkflowError(msg)
+        self._require_mine(task)
         self.api.add_comment(task_id, f"[нужен человек] {question.strip()}")
         self._move(task_id, "Your Call")
         result = {
@@ -1304,7 +1320,23 @@ class Workflow:
     def return_task(self, task_id: int, reason: str) -> dict:
         if not (reason or "").strip():
             raise WorkflowError("give the reason for the block — it'll be posted as a comment")
-        task, _stage = self._find_task(task_id)
+        task, stage = self._find_task(task_id)
+        # Review ONLY (#590), and BEFORE _require_mine so solo and multi-identity read the same,
+        # correct refusal (in multi-identity a reviewer's card is the implementer's, and
+        # "claim it first" would send them the wrong way). Measured: without this gate the tool
+        # passed from Review and silently walked reviewed work to Backlog, unassigned + `blocked`.
+        # Every OTHER stage stays open on purpose — returning a half-claimed Queue/Design/Build
+        # card is a defensible "externally blocked", which is what this tool is for.
+        if stage == "Review":
+            raise WorkflowError(
+                "return_task is not available from Review: it would unassign the card and send "
+                "work that is under review (or already approved) back to Backlog for re-triage. "
+                "A reviewer who needs a human decision puts it in review_task(task_id, "
+                "verdict='needs_work', report=<the question>) — the card goes back to its "
+                "implementer in Build, who owns it and can call_human from there; a finding "
+                "outside the card's slice goes to file_task. Anything else genuinely blocked in "
+                "Review takes that same door back to Build first."
+            )
         self._require_mine(task)
         self.api.add_comment(task_id, f"[blocked] {reason.strip()}")
         label = self.api.get_or_create_label(LABEL_BLOCKED)
