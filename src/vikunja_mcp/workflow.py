@@ -1383,10 +1383,12 @@ class Workflow:
         # Review. The gate belongs HERE rather than in one shared stage rule because human-only
         # Done is not expressed anywhere as a rule: every tool re-derives it from its own source
         # stage (advance from_stage, claim Queue, review_task Review, call_human Design/Build),
-        # so a tool that moves a card without a stage check reproduces the hole. `decompose` is
-        # exactly that tool and STILL is — measured on the same card, it walks the parent to
-        # Backlog with `epic` — hence #626 does NOT claim to be the last one; that sibling is
-        # filed separately. Ownership cannot stand in for the check either: a human moving a card
+        # so a tool that moves a card without a stage check reproduces the hole. `decompose` was
+        # exactly that tool — measured on the same card, it walked the parent to Backlog with
+        # `epic` — hence #626 did NOT claim to be the last one; that sibling was gated by #649,
+        # which closed the last instance known then WITHOUT closing the class: the rule is still
+        # nowhere written once, so the next mutating tool reopens it and nothing catches that.
+        # Ownership cannot stand in for the check either: a human moving a card
         # into Done does not unassign it, so `_require_mine` passes on the very card that must be
         # untouchable.
         if stage == "Done":
@@ -1412,7 +1414,44 @@ class Workflow:
             raise WorkflowError("decomposition means at least 2 subtasks")
         if any(not (st.get("title") or "").strip() for st in subtasks):
             raise WorkflowError("every subtask must have a title")
-        task, _stage = self._find_task(task_id)
+        task, stage = self._find_task(task_id)
+        # Done (#649): the second half of the same bypass #626 closed for `return_task`, and the
+        # LAST measured instance of it. Measured on a card driven the normal way (Queue -> claim
+        # -> Design -> Build -> Review -> approve -> a human moves it to Done): decompose did not
+        # refuse and walked the parent to Backlog with NO assignee, carrying `reviewed` AND `epic`
+        # at once, with two fresh children in Queue — the board claiming a card a human accepted
+        # is now an unfinished container. Not a regression: at 51ab50d^ (the parent of #590's
+        # commit) decompose reads the same `_find_task` -> `_require_mine` with no stage check at
+        # all. The gate is per-tool for the same reason #626's is: human-only Done is nowhere
+        # expressed as ONE rule, and the only chokepoint every card-touching tool shares is
+        # `_find_task`, which also serves the READ paths (get_task/comment/download_attachment/
+        # attach_file) — shutting Done there would make an accepted card unreadable, a worse
+        # regression than the hole. A guard inside `_move` would fire only AFTER the children
+        # exist and `epic`/unassign have landed, which is not a guard. So the CLASS stays open by
+        # construction — the next mutating tool that moves a card without checking its stage
+        # reopens it, and nothing catches that — and is filed for a human's ruling as #662; what
+        # is closed here is the last instance known TODAY, and that was SWEPT, not assumed: all 12
+        # registered tools were run against one such card and NONE walks it out — the five that
+        # refuse (advance, claim, call_human, review_task, return_task) plus this one, and the six
+        # that never move it (next_task, get_task, comment, file_task, attach_file,
+        # download_attachment). The count is spelled out because #626 shipped this same claim off
+        # a sweep of 5 of 12. Review is a different question and stays open here — decompose
+        # does walk a card out of Review, the shape #590 gated for return_task, filed as #663.
+        # Ownership cannot stand in: a human moving a card into Done does not unassign it, so
+        # `_require_mine` passes on the very card that must be untouchable — and it runs SECOND
+        # here so that a Done card belonging to someone else reads the stage refusal instead of
+        # "claim it first", which for an accepted card is the one answer that can never be right.
+        if stage == "Done":
+            raise WorkflowError(
+                "decompose is not available from Done: a human accepted this card, and splitting "
+                "accepted work back out into Backlog is the human's call too — the Done "
+                "transition is human-only in BOTH directions. It would also unassign the card, "
+                "stack `epic` on top of `reviewed` and drop fresh children into Queue, so the "
+                "board would claim work a human accepted is an unfinished container. Work that a "
+                "Done card revealed is NEW work, not a split of this one: file_task the "
+                "follow-ups (related_task_id=<this task>) for a human to triage — call_human "
+                "refuses from Done as well; a human can also move this card back themselves."
+            )
         self._require_mine(task)
 
         created: list[dict] = []

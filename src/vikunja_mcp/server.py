@@ -485,7 +485,11 @@ def decompose(task_id: int, subtasks: list[dict], ordered: bool = False) -> dict
     Pass ordered=True when the subtasks MUST run in sequence (each builds on the previous):
     they are chained in ARRAY ORDER so only the head is claimable immediately and each later
     child unlocks when its predecessor reaches Review. Leave ordered=False (default) when the
-    subtasks are independent and may be worked in parallel."""
+    subtasks are independent and may be worked in parallel.
+    REFUSES from Done (#649): a human accepted that card, and splitting accepted work back out
+    to Backlog is the human's transition too — file_task the follow-ups instead (they are NEW
+    work, not a split of this one). It still works from Backlog/Queue/Design/Build/Review/Your
+    Call, where the ownership guard applies as usual."""
     return _wf().decompose(task_id, subtasks, ordered)
 
 

@@ -2337,8 +2337,9 @@ def test_the_rulebook_names_BOTH_stages_return_task_refuses_from():
     self-heals onto every consumer. Measured at the time: `return_task` really did walk a card out
     of Done (the transition CLAUDE.md calls human-only) — one of SEVERAL agent tools that could,
     never the only one, so the rulebook was advertising an agent bypass of that invariant as
-    supported. `decompose` is the other known one — measured on the same card, untouched by this
-    diff, filed as #649 — so shutting this door does not shut them all.
+    supported. `decompose` was the other known one — measured on the same card, untouched by THIS
+    diff, gated separately by #649 — so shutting this door did not shut them all, and the class
+    (no single rule anywhere) is still open by construction.
 
     Both halves are pinned against the TOOL, not just as words, because prose and gate drifting
     apart is the failure this card is about: the gate must refuse from Done AND the bullet must say
@@ -2394,6 +2395,102 @@ def test_the_rulebook_names_BOTH_stages_return_task_refuses_from():
         card = api.add_task(f"blocked in {stage}", stage, assignee=api.me_user)
         assert wf.return_task(card["id"], reason="чужой сервис лежит")["moved_to"] == "Backlog", \
             f"the bullet promises return_task still works from {stage}; it does not"
+
+
+def _decompose_bullet(text: str) -> str:
+    """The `decompose` bullet in «Декомпозиция и файлинг находок» — where an agent looks the tool
+    up, and therefore where its shut stage has to be written.
+
+    Sliced to the BULLET rather than the section, and the difference was measured on the mutant
+    that deletes this bullet's Done sentences outright: at SECTION scope «Done» survives in the
+    epic-lifecycle bullet («весь набор … в Done уводит ЧЕЛОВЕК») and `file_task` survives in its
+    own bullet a few lines below, so a section-wide TOKEN check stays GREEN on exactly the
+    deletion this pin exists to catch. Stated precisely, because the honest half matters too: the
+    verbatim RULE string is gone at either scope, so it is the token assertions — «Done», the open
+    stage list — that the bullet slice makes meaningful, not every assertion here."""
+    start = text.find("\n- **`decompose` — про ТВОЙ таск.**")
+    assert start != -1, "SKILL.md no longer describes decompose in the decomposition section"
+    end = text.find("\n- **", start + 1)
+    assert end != -1, "the decompose bullet no longer ends where the next top-level bullet does"
+    bullet = text[start:end]
+    assert 0 < len(bullet) < len(text), "the decompose slice is not a proper subset of SKILL.md"
+    assert "Жизненный цикл эпика" not in bullet, "the slice swallowed the epic-lifecycle bullet"
+    return bullet
+
+
+def test_the_rulebook_says_decompose_refuses_from_done_too():
+    """#649: the sibling hole #626 measured and left open. Until this landed, `decompose` walked a
+    card a human had ACCEPTED out of Done — to Backlog, unassigned, carrying `reviewed` and `epic`
+    at once, with fresh children in Queue — while the rulebook said nothing about it in the place
+    an agent reads decompose. The gate and the sentence land together because prose and gate
+    drifting apart is the failure this whole file exists to catch: #626's own bullet advertised
+    the Done path as normal for a year of nobody noticing.
+
+    Pinned against the TOOL as well as the words. The rule (WHICH stage is shut) is asserted
+    verbatim, because token presence is measurably not enough — that was proven on #626's pin,
+    where a mutant inverting the rule kept every token and sailed through green. The open list is
+    derived from `workflow.STAGES`, so adding a stage or shutting another one fails here until the
+    rulebook is updated too; reword the bullet freely, but the rule has to still be spelled out.
+
+    The `return_task` bullet's caveat is checked from here too, and it is the reason this pin is
+    not just about decompose: that caveat is what stops a reader concluding «из Done теперь не
+    уводит ничто» from a clean sweep. #626 wrote it naming decompose as the live counter-example;
+    this card removes that counter-example, so the caveat now has to carry the CLASS instead (the
+    rule is nowhere written once — the next mutating tool reopens the hole). A caveat that decayed
+    into «all doors are shut» would be worse than none, so it is pinned, not trusted.
+
+    MUTATION-CHECKED (`__pycache__` cleared between rounds, restore sha256-verified): control
+    PASS; drop decompose's Done gate -> FAIL on the code half (DID NOT RAISE); delete the Done
+    sentences from the decompose bullet -> FAIL on the rule assertion (which reddens at either
+    scope — it is the TOKEN assertions the bullet slice protects, and on that same mutant a
+    section-wide token check was measured GREEN); INVERT the
+    rule keeping every token -> FAIL; drop `Review` from the open list -> FAIL, and this one only
+    reddens because the list is sliced: measured on the deletion mutant, «Review», «Backlog» and
+    «Queue» all still occur in this bullet for unrelated reasons, so a bullet-wide `in` would have
+    stayed green; soften the return_task caveat into "nothing walks a card out of Done any more"
+    -> FAIL."""
+    text = _skill_text()
+    bullet = _decompose_bullet(text)
+
+    # the RULE, not its vocabulary: which stage is shut, spelled out
+    rule_at = bullet.find("**Он ОТКАЗЫВАЕТ из ОДНОЙ стадии — Done")
+    assert rule_at != -1, \
+        "the decompose bullet no longer states WHICH stage decompose refuses from (#649 Done)"
+    assert "file_task" in bullet, \
+        "the bullet no longer routes work an accepted card revealed to file_task"
+    # ...and the open list must be exactly the complement, straight out of the code. Scoped to the
+    # parenthesised list, NOT the whole bullet: this bullet talks about Backlog, Queue and Review
+    # for unrelated reasons ("подзадачи встанут в Queue", "доехала до Review"), so a bullet-wide
+    # `in` would stay green with a stage quietly dropped from the promise. Measured, not assumed.
+    open_list = bullet[rule_at:bullet.find(")", rule_at) + 1]
+    for stage in workflow.STAGES:
+        if stage == "Done":
+            continue
+        assert stage in open_list, \
+            f"the bullet promises the OTHER stages keep working but never names {stage!r}"
+
+    # the caveat next door must now carry the CLASS, not a counter-example this card just removed
+    stuck = _return_task_bullet(text)
+    assert "#649" in stuck, \
+        "the return_task caveat still names decompose as an OPEN bypass, or stopped naming it"
+    assert "следующий мутирующий тул" in stuck, \
+        "the caveat decayed into 'every door is shut' — the class is still open by construction"
+
+    # the code: the door really is shut, and the six others really are open
+    api = FakeAPI(buckets=workflow.STAGES)
+    wf = workflow.Workflow(api, project_id=3)
+
+    accepted = api.add_task("accepted by a human", "Done", assignee=api.me_user)
+    with pytest.raises(workflow.WorkflowError) as done:
+        wf.decompose(accepted["id"], [{"title": "A"}, {"title": "B"}])
+    assert "file_task" in str(done.value), \
+        "SKILL.md says decompose refuses from Done and points at file_task; it no longer does"
+    assert api.stage_of(accepted["id"]) == "Done", "the refusal split the accepted card anyway"
+
+    for stage in ("Backlog", "Queue", "Design", "Build", "Review", "Your Call"):
+        card = api.add_task(f"big job in {stage}", stage, assignee=api.me_user)
+        assert wf.decompose(card["id"], [{"title": "A"}, {"title": "B"}])["parent"]["moved_to"] \
+            == "Backlog", f"the bullet promises decompose still works from {stage}; it does not"
 
 
 def _crashed_agent_bullet(text: str) -> str:
