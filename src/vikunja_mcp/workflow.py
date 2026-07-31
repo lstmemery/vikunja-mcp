@@ -575,12 +575,41 @@ class Workflow:
         ]
         if stuck:
             stuck.sort(key=lambda t: -t.get("priority", 0))
+            note = (
+                "this task in Queue is assigned to you (by a human or an unfinished "
+                "claim) — call claim(task_id) to finish moving it into Design"
+            )
+            # #571: this branch, like the resume above, returns BEFORE the free == 0 slot guard,
+            # so at zero free slots it hands back an instruction the pump cannot carry out —
+            # claim() is exactly what the WIP gate refuses ("WIP limit reached"). Deliberately a
+            # VARIANT of #527's clause and not that text: reaching this branch PROVES `offerable`
+            # was empty, i.e. every active task of the caller is ALREADY named in `exclude`, so
+            # "your exclude may be incomplete" — the ambiguity #527 answers on the resume branch —
+            # cannot arise here. The useful fact is the other one: the instruction above is
+            # un-followable right now, no wip_saturated came with it (this branch outranks the slot
+            # check), and the way to surface saturation is to exclude THIS id for the rest of the
+            # tick and ask again — the same "claim ОТКАЗАЛ — id в exclude до конца тика" move
+            # SKILL.md already teaches. Nothing is claimed, so the card must NOT be dispatched onto:
+            # it stays claimable once a slot frees. The branch ORDER is again NOT what gets fixed,
+            # for #527's reason — `vikunja-mcp claimable` calls next_task with an EMPTY exclude and
+            # its closed kind enum depends on this order. The over-budget clause stays on the resume
+            # branch (#529's slice): the card here is not the rework that caused an overshoot.
+            # Pure string building — next_task stays READ-ONLY BY CONTRACT (see the top of this
+            # method). Conditional on free == 0 so the ordinary stuck claim keeps a byte-identical
+            # note.
+            if wip["free"] == 0:
+                note += (
+                    ". NOTE: wip.free == 0, so claim(task_id) will be REFUSED right now (\"WIP "
+                    "limit reached\") — the slot gate stands between this instruction and Design. "
+                    "And no wip_saturated is reported because this branch is offered BEFORE the "
+                    "slot check, so the state is read from your own set, not the board: put this "
+                    "id in `exclude` for the rest of the tick and call next_task again — that is "
+                    "how the saturation signal appears. Do NOT dispatch an agent onto it: nothing "
+                    "has been claimed, and the card stays claimable once a slot frees"
+                )
             return with_wip({
                 "resume": True, "stage": "Queue", "task": self._summary(stuck[0]),
-                "note": (
-                    "this task in Queue is assigned to you (by a human or an unfinished "
-                    "claim) — call claim(task_id) to finish moving it into Design"
-                ),
+                "note": note,
             })
 
         # independent-review pull path (#117): offer ANY task in Review awaiting review —

@@ -659,3 +659,95 @@ def test_the_over_budget_resume_note_is_the_base_plus_both_clauses_in_that_order
     assert res["note"] == (
         _clause_free_base() + _OVER_BUDGET_CLAUSE_4_OF_3 + _ZERO_FREE_CLAUSE
     ), res["note"]
+
+
+# --- the STUCK-CLAIM branch at free == 0: the instruction it gives cannot be followed (#571) ---
+#
+# Same shape as the resume pins above, different fact. The stuck branch ("assigned to you, still in
+# Queue — call claim") also outranks the slot guard, so at free == 0 it hands back an instruction
+# the WIP gate will refuse, with no wip_saturated to explain why. What it must NOT say is #527's
+# "check your exclude": this branch is only reached when `offerable` is empty, i.e. every active
+# task of the caller is ALREADY excluded — so that ambiguity is structurally impossible here and
+# copying the resume clause would send the pump auditing a set that is by construction complete.
+#
+# The literals below are OWNED BY THIS FILE for the reason spelled out at the top of the previous
+# section: importing them from workflow.py would put both sides of the differential on one source,
+# and a clause written INTO the constant would move both sides together and stay green.
+
+_STUCK_BASE_TAIL = "call claim(task_id) to finish moving it into Design"
+
+_STUCK_ZERO_FREE_CLAUSE = (
+    ". NOTE: wip.free == 0, so claim(task_id) will be REFUSED right now (\"WIP limit reached\") — "
+    "the slot gate stands between this instruction and Design. And no wip_saturated is reported "
+    "because this branch is offered BEFORE the slot check, so the state is read from your own set, "
+    "not the board: put this id in `exclude` for the rest of the tick and call next_task again — "
+    "that is how the saturation signal appears. Do NOT dispatch an agent onto it: nothing has been "
+    "claimed, and the card stays claimable once a slot frees"
+)
+
+
+def _stuck_free_base() -> str:
+    """The stuck-claim note in the ONE state that appends nothing: a free slot.
+
+    Mirrors _clause_free_base for the other resume-shaped branch — read from a SEPARATE env so a
+    wording change to the shared prose stays a one-file edit, with the endswith as the anchor that
+    keeps the differential honest (a clause appended UNCONDITIONALLY moves this ending and fails
+    here instead of hiding inside the base)."""
+    api, wf = _env(wip_limit=3)
+    api.add_task("stuck claim", "Queue", assignee=api.me_user)
+    res = wf.next_task()
+    assert res["wip"]["free"] > 0, "precondition: this env must append no clause at all"
+    assert res["note"].endswith(_STUCK_BASE_TAIL), res["note"]
+    return res["note"]
+
+
+def test_a_stuck_claim_at_zero_free_slots_says_the_claim_will_be_refused():
+    """#571: the payload's own instruction is un-followable in this state, and nothing else says so.
+
+    The pump is told "call claim(task_id)" while the WIP gate is standing right behind it, and no
+    wip_saturated came with the offer because this branch is checked BEFORE the slot guard. Without
+    the clause the pump walks into a "WIP limit reached" refusal it had no way to predict, and the
+    saturation signal it actually needs never appears — that only happens once this id is in
+    `exclude` and next_task is asked again. Pinned as the ACTION the note must demand, not as
+    incidental wording, so a rewrite that keeps the instruction stays green."""
+    api, wf = _env(wip_limit=1)
+    held = _hold(api, wf, "in flight")
+    api.add_task("stuck claim", "Queue", assignee=api.me_user)
+    res = wf.next_task(exclude=[held["id"]])
+    assert res["resume"] is True and res["stage"] == "Queue"
+    assert "wip_saturated" not in res
+    assert res["wip"]["free"] == 0
+    assert "put this id in `exclude` for the rest of the tick and call next_task again" \
+        in res["note"]
+    assert "Do NOT dispatch an agent onto it" in res["note"]
+
+
+def test_the_stuck_claim_note_is_unchanged_when_a_slot_is_free():
+    """The no-noise half, and the one a reviewer should distrust most: at free > 0 the instruction
+    is followable — claim() will go through — so the clause would be pure noise on the ordinary
+    unfinished-claim tick. Drop the `if wip["free"] == 0` guard in workflow.py (append
+    unconditionally) and this goes red while the test above stays green; that is the property."""
+    api, wf = _env(wip_limit=3)
+    stuck = api.add_task("stuck claim", "Queue", assignee=api.me_user)
+    res = wf.next_task()
+    assert res["resume"] is True and res["task"]["id"] == stuck["id"]
+    assert res["wip"]["free"] > 0
+    assert res["note"].endswith(_STUCK_BASE_TAIL), res["note"]
+    assert "wip.free == 0" not in res["note"]
+    assert _STUCK_ZERO_FREE_CLAUSE not in res["note"]
+
+
+def test_the_zero_free_stuck_note_is_the_base_plus_571s_clause_and_nothing_else():
+    """Equality, not `in`: the same coverage VMCP-106 restored for the resume branch, applied to
+    this one before it can be lost the same way. A future clause appended here — conditional or
+    not — shows up on the left-hand side only and goes red, because the right-hand base is read
+    from the free > 0 env that appends nothing. The `wip` check first is not decoration: it proves
+    the env really is the saturated one, so a refactor that quietly gave it a free slot could not
+    turn this into a restatement of the base."""
+    api, wf = _env(wip_limit=1)
+    held = _hold(api, wf, "in flight")
+    api.add_task("stuck claim", "Queue", assignee=api.me_user)
+    res = wf.next_task(exclude=[held["id"]])
+    assert res["wip"] == {"active": 1, "limit": 1, "free": 0}
+    assert res["stage"] == "Queue"
+    assert res["note"] == _stuck_free_base() + _STUCK_ZERO_FREE_CLAUSE, res["note"]
