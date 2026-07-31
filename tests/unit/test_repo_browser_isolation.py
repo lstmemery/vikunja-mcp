@@ -54,7 +54,12 @@ only put its trigger in a file under `.git/` or in a local config key, and neith
 every "stronger" option reduces to "works on whichever machine ran an installer" — which is
 precisely the "correct on the author's disk and reaching nobody" failure the settings-delivery
 pin below was written after being bitten by.
+
+Most of that asks GIT a question, so most of this file needs a git checkout to mean anything at
+all — see `requires_git_checkout` below for what happens in a tree that is not one, and why the
+answer is a skip rather than the 30 red tests it used to be.
 """
+import inspect
 import json
 import subprocess
 from pathlib import Path
@@ -166,6 +171,54 @@ SHAPE_SCAN_MAX_BYTES = 64 << 20
 # ANYTHING ELSE is ignored entirely — which is why the value, not the key, is what gets pinned.
 ENV_TRUE_VALUES = frozenset({"true", "1"})
 
+# The two call sites through which every git-dependent pin in this file reaches git. Held as a
+# constant so the scanner that enforces `requires_git_checkout` (see the last test) does not
+# match its OWN source and report itself.
+GIT_CALL_MARKERS = ("_git(", "_ignore_rule(")
+
+# --- Is this tree a git checkout at all? (#622) ---------------------------------------------
+#
+# Most pins here ask GIT a question and assert on its exit code, which makes them meaningless —
+# not failing, MEANINGLESS — in a tree git does not track: a `git archive`/sdist extraction, a
+# copied tree, any derived measurement environment. They used to FAIL there, 30 ids of them,
+# with `fatal: not a git repository … assert 128 == 0`, and that cost a real measurement: #594's
+# mutation sweep ran in exactly such a tree and its author read the raw `N failed` counts as
+# mutation KILL counts. Every row of a six-row table was inflated by precisely these 30 and the
+# headline conclusion came out wrong by a factor of 16. A CONSTANT failure is the dangerous kind:
+# it survives any before/after comparison intact, so it does not look like noise, it looks
+# like signal.
+#
+# The probe is a FILESYSTEM fact, deliberately NOT `git rev-parse --show-toplevel`, and the
+# difference is not stylistic. `rev-parse` walks UP. Measured while writing this: an extraction
+# placed inside another repository (a `build/` directory under a checkout is the ordinary way
+# that happens) answers exit 0 there and names the OUTER repo — so a rev-parse probe would
+# decline to skip, and these pins would go on to interrogate the wrong repository, reporting
+# things like "`.claude/settings.json` is not carried by git" about a repo that was never asked
+# about. `.git` at REPO_ROOT ITSELF (a directory in a main checkout, a `gitdir:` FILE in a linked
+# worktree — which is where the parallel drain's per-task agents run, so that case is the common
+# one, not an edge) is the question actually being asked, costs one stat, and cannot walk
+# anywhere.
+#
+# It also never reads git's EXIT CODE, and that is what stops the skip from becoming an
+# off-switch. "No repository" is a MISSING `.git`; "git failed" is a non-zero exit WITH a `.git`
+# present — two different facts from two different sources, which is the only arrangement in
+# which one cannot mask the other. So a git that is broken inside a real checkout (no binary, a
+# corrupt repo, unreadable objects) leaves `.git` exactly where it is: nothing skips, and the
+# original assertions go red as loudly as before. Both directions are pinned in
+# `test_the_checkout_probe_is_not_an_off_switch_for_a_broken_git`.
+_IS_GIT_CHECKOUT = (REPO_ROOT / ".git").exists()
+
+requires_git_checkout = pytest.mark.skipif(
+    not _IS_GIT_CHECKOUT,
+    reason=(
+        f"{REPO_ROOT} has no .git, so it is not a git checkout (a `git archive`/sdist "
+        "extraction, a copied tree). These pins ask git what it would publish and there is no "
+        "git here to ask: the property is NOT APPLICABLE, not broken. In a checkout every one "
+        "of them runs, and a git that FAILS there still goes red — this probe never reads "
+        "git's exit code"
+    ),
+)
+
 
 def _git(*args: str) -> subprocess.CompletedProcess:
     """git, always rooted at the repo — never at whatever cwd pytest happened to be started in."""
@@ -264,6 +317,7 @@ def test_the_committed_settings_turn_playwright_isolation_on():
         "present-looking and inert"
 
 
+@requires_git_checkout
 def test_the_settings_file_is_actually_carried_by_git():
     """Being right in the author's checkout is not the property — REACHING everyone else is.
 
@@ -286,6 +340,7 @@ def test_the_settings_file_is_actually_carried_by_git():
         "and no new worktree — every per-task agent of the parallel drain gets a repo without it"
 
 
+@requires_git_checkout
 def test_gitignore_still_lets_the_settings_file_through():
     """The negation is the whole delivery mechanism, and it can be defeated without being removed.
 
@@ -393,6 +448,7 @@ def test_the_committed_settings_never_carry_a_path_to_live_session_cookies():
         "makes every browser_* call fail with `Error reading storage state … ENOENT`"
 
 
+@requires_git_checkout
 @pytest.mark.parametrize("path", COVERED_NAMES)
 def test_the_listed_storage_state_names_are_excluded_by_this_repos_gitignore(path):
     """Layer one of the guard: the NAMES it forecloses — no more, and this test says no more.
@@ -452,6 +508,7 @@ def test_the_listed_storage_state_names_are_excluded_by_this_repos_gitignore(pat
         "cover it, and vanishes silently in a fresh clone"
 
 
+@requires_git_checkout
 @pytest.mark.parametrize("path", UNCOVERED_NAMES)
 def test_the_name_list_is_known_to_be_incomplete(path):
     """The honesty half — it pins what the guard does NOT do, so the prose cannot outrun it.
@@ -480,6 +537,7 @@ def test_the_name_list_is_known_to_be_incomplete(path):
         "this name is NOT protected. The guard and the claim about it move together"
 
 
+@requires_git_checkout
 @pytest.mark.parametrize("path", COLLATERAL_NAMES)
 def test_the_state_glob_hides_more_than_a_file_called_state_json(path):
     """The PRICE of layer one, pinned in the same way its coverage is — because it was misstated.
@@ -516,6 +574,7 @@ def test_the_state_glob_hides_more_than_a_file_called_state_json(path):
         "still covered, because they are the names the leak was constructed under"
 
 
+@requires_git_checkout
 @pytest.mark.parametrize("path", CASE_VARIANT_NAMES)
 def test_the_name_list_covers_a_different_set_on_linux_than_on_macos(path):
     """The coverage table is platform-local, and saying so is the whole point of this pin.
@@ -562,6 +621,7 @@ def test_the_name_list_covers_a_different_set_on_linux_than_on_macos(path):
         "covered on macOS only. Update both, and move the name into COVERED_NAMES"
 
 
+@requires_git_checkout
 @pytest.mark.parametrize("path", (
     ".playwright-mcp/page-2026-07-30T20-35-12-319Z.yml",
     ".playwright-mcp/storage-state-2026-07-30T20-35-12-331Z.json",
@@ -596,6 +656,7 @@ def test_the_playwright_output_dir_is_excluded(path):
         ".gitignore, so it is not protected in a fresh clone"
 
 
+@requires_git_checkout
 def test_no_file_of_storage_state_shape_is_reachable_by_git():
     """Layer two: the guard that does NOT depend on the name, and the reason the card shipped.
 
@@ -707,6 +768,7 @@ def test_no_file_of_storage_state_shape_is_reachable_by_git():
         "the measurement in the comment that justifies it"
 
 
+@requires_git_checkout
 def test_no_storage_state_file_is_tracked_today():
     """The name-shaped version of the same question, kept because it answers a wider one.
 
@@ -799,3 +861,157 @@ def test_the_accepted_true_set_is_the_one_playwright_actually_parses(value):
     assert value not in ENV_TRUE_VALUES, \
         f"{value!r} was added to ENV_TRUE_VALUES, but playwright-core's envToBoolean does not " \
         "read it as true — the isolation pin now passes on a setting that does nothing"
+
+
+def test_the_checkout_probe_is_not_an_off_switch_for_a_broken_git():
+    """#622: the skip must say "not applicable" WITHOUT ever being able to say it about a failure.
+
+    A skip is the one repair that can do more damage than the bug it fixes: 30 red tests are at
+    least visible, whereas 30 silently skipped ones look exactly like 30 passing ones in the
+    `-q` summary line this repo reads its verdicts from. So the two claims `requires_git_checkout`
+    makes are asserted here, one per branch, and this test carries no marker — it is the one that
+    has to run on BOTH sides of the very condition it is checking.
+
+    In a CHECKOUT: nothing may be skipped (the marker's condition must be false — that is the
+    gate's whole value, and an inverted probe would take all 30 pins offline while the suite
+    stayed green), and git must actually ANSWER. That second assertion is the trap the card named
+    explicitly: a git that is present but broken here — no binary, corrupt repo, unreadable
+    objects — is a FAILURE, not a missing repository, and it goes red on this line instead of
+    disappearing into a skip. It can only work because the probe reads the filesystem and this
+    reads git: one source cannot mask the other. `--show-toplevel` is also required to name
+    REPO_ROOT itself rather than some ancestor, which is what would be happening if a `.git` ever
+    turned up here belonging to a repo this tree is merely nested inside.
+
+    In a NON-checkout: something must actually be skipped, and the reason has to name the tree —
+    a skip whose reason does not say WHICH tree was found wanting is how a measurement
+    environment gets misread a second time.
+
+    `is_checkout` is RECOMPUTED here rather than read from `_IS_GIT_CHECKOUT`, and that is the
+    whole reason this test can fail at all. Its first version branched on the module constant —
+    the thing under test — so inverting the probe merely sent this test down the OTHER branch,
+    where every assertion held. Measured, in a real checkout: `11 passed, 30 skipped`, no
+    failures: the gate silently offline and the suite green, i.e. precisely the outcome this
+    docstring claims to forbid, produced by the round written to prove it could not happen. The
+    local `dot_git.exists()` is therefore a SECOND, independent statement of the contract — "the
+    marker skips exactly when REPO_ROOT has no `.git`" — and defining the probe some other way
+    has to come and reconcile with it here, on purpose.
+
+    MUTATION-CHECKED (`__pycache__` cleared between rounds, the WHOLE file selected per round so
+    that the skip count is visible and not just the failure count, source restored from a COPY):
+    control PASS in the checkout and PASS in a `git archive` extraction; invert the probe to
+    `not (REPO_ROOT / ".git").exists()` -> FAIL in the checkout, the round the first version of
+    this test passed; force `_IS_GIT_CHECKOUT = True` inside an extraction -> FAIL; leave the
+    constant honest and invert only the MARKER's condition -> FAIL, the round that shows the two
+    assertions cover two different mutation sites.
+
+    The last two assertions need a broken TREE rather than a broken source, so they were built:
+    a `.git` file pointing at a gitdir that does NOT exist (which takes some doing — see below)
+    -> the whole file measures `31 failed, 10 passed, 0 skipped`, i.e. the 30 pins go red exactly
+    as they did before this marker existed, plus this one naming the cause, while the 10 that
+    pass are precisely the pins that never needed git. Nothing hides in a skip, which is the
+    property; and a `.git` file pointing at a repo whose `core.worktree` names a DIFFERENT
+    directory -> FAIL on the REPO_ROOT comparison, git having answered exit 0 about that other
+    tree. That second one had to be hunted for, and the hunt is the finding: a nested extraction
+    does NOT reach it (the probe returns early), and neither does a copied linked worktree — its
+    `.git` file still points at a gitdir that EXISTS, and git derives the toplevel from where the
+    `.git` file SITS, so `rev-parse` succeeds and names the copy. A dangling gitdir is therefore
+    a rarer shape than it first looks (the source repo has to be gone, or on another machine), not
+    the ordinary residue of an interrupted worktree operation. Reachable only via `core.worktree`,
+    but reachable — which is what stops that line from being an assertion no round can arrive at,
+    the kind this file elsewhere calls a claim nobody has tested.
+    """
+    dot_git = REPO_ROOT / ".git"
+    is_checkout = dot_git.exists()  # recomputed, NOT read off the constant — see docstring
+    skips = requires_git_checkout.mark.args[0]
+    reason = requires_git_checkout.mark.kwargs.get("reason") or ""
+
+    assert _IS_GIT_CHECKOUT is is_checkout, \
+        f"the checkout probe says {_IS_GIT_CHECKOUT}, but {dot_git} " \
+        f"{'exists' if is_checkout else 'does not exist'}. The contract is exactly `.git` at " \
+        "REPO_ROOT: read any other way, the probe can call a real checkout derived — taking all " \
+        "30 git-backed pins offline while the suite stays green — or call a `git archive` " \
+        "extraction a checkout and put the 30 red failures back (tracker #622)"
+    assert skips == (not is_checkout), \
+        f"requires_git_checkout would {'SKIP' if skips else 'RUN'} the git-backed pins in a " \
+        f"tree that {'IS' if is_checkout else 'is NOT'} a checkout. Skipping them in a real " \
+        "checkout takes the storage-state gate offline while the suite reports nothing but " \
+        "green, which is strictly worse than the 30 red tests this marker replaced"
+
+    if not is_checkout:
+        assert str(REPO_ROOT) in reason, \
+            "the skip reason no longer names the tree it applies to. Whoever reads a summary " \
+            "line of skips next has to be told WHICH directory was judged not-a-checkout, or " \
+            "they are back to guessing what their measurement environment did"
+        return
+
+    probe = _git("rev-parse", "--show-toplevel")
+    assert probe.returncode == 0, \
+        f"{dot_git} exists, so this tree IS a repository, but git could not answer " \
+        f"`rev-parse --show-toplevel` (exit {probe.returncode}): {probe.stderr.strip()}. That " \
+        "is a BROKEN git, not a missing repository, and the difference is the whole point: it " \
+        "must be red here rather than skipped by the marker, which is why the marker reads the " \
+        "filesystem and never git's exit code"
+    assert Path(probe.stdout.strip()).resolve() == REPO_ROOT, \
+        f"git says the enclosing repository is {probe.stdout.strip()!r}, not {REPO_ROOT}. The " \
+        "pins in this file assert about THIS tree, so a git that answers about an ancestor " \
+        "would be answering a question nobody asked"
+
+
+def test_every_pin_here_that_shells_out_to_git_declares_it():
+    """The marker has to keep being APPLIED, and remembering is not a mechanism.
+
+    The 30 failures this card removed were not written deliberately — they accumulated, one pin
+    at a time, because nothing connected "this test runs git" to "this test needs a checkout".
+    Leave that connection to reviewers and the next git-backed pin re-opens the hole for the
+    next derived measurement environment to fall into.
+
+    So the rule is enforced from the source: a test function that reaches git — through `_git`
+    or `_ignore_rule`, the only two doors — must either carry `requires_git_checkout` or branch
+    on `_IS_GIT_CHECKOUT` itself. The second alternative is not a loophole, it is what
+    `test_the_checkout_probe_is_not_an_off_switch_for_a_broken_git` needs in order to assert
+    anything about the checkout branch at all: it must run unmarked, on both sides.
+
+    The marker is matched as the WHOLE mark, not by its name: an `Mark(name="skipif", …)` with
+    some other condition would otherwise satisfy this, and "skipped for an unrelated reason" is
+    not the property being enforced. What stays approximate — stated because this file's habit is
+    to price its guards rather than round them up — is the escape hatch: `_IS_GIT_CHECKOUT` is
+    looked for as a SUBSTRING of the function's source, docstring included, so a test that merely
+    mentions the constant in prose while calling git unguarded would pass. That bound is accepted
+    rather than engineered away: the hatch exists for exactly one test, taking it is a deliberate
+    act by someone editing this file, and the behaviour it protects is held on the checkout side
+    by the pin above regardless.
+
+    (`GIT_CALL_MARKERS` is a constant rather than two literals here for a mundane reason: written
+    inline, this scanner's own source would contain the tokens and it would report itself.)
+
+    MUTATION-CHECKED (`__pycache__` cleared, exactly 1 test selected per round): control PASS;
+    remove `@requires_git_checkout` from `test_no_storage_state_file_is_tracked_today` -> FAIL
+    naming that function alone; remove it from the parametrised
+    `test_the_playwright_output_dir_is_excluded` -> FAIL naming that one, so a decorator stacked
+    above `parametrize` is seen too; add a new unmarked test that calls `_ignore_rule` -> FAIL
+    naming it; replace the marker with an UNRELATED `pytest.mark.skipif(False, reason=…)` ->
+    FAIL, the round that distinguishes matching the whole mark from matching its name, and which
+    an earlier version of this scanner passed.
+    """
+    unguarded = []
+    for name, obj in sorted(globals().items()):
+        if not name.startswith("test_") or not callable(obj):
+            continue
+        source = inspect.getsource(obj)
+        if not any(marker in source for marker in GIT_CALL_MARKERS):
+            continue
+        marked = any(
+            mark == requires_git_checkout.mark for mark in getattr(obj, "pytestmark", [])
+        )
+        if not marked and "_IS_GIT_CHECKOUT" not in source:
+            unguarded.append(name)
+
+    assert not unguarded, \
+        f"{unguarded} shell out to git without declaring that they need a git checkout. Add " \
+        "`@requires_git_checkout` (or branch on `_IS_GIT_CHECKOUT` if the test must run on both " \
+        "sides). Outside a checkout — a `git archive`/sdist extraction, a copied tree, a " \
+        "mutation-sweep environment — such a test cannot pass and cannot mean anything: it " \
+        "reports `fatal: not a git repository … assert 128 == 0`, which is indistinguishable " \
+        "from a real finding in a `-q` summary and CONSTANT, so it survives every before/after " \
+        "comparison looking like signal. That is tracker #622, and it already corrupted one " \
+        "mutation sweep's numbers (#594) by exactly the count of tests in this position"
