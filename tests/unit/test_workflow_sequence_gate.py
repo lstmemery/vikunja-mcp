@@ -984,3 +984,173 @@ def test_the_starving_message_is_the_plain_tail_plus_the_retriage_escalation_and
     for tail in tails[:_RETRIAGE_N]:
         expected = _blocker_moved_to_backlog(expected, blocker_ref[tail["id"]])
     assert retriage["message"] == expected + _RETRIAGE_ESCALATION_2, retriage["message"]
+
+
+# --- the prose's INTERPOLATED VALUES, not just its clauses (VMCP-143 / #632) ---
+#
+# #586 pinned next_task's prose against CLAUSE growth and, in the SAME commit (037db94), one VALUE
+# pair on purpose — `wip_saturated`'s «all 3 WIP slot(s) are busy (4 active)», owned there as a
+# literal and asserted against BOTH SKILL.md and the payload ("Pinned as the VALUES and the
+# IMPERATIVE, not as prose"). VMCP-125 (606) pinned the first value inside the STARVING message
+# (the retriage count). This section pins six more, each measured GREEN — i.e. genuinely
+# unprotected — on 886211e, this commit's parent, at baseline **716 passed**: the four values of
+# `_cycle_signal` (the closed loop, each ref, each stage, the task count), the LEFT side of
+# `_starving_tail`'s waiting line, and the starving headline's count. With the pins in place the
+# same six go red (2 or 3 failed of **721**) and every restore returns to 721. Each was probed
+# alone, on a pristine workflow.py in an isolated clone, needle asserted to occur exactly once (the
+# waiting line's f-string occurs VERBATIM three times — in `_starving_tail`, `claim` and `advance`
+# — so a bare needle silently mutates three renderings), caches cleared, restores
+# checksum-verified. A seventh probe, swapping the waiting line's BLOCKER ref, came back 1 failed /
+# 715 passed WITHOUT these pins: 606's ref-anchored helper already catches it, as a precondition
+# rather than as a statement about the arrow. The pin below makes that half semantic too, so it no
+# longer depends on a helper's internals.
+#
+# WHY PER-IDENTIFIER SUBSTRING ASSERTIONS CANNOT DO THIS JOB, and this is the whole point of the
+# section. Every ref in `_cycle_signal`'s message renders TWICE — once in `loop`, once in `detail`
+# — and the head ref THREE times, because the loop is closed with `nodes[0]`. So the pre-existing
+# `identifier in message` checks are satisfied by whichever copy survives. Measured in two halves,
+# because no ONE tree shows both: rendering `n['stage']` where `n['ref']` belongs leaves the whole
+# suite green at 716 WITHOUT this section, and under THIS section's env (stages pairwise distinct)
+# the same mutant renders `Задачи в цикле: Queue in 'Queue'; Build in 'Build'; Design in 'Design'`
+# — every identity gone from the detail clause — while every pre-existing test still passes (3
+# failed of 721, and the three are this section's own params). Mutual masking, demonstrated rather
+# than argued. The repair is therefore not another PER-IDENTIFIER check but a CONTIGUOUS literal
+# spanning a value in its position — `in msg` is still the operator, what changed is what the
+# literal covers: the surviving copy is rendered with different punctuation and cannot satisfy it.
+#
+# BOTH SIDES ABSOLUTE, which is 606's rule and the reason these pins can disagree with the code.
+# `_spelled_ref` respells the ref format in THIS FILE, so no literal below is derived from
+# workflow.py; the numerals are spelled in the parametrize lists rather than computed from the
+# parameter, so a test-side `str(size)` cannot quietly put both sides back on one source. A RELATIVE
+# check (numeral == the payload's own count) would pass any edit moving value and prose together.
+#
+# WHAT THE ENVS HOLD APART. The cycle env gives its nodes PAIRWISE DISTINCT stages that are never
+# equal to a ref — without that, swapping `n['ref']` for `n['stage']` is unobservable by
+# construction. The starving env gives every tail a blocker of its own, so no task is its own
+# blocker and the arrow's two sides genuinely differ. Both properties are asserted, not assumed:
+# 606's bug was an env that silently collapsed into an equality and blinded a correct pin.
+# PARAMETRIZING OVER SIZE is what kills a hard-coded count, which no single state can, and that is
+# measured HERE rather than inherited: hard-coding the cycle count to `2` goes red at sizes 1 and 3
+# and green at 2 (2 failed of 721); hard-coding the headline to `2` goes red at 3 tails only (1
+# failed of 721). 606 hit that limit from the other side — its review comment measured a hard-coded
+# 2 passing 606's single-state pin, and a hard-coded 1 passes it by construction, since 606's old
+# env rendered a literal 1. The self-loop is the case the production comment names FIRST ("render
+# the loop CLOSED ... so a 2-cycle and a self-loop both read unambiguously" — it names both, and
+# both are parametrized): drop the closure and a self-loop renders as a bare ref with no arrow.
+#
+# DELIBERATELY NOT PINNED, measured rather than assumed — but NOT "free by construction", which is
+# what this note claimed until a constructed counterexample killed it. A clause inserted INSIDE the
+# starving base prose that CARRIES an interpolation — `f" ({len(waiting)} need human re-triage)"`,
+# false in the plain state where ZERO tails need re-triage — is green at 716 without these pins and
+# green at 721 with them. That is clause growth (#586's class), not one of this card's values. What
+# guards that region is 606's differential, and it guards exactly one thing: a clause that renders
+# DIFFERENTLY in the plain and the retriage states. Measured — same insertion, same position,
+# `len(retriage)` instead of `len(waiting)`: 1 failed, at the `retriage["message"] == expected + …`
+# equality above. So the base is free of STATE-INDEPENDENT edits only.
+# Nor is wholesale pinning the only close available, which this note also used to claim: the
+# measured clause happens to carry the word `re-triage`, so a plain-state `assert "re-triage" not
+# in plain_msg`, beside the existing `_RETRIAGE_ANNOTATION not in plain_msg` (which misses it only
+# because it needles the FULL annotation), closes THIS clause in one line. It does not close the
+# CLASS — a clause interpolating a count with no retriage vocabulary walks past it — and the class
+# does need the base pinned wholesale, which #586 and 606 both decided against with a stated
+# reason. Card 632's own review comment calls that reason true of EMISSION and false of CONTENT;
+# it is recorded here as INHERITED, not endorsed. Recorded so the next reader does not re-measure
+# it as a fresh finding.
+
+_CYCLE_STAGES = ["Queue", "Build", "Design"]   # pairwise distinct, and never equal to a ref
+
+
+def _spelled_ref(task: dict) -> str:
+    """The ref format as THIS FILE spells it — deliberately not imported from workflow.py, so the
+    expected literals below and the rendered message come from two independent sources and can
+    genuinely disagree. Asserted against the payload's own `ref` before any literal uses it, so a
+    format change fails loudly here instead of silently weakening every pin in this section."""
+    return f"{task['identifier']} ({task['id']})"
+
+
+def _cycle_env(api, size: int) -> list[dict]:
+    """A `size`-node predecessor cycle whose members sit in DISTINCT stages: task i follows task
+    i+1, and the last follows the first. Only the Queue member is a gate candidate; the walk
+    reaches the others as unfinished predecessors, so the reported order is the creation order."""
+    tasks = [api.add_task(f"cycle {i}", _CYCLE_STAGES[i]) for i in range(size)]
+    for i in range(size):
+        api.add_relation(tasks[i]["id"], tasks[(i + 1) % size]["id"], "follows")
+    return tasks
+
+
+@pytest.mark.parametrize("size, count", [(1, "1"), (2, "2"), (3, "3")])
+def test_the_cycle_message_pins_the_closed_loop_every_ref_beside_its_own_stage_and_the_count(
+    env, size, count
+):
+    """`_cycle_signal`'s four interpolated values in THREE contiguous literals — the detail literal
+    carries each ref beside its OWN stage, so one assert covers two of the four. This is the branch
+    that tells a human a chain can NEVER self-unblock and only they can cut it, so a wrong ref sends
+    them to the wrong card and a wrong count misstates how much of the board is stuck."""
+    api, wf = env
+    tasks = _cycle_env(api, size)
+    res = wf.next_task()
+    assert res["cycle"] is True
+
+    stages = _CYCLE_STAGES[:size]
+    refs = [_spelled_ref(t) for t in tasks]
+    # The env properties every literal below rests on. Collapse any of them — one shared stage, a
+    # stage that reads like a ref, a reordered walk — and the pins go vacuous instead of failing.
+    assert [n["id"] for n in res["cycle_tasks"]] == [t["id"] for t in tasks]
+    assert [n["stage"] for n in res["cycle_tasks"]] == stages
+    assert [n["ref"] for n in res["cycle_tasks"]] == refs
+    assert len(set(stages)) == size and len(set(refs)) == size
+    assert not set(refs) & set(stages)
+
+    msg = res["message"]
+    # 1. the loop, rendered CLOSED: the head repeats at the end, so a 1-cycle still shows an arrow.
+    assert f"— {' → '.join(refs + refs[:1])}: " in msg, msg
+    # 2. the task count — the one value here with no machine-readable twin anywhere in the payload
+    #    (`cycle_tasks` merely permits counting a list).
+    assert f": {count} задач(и) " in msg, msg
+    # 3. the detail: every ref beside ITS OWN stage, in order, and nothing after it.
+    assert msg.endswith("; ".join(f"{r} in '{s}'" for r, s in zip(refs, stages))), msg
+
+
+@pytest.mark.parametrize("n_tails, headline", [
+    (2, "2 queued task(s) can't be claimed"),
+    (3, "3 queued task(s) can't be claimed"),
+])
+def test_the_starving_waiting_line_reads_blocked_task_then_blocker_and_the_headline_counts_them(
+    env, n_tails, headline
+):
+    """The waiting line states WHICH task waits on WHICH blocker, and the headline says how many.
+    606's differential cannot see either: it changes one attribute between two calls, so a
+    corruption that renders identically in both states cancels out of the equality. Both mutations
+    measured green at 716 without this test — the line's LEFT side replaced by the blocker's own
+    ref, so the line reads `X ← X in 'Build'` and the task that actually waits vanishes from it
+    (nothing is transposed, hence not an inversion), and the headline count corrupted
+    state-independently."""
+    api, wf = env
+    heads = [api.add_task(f"chain head {i}", "Build") for i in range(n_tails)]
+    tails = [api.add_task(f"tail {i}", "Queue") for i in range(n_tails)]
+    for tail, head in zip(tails, heads):
+        api.add_relation(tail["id"], head["id"], "follows")
+
+    res = wf.next_task()
+    assert res["starving"] is True and res["needs_retriage"] is False
+    # The env property the arrow pin lives on: every tail has a blocker of its OWN, so the two sides
+    # of the arrow are always different tasks. Give two tails one shared head and the inversion
+    # stops being observable on the shared line.
+    assert len({_spelled_ref(t) for t in tails + heads}) == 2 * n_tails
+    # The pairing and its order, pinned to what this test built, so the rendered line below is read
+    # against the board the test set up rather than against whatever the payload happens to say.
+    assert [(w["task"]["id"], w["blocked_by"][0]["id"]) for w in res["waiting"]] == [
+        (t["id"], h["id"]) for t, h in zip(tails, heads)
+    ], res["waiting"]
+    # And the SPELLING, against the payload's own `ref` — the same check the cycle test makes, so
+    # `_spelled_ref`'s promise holds in BOTH tests. Without it a ref-FORMAT change surfaces only as
+    # a wall-of-message diff at the equality below, instead of naming what actually moved.
+    assert [(w["task"]["ref"], w["blocked_by"][0]["ref"]) for w in res["waiting"]] == [
+        (_spelled_ref(t), _spelled_ref(h)) for t, h in zip(tails, heads)
+    ], res["waiting"]
+
+    msg = res["message"]
+    assert msg.startswith(headline), msg
+    assert msg.endswith(" | ".join(
+        f"{_spelled_ref(t)} ← {_spelled_ref(h)} {_IN_BUILD}" for t, h in zip(tails, heads)
+    )), msg
