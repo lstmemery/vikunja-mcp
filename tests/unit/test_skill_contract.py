@@ -2742,7 +2742,7 @@ def _second_pass_section(text: str) -> str:
 
     Sliced like `_stuck_section` / `_independent_review_section`, and here the slicing is MEASURED
     rather than stylistic: `[review] APPROVE` occurs a SECOND time in this file, in the reviewer's
-    rubric («человек прочитает `[review] APPROVE` и примет решение о Done»), so a whole-file
+    rubric («человек увидит `[review] APPROVE` и примет решение о Done»), so a whole-file
     substring cannot tell "the discriminator is still taught here" from "the words survive in the
     rubric". The heading is anchored WITH its `## ` prefix because the section's title is also
     cited from two other places (the implementer's `advance(to='review')` bullet and the reviewer's
@@ -2813,12 +2813,33 @@ def test_the_post_verdict_note_rides_on_a_comment_tool_with_no_stage_or_ownershi
 
 
 def test_only_the_review_tool_writes_a_comment_that_opens_with_its_verdict_line():
-    """#618: the same rule tells an agent HOW to tell a tool verdict from a note appended by hand —
-    «их видно по тому, что тулза печатает `[review] APPROVE`/`[review] NEEDS WORK` первой строкой,
-    а у этих трёх её нет». That is the reader's only discriminator, and it is grounded entirely in
-    two f-strings inside `review_task`. Reword either one and every agent (and every human reading
-    the journal) keeps applying a test that no longer separates anything, silently — a hand-written
-    note and a recorded verdict would look alike.
+    """#618: the same rule tells an agent HOW to tell a tool verdict from a note appended by hand.
+    A verdict written by the tool always opens with its own line — `[review] APPROVE` or `[review]
+    NEEDS WORK`, `первой строкой` — and the post-verdict notes the rule points at have no such
+    line, which is how a reader knows they were appended with `comment` instead. That is the
+    reader's only discriminator, and it is grounded entirely in two f-strings inside `review_task`.
+    Reword either one and every agent (and every human reading the journal) keeps applying a test
+    that no longer separates anything, silently — a hand-written note and a recorded verdict would
+    look alike.
+
+    Deliberately a PARAPHRASE, and the claim it makes is narrow: the only spans above quoted FROM
+    SKILL.md are the three the assertions below pin (`[review] APPROVE`, `[review] NEEDS WORK`,
+    `первой строкой`) — the remaining backticked tokens are this codebase's own identifiers and a
+    shell command, not citations. VMCP-148 (646)'s ruling, and not a style choice: this paragraph
+    opened with a «…» citation of a phrase SKILL.md does not contain (`grep -c` = 0), which sent
+    the next reader hunting for text that was not there. Its history is worth stating because git
+    cannot tell it — 618's second pass flagged the draft wording, the implementer reworded
+    SKILL.md BEFORE committing, and only this docstring's copy of the pre-edit phrasing landed, so
+    `git log -S` finds that phrase in this file and in SKILL.md at NO commit. Re-pinning the quote
+    to today's wording would only restart the same clock.
+
+    What the paraphrase buys, and what it does not: the three quoted spans are read by an
+    assertion, so THOSE cannot go stale quietly. The prose around them is NOT pinned — reword the
+    rule's clause about post-verdict notes into its own opposite while leaving those three tokens
+    standing, and this test stays green (measured on this card). So a re-wrap or a meaning-
+    preserving re-wording will not break this docstring, and a meaning-CHANGING one will not flag
+    it either: re-read this paragraph against SKILL.md whenever that section moves. Do not
+    "helpfully" restore a citation here — the citation is the part that rotted last time.
 
     Pinned on the comment the tool actually WRITES, not on the source that formats it: the claim is
     about the FIRST LINE a reader sees, which is a property of the stored comment after the
