@@ -31,7 +31,25 @@ Status: approved (brainstorming) → ready for implementation plan
 > marked passage carries the claim that someone checked it, which is a *stronger* claim than an
 > unmarked one and can therefore be wrong in a worse way — and the correction of a wrong marker
 > is itself a marked passage, so it inherits the same risk. "Assume a third pass finds more" was
-> written before the third pass; it found two. Assume a fourth.
+> written before the third pass; it found two. A fourth pass did come — tracker #597, off
+> VMCP-110's sweep — and found a **fourth** marker claiming more than the code does: the
+> `--release` marker below stated the `code` payload over refusals in general, where only
+> `--release`/`--gc` refusals carry one. That one was *contextually* true (its host paragraph is
+> `--release`) and false the moment it was read on its own, which is the form this hazard takes
+> once the obvious cases are gone: `git grep machine-readable` used to print that marker's line
+> directly beside §3's "no machine-readable key at all", with NEITHER line naming a channel — one
+> document contradicting itself, resolvable only by this banner, which says the marked passage is
+> the stronger claim. It was the wrong one to trust. (Re-run that grep today and the two lines
+> still sit together — the surviving fragment simply no longer quantifies over anything, so there
+> is no universal left to print. The fix removed the false claim, not the juxtaposition.)
+>
+> It is scoped in place, and `tests/unit/test_skill_contract.py` now runs the same predicate that
+> guards CLAUDE.md over this file and its sibling plan. **That net is narrower than it sounds and
+> should not be leaned on**: an independent review of #597 measured nine real wordings of this same
+> claim against it and found it flags ONE — the compact copy-paste shape. Noun synonyms, a missing
+> quantifier, litotes and a long parenthesised form all walk past, and the plan doc is invisible to
+> it in both directions; the predicate's own docstring lists the misses. It retires the way this
+> claim has actually spread four times, not the claim. Assume a fifth.
 >
 > Two narrower cautions:
 >
@@ -342,11 +360,11 @@ trees to release (default `build`); a review tree is detached and carries no
 branch, so only the `worktree remove` half applies to it.
 
 > **SUPERSEDED IN PART on 2026-07-30 (tracker #516) — the POLICY above is unchanged and still
-> binding; the PAYLOAD is not.** Every refusal now also carries a machine-readable `code`
-> alongside the human `reason`, and that key — never the prose — is what `--gc` grades on:
-> `dirty`, `unpushed`, `half-created`, `unreachable-head`, `detached-build`, `no-worktree`,
-> plus two that only `--gc` can produce (`self-tree`, `release-error`). Two of those refusals
-> did not exist when this was written: a build tree left DETACHED by an interrupted rebase
+> binding; the PAYLOAD is not.** Every `--release`/`--gc` refusal now also carries a
+> machine-readable `code` alongside the human `reason`, and that key — never the prose — is what
+> `--gc` grades on: `dirty`, `unpushed`, `half-created`, `unreachable-head`, `detached-build`,
+> `no-worktree`, plus two that only `--gc` can produce (`self-tree`, `release-error`). Two of those
+> refusals did not exist when this was written: a build tree left DETACHED by an interrupted rebase
 > (`detached-build`, tracker #540) and a tree left `locked "initializing"` by a killed
 > `worktree add` (`half-created`, tracker #514). A `released: true` entry can also now carry
 > `branch_deleted: false` + `warning` — the tree went, the branch leaked (tracker #517). Read

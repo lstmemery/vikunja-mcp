@@ -1920,6 +1920,117 @@ def test_the_claude_md_workspace_bullet_keeps_the_code_claim_scoped():
     )
 
 
+# The two in-repo DESIGN RECORDS of the parallel drain. Both already carry a scoped copy of the
+# `code` claim, and both are read by agents arriving from a grep rather than from the top of the
+# file — which is the whole reason the claim keeps regrowing here.
+_DRAIN_DESIGN_DOCS = (
+    "docs/superpowers/specs/2026-07-29-parallel-worktree-drain-design.md",
+    "docs/superpowers/plans/2026-07-29-parallel-worktree-drain.md",
+)
+
+
+def _design_doc_flat(relpath: str) -> str:
+    """A tracked design document, blockquote-stripped and flattened for the prose predicates.
+
+    Read from the CHECKOUT by path, like `_claude_md_text` and unlike `_skill_text`: these are
+    repo documents, not packaged resources, so `importlib.resources` cannot see them.
+
+    The blockquote strip is not cosmetic and was MEASURED, not assumed. Every marker in the design
+    record is a `>` block, and `_CODE_UNIVERSAL_CANDIDATE` caps the quantifier→`code` gap at 72
+    characters to stay inside one clause; a `> ` leader adds two characters per WRAPPED LINE, which
+    spends that budget on punctuation. Constructed the boundary case: "Every refusal <41 chars>
+    carries a machine-readable `code` beside the reason", wrapped as a blockquote, is MISSED with
+    the leaders left in and FLAGGED with them stripped. So stripping makes this pin strictly
+    stricter, and a violation cannot hide behind the wrap it happens to fall on. (On today's text
+    both spellings agree — the strip buys nothing yet, which is exactly when it is cheap to add.)
+    """
+    path = Path(__file__).resolve().parents[2] / relpath
+    assert path.is_file(), (
+        f"{relpath} is gone from the repo — this pin has nothing to read. If the design record "
+        f"was moved or retired, move this path; do not delete the check"
+    )
+    return _flat(re.sub(r"(?m)^[ \t]*>+[ \t]?", " ", path.read_text(encoding="utf-8")))
+
+
+def test_the_drain_design_records_keep_the_code_claim_scoped():
+    """VMCP-122 (597): the same `code` universal, in the DESIGN RECORDS — its fourth regrowth.
+
+    580 scoped this claim in three places and pinned exactly one of them (CLAUDE.md, above). The
+    seed then turned up a FOURTH time, in the spec doc's `--release` marker: "Every refusal now
+    also carries a machine-readable `code`". That copy was *contextually* scoped — its host
+    paragraph is `--release` and its opening clause says "the POLICY above" — which is precisely
+    why it survived three sweeps that were looking for the obvious shape.
+
+    WHY IT WAS STILL WORTH FIXING, and therefore worth pinning: MEASURED, `git grep
+    machine-readable` over that document prints the marker's line beside §3's "no machine-readable
+    key at all", and NEITHER line names a channel. A reader who lands out of context — a grep, a
+    diff hunk, a deep link — sees one document flatly contradicting itself and has only the
+    document's own banner to break the tie, which tells them a MARKED passage is the stronger
+    claim. The marker was the wrong branch to trust.
+
+    WHY THE WHOLE FILE AND NOT A SLICE. Every other prose pin in this module slices first, because
+    a bare token scan cannot tell "the rule is still stated HERE" from "the token survives
+    somewhere". This one needs no slice: `_unscoped_code_universal` does not scan for tokens, it
+    decides violation-vs-scoped per candidate, so correct prose in the rest of the file is simply
+    not a candidate. MEASURED on both documents: the spec doc yields exactly ONE violation before
+    the fix and NONE after; the plan doc yields none either way — but NOT because it is scoped,
+    which matters enough to have its own paragraph below; and the spec doc's own CORRECT §3
+    sentence, "every create-path refusal is codeless", is clean, since `codeless` is not
+    `\\bcode\\b`. A slicer here would only add a second thing to drift.
+
+    NOT VACUOUS, and that is measured rather than argued: run this predicate over the spec doc as
+    it stood at the parent commit and it FAILS, naming the sentence. Contrast the CLAUDE.md pin
+    above, whose bullet yields ZERO candidates on a green run — this one exercises the window on
+    real prose in both directions.
+
+    NOT PINNED: anything else in either document. They are design records whose own banner says
+    the markers are not exhaustive and that an unmarked passage means "nobody has checked it".
+    This pin makes exactly one claim — that neither record restates the `code` payload as a
+    universal over both refusal channels — and deliberately leaves the rest free to age, which is
+    what a design record is for.
+
+    MUTATION-CHECKED (`__pycache__` cleared between rounds, each round confirmed to select exactly
+    1 test, documents restored from a COPY — never `git checkout --`, since they are uncommitted
+    while the card is in Build): control PASS; restore the unscoped "Every refusal now also carries
+    a machine-readable `code`" to the spec doc's `--release` marker -> FAIL, quoting the match; the
+    same universal added to the PLAN doc -> FAIL naming the plan doc, i.e. the loop really does
+    read both; point `_DRAIN_DESIGN_DOCS` at a renamed path -> FAIL loudly from the `is_file`
+    guard, not a vacuous pass.
+
+    ONE ROUND CAME BACK GREEN, and it is recorded as a BOUND rather than quietly dropped, because
+    it narrows what this pin may be SAID to protect. Re-generalising the plan doc's OWN scoped
+    clause — "the `code:` key on every `--release`/`--gc` refusal" back to "every refusal" — does
+    NOT fail; nor does restoring 580's EXACT deleted wording there ("the `code:` key on every
+    refusal (#516)"). Both yield ZERO CANDIDATES, and the cause is structural, not semantic:
+    `_CODE_UNIVERSAL_CANDIDATE` requires quantifier → refusal → `code` IN THAT ORDER, and the plan
+    doc puts `code` FIRST. Measured on that sentence — the first `\\bcode\\b` sits 14 characters
+    BEFORE the quantifier, and the next one after it is 86 to 105 characters later, past the
+    72-character cap as well. The plan doc is invisible to this predicate in both directions.
+
+    SO READ THE COVERAGE HONESTLY. This pin protects the plan doc against a NEW compact universal
+    added to it (the round above proves that much) and NOT against its existing clause being
+    re-generalised: the plan doc's correctness rests on 580's WORDING, not on this test. The spec
+    doc is the file this pin actually guards, and even there it guards ONE SHAPE — an independent
+    review of this card measured nine real wordings of the same claim and found this predicate
+    flags one of them. See `_unscoped_code_universal`'s own bounds list for the misses it already
+    documents. That is why 580's ruling stands unchanged: review catches the rest, and this is a
+    net under the copy-paste form of the drift, not a proof that the claim cannot regrow.
+    """
+    for relpath in _DRAIN_DESIGN_DOCS:
+        violation = _unscoped_code_universal(_design_doc_flat(relpath))
+        # the message is evaluated only when the assert FAILS, so .group() is safe here
+        assert violation is None, (
+            f"{relpath} states the `code` payload as an UNSCOPED universal: "
+            f"{violation.group(0)!r}. Only a `--release`/`--gc` refusal carries a `code`; a CREATE "
+            f'refusal is `{{"error": …}}` + exit 1 and carries none. In a design record this is '
+            f"worse than in prose that describes today's code, because a MARKED passage claims "
+            f"someone CHECKED it — see this document's own banner. Name the channel anywhere from "
+            f"the start of that sentence through the `code` clause itself. Being inside a marker "
+            f"attached to the `--release` paragraph does NOT count: that is exactly the copy "
+            f"tracker #597 had to fix, and a grep prints the line without its host"
+        )
+
+
 def _reviewer_tree_rule(text: str) -> str:
     """The «Ревьюер, вынеся вердикт, освобождает своё дерево» bullet — the ONLY place a REVIEWER
     reads about its own worktree.
