@@ -522,18 +522,50 @@ def test_the_resume_note_says_nothing_extra_at_or_below_the_limit():
 # above used a different marker, so it would have slipped straight through.
 #
 # The base is READ from the other env rather than copied so that a wording change to the shared
-# prose stays a one-file edit. An UNCONDITIONAL clause cannot hide inside it: _clause_free_base
-# re-asserts the base's byte-exact tail before handing it over, so a clause appended on every
-# resume moves the base's ending and fails there instead.
+# prose stays a one-file edit. That trade has a price, and this states it in BOTH directions,
+# because the sentence that used to stand here — "an UNCONDITIONAL clause cannot hide inside it" —
+# was FALSE as written (VMCP-115); only its stated mechanism was true, and that mechanism is
+# narrower than the sentence. Measured, each round on a pristine workflow.py:
+#   CAUGHT by the endswith — a clause APPENDED on every resume, anywhere in this branch. It moves
+#     the base's own ending, so _clause_free_base fails before any equality is reached: appended
+#     straight after the base, and appended after BOTH `if` blocks, each 9 of this file's 47.
+#   CAUGHT by the equality — an insertion INTO the base, mid-base included, that renders
+#     differently in the under-limit env than at free == 0, because the two sides then move apart.
+#     Measured with a mid-base insertion guarded on `stage == "Build"`: 4 failed, every [Build].
+#   NOT CAUGHT — an insertion into the MIDDLE of the base that renders the SAME in both envs. The
+#     tail is untouched, so both sides move together and the differential cancels: the WHOLE unit
+#     suite passes, exit 0 (703 of 703 when this was written), while the rendered note visibly
+#     changed. That blind spot is deliberately left open.
+#     Closing it means pinning the base byte-exact, which is the copy this file rejected three
+#     paragraphs up — every UX wording edit would become a test edit. And nothing was LOST to it:
+#     #529's original `endswith` would have passed the same insertion too. What this pin is FOR is
+#     clause GROWTH at the two append sites; a mid-base edit is one literal, read as copy.
 #
-# Both tests run over BOTH resume stages. An equality table is a set of points, not a property, so
-# it only sees a clause keyed on a dimension some point actually varies: as first written, both
-# envs happened to hand back a DESIGN card, and a clause guarded by `stage == "Build"` inside the
-# free == 0 branch would have walked past both. Design/Build are the two stages the resume branch
-# can offer, and `stage` is in scope right where the clauses are appended, so the parametrisation
-# closes the cross-product of the dimensions a clause here could plausibly key on. The
-# `res["stage"] == stage` assertion is what keeps that true — without it a reordering could
-# quietly collapse both cases back onto one stage.
+# Both tests run over BOTH resume stages AND over an empty/non-empty `exclude`. An equality table
+# is a set of points, not a property, so it only sees a clause keyed on a dimension some point
+# actually varies — and it CLOSES nothing, because the variables in scope at the append site are
+# open-ended. It spans exactly two, each added after a measured escape, not after an argument:
+#   `stage` — as first written both envs handed back a DESIGN card, so a clause guarded by
+#     `stage == "Build"` at free == 0 passed the whole suite (VMCP-106).
+#   `excluded` — both tests then called next_task() with NO argument, so before this axis existed
+#     a clause guarded by `if excluded:` passed the whole suite too (694 passed, exit 0 —
+#     VMCP-115); with the axis it takes down all four [exclude=[live]] rows. It is the sharper
+#     miss of the two, because #527's clause is literally ABOUT `exclude`, which makes `excluded`
+#     the likeliest thing for the next clause here to key on. The axis is on BOTH tests, not just
+#     the exactly-full one, and that is measured too: a clause needing `excluded and
+#     wip["active"] > limit` fails ONLY the over-budget [exclude=[live]] rows (2 of 47), so a
+#     table whose one non-empty exclude sat at the limit would have let it through.
+# NOT spanned, and measured green rather than assumed: a clause keyed on the offered task's
+# PRIORITY passes the whole suite, exit 0, and so does one keyed on `rework_first` (703 each,
+# same tree as above — the red counts in this comment are per-FILE and stable, the green ones are
+# whole-suite and will drift as the suite grows; re-measure, don't trust the digits). Neither
+# guard can fire in any env here — measured, not inferred: every task these fixtures build reports
+# priority 0 and no relations at all, so `rework_first` is always the empty set. `mine`, the task's
+# labels and the board itself are in scope at the same point and are not spanned either. A clause
+# keyed on any of them is invisible to this table; the answer is another row, not a bigger claim
+# about the rows already here.
+# The `res["stage"] == stage` and `res["wip"] == ...` assertions are what hold the rows apart —
+# without them a reordering could quietly collapse the cases back onto one point.
 
 _BASE_TAIL = "continue from where it left off"
 
@@ -570,26 +602,37 @@ def _clause_free_base() -> str:
     return res["note"]
 
 
+@pytest.mark.parametrize("excluded", [False, True], ids=["exclude=[]", "exclude=[live]"])
 @pytest.mark.parametrize("stage", ["Design", "Build"])
-def test_the_exactly_full_resume_note_is_the_base_plus_527s_clause_and_nothing_else(stage):
+def test_the_exactly_full_resume_note_is_the_base_plus_527s_clause_and_nothing_else(
+    stage, excluded
+):
     """At free == 0 and active == limit exactly ONE clause is justified — #527's "check your
     exclude, not the board". Equality, not `in`: this is the assertion that goes red when a third
     clause is appended there, which is the coverage VMCP-106 was filed to restore. The `wip`
     check first is not decoration — it proves the env really is the exactly-full one, so a
     refactor that quietly moved this env under the limit could not turn the test into a
     restatement of the base."""
-    api, wf = _env(wip_limit=1)
-    held = _hold(api, wf, "exactly full")
+    # The non-empty-exclude row needs a SECOND held task: at wip_limit 1 excluding the only card
+    # leaves nothing offerable and no resume at all, so it is exactly-full at 2 instead. What it
+    # excludes is the card next_task would otherwise hand back, which is the real pump shape —
+    # an agent is already live on it (#527's clause is about exactly that).
+    limit = 2 if excluded else 1
+    api, wf = _env(wip_limit=limit)
+    held = [_hold(api, wf, f"exactly full {n}") for n in range(limit)]
     if stage == "Build":
-        wf.advance(held["id"], to="build", spec="carrying on")
-    res = wf.next_task()
-    assert res["wip"] == {"active": 1, "limit": 1, "free": 0}
+        for task in held:
+            wf.advance(task["id"], to="build", spec="carrying on")
+    skip = [wf.next_task()["task"]["id"]] if excluded else []
+    res = wf.next_task(exclude=skip)
+    assert res["wip"] == {"active": limit, "limit": limit, "free": 0}
     assert res["stage"] == stage
     assert res["note"] == _clause_free_base() + _ZERO_FREE_CLAUSE, res["note"]
 
 
+@pytest.mark.parametrize("excluded", [False, True], ids=["exclude=[]", "exclude=[live]"])
 @pytest.mark.parametrize("stage", ["Design", "Build"])
-def test_the_over_budget_resume_note_is_the_base_plus_both_clauses_in_that_order(stage):
+def test_the_over_budget_resume_note_is_the_base_plus_both_clauses_in_that_order(stage, excluded):
     """The other half of free == 0, where BOTH clauses are legitimate — and the only test that
     says which comes first. Order carries meaning: the over-budget disclosure explains the state
     the pump is in, the exclude clause tells it what to do about the resume it just got, so the
@@ -606,7 +649,11 @@ def test_the_over_budget_resume_note_is_the_base_plus_both_clauses_in_that_order
         for tid in wf.active_task_ids():
             if api.stage_of(tid) == "Design":
                 wf.advance(tid, to="build", spec="carrying on")
-    res = wf.next_task()
+    # Same axis as the exactly-full test, and it has to be here too: a clause needing BOTH a
+    # non-empty exclude and active > limit renders in no other row. Four active against a limit
+    # of three means excluding one still leaves the stage under test offerable.
+    skip = [wf.next_task()["task"]["id"]] if excluded else []
+    res = wf.next_task(exclude=skip)
     assert res["wip"] == {"active": 4, "limit": 3, "free": 0}
     assert res["stage"] == stage
     assert res["note"] == (
