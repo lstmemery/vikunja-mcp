@@ -2313,6 +2313,87 @@ def test_the_rulebook_routes_a_stuck_REVIEWER_to_the_only_door_that_is_open_to_i
     )["moved_to"] == "Build"
 
 
+def _return_task_bullet(text: str) -> str:
+    """The `return_task` bullet inside the stuck section — where its shut stages are spelled out.
+
+    Sliced to the BULLET, not the section, and that is measured too: «Done» occurs in this same
+    section's reviewer sub-bullet («карточка … ждущей человеческого Done») and `file_task` occurs
+    in its last sub-bullet, so even a SECTION-wide substring stays green with this bullet's Done
+    sentence deleted. The bullet is the smallest slice that can tell "return_task's shut stages are
+    written down" from "those words exist nearby"."""
+    start = text.find("\n- **`return_task`** — внешняя блокировка")
+    assert start != -1, "SKILL.md no longer describes return_task in the stuck section"
+    end = text.find("\n- **", start + 1)
+    assert end != -1, "the return_task bullet no longer ends where the next top-level bullet does"
+    bullet = text[start:end]
+    assert 0 < len(bullet) < len(text), "the return_task slice is not a proper subset of SKILL.md"
+    assert "У РЕВЬЮЕРА" not in bullet, "the slice swallowed the reviewer's bullet"
+    return bullet
+
+
+def test_the_rulebook_names_BOTH_stages_return_task_refuses_from():
+    """#626: after #590 this bullet said «Из Review он ОТКАЗЫВАЕТ … Из остальных стадий он
+    по-прежнему работает» — a sentence that POSITIVELY described the Done path as normal, and it
+    self-heals onto every consumer. Measured at the time: `return_task` really did walk a card out
+    of Done (the transition CLAUDE.md calls human-only) — it was the ONLY agent tool that could,
+    so the rulebook was advertising the single agent bypass of that invariant as supported.
+
+    Both halves are pinned against the TOOL, not just as words, because prose and gate drifting
+    apart is the failure this card is about: the gate must refuse from Done AND the bullet must say
+    so, and the five stages the bullet still promises must genuinely stay open.
+
+    Token presence is NOT enough here, and that is measured rather than assumed: an earlier version
+    of this pin asserted only that «Review», «Done» and `file_task` occur in the bullet, and a
+    mutant that INVERTED the rule — «отказывает только из Review, а из Done … работает штатно» —
+    kept all three words and sailed through GREEN. That mutant is precisely the sentence this card
+    exists to delete, so the pin now asserts the RULE (the enumeration of shut stages, verbatim)
+    and derives the open list from `workflow.STAGES`, which also ties the prose to the code: add a
+    stage, or shut another one, and this fails until the rulebook is updated too. Reword the bullet
+    freely — but the rule has to still be spelled out, and then this string moves with it.
+
+    MUTATION-CHECKED (`__pycache__` cleared between rounds, selection confirmed at exactly 1 test):
+    control PASS; delete the Done sentence from the bullet while leaving «Done» and `file_task`
+    elsewhere in the section -> FAIL (and a SECTION-wide substring was measured GREEN on that same
+    mutation); INVERT the rule keeping every token -> FAIL; drop `Your Call` from the open list ->
+    FAIL; drop return_task's Done gate -> FAIL; drop its Review gate -> FAIL."""
+    text = _skill_text()
+    bullet = _return_task_bullet(text)
+
+    # the RULE, not its vocabulary: which stages are shut, spelled out
+    assert "ОТКАЗЫВАЕТ из ДВУХ стадий — Review и Done" in bullet, \
+        "the bullet no longer states WHICH stages return_task refuses from (#590 Review, #626 Done)"
+    assert "file_task" in bullet, \
+        "the bullet no longer routes unusable Done work to file_task, the one channel left"
+    # ...and the open list must be exactly the complement, straight out of the code
+    for stage in workflow.STAGES:
+        if stage in ("Review", "Done"):
+            continue
+        assert stage in bullet, \
+            f"the bullet promises the OTHER stages keep working but never names {stage!r}"
+
+    # the code: both doors really are shut
+    api = FakeAPI(buckets=workflow.STAGES)
+    wf = workflow.Workflow(api, project_id=3)
+
+    accepted = api.add_task("accepted by a human", "Done", assignee=api.me_user)
+    with pytest.raises(workflow.WorkflowError) as done:
+        wf.return_task(accepted["id"], reason="внешний блок")
+    assert "file_task" in str(done.value), \
+        "SKILL.md says return_task refuses from Done and points at file_task; it no longer does"
+    assert api.stage_of(accepted["id"]) == "Done", "the refusal walked the accepted card back anyway"
+
+    under_review = api.add_task("under review", "Review", assignee=api.me_user)
+    with pytest.raises(workflow.WorkflowError):
+        wf.return_task(under_review["id"], reason="внешний блок")
+    assert api.stage_of(under_review["id"]) == "Review"
+
+    # ...and the five stages the same bullet still promises are genuinely open
+    for stage in ("Backlog", "Queue", "Design", "Build", "Your Call"):
+        card = api.add_task(f"blocked in {stage}", stage, assignee=api.me_user)
+        assert wf.return_task(card["id"], reason="чужой сервис лежит")["moved_to"] == "Backlog", \
+            f"the bullet promises return_task still works from {stage}; it does not"
+
+
 def _crashed_agent_bullet(text: str) -> str:
     """The «Пер-таск-агент УПАЛ» bullet — the pump's whole restart rule, both roles.
 

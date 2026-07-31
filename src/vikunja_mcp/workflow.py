@@ -1350,12 +1350,21 @@ class Workflow:
         if not (reason or "").strip():
             raise WorkflowError("give the reason for the block — it'll be posted as a comment")
         task, stage = self._find_task(task_id)
-        # Review ONLY (#590), and BEFORE _require_mine so solo and multi-identity read the same,
+        # TWO stages are shut, both BEFORE _require_mine so solo and multi-identity read the same,
         # correct refusal (in multi-identity a reviewer's card is the implementer's, and
-        # "claim it first" would send them the wrong way). Measured: without this gate the tool
-        # passed from Review and silently walked reviewed work to Backlog, unassigned + `blocked`.
-        # Every OTHER stage stays open on purpose — returning a half-claimed Queue/Design/Build
-        # card is a defensible "externally blocked", which is what this tool is for.
+        # "claim it first" would send them the wrong way). The five OTHER stages stay open on
+        # purpose — Backlog/Queue/Design/Build/Your Call: returning a half-claimed or in-flight
+        # card is a defensible "externally blocked", which is what this tool is for. Your Call is
+        # deliberately among them: that card is still the agent's OWN work in flight (call_human
+        # keeps the assignee), the [нужен человек] question survives in the append-only journal,
+        # and a block that appears while waiting for an answer is the same defensible case as from
+        # Design/Build. That choice is not free, and the price is named rather than hidden: the
+        # webhook ping (if configured) has already gone out and points at a card no longer in the
+        # column the human looks at, and `parked_task_ids` stops covering it, so a dead tree's
+        # unpushed work regrades from `--gc`'s `expected` to `kept` and wakes someone. Both are
+        # noise, neither destroys work — unlike Done, where the card is not the agent's to move.
+        # Review (#590): measured — without this gate the tool passed from Review and silently
+        # walked reviewed work to Backlog, unassigned + `blocked`.
         if stage == "Review":
             raise WorkflowError(
                 "return_task is not available from Review: it would unassign the card and send "
@@ -1365,6 +1374,30 @@ class Workflow:
                 "implementer in Build, who owns it and can call_human from there; a finding "
                 "outside the card's slice goes to file_task. Anything else genuinely blocked in "
                 "Review takes that same door back to Build first."
+            )
+        # Done (#626): the Done transition is human-only BY DESIGN, and an invariant that only
+        # holds one way is not an invariant. Measured on a card driven the normal way (Queue ->
+        # claim -> Design -> Build -> Review -> approve -> a human moves it to Done): return_task
+        # did not refuse, and left the card in Backlog with NO assignee, carrying `reviewed` AND
+        # `blocked` at once — the same "approved and blocked" board state #590 documented for
+        # Review. The gate belongs HERE rather than in one shared stage rule because human-only
+        # Done is not expressed anywhere as a rule: every tool re-derives it from its own source
+        # stage (advance from_stage, claim Queue, review_task Review, call_human Design/Build),
+        # so a tool that moves a card without a stage check reproduces the hole. `decompose` is
+        # exactly that tool and STILL is — measured on the same card, it walks the parent to
+        # Backlog with `epic` — hence #626 does NOT claim to be the last one; that sibling is
+        # filed separately. Ownership cannot stand in for the check either: a human moving a card
+        # into Done does not unassign it, so `_require_mine` passes on the very card that must be
+        # untouchable.
+        if stage == "Done":
+            raise WorkflowError(
+                "return_task is not available from Done: a human accepted this card, and walking "
+                "accepted work back out to Backlog is the human's call too — the Done transition "
+                "is human-only in BOTH directions. It would also unassign the card and stack "
+                "`blocked` on top of `reviewed`, so the board would claim 'approved' and 'blocked' "
+                "at once. If Done work needs redoing, file_task a follow-up card "
+                "(related_task_id=<this task>) for a human to triage — call_human refuses from "
+                "Done as well; a human can also move this card back themselves."
             )
         self._require_mine(task)
         self.api.add_comment(task_id, f"[blocked] {reason.strip()}")

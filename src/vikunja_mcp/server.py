@@ -467,9 +467,12 @@ def call_human(task_id: int, question: str) -> dict:
 def return_task(task_id: int, reason: str) -> dict:
     """Return a task because of an EXTERNAL block (no access/dependency/someone else's
     service): unassigns you, adds label 'blocked', moves it to Backlog for human
-    re-triage. REFUSES from Review — never use it to get rid of a card you are reviewing;
-    a reviewer's block or question goes in review_task(verdict='needs_work'), and a finding
-    outside that card's slice goes in file_task."""
+    re-triage. REFUSES from TWO stages. From Review — never use it to get rid of a card you
+    are reviewing; a reviewer's block or question goes in review_task(verdict='needs_work'),
+    and a finding outside that card's slice goes in file_task. From Done — a human accepted
+    that card, and moving accepted work back out is the human's call too (the Done transition
+    is human-only in BOTH directions); Done work that needs redoing goes in file_task as a
+    follow-up card. It still works from Backlog/Queue/Design/Build/Your Call."""
     return _wf().return_task(task_id, reason)
 
 

@@ -188,6 +188,105 @@ def test_return_task_refuses_from_review_and_still_works_everywhere_else(env):
         assert any(lb["title"] == "blocked" for lb in api.tasks[open_task["id"]]["labels"])
 
 
+def test_return_task_refuses_from_done_the_human_only_transition_run_backwards(env):
+    """#626: `return_task` was the ONE agent tool that moved a card OUT of Done. Measured through
+    the real `Workflow` over a FakeAPI board, on a card driven the NORMAL way (Queue -> claim ->
+    Design -> Build -> Review -> approve -> a human moves it to Done): it did not refuse, answered
+    {"moved_to": "Backlog", "labeled": "blocked"}, and left the card in Backlog with NO assignee
+    and BOTH labels — `reviewed` and `blocked` — the board claiming "approved" and "blocked" at
+    once. On that same card advance (build/review/done), call_human, claim and review_task (both
+    verdicts) all refuse — the transition CLAUDE.md calls human-only, run BACKWARDS, and an
+    invariant that holds in only one direction is not an invariant.
+
+    It is NOT, however, the last such door, and this test does not pin that it is: human-only Done
+    is nowhere expressed as one rule, so any tool that moves a card without checking its stage
+    reproduces the hole. `decompose` measurably does (it walks the parent to Backlog with `epic`)
+    and is filed separately. The first draft of this docstring called return_task "the ONE agent
+    tool that moves a Done card"; probing the tools the first repro had skipped disproved it.
+
+    Same FORM as the Review gate (#590): a stage check BEFORE `_require_mine`, with a refusal that
+    names the channel that does work. Done is not "stuck", so the door it points at is `file_task`
+    (a follow-up card for a human to triage) — `call_human` refuses from Done too, and only a human
+    can move THIS card back.
+
+    Not a regression, and that was RUN, not inherited from the card: the same probe against a
+    shadow copy of 51ab50d^ (the parent of the commit that gated Review) prints the same
+    {"moved_to": "Backlog"} and the same `['reviewed', 'blocked']` after-state — the hole predates
+    that card, which gated exactly Review.
+
+    Four parts, all load-bearing, mirroring the sibling test above. The refusal must leave the
+    BOARD untouched: a guard that raises after the comment/label/unassign already landed is not a
+    guard. The multi-identity branch is what pins the check ORDER for the Done cell (the Review
+    cell is pinned by #627), the OWNERSHIP control is what stops that negative assertion from
+    passing for a `return_task` with no `_require_mine` at all, and the CONTROL sweep is what
+    stops the whole test from passing for a `return_task` that refuses unconditionally — Your Call
+    is deliberately in that sweep: unlike Done, that card is still the agent's OWN work in flight.
+
+    MUTATION-CHECKED, each round naming the assertion it actually reddens (checked against the
+    driver's raw output, because guessing the site is how a pin gets miscredited): control PASS;
+    delete the Done gate -> FAIL at the first `pytest.raises` (the card walks to Backlog); put
+    `_require_mine` before the stage gates -> FAIL on the multi-identity branch; delete
+    `_require_mine` -> FAIL on the ownership control; widen the gate to ("Done", "Design") -> FAIL
+    on the CONTROL sweep. An UNCONDITIONAL gate also fails, but at the ownership control, which it
+    reaches first — so it is the widened mutant, not that one, that shows the sweep is live."""
+    api, wf, _t = env
+
+    # driven the NORMAL way, so the state the refusal protects is the real one
+    accepted = api.add_task("work a human already accepted", "Queue")
+    wf.claim(accepted["id"])
+    wf.advance(accepted["id"], to="build", spec="сделаю X")
+    wf.advance(accepted["id"], to="review", worklog="сделано", evidence="abc123")
+    wf.review_task(accepted["id"], verdict="approve", report="ок")
+    api.task_bucket[accepted["id"]] = api.bucket_id("Done")   # the HUMAN moves it — no tool can
+    assert api.stage_of(accepted["id"]) == "Done"
+
+    with pytest.raises(WorkflowError) as excinfo:
+        wf.return_task(accepted["id"], reason="внешний блок")
+    msg = str(excinfo.value)
+    assert "Done" in msg and "file_task" in msg, \
+        f"the refusal must say it is the human's transition and name the door that works: {msg}"
+
+    # nothing happened: the gate fires BEFORE the comment / label / unassign / move
+    assert api.stage_of(accepted["id"]) == "Done", "the refused return walked accepted work back"
+    assert api.tasks[accepted["id"]]["assignees"], "the refused return still unassigned the card"
+    labels = [lb["title"] for lb in api.tasks[accepted["id"]]["labels"]]
+    assert "blocked" not in labels, f"the board now says approved AND blocked at once: {labels}"
+    assert "reviewed" in labels, "the verdict label vanished"
+    assert not any(c.startswith("[blocked]") for c in api.comments_text(accepted["id"]))
+
+    # multi-identity: someone else's accepted card. THIS is the cell that pins the check ORDER —
+    # under the inverted order the caller reads "claim it first", which for a card in Done is the
+    # one thing that can never be right.
+    theirs = api.add_task("someone else's accepted card", "Done")
+    api.tasks[theirs["id"]]["assignees"] = [{"id": 77, "username": "agent-impl"}]
+    with pytest.raises(WorkflowError) as multi:
+        wf.return_task(theirs["id"], reason="внешний блок")
+    multi_msg = str(multi.value)
+    assert "Done" in multi_msg and "file_task" in multi_msg, \
+        f"the caller must read the STAGE refusal, not an ownership one: {multi_msg}"
+    assert "not assigned to you" not in multi_msg, \
+        f"ownership ran first — 'claim it first' is never the answer for a Done card: {multi_msg}"
+    assert api.stage_of(theirs["id"]) == "Done"
+    assert api.tasks[theirs["id"]]["assignees"][0]["id"] == 77
+
+    # OWNERSHIP CONTROL: the assertion above is a NEGATIVE one about a guard it never reaches, so
+    # pin that the guard is still live — from an OPEN stage someone else's card is refused BY
+    # OWNERSHIP.
+    not_mine = api.add_task("someone else's card in Build", "Build")
+    api.tasks[not_mine["id"]]["assignees"] = [{"id": 77, "username": "agent-impl"}]
+    with pytest.raises(WorkflowError) as owned:
+        wf.return_task(not_mine["id"], reason="чужой сервис лежит")
+    assert "not assigned to you" in str(owned.value), \
+        f"_require_mine no longer guards return_task from an open stage: {owned.value}"
+
+    # CONTROL: the five stages that stay open still return the card — the gate is Review+Done,
+    # not "everything above Build"
+    for stage in ("Design", "Build", "Queue", "Backlog", "Your Call"):
+        open_task = api.add_task(f"blocked in {stage}", stage, assignee=api.me_user)
+        wf.return_task(open_task["id"], reason="чужой сервис лежит")
+        assert api.stage_of(open_task["id"]) == "Backlog", f"return_task broke from {stage}"
+
+
 def test_call_human_refuses_from_review_and_the_stage_check_precedes_ownership(env):
     """#590: the second half of the reviewer's dead end. `call_human` was already gated to
     Design/Build, but its refusal only said WHERE it doesn't work, and `_require_mine` ran FIRST —
