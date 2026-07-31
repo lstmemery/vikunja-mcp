@@ -1210,27 +1210,30 @@ def _flat(pages, *, page_size=5, total_pages=None, info_status=200,
     `pages` is either a mapping {page_no: [row, ...]} — every page it does not name is EMPTY, which
     is how a finite list ends — or a CALLABLE page -> [row, ...] for a server that HAS no last page.
 
-    WHY THE CALLABLE FORM EXISTS, and it is NOT that a mapping cannot reach the ceiling: it can, and
-    test_a_flat_list_that_dribbles_new_rows_forever_RAISES_instead_of_a_partial_list below is a
-    mapping that does. A mapping of N pages ends the read itself on page N+1 (`.get(page, [])` ->
-    `[]` -> `if not items: break`), so it reaches the ceiling only while N is at least what the
-    ceiling COSTS on that shape — the budget when no page is ever full, one MORE when the server
-    fills its first page, which buys a request the budget is never charged for. MEASURED with the
-    budget edited in a scratch copy and this harness otherwise untouched: on the never-fills-a-page
-    shape, mappings of 119 / 120 / 121 pages at budget 120 give NO RAISE (119 rows) / 508 / 508, and
-    499 / 500 / 501 at budget 500 give NO RAISE (499 rows) / 508 / 508; the full-first-page shape of
-    the 199-page test named above is green up to budget 198 and DID NOT RAISE at 199. A mapping
-    fixture is therefore BUDGET-COUPLED, and past that point it does not merely fail — it stops
-    PINNING, because the guard no longer changes what it does:
+    WHY THE CALLABLE FORM EXISTS, and it is NOT that a mapping cannot reach the ceiling: it can. A
+    mapping of N pages ends the read itself on page N+1 (`.get(page, [])` -> `[]` -> `if not items:
+    break`), so it reaches the ceiling only while N is at least what the ceiling COSTS on that shape
+    — the budget when no page is ever full, one MORE when the server fills its first page, which
+    buys a request the budget is never charged for. MEASURED with the budget edited in a scratch
+    copy and this harness otherwise untouched: on the never-fills-a-page shape, mappings of
+    119 / 120 / 121 pages at budget 120 give NO RAISE (119 rows) / 508 / 508, and 499 / 500 / 501 at
+    budget 500 give NO RAISE (499 rows) / 508 / 508; on the full-first-page shape, the 199-page
+    mapping that test_a_flat_list_that_dribbles_new_rows_forever_RAISES_instead_of_a_partial_list
+    used to carry raises at budgets 197 and 198 (508 at 198 and at 199 requests) and is dead from
+    199 on. A mapping fixture is therefore BUDGET-COUPLED, and past that point it does not merely
+    fail — it stops PINNING, because the guard no longer changes what it does:
 
         budget edited 120 -> 500    ceiling as shipped       ceiling -> `if False:`
         callable, no last page      508 at request 500       harness cap at 1501 (cap = 3 * budget)
         mapping of 499 pages        499 rows, DID NOT RAISE  499 rows, DID NOT RAISE  <- the same
+        that 199-page mapping       203 rows, DID NOT RAISE  203 rows, DID NOT RAISE  <- the same
 
     So the callable tells the two states apart at every budget measured — it has no page count to
-    outgrow, which is the whole point — while a mapping does so only below its own. That is exactly
-    why the 199-page test named above is safe at today's budget of 120 and dead at 199: filed as
-    VMCP-135 (624), out of this card's slice.
+    outgrow, which is the whole point — while a mapping does so only below its own. NO
+    RUNAWAY-READ FIXTURE IN THIS FILE IS A MAPPING ANY MORE: VMCP-135 (624) moved the last one —
+    the test named above, green at today's budget of 120 and pinning nothing from 199 on — onto a
+    callable for exactly this reason. Mappings remain right for the FINITE lists everything else
+    here models; the coupling only bites a fixture whose job is to have no last page.
 
     The HARNESS CAP is the same honesty device `_tracker` uses: several of these shapes make the
     loop run forever if its termination guard is removed (a server that ignores `?page=` serves a
@@ -2178,9 +2181,39 @@ def test_a_flat_list_that_dribbles_new_rows_forever_RAISES_instead_of_a_partial_
     Both outcomes are wrong about the server; only one of them says so. Note the direction this
     moved in: `test_a_list_that_never_finishes_paging_raises_instead_of_truncating` already pinned
     the same 508 for a server that never fills a page AT ALL — what changed is that a server which
-    fills its FIRST page and then dribbles no longer gets a quiet partial answer."""
-    api, seen = _flat({1: [{"id": i} for i in range(1, 6)],
-                       **{p: [{"id": 5 + p}] for p in range(2, 200)}}, page_size=5)
+    fills its FIRST page and then dribbles no longer gets a quiet partial answer.
+
+    THE SERVER IS A CALLABLE, AND THAT IS THE WHOLE OF VMCP-135 (624). It used to be a mapping of
+    199 pages, and that page count was a SILENT PRECONDITION of every assertion below, stated
+    nowhere. The ceiling costs budget + 1 requests on THIS shape — the full first page is
+    justified by `max_items_per_page` and never charged, so it buys a request the budget never
+    pays for — while a mapping ends the read by itself on the first page it does not name
+    (`.get(page, [])` -> `[]` -> `if not items: break`). The two meet at 199. MEASURED with the
+    budget edited in a scratch copy of src/ and the fixture otherwise untouched: budget 197 -> 508
+    at 198 requests, 198 -> 508 at 199, and from 199 on DID NOT RAISE — 203 rows in 200 requests.
+
+    PAST THAT LINE IT DID NOT MERELY FAIL, IT STOPPED PINNING — the part worth a card rather than
+    a comment, and NOT the same thing as going quietly green. At budget 500 the mapping returned 203
+    rows in 200 requests under all THREE states of the guard measured: ceiling as shipped, ceiling
+    -> `if False:`, and ceiling returning `merged` instead of raising. It was therefore RED either
+    way, on `DID NOT RAISE` — loud, but carrying no information about the ceiling at all, since
+    nothing it could observe changed when the ceiling did. What it was actually exercising by then
+    are the two guards BELOW it: past page 199 the mapping serves empty pages, so the read ended on
+    `if not items` / `if not added_new` and the ceiling was simply unreachable — measured, mutate
+    BOTH of those to `if False:` and the very same mapping does reach it, 508 at 501 requests. That
+    is the trap: the obvious repair is to grow the mapping, which only moves the same silent
+    precondition further out and leaves the name of the test still promising the ceiling. The
+    callable has no page count to outgrow — measured at budgets 5 / 37 / 60 / 120 / 240 / 500 /
+    1000 it raises 508 at exactly budget + 1 requests every time (that IS the assert below, which
+    moves with the constant), while with the ceiling removed it dies on `_flat`'s harness cap
+    (3 * budget) in under 2 s instead, so the two states stay distinguishable at every budget.
+    That is what lets the assert below be read the way `_flat` and
+    test_a_list_that_never_finishes_paging_raises_instead_of_truncating already describe this file:
+    it pins WHERE the guard fires relative to the budget, whatever the budget is."""
+    api, seen = _flat(
+        lambda page: [{"id": i} for i in range(1, 6)] if page == 1 else [{"id": 5 + page}],
+        page_size=5,
+    )
 
     with pytest.raises(VikunjaError) as exc:
         api.labels()
