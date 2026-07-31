@@ -901,27 +901,75 @@ def test_next_task_offers_free_task_despite_off_board_gated_candidate(env):
 # and nothing else (claimable_cmd.py:69-80).
 #
 # WHAT MAKES THE PIN BITE is that both sides of the count are ABSOLUTE — the escalation literal
-# spells the number and `_RETRIAGE_N` spells it again for the env. A RELATIVE check ("the numeral in
+# spells the number and the param row spells it again for the env. A RELATIVE check ("the numeral in
 # the message equals the payload's own count") would have caught the measured swap too, but it
 # passes any edit moving the count and the prose together, which is #570's same-source trap. The env
 # is what makes the absolute form possible: 3 waiting != 2 retriaged, so the swap renders 3 against
 # a pinned 2; 2 != 1, so a hard-code to 1 — the value the old env's number happened to equal — also
-# goes red. It kills THOSE two, not every constant: a hard-coded 2 would still pass, exactly as a
-# hard-coded 1 passed before.
+# goes red.
+#
+# AND WHY THE PIN SPANS TWO ENVS (VMCP-146 / #635), which is a repair of what the paragraph above
+# cost. Making the counts differ moved this test OFF the boundary the predicate is written on:
+# `if retriage:` narrowed to `if len(retriage) > 1:` drops the escalation sentence at exactly one
+# value of the count — 1 — and 606's env asserts the count is 2, so that value became structurally
+# unreachable and the narrowing went GREEN. Measured on this repo's own history, one mutation each,
+# whole suite, pristine copy, caches cleared, restores checksum-verified: `1 failed, 693 passed` on
+# bce31d7 (the pre-606 tree, env 1 waiting / 1 retriaged — and the one failure is this very test)
+# against `723 passed` on 7e97b2b (today's main, env 3 / 2). The state it stops covering is the
+# COMMONEST real board — one chain head sent back by one return_task — and there the narrowing
+# deletes the sentence outright, which is the exact harm the escalation exists to prevent.
+#
+# The trade was invisible because the lost discrimination was never STATED: the old env held the
+# boundary by accident, so nothing failed when it went. Hence the property is now asserted of the
+# PARAM SET rather than of an env — one row that separates the counts, one row that sits ON the
+# boundary. Neither row can carry both halves (separating them is exactly what puts the retriage
+# count above 1), so a set collapsed back to a single row fails loudly instead of re-blinding a
+# correct pin — the same failure mode, one level up.
+#
+# WHAT THE SECOND ROW DOES NOT BUY, so it is not over-read: it is one more STATE, not a stronger
+# technique. Spanning 1 and 2 does kill BOTH degenerate hard-codes — measured, a hard-coded `2` is
+# GREEN under 606's single env and RED here (at the 1/1 row), while `1` was already red and stays
+# red (at the 3/2 row) — but arithmetic that renders correctly at both spanned values still passes:
+# `max(1, len(retriage))` is GREEN at 724, as it would be under any finite set of states.
+# And the loss this repairs really was confined to the escalation's own predicate, which bounds the
+# claim from the other side too. Re-measured against the pre-fix tree: deleting the escalation is
+# `1 failed`, emitting it unconditionally `3 failed` (this test plus both of 632's rows), and the
+# SAME narrowing applied to the payload flag — `bool(retriage)` -> `len(retriage) > 1` — is
+# `2 failed` there, caught by test_next_task_returned_head_in_backlog_flags_retriage and
+# test_next_task_backlog_head_off_light_board_gates_not_offers, which build boards with exactly one
+# returned head. So only the narrowing that manifests solely at 1 AND solely in the message was
+# ever slipping through; the flag half of the same boundary never stopped being covered.
+# Two NEIGHBOURING boundaries of this same class, measured GREEN on this tree and deliberately left
+# out of this slice, are recorded on VMCP-158 (664) so the next reader does not re-measure them: the
+# headline count at exactly ONE waiting task (632's parametrize spans 2 and 3, and the differential
+# below cannot see the base at all), and `any` -> `all` over a tail's blockers, which no env can
+# tell apart because every gated tail in the suite has exactly one blocker.
 
 _IN_BUILD = "in 'Build'"
 _IN_BACKLOG = "in 'Backlog'"
 _RETRIAGE_ANNOTATION = " [sent back to Backlog via return_task — needs human re-triage]"
-# Spelled with the count this env actually reaches, exactly as #570's clause literals do — but the
-# count is RETRIAGE's, and this env holds it apart from the waiting count and from 1 (VMCP-125/606).
+# One literal per env, spelled with the count that env actually reaches, exactly as #570's clause
+# literals do. Written out rather than formatted from the parameter (`f". {retriage_n} of these …"`
+# would be the tidy spelling) — that would put the message's number and the env's number back on
+# ONE source, which is the same-source trap #570 recorded and 632 re-stated for its numerals.
 _RETRIAGE_ESCALATION_2 = (
     ". 2 of these are stalled behind a chain HEAD returned to Backlog (return_task) — a human "
     "must re-triage the head before the tail can resume."
 )
+_RETRIAGE_ESCALATION_1 = (
+    ". 1 of these are stalled behind a chain HEAD returned to Backlog (return_task) — a human "
+    "must re-triage the head before the tail can resume."
+)
 
-# The counts this env must keep APART, asserted below as a pair. Three waiting tasks, two of them
-# behind a returned head: 3 != 2 kills the swap, and 2 != 1 kills the degenerate hard-code.
-_WAITING_N, _RETRIAGE_N = 3, 2
+# The envs the pin spans: (waiting tasks, of them behind a head returned to Backlog, that env's
+# escalation literal). Row one keeps the two counts APART — 3 != 2 kills the swap of one
+# interpolation for the other, 2 != 1 kills a hard-code to the value the pre-606 env happened to
+# equal. Row two sits ON the predicate's boundary, retriage == 1. Both properties are asserted of
+# this LIST inside the test, because each row satisfies only one of them.
+_STARVING_ENVS = [
+    (3, 2, _RETRIAGE_ESCALATION_2),
+    (1, 1, _RETRIAGE_ESCALATION_1),
+]
 
 
 def _blocker_moved_to_backlog(msg: str, blocker_ref: str) -> str:
@@ -935,17 +983,25 @@ def _blocker_moved_to_backlog(msg: str, blocker_ref: str) -> str:
     return msg.replace(was, f"{blocker_ref} {_IN_BACKLOG}{_RETRIAGE_ANNOTATION}")
 
 
-def test_the_starving_message_is_the_plain_tail_plus_the_retriage_escalation_and_nothing_else(env):
+@pytest.mark.parametrize("waiting_n, retriage_n, escalation", _STARVING_ENVS)
+def test_the_starving_message_is_the_plain_tail_plus_the_retriage_escalation_and_nothing_else(
+    request, env, waiting_n, retriage_n, escalation
+):
     """The retriage escalation and its per-blocker annotation appear IF AND ONLY IF a blocker sits
     in Backlog, in that position, with the count of RETRIAGED tails and nothing else may follow.
 
     The two next_task calls differ in exactly one attribute — the chain heads' stage — so every
     other byte of the message is common to both and cancels out of the differential. `_move` is the
     call return_task itself makes on a returned head (workflow.py:1313); the label it also adds is
-    irrelevant here, since the retriage condition reads the blocker's STAGE and nothing else."""
+    irrelevant here, since the retriage condition reads the blocker's STAGE and nothing else.
+
+    Two envs, and it takes both (see the section note): one where the waiting and the retriage
+    counts DIFFER, so neither numeral can be read off the other, and one where the retriage count
+    is 1 — the value `if retriage:` is written on, and the only value at which narrowing it to
+    `> 1` changes a byte. 606 added the first and, unnoticed, removed the second."""
     api, wf = env
-    heads = [api.add_task(f"chain head {i}", "Build") for i in range(_WAITING_N)]
-    tails = [api.add_task(f"tail {i}", "Queue") for i in range(_WAITING_N)]
+    heads = [api.add_task(f"chain head {i}", "Build") for i in range(waiting_n)]
+    tails = [api.add_task(f"tail {i}", "Queue") for i in range(waiting_n)]
     for tail, head in zip(tails, heads):
         api.add_relation(tail["id"], head["id"], "follows")
 
@@ -957,21 +1013,41 @@ def test_the_starving_message_is_the_plain_tail_plus_the_retriage_escalation_and
     # unconditional clause appended anywhere after it moves this ending and fails right here
     # instead of cancelling out of the equality below.
     assert plain_msg.endswith(_IN_BUILD), plain_msg
-    assert plain_msg.count(_IN_BUILD) == _WAITING_N, plain_msg
+    assert plain_msg.count(_IN_BUILD) == waiting_n, plain_msg
     assert _RETRIAGE_ANNOTATION not in plain_msg, plain_msg
 
-    returned = heads[:_RETRIAGE_N]           # the one changed attribute — what return_task does
+    returned = heads[:retriage_n]            # the one changed attribute — what return_task does
     for head in returned:
         wf._move(head["id"], "Backlog")
 
     retriage = wf.next_task()
     assert retriage["starving"] is True and retriage["needs_retriage"] is True
-    # The property this env EXISTS for, pinned so it cannot be lost in silence the way it was: the
-    # base's count and the escalation's count must be DIFFERENT numbers. Collapse the env back to
-    # one-blocked-by-one and this fails here, instead of quietly re-blinding the equality below.
-    assert retriage["waiting_count"] == plain["waiting_count"] == _WAITING_N
-    assert sum(w["needs_retriage"] for w in retriage["waiting"]) == _RETRIAGE_N
-    assert _WAITING_N != _RETRIAGE_N != 1
+    # This env really reaches the counts its row claims — otherwise the literal below is pinned
+    # against a state nobody built.
+    assert retriage["waiting_count"] == plain["waiting_count"] == waiting_n
+    assert sum(w["needs_retriage"] for w in retriage["waiting"]) == retriage_n
+    # The rows that ACTUALLY RAN, read off the running node instead of from the module constant.
+    # `@parametrize(…, _STARVING_ENVS)` beside an assert over `_STARVING_ENVS` would be TWO sources
+    # — #570's same-source trap in reverse — and the gap is constructible: slice only the decorator
+    # (`_STARVING_ENVS[:1]`), leave the list alone, and both asserts below pass while one row runs.
+    # Measured that way by an independent pass: the boundary mutation went back to `1 passed`.
+    # Reading the marker puts the pinned property and the executed set back on ONE source, and the
+    # param names are asserted so a restructured decorator fails loudly instead of pinning some
+    # other list.
+    marker = request.node.get_closest_marker("parametrize")
+    assert marker.args[0] == "waiting_n, retriage_n, escalation", marker.args
+    rows = marker.args[1]
+    assert (waiting_n, retriage_n, escalation) in rows, rows
+    # The two properties the PARAM SET exists for, each held by a DIFFERENT row, pinned so neither
+    # can be lost in silence the way the second one was. Separated counts (606): the base's numeral
+    # and the escalation's must be different numbers, and neither may be 1, the value a hard-code
+    # would most plausibly pick. The boundary (635): some row must sit at retriage == 1, or
+    # narrowing `if retriage:` to `if len(retriage) > 1:` becomes unobservable. No single row can
+    # satisfy both (separating the counts is exactly what lifts the retriage count above 1), so
+    # whichever row a collapse keeps, one of these fails HERE — for every row that still runs —
+    # instead of re-blinding the equality below.
+    assert any(w != r != 1 for w, r, _ in rows), rows
+    assert any(r == 1 for _, r, _lit in rows), rows
 
     # `expected` rewrites the plain message IN PLACE, so the equality below assumes both states
     # list the waiting tasks in the same order. At one waiting task that was vacuous; at three it
@@ -981,9 +1057,9 @@ def test_the_starving_message_is_the_plain_tail_plus_the_retriage_escalation_and
 
     blocker_ref = {w["task"]["id"]: w["blocked_by"][0]["ref"] for w in plain["waiting"]}
     expected = plain_msg
-    for tail in tails[:_RETRIAGE_N]:
+    for tail in tails[:retriage_n]:
         expected = _blocker_moved_to_backlog(expected, blocker_ref[tail["id"]])
-    assert retriage["message"] == expected + _RETRIAGE_ESCALATION_2, retriage["message"]
+    assert retriage["message"] == expected + escalation, retriage["message"]
 
 
 # --- the prose's INTERPOLATED VALUES, not just its clauses (VMCP-143 / #632) ---
