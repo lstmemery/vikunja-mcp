@@ -2311,3 +2311,246 @@ def test_the_rulebook_routes_a_stuck_REVIEWER_to_the_only_door_that_is_open_to_i
     assert wf.review_task(
         card["id"], verdict="needs_work", report="вопрос человеку: какой из двух вариантов?"
     )["moved_to"] == "Build"
+
+
+def _crashed_agent_bullet(text: str) -> str:
+    """The «Пер-таск-агент УПАЛ» bullet — the pump's whole restart rule, both roles.
+
+    Sliced, and the slice is the ONLY form that can carry VMCP-118 (591). The sentence this pin
+    is about — «ветка предложения ревью … пропускает карточки, назначенные на тебя» — ALREADY
+    occurs verbatim in the drain tick's step 3, where it explains a DIFFERENT situation (an
+    orchestrator that cannot verify an evidence sha). So a whole-file substring cannot tell
+    "the restart rule now covers a dead reviewer" from "step 3 still explains the same mechanism
+    for its own purpose", which was exactly the gap: the restart rule promised a mechanism
+    (`next_task` hands the task back) that exists for build and NOT for review."""
+    start = text.find("- **Пер-таск-агент УПАЛ (ошибка рантайма/API)")
+    assert start != -1, "SKILL.md no longer tells the pump to restart a crashed per-task agent"
+    end = text.find("\n- **", start + 1)
+    assert end != -1, "the crashed-agent bullet no longer ends where the next top-level bullet does"
+    bullet = text[start:end]
+    assert 0 < len(bullet) < len(text), "the crashed-agent slice is not a proper subset of SKILL.md"
+    assert "Пер-таск-агент ведёт ВЕСЬ таск сам" not in bullet, \
+        "the slice swallowed the following bullet"
+    return bullet
+
+
+def _independent_review_section(text: str) -> str:
+    """The «Независимое ревью изменений» section — the reviewer's OWN rubric, and the one place
+    in this file that is addressed to the reviewer and nobody else.
+
+    Sliced for the same measured reason as `_gc_section` / `_reviewer_tree_rule`: every token the
+    pins below name already lives elsewhere in this file, in BUILD-side prose — `git rev-parse
+    HEAD` is in the integration recipe, `git show <sha из evidence>` is in «Два возврата, два
+    дерева», and `[review]` appears throughout. A whole-file substring would stay green with the
+    reviewer's own rule deleted."""
+    start = text.find("\n## Независимое ревью изменений")
+    assert start != -1, "SKILL.md no longer has a section on independent review"
+    end = text.find("\n## ", start + 1)
+    assert end != -1, "the independent-review section no longer ends where the next section begins"
+    section = text[start:end]
+    assert 0 < len(section) < len(text), "the review-section slice is not a proper subset"
+    assert "Застрял?" not in section, "the slice swallowed the following section"
+    return section
+
+
+def test_the_restart_rule_says_its_own_mechanism_is_build_only():
+    """VMCP-118 (591): the pump's restart rule rests on «снова зовёт `next_task` (задача всё ещё
+    за ним)». That premise is TRUE for a build agent and FALSE for a reviewer, and the rulebook
+    stated only the half that holds — the catalogue's «упавший review-саб-агент нигде не
+    перезапускается».
+
+    MEASURED before the prose was written (real `Workflow` over FakeAPI, solo setup — the dogfood
+    one): a card driven to Review and still assigned to me makes `next_task()` answer
+    `{"task": null, "message": "the queue is empty — no work for the agent"}`, on every call; the
+    same identity with a card in Build gets `{"task": 107, "resume": true, "stage": "Build"}`. A
+    SECOND token sees the Review card as `{"review": true}` — so the blindness is a property of
+    the solo setup, which is the setup this rulebook is written for.
+
+    Anchored in the branch that causes it: the review-offer loop must keep skipping cards assigned
+    to the caller (delete that conjunct and a dead reviewer WOULD be reminded, making this
+    paragraph false), and the resume path that DOES hand build work back must still exist — that
+    contrast is the whole point of the added clause.
+
+    MUTATION-CHECKED: delete the added sub-bullet while step 3 of the drain tick keeps the same
+    sentence verbatim -> FAIL (a whole-file substring on that sentence stays GREEN on the same
+    mutant, which is why this is sliced); make the review branch stop skipping my own cards ->
+    FAIL; re-wrap the paragraph -> PASS by design (`_flat`)."""
+    flat = _flat(_crashed_agent_bullet(_skill_text()))
+    assert "Упал РЕВЬЮЕР" in flat, \
+        "the restart rule no longer says anything about a reviewer that died"
+    assert "пропускает карточки, назначенные на тебя" in flat, \
+        "the restart rule no longer names WHY a dead reviewer is never handed back"
+
+    src = inspect.getsource(workflow.Workflow.next_task)
+    review_at = src.index('for t in sorted(board.get("Review", [])')
+    assert "my_id in self._assignee_ids(t)" in src[review_at:], \
+        "the review-offer branch no longer skips cards assigned to the caller — SKILL.md tells " \
+        "the pump a dead reviewer is never reminded, which would become false"
+    assert "_my_active_tasks" in src, \
+        "next_task no longer has the resume path for active work — the build half of the " \
+        "contrast the restart rule draws would be gone"
+
+
+def test_the_reviewer_is_told_to_establish_it_is_looking_at_the_reviewed_code():
+    """VMCP-118 (591), three catalogue entries closed by one rule: «проверяй, а не предполагай»
+    was never said to the reviewer; «без пути в брифе работай там, где стоишь» is harmless for a
+    build agent and means "review the main branch" for a reviewer; and the reviewer's isolation at
+    `wip.limit: 1` was not described at all, though background review runs at ANY limit.
+
+    MEASURED on this code (throwaway repo, real git): `ensure_workspace(id, role="review",
+    at=None)` against an EXISTING tree pinned at a stale sha returns `{"created": false, "head":
+    <the OLD sha>}` with no refusal of any kind, while the same call WITH `--at <new sha>` raises
+    («review tree for task N is pinned at X but --at asked for Y»). So the loud guard is the one
+    the caller can forget to ask for, and the reviewer's own `git rev-parse HEAD` is the check
+    that does not depend on the pump getting its flags right.
+
+    Anchored in the two facts the prose asserts about the tool: the pinned-at check really is
+    conditional on `--at`, and creating a review tree really does read neither the board nor the
+    limit (only `--gc` builds a Workflow) — which is what makes "нужно при ЛЮБОМ `wip.limit`" a
+    statement about the code rather than a preference.
+
+    MUTATION-CHECKED: delete the added bullet while `git rev-parse HEAD` and `git show <sha из
+    evidence>` stay in their build-side homes -> FAIL (whole-file substrings on BOTH stay GREEN on
+    that mutant); drop the round-2 `[review]` clause from the dossier list -> FAIL; make the
+    pinned-at check unconditional -> FAIL; re-wrap -> PASS by design."""
+    flat = _flat(_independent_review_section(_skill_text()))
+    assert "при ЛЮБОМ `wip.limit`" in flat, \
+        "the reviewer is no longer told its own worktree is not a parallel-drain-only affair"
+    assert "git rev-parse HEAD" in flat, \
+        "the reviewer is no longer told to verify its tree holds the sha under review"
+    assert "git show <sha из evidence>" in flat, \
+        "the reviewer with no tree is no longer given the fallback that reads the RIGHT code"
+    assert "прошлый `[review]`" in flat, \
+        "the round-2 reviewer is no longer told to read the previous verdict"
+    # the placement residue this card rules on: the reviewer's tree rules are WRITTEN, but they
+    # live inside a section headed `wip.limit > 1`, so at limit 1 nothing routes the reviewer to
+    # them. Fixed by POINTING from the rubric (always read) rather than by moving the text.
+    assert "Ревьюер, вынеся вердикт, освобождает своё дерево" in flat, \
+        "the rubric no longer points at the bullet holding the rest of the reviewer's tree " \
+        "rules — at wip.limit 1 the reviewer never reaches that section on its own"
+    assert "Параллельный дренаж" in flat, \
+        "the rubric no longer warns that the pointed-at bullet sits behind a wip.limit > 1 " \
+        "heading that does not apply to the reviewer"
+    # ...and the pointer must keep resolving: a renamed target would leave a dangling reference
+    assert "- **Ревьюер, вынеся вердикт, освобождает своё дерево:**" in _skill_text(), \
+        "the bullet the rubric points at no longer exists under that name"
+
+    ensure_src = inspect.getsource(workspace_cmd._ensure_locked)
+    assert "if at is not None and" in ensure_src, \
+        "the pinned-at guard is no longer conditional on --at — SKILL.md tells the reviewer a " \
+        "tree can come back stale in SILENCE, which is only true while this check can be skipped"
+    assert '"created": False,' in ensure_src, \
+        "an existing worktree is no longer handed back as created: false — the stale-tree hazard " \
+        "the rule is about would not arise"
+    assert "wip_limit" not in ensure_src and "_build_workflow" not in ensure_src, \
+        "creating a workspace now reads the board/limit — 'нужно при ЛЮБОМ wip.limit' rests on " \
+        "this path needing neither"
+    assert "_build_workflow" in inspect.getsource(workspace_cmd.gc_workspaces), \
+        "--gc no longer builds the Workflow — the read/no-read split the rule cites is gone"
+
+
+def test_the_reviewers_release_rule_carries_the_refusal_its_own_cure_cannot_answer(git_repo):
+    """VMCP-118 (591), the ONE entry the catalogue had confirmed by running it: the `dirty` guard
+    in `_release_locked` is ROLE-AGNOSTIC, but its cure («доведи до пуша и повтори») is written on
+    the build side and is FORBIDDEN to a reviewer — its tree is detached, has no branch, and a
+    commit inside it is `unreachable-head` forever. So the role got the refusal and a recipe it
+    may not run.
+
+    MEASURED (throwaway repo, real git): a review tree holding ONE untracked file ->
+    `{"released": false, "code": "dirty", "reason": "working tree is dirty (1 entries)"}`; the same
+    tree after deleting that file -> `{"released": true}`. And the cost of not clearing it is
+    measured here rather than argued: `_keep_is_expected` grades that refusal `kept` — the list a
+    human is told to read in full — on every tick, unless the card happens to be parked.
+
+    Anchored BEHAVIOURALLY rather than by reading the guard: the claim "роли НЕ РАЗЛИЧАЕТ" is
+    about what a REVIEW tree does when it holds a stray file, so this builds exactly that state
+    and runs `release_workspace` on it — then removes the file and runs it again, so the cure the
+    prose prescribes is measured to work rather than asserted to exist. An index or substring pin
+    over `_release_locked` would go green for `if dirty and role == "build":`, which is precisely
+    the mutation that would make this paragraph false.
+
+    MUTATION-CHECKED: delete the added paragraph while the build side keeps its full `dirty`
+    breakdown -> FAIL (a whole-file substring on `dirty` stays GREEN); make the dirty guard
+    role-conditional -> FAIL; add CODE_DIRTY to `_EXPECTED_IN_A_REVIEW_TREE` -> FAIL; re-wrap ->
+    PASS by design."""
+    flat = _flat(_reviewer_tree_rule(_skill_text()))
+    assert "`dirty` роли НЕ РАЗЛИЧАЕТ" in flat, \
+        "the reviewer is no longer told the dirty refusal is aimed at it too"
+    assert "убери файл из дерева" in flat, \
+        "the reviewer is no longer given the ONE cure it is allowed to run"
+
+    # the state the prose is about: a REVIEW tree the reviewer left one file in
+    tree = Path(workspace_cmd.ensure_workspace(7, role="review", cwd=git_repo)["path"])
+    stray = tree / "reviewer-scratch.md"
+    stray.write_text("probe\n")
+    refused = workspace_cmd.release_workspace(7, role="review", cwd=git_repo)
+    assert refused["released"] is False and refused["code"] == workspace_cmd.CODE_DIRTY, \
+        f"a review tree holding a stray file no longer refuses release as dirty: {refused} — " \
+        f"SKILL.md tells the reviewer this refusal is aimed at it too"
+    assert tree.is_dir(), "the refusal removed the directory anyway"
+
+    # ...and the ONE cure the reviewer is allowed to run really does clear it
+    stray.unlink()
+    assert workspace_cmd.release_workspace(7, role="review", cwd=git_repo)["released"] is True, \
+        "removing the stray file no longer releases the tree — the rulebook prescribes exactly " \
+        "that as the reviewer's only available cure"
+
+    entry = {"code": workspace_cmd.CODE_DIRTY, "role": "review", "task_id": 7}
+    assert not workspace_cmd._keep_is_expected(entry, set()), \
+        "a dirty review tree is now graded `expected` — SKILL.md tells the reviewer an uncleared " \
+        "file shouts at a human every tick, which is the reason the cure matters"
+    assert workspace_cmd._keep_is_expected(entry, {7}), \
+        "control: a PARKED card's dirty tree must still be `expected`, else the assertion above " \
+        "would pass merely because nothing is ever graded routine"
+
+
+def test_the_skill_verification_trap_is_addressed_to_the_reviewer_as_well():
+    """VMCP-118 (591): the trap «правку этого файла нельзя проверять вызовом скилла» was written
+    in build lexicon — it ended «в `[worklog]` пиши, чем именно проверял», a marker only the
+    implementer posts. The role that actually walks into it is the REVIEWER, whose own rubric
+    orders it to verify BY RUNNING, and whose only available "run" for a rules change is the skill
+    call that returns the frozen snapshot. Same rule, one word wider.
+
+    Pinned inside the freshness section for `_freshness_section`'s own recorded reason, and
+    MUTATION-CHECKED by putting the build-only wording back while `[review]` stays everywhere else
+    in the file -> FAIL."""
+    flat = _flat(_freshness_section(_skill_text()))
+    assert "ни РЕВЬЮЕРУ" in flat, \
+        "the snapshot trap no longer names the role that most often walks into it"
+    assert "`[review]` у ревьюера" in flat, \
+        "the trap still tells only the implementer where to record what it checked"
+
+
+def test_the_container_name_recipe_says_the_reviewers_id_is_not_its_own():
+    """VMCP-118 (591): the shared-resource recipe derives a container NAME from the task id
+    (`NAME=vikunja-test-$ID`) — and for a REVIEWER that id belongs to somebody else's card, so it
+    collides with the container of that card's own build agent, which «Чек-пойнть рано» expressly
+    allows to still be working after `advance`.
+
+    Dropped from this card's plan at first, on the ground that the collision is LOUD (docker exits
+    125, and the rulebook quotes both refusals verbatim). Independent adjudication measured that
+    the loudness does not bound the cost, and the measurement stands: the name refusal reads «You
+    have to remove (or rename) that container», the recipe's own cleanup line is `docker rm -f
+    "$NAME"  # ОБЯЗАТЕЛЬНО`, and `docker rm -f` against a sibling's RUNNING container exits 0 with
+    no warning. So the loud error routes an obedient reader straight into destroying a sibling's
+    work. The neighbouring-value escape hatch does not cover it either: «возьми соседний» occurs
+    once, on the `lsof` PORT line, and a name has no lsof.
+
+    Kept word-level on purpose (this card's whole ruling is that attention is the scarce
+    resource): the fix is a comment on the existing `ID=` line, not a new bullet.
+
+    MUTATION-CHECKED: delete the added comment while the section keeps `vikunja-test-$ID`, the
+    quoted docker refusals and the mandatory `docker rm -f` -> FAIL."""
+    section = _shared_resources_section(_skill_text())
+    flat = _flat(section)
+    assert "РЕВЬЮЕР: он ЧУЖОЙ" in flat, \
+        "the id-derived naming recipe no longer warns the reviewer that the id is not its own"
+    assert "убьёт ЕГО работающий контейнер" in flat, \
+        "the recipe no longer names the destructive outcome the loud refusal routes an obedient " \
+        "reader towards"
+    # controls: the collision the warning is about must still be constructible from this recipe
+    assert "NAME=vikunja-test-$ID" in section, \
+        "the recipe no longer derives the container name from the task id — the hazard the " \
+        "warning describes would not exist"
+    assert 'docker rm -f "$NAME"' in section, \
+        "the recipe no longer prescribes the removal that makes the collision destructive"
