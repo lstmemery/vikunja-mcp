@@ -116,14 +116,27 @@ def test_return_task_refuses_from_review_and_still_works_everywhere_else(env):
     card is the IMPLEMENTER's — reads the same stage refusal instead of "claim it first", advice
     that would be actively wrong (you never claim work you are reviewing).
 
-    Both halves below are load-bearing. The refusal must leave the BOARD untouched: a guard that
-    raises after the comment/label/unassign already landed is not a guard. And the CONTROL sweep is
+    #627: that ORDER sentence used to live in this docstring as prose only — every card built here
+    was `assignee=api.me_user`, so the "in Review AND not mine" cell no one asserted was the one
+    cell the order decides. Measured on this tree: inverting the order (`_require_mine` first) left
+    all three pins of #590 green AND the whole unit suite green (712 passed). The multi-identity
+    branch below is what closes that, mirroring the sibling assertion already in the `call_human`
+    test — the two tools share a ruling, so they must share a pin.
+
+    All four parts below are load-bearing. The refusal must leave the BOARD untouched: a guard that
+    raises after the comment/label/unassign already landed is not a guard. The CONTROL sweep is
     what makes the "must NOT happen" half mean anything — without it the first assertion stays
     green for a `return_task` that raises unconditionally, which is not the ruling: every stage
     except Review keeps working, because returning a half-claimed Queue/Design/Build card really is
-    the "externally blocked" case this tool exists for.
+    the "externally blocked" case this tool exists for. And the OWNERSHIP control is what makes the
+    order assertion mean anything: `"not assigned to you" not in msg` names a guard it does not
+    exercise, so on its own it would stay green for a `return_task` with no `_require_mine` AT ALL
+    — measured, deleting that guard also left the whole suite green (712 passed). Together the two
+    say what one cannot: BOTH guards are live, and in their intersection STAGE wins.
 
-    MUTATION-CHECKED: control PASS; delete the Review gate -> FAIL (the card walks to Backlog)."""
+    MUTATION-CHECKED: control PASS; delete the Review gate -> FAIL (the card walks to Backlog);
+    invert the order (`_require_mine` first) -> FAIL on the multi-identity branch; delete
+    `_require_mine` -> FAIL on the ownership control."""
     api, wf, _t = env
     reviewed = api.add_task("someone else's finished work", "Review", assignee=api.me_user)
 
@@ -138,6 +151,33 @@ def test_return_task_refuses_from_review_and_still_works_everywhere_else(env):
     assert api.tasks[reviewed["id"]]["assignees"], "the refused return still unassigned the card"
     assert not any(lb["title"] == "blocked" for lb in api.tasks[reviewed["id"]]["labels"])
     assert not any(c.startswith("[blocked]") for c in api.comments_text(reviewed["id"]))
+
+    # multi-identity: the card in Review is the IMPLEMENTER's. THIS is the cell that pins the
+    # check ORDER — under the inverted order the reviewer reads "claim it first" and never hears
+    # about the stage or about the channel that actually works.
+    theirs = api.add_task("someone else's card in review", "Review")
+    api.tasks[theirs["id"]]["assignees"] = [{"id": 77, "username": "agent-impl"}]
+    with pytest.raises(WorkflowError) as multi:
+        wf.return_task(theirs["id"], reason="я не понимаю, чего от меня хотят")
+    multi_msg = str(multi.value)
+    assert "review_task" in multi_msg and "needs_work" in multi_msg, \
+        f"the reviewer must read the STAGE refusal, not an ownership one: {multi_msg}"
+    assert "not assigned to you" not in multi_msg, \
+        f"ownership ran first — 'claim it first' is the wrong advice for a reviewer: {multi_msg}"
+    assert api.stage_of(theirs["id"]) == "Review"
+    assert api.tasks[theirs["id"]]["assignees"][0]["id"] == 77
+
+    # OWNERSHIP CONTROL: the assertion above is a NEGATIVE one about a guard it never reaches, so
+    # pin that the guard is still there and still runs — from an OPEN stage, where the Review gate
+    # cannot mask it, someone else's card is still refused BY OWNERSHIP.
+    not_mine = api.add_task("someone else's card in Design", "Design")
+    api.tasks[not_mine["id"]]["assignees"] = [{"id": 77, "username": "agent-impl"}]
+    with pytest.raises(WorkflowError) as owned:
+        wf.return_task(not_mine["id"], reason="чужой сервис лежит")
+    assert "not assigned to you" in str(owned.value), \
+        f"_require_mine no longer guards return_task from an open stage: {owned.value}"
+    assert api.stage_of(not_mine["id"]) == "Design"
+    assert api.tasks[not_mine["id"]]["assignees"][0]["id"] == 77
 
     # CONTROL: every stage I deliberately left open still returns the card
     for stage in ("Design", "Build", "Queue", "Backlog", "Your Call"):
