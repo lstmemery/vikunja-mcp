@@ -1258,37 +1258,53 @@ def _flat(pages, *, page_size=5, total_pages=None, info_status=200,
     508 at 120. Below `page_size` THIS mutation has no runaway left to bound, because the ceiling
     gets there first — a fact about the MUTATION, not about the shape. Remove the CEILING instead
     and the region below the line turns out to be where the runaways actually live: it is where
-    BOTH callable fixtures named above sit, at ONE row per page against page_size 5. MEASURED with
-    the ceiling gone and the cap lifted to 1e9: neither read TERMINATES — a 20 s alarm cut both
-    off, each six figures of requests deep and still climbing. That depth is throughput and is
-    deliberately not pinned to a figure (the same shape gave 96,882 on one run of this measurement
-    and 191,269 on the next); what reproduces is that no bound is reached at all. Under the
-    `added_new` mutation those same two shapes stop at 120 and 121.
+    BOTH callable fixtures named above END UP at one row per page against page_size 5 — the
+    never-fills shape from page 1, the DRIBBLER only from page 2, because its first page is 5 rows
+    against page_size 5 and therefore FULL, on the cap side of the boundary measured just above.
+    (Both page-length lists were read off the fixtures the tests actually build rather than off the
+    source: [1, 1, 1, ...] and [5, 1, 1, ...].) MEASURED with the ceiling gone and the cap lifted
+    to 1e9: neither read TERMINATES — a 20 s alarm cut both off, each six figures of requests deep
+    and still climbing. That depth is throughput and is deliberately not pinned to a figure (the
+    same shape gave 96,882 on one run of this measurement and 191,269 on the next); what reproduces
+    is that no bound is reached at all. Under the `added_new` mutation those same two shapes stop
+    at 120 and 121, and that one-request gap IS that full first page: `max_items_per_page`
+    justifies it, so the budget is never charged for it. MEASURED across budgets rather than
+    inferred — 120 stops them at 120 and 121, budget 2 at 2 and 3, budget 1 at 1 and 2. A server
+    that really did serve one row per page FROM PAGE 1 would stop where its twin does.
 
     AND NOTHING IN THIS FILE REACHES THE CAP UNDER IT — for two DIFFERENT reasons, which is the
     part a single count hides. The same mutation turns this file red in SEVEN places and reaches
     the cap in NONE of them: 7 failed against a control round of 0, and the cap's own message
     occurs ZERO times, here and across all of tests/unit. Two are the `_flat` MAPPINGS, and those
-    are ABOVE the line — 11 rows against page_size 5, so every page is FULL, none is ever unproven
-    and the ceiling is structurally unreachable for them. They end by EXHAUSTION instead, running
-    out of named pages onto `if not items:` —
+    are ABOVE the line — 11 rows against page_size 5, so every page they NAME is FULL, none is
+    ever unproven and the ceiling is structurally unreachable for them. They end by EXHAUSTION
+    instead, running out of named pages onto `if not items:` —
     test_an_endpoint_that_ignores_page_terminates_without_duplicating_rows after 5 requests on
     `assert [1, 2, 3, 4, 5] == [1, 2]`, and the "live views/buckets shape" row of
     test_the_extra_request_is_paid_only_by_a_partial_last_page after 40 on `assert 40 == 2`, i.e.
     355 and 320 SHORT of the cap. (That they are above the line is MEASURED, not read off the
-    fixture: with the budget cut 120 -> 2 on TOP of the same mutation, the first STILL reaches 5
-    requests and never 508s, which is possible only if no page was ever unproven — while
-    test_projects_filters_pseudo, the control in that same round, 508s at 2.) The other five —
-    test_projects_filters_pseudo, test_kanban_view_picks_kanban_kind,
+    fixture: cut the budget to 1 on TOP of the same mutation and lift `harness_cap` so that only
+    the CEILING can end the read early — the first STILL runs to its own assert, 5 requests and no
+    508, and at a budget of ONE that is possible only if the unproven count stayed at zero for the
+    whole read. test_projects_filters_pseudo, the control in that round, 508s at 1.) The other
+    five — test_projects_filters_pseudo, test_kanban_view_picks_kanban_kind,
     test_kanban_view_missing_raises_actionable_error, test_get_or_create_label_reuses_existing,
-    test_share_project_idempotent — sit BELOW it: bare `make_api` servers whose /info is NOT
-    stubbed, so no page is ever justified and the CEILING stops them at 120 requests with a 508
-    (test_kanban_view_missing_raises_actionable_error surfaces that 508 as a regex mismatch inside
-    its `pytest.raises` rather than as the raise itself — same stop, different failing line). The
-    seven are NAMED because the bare count is ambiguous: ceiling -> `if False:` at BOTH api.py
-    sites is also 7 failed on this file, over a DISJOINT set. The two mappings stay mappings
-    deliberately: a request-count assert that names the guard is a better failure than a
-    RuntimeError 356 requests later."""
+    test_share_project_idempotent — are not BELOW the
+    line, they have no line at all: bare `make_api` servers whose catch-all handler answers /info
+    with the same list as every other path, so `max_items_per_page` never arrives and page_size
+    stays None. The 508 says exactly that ("could not read max_items_per_page from /info, so it
+    cannot tell a full page from a short one at all"): no page is ever justified, and the CEILING
+    stops them at 120 requests with a 508 (test_kanban_view_missing_raises_actionable_error
+    surfaces that 508 as a regex mismatch inside its `pytest.raises` rather than as the raise
+    itself — same stop, different failing line). The seven are NAMED because the bare count is
+    ambiguous: ceiling -> `if False:` at BOTH api.py sites is also 7 failed on this file, over a
+    DISJOINT set. The two mappings stay mappings deliberately: a request-count assert that names
+    the guard is a better failure than a RuntimeError 356 and 321 requests later — ONE FIGURE PER
+    MAPPING, because as callables both would run to the cap and it raises ON request 361, while
+    these two fail at 5 and 40. (The 355 and 320 above are those same two distances measured to
+    the cap's VALUE, 360, rather than to the request that raises. Both are PAIRS for the same
+    reason: the mappings NAME 4 and 39 pages, so any single figure here is wrong about one of
+    them — this sentence carried a lone 356 until VMCP-152 (655) measured it.)"""
     seen = []
 
     def handler(request):
