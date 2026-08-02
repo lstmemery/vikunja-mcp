@@ -467,7 +467,14 @@ precisely so it can be RUN on a stand instead of reasoned about. The job holds
 `permissions: contents: write` (least-privilege, that job only) and a `release`
 concurrency group, which serializes the release JOBS **and nothing else**: it
 does not move a queued job onto a newer base, so both jobs of two close landings
-still compute the same next patch (see the tip guard below). The bump commit is
+still compute the same next patch (see the tip guard below). That "nothing else"
+is not "nothing useful", and the difference is measured: the group is what keeps
+another RELEASE JOB out of the window between a job DECIDING to release and its
+final `git push -f … stable` — a stand that runs a sibling's whole release inside
+that window rolls `stable` BACK onto the earlier bump, identically on the guarded
+path, the ordinary path and the pre-guard inline block, so the last push's
+correctness rests on ci.yml's group rather than on the script. The group covers
+only jobs, not a human moving `stable` by hand; filed as #737. The bump commit is
 pushed with `GITHUB_TOKEN`, which by design does NOT re-trigger CI (plus
 `[skip ci]` as a second belt). So `stable` always tracks the latest green `main`,
 patch-bumped, hands-off.
@@ -485,42 +492,104 @@ the run was created: the loser's `integration` job sat unstarted for five minute
 (started 15:41:31Z). And the concurrency group had nothing to serialize here —
 the two `release` jobs never overlapped at all, the winner's running
 15:40:34–15:40:44Z and the loser's 15:41:58–15:42:04Z, which is why the loser saw
-the tag already on the remote at checkout. So `scripts/release.sh` asks one question
-before `git tag` and again after a rejected `git push origin HEAD:main`: is
-`main`'s tip a DIFFERENT commit that CONTAINS `$GITHUB_SHA`? If yes, a newer
-landing is already on top and ITS release job carries this commit into `stable`,
-so the job prints a notice and exits 0. Everything else proceeds exactly as it
-did before the guard — with two qualifications that sentence must not be read to
-cover, both checked rather than assumed. A `main` force-pushed BACKWARDS is not
-superseded at all: the rollback tip is an ANCESTOR of `$GITHUB_SHA`, so the bump
-is a fast-forward and the job pushes straight over the rollback — measured on the
-stand, byte-for-byte the same outcome with the guard and without it, so this is
-pre-existing behaviour rather than anything this card introduced or fixed. And
-the guard's own new cost is two swallows, both constructed rather than argued.
-After a rejected main push the script asks only whether a newer landing containing
-us exists, never WHY git refused — so a non-race refusal (permissions, branch
-protection) that COINCIDES with a sibling landing now exits green where it used to
-be red; measured mitigation, and it is the stronger half: the TIP has no sibling by
-definition, so its job under the same denial still exits 1, and a permanently
-broken release path stays visible. And a job KILLED between the main push and the
-tag push leaves its own bump as the tip, so its re-run reads that as "superseded"
-— by its own orphan — and goes green without ever cutting the tag; before the guard
-that re-run was red, which fixed nothing but was visible. That half-state class is
-tracked as #723.
+the tag already on the remote at checkout. So `scripts/release.sh` asks, before
+`git tag` and again after a rejected `git push origin HEAD:main`: is `main`'s tip
+a DIFFERENT commit that CONTAINS `$GITHUB_SHA`? If yes, a newer landing is already
+on top, so the job prints a notice and exits 0 — and the notice says only that,
+never who will release the tip. Round 1's notice promised "releasing it is that
+newer tip's job", which is false in THREE of the four swallows below: in two of them
+the tip is a bump commit, and bump commits get no runs at all — by construction
+(`GITHUB_TOKEN` does not re-trigger CI, plus the ci-skip marker) and re-measured on 60
+consecutive bump shas, every one of which returns `[]` from `gh run list --commit
+<full sha>`; in the third the tip has a run and that run releases nothing.
 
-What that does NOT change is what reaches consumers: the superseded job pushed
-NOTHING before the fix either. Measured on a bare-repo stand, the pre-fix job
-dies at `git tag` when the sibling already took the name and at
-`! [rejected] HEAD -> main (non-fast-forward)` when it did not — and `git tag`
-sits BEFORE all four pushes, so in both cases the remote's `main`, tags and
-`stable` are unchanged before and after. Only the job's CONCLUSION moves, from a
-false red to a green no-op. Two readings follow. N rapid landings can share ONE
-patch bump (already true before the fix), and a green `release` job therefore no
-longer implies a new tag exists — the log line `release skipped: …` is what tells
-the two apart. And the one landing that always DOES release is the LAST of a
-session: nothing lands after it, and an earlier job's bump can only be pushed
-onto ITS OWN sha, so absent a hand force-push of `main` the last landing is still
-the tip when its job runs.
+**After a rejected push that question is asked SECOND, and the order is
+load-bearing** — the same order this file already prescribes to agents above
+("First *did it land anyway?*"). Round 1 of #716 asked only the second question,
+and lost whole releases to exactly the failure that rule exists for: a server can
+take the ref update and still leave the client reporting failure, and then the tip
+that "supersedes" the job is its OWN landed bump — a different commit that contains
+`$GITHUB_SHA`, a perfect match for the condition. The job went GREEN having cut no
+tag and moved no `stable`, with no second actor, no human and no re-run involved.
+Constructed on the stand with a shim that performs the push and then reports the
+hangup: round 1 gave `rc=0 tags=[] stable=none`, round 2 gives `rc=0 tag=v0.2.171
+stable=<the bump>`. So the recheck now asks in three steps. My HEAD IS the tip →
+the push landed, finish the release (tag, then `stable`). My HEAD is ON `main` but
+something NEWER sits on top → LOUD, exit 1: the tag never reached the remote, and
+force-moving `stable` onto a non-tip could roll the channel BACK, so this stays as
+red as it was before any guard existed (#723's class). Only then, my HEAD is not on
+`main` at all → the supersession question, whose "no" is exit 1.
+
+Everything else proceeds exactly as it did before the guard — with qualifications
+that sentence must not be read to cover, all checked rather than assumed. A `main`
+force-pushed BACKWARDS is not superseded at all: the rollback tip is an ANCESTOR of
+`$GITHUB_SHA`, so the bump is a fast-forward and the job pushes straight over the
+rollback — measured on the stand, byte-for-byte the same outcome with the guard and
+without it, so this is pre-existing behaviour rather than anything this card
+introduced or fixed. And the guard's own cost is FOUR swallows, a number RECOUNTED
+TWICE rather than inherited: round 1 said two, round 2 fixed one (the landed push
+above) and its second pass built two more, and the rework's own second pass then
+built a fourth — which also DISPROVED the sentence (2) used to close on. All four
+are constructed, and they do not sit at the same gate.
+
+**(1) The post-push recheck** still never asks WHY git refused, so a non-race
+refusal (permissions, branch protection) that COINCIDES with a sibling landing exits
+green where it used to be red. The mitigation is real but weaker than round 1's "the
+TIP has no sibling by definition": measured with a standing push denial and a
+landing inside every job's window, a series of five gave FOUR green swallows and ONE
+red — the last. So the surviving signal is one red per SERIES, not one per job.
+**(2) The pre-tag gate, as a CLASS**: any half-assembled state plus a RE-RUN is a
+green skip. A job that left its own bump as the tip — killed between pushes, or with
+the TAG push landing while the client reported failure (the same hangup this card
+fixes, one push later) — re-runs, reads the tip as "superseded" by its own orphan,
+and goes green. THAT job's first run is loud and only a hand `gh run rerun` silences
+it — but the qualifier rests on the tip being the job's OWN bump, and must not be
+read as "a half-state is always loud first": a DIFFERENT landing under the same
+half-state is swallowed on its first run, which is (4). Round
+1 described this narrower than it is ("without ever cutting the tag"): when the
+hangup hits the tag push, the tag IS on the remote and what is lost is `stable`.
+The landed question does not rescue a re-run, and should not — a re-run commits its
+OWN bump (fresh committer date, different sha), so "did MY push land?" is honestly
+no. Before the guard the re-run was red (`fatal: tag … already exists`), which fixed
+nothing but was visible. Class tracked as #723.
+**(3) The pre-tag gate again**: the tip that supersedes me will not release EITHER —
+its run is red, its ci-skip marker was swallowed, or its job was cancelled. The skip
+is then literally true and still leaves `stable` where it was. This is the stand's
+CASE C, the "tag name still free" row of the card's own table: the same input was
+`! [rejected] … (non-fast-forward)`, exit 1, before the guard. The script cannot
+check it from here, which is exactly why the notice promises nothing — and it is not
+rare: seven of fifteen consecutive `main` runs were red on the night of 31.07.
+**(4) The pre-tag gate a third time, and it is neither (2) nor (3)**: the tip is
+ANOTHER job's orphaned bump, and what gets swallowed is a DIFFERENT, EARLIER landing
+on its FIRST and only run — no re-run, no second actor inside its own path. Unlike
+(2), the hangup happened in someone else's run, so "the first run is loud" never
+applies; unlike (3), the tip is a BUMP commit, which gets no run at all (re-measured:
+60 of 60 consecutive bump shas return `[]`), so "its run is red" is not even a
+question that can be asked — the job that owed that tip a release already ran and
+died. One hangup swallows as many landings as it buried: two, measured on three
+commits. And this one the guard INTRODUCED rather than inherited — on identical
+input the pre-716 inline gives `! [rejected] … (non-fast-forward)` and exit 1, round
+1 gives rc=0 and round 2 still gives rc=0. Pinned by
+`test_a_foreign_orphan_bump_swallows_an_earlier_landing`, tracked as #740.
+
+What that does NOT change is what reaches consumers ON THE SUPERSEDED PATH — and
+the scope of that sentence matters, because on the landed-but-reported-failure path
+above the fix deliberately pushes MORE than the pre-fix step did. Measured on a
+bare-repo stand, the pre-fix superseded job dies at `git tag` when the sibling
+already took the name and at `! [rejected] HEAD -> main (non-fast-forward)` when it
+did not — and `git tag` sits BEFORE all four pushes, so in both cases the remote's
+`main`, tags and `stable` are unchanged before and after; there, and only there,
+just the job's CONCLUSION moves, from a false red to a green no-op. Two readings
+follow. N rapid landings can share ONE patch bump (already true before the fix),
+and a green `release` job therefore no longer implies a new tag exists — the log
+line `release skipped: …` is what tells the two apart. And what the guard
+guarantees for the LAST landing of a session is that it is never SUPERSEDED, NOT
+that it releases: nothing lands after it and an earlier job's bump can only be
+pushed onto ITS OWN sha, so it is still the tip when its job runs — but that job
+can fail to start at all (a swallowed ci-skip marker), go red, or be killed
+mid-way, and each of those leaves the last landing unreleased with nothing later to
+heal it. "Always DOES release" was the overclaim; "is never superseded" is the
+measured part.
 
 Two directions that look equivalent here and are not, both refuted by measurement
 rather than argument. Recomputing the VERSION — from `origin/main`, from a retry,
