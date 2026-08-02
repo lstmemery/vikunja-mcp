@@ -461,20 +461,56 @@ to `main` fires the `release` job in `.github/workflows/ci.yml`
 `src/vikunja_mcp/__init__.py` and `uv.lock`'s self-entry; the lock is easy to
 forget and it is a *dependency-resolution* file, so "version-only" does not mean
 "touches nothing that matters"), commits `chore: vX.Y.Z [skip ci]`, tags
-`vX.Y.Z`, and force-moves `stable` onto that bump commit — the commit/tag/push
+`vX.Y.Z`, and moves `stable` onto that bump commit — the commit/tag/push
 half lives in `scripts/release.sh`, in a FILE rather than a `run: |` block
 precisely so it can be RUN on a stand instead of reasoned about. The job holds
 `permissions: contents: write` (least-privilege, that job only) and a `release`
 concurrency group, which serializes the release JOBS **and nothing else**: it
 does not move a queued job onto a newer base, so both jobs of two close landings
-still compute the same next patch (see the tip guard below). That "nothing else"
-is not "nothing useful", and the difference is measured: the group is what keeps
-another RELEASE JOB out of the window between a job DECIDING to release and its
-final `git push -f … stable` — a stand that runs a sibling's whole release inside
-that window rolls `stable` BACK onto the earlier bump, identically on the guarded
-path, the ordinary path and the pre-guard inline block, so the last push's
-correctness rests on ci.yml's group rather than on the script. The group covers
-only jobs, not a human moving `stable` by hand; filed as #737. The bump commit is
+still compute the same next patch (see the tip guard below).
+
+**The channel moves FORWARD ONLY, and that is a property of the script now, not of
+ci.yml** (tracker #737). Until then the last action was an unconditional `git push
+-f … stable`, and the window between a job DECIDING to release and that push was
+closed by the concurrency group alone: a stand that runs a sibling's whole release
+inside the window rolled `stable` BACK onto the earlier bump — job GREEN, both tags
+present, channel a patch behind its own newest tag — identically on the guarded
+path, the ordinary path and the pre-guard inline block, i.e. the property was
+PRE-EXISTING rather than introduced by #716. The fix is the missing `-f`: a plain
+push is fast-forward-only, so git itself refuses to point `stable` at a commit that
+does not contain the channel's current head, and the refusal is then GRADED by the
+same two questions the `main` push already asks — channel equals my bump (it landed,
+the client lied) or channel CONTAINS my bump (a newer release already carried me):
+green with a notice; **anything else, including "the channel could not be read", is
+RED**. Both green branches need a proof that the channel carries my code, so
+"channel not moved AND my code not in it" is green on no branch OF THIS STEP. **Wider
+than this step that sentence is FALSE, and an attack pass built the counterexample
+three ways**: the PRE-TAG gate still returns a green skip with the channel unmoved —
+that is its four documented swallowings, the most ordinary being a runner killed
+between pushes followed by a `gh run rerun`. This fix removes the channel ROLLBACK, not
+the whole class "green job, channel behind" (#723, #740), which it neither introduced
+nor closes. `--force-with-lease`
+was measured and rejected: without `refs/remotes/origin/stable` it rejects even a
+perfectly normal push, with no race in sight (`! [rejected] … (stale info)`), which
+would make the release depend on `actions/checkout`'s refspec — whether checkout
+creates that ref was NOT measured here, and that is the objection rather than a hole
+in it, since this repo can neither run a runner on a stand nor pin what the action
+does — and WITH that ref a plain `git fetch origin` before the push resets the lease
+and lets the rollback through. A plain push has neither dependency: the comparison is the
+server's, and the stand gives the same refusal with and without the tracking ref.
+What this does NOT fix, measured on the same stand: a HUMAN's documented rollback
+(`git branch -f stable vX.Y.Z && git push -f origin stable`) performed inside a live
+release job's window is still silently undone, because the old tag is an ANCESTOR of
+the new bump, so the job's push is an honest fast-forward. The same measurement is
+what shows the rollback procedure itself still works — the release after a rollback
+moves the channel forward again, rc=0. The group survives as defence in depth and is
+now PINNED by a test, because after this fix its removal has no reliable
+symptom: the common outcomes of the races it prevents are GREEN (the supersession
+skip, and this section's notice). Not "never red" — the branch where my bump is on
+`main` with something newer on top is red, and dropping the group makes exactly that
+more frequent too; what is gone is any DEPENDABLE signal, which is what a pin is for.
+The same fix has one named cost: a channel pointed by HAND at a commit off `main` is
+no longer silently overwritten, it reddens every release until a human fixes it. The bump commit is
 pushed with `GITHUB_TOKEN`, which by design does NOT re-trigger CI (plus
 `[skip ci]` as a second belt). So `stable` always tracks the latest green `main`,
 patch-bumped, hands-off.
@@ -515,8 +551,8 @@ Constructed on the stand with a shim that performs the push and then reports the
 hangup: round 1 gave `rc=0 tags=[] stable=none`, round 2 gives `rc=0 tag=v0.2.171
 stable=<the bump>`. So the recheck now asks in three steps. My HEAD IS the tip →
 the push landed, finish the release (tag, then `stable`). My HEAD is ON `main` but
-something NEWER sits on top → LOUD, exit 1: the tag never reached the remote, and
-force-moving `stable` onto a non-tip could roll the channel BACK, so this stays as
+something NEWER sits on top → LOUD, exit 1: the tag never reached the remote, so a
+tag-less half-release stays as
 red as it was before any guard existed (#723's class). Only then, my HEAD is not on
 `main` at all → the supersession question, whose "no" is exit 1.
 

@@ -394,7 +394,7 @@ def classify_next(result: dict) -> dict:
     (internal/hub/vikunja/claimable.go `kindIsClaimable`) and fail-CLOSES on anything
     it does not know — deliberately, because a hub that silently accepted an unknown
     verdict could idle its loops forever, invisibly. Every push to main here
-    auto-releases and force-moves `stable`, and the hub re-resolves `@stable` on EVERY
+    auto-releases and moves `stable`, and the hub re-resolves `@stable` on EVERY
     check — so a new kind reaches every hub within MINUTES and turns all its loops red
     (loud idle-check rows, no launches) until the hub's enum learns it. Ship the hub's
     enum FIRST, then this. (Renaming a KEY is the same class, ordered the usual way:
