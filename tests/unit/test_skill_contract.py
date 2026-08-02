@@ -2523,21 +2523,23 @@ def _return_task_bullet(text: str) -> str:
     EVERY revision of SKILL.md this history holds the sentence is absent, and so is the bare word
     «ждущей» — zero hits read RAW and zero read whitespace-FLATTENED alike. The load-bearing
     figure is that ZERO, not the denominator, which is why the denominator is dated rather than
-    pinned: 69 revisions when this was run on 2026-08-02, and it grows with every rulebook edit
-    (it was 67 at this card's own first round, four commits earlier). The PRESENT control is
-    NAMED so it can be re-derived instead of trusted — this section's own heading, «Застрял?
-    Выход зависит от РОЛИ», hits 10 of those 69; the absent control is any string the file never
-    contains, and hits 0. Both readings are reported because only the SENTENCE could ever have
-    wrapped: `git log -S` matches raw bytes and this file line-wraps, which is not hypothetical —
-    the nearest live text, «ждёт человеческого Done» in the `decompose` bullet, wraps between its
-    first two words and answers the pickaxe only as «человеческого Done». Repo-wide, with the
-    full sentence as the needle, it APPEARED in exactly one commit: 6ac1454, which added the
-    docstring line that quoted it — a line 72c6879 then deleted, so nothing in the text you are
-    reading contains it. Named that way because the needle decides the caveat: the sentence now
-    also names that DELETING commit, while the bare word never will, its count being unchanged
-    across that edit and across this one. Nothing to re-quote, so the
-    rationale is now the mutants themselves, each run at three scopes: this bullet as shipped,
-    `_stuck_section(text)`, and all of `text`.
+    pinned: 71 revisions when this was run on 2026-08-02, and it grows with every rulebook edit —
+    it went 69 -> 71 during this very round, on the rebase before the push. (67 at this card's
+    own first round, 72c6879; the four SKILL.md landings since — #547, #631 and two from #628 —
+    are what made it 71, the count of COMMITS since that round being a larger and different
+    number.) The PRESENT control is NAMED so it can be re-derived instead of trusted — this
+    section's own heading, «Застрял? Выход зависит от РОЛИ», hits 12 of those 71; the absent
+    control is any string the file never contains, and hits 0. Both readings are reported because
+    only the SENTENCE could ever have wrapped: `git log -S` matches raw bytes and this file
+    line-wraps, which is not hypothetical — the nearest live text, «ждёт человеческого Done» in
+    the `decompose` bullet, wraps between its first two words and answers the pickaxe only as
+    «человеческого Done». Repo-wide, with the full sentence as the needle, it APPEARED in exactly
+    one commit: 6ac1454, which added the docstring line that quoted it — a line 72c6879 then
+    deleted, so nothing in the text you are reading contains it. Named that way because the needle
+    decides the caveat: the sentence now also names that DELETING commit, while the bare word
+    never will, its count being unchanged across that edit and across this one. Nothing to
+    re-quote, so the rationale is now the mutants themselves, each run at three scopes: this
+    bullet as shipped, `_stuck_section(text)`, and all of `text`.
 
       * delete the bold rule sentence and its parenthesised open list -> RED at bullet AND at
         section scope, GREEN file-wide: the very string this pin asserts also stands in the
@@ -2551,7 +2553,7 @@ def _return_task_bullet(text: str) -> str:
     So the slice is load-bearing at BOTH steps of the narrowing, and the two steps are held by
     DIFFERENT rounds. File scope is blind to all three rounds above, and to a FOURTH assertion:
     the loop requiring each open stage. That loop takes a round PER STAGE, and measuring it with
-    ONE stage is how the sentence that stood here before this round came out false — it named
+    ONE stage is how the sentence 72c6879 left standing here came out false — it named
     «Queue» alone among the stage-drops and concluded that exactly one round justified the last
     step. (Named, which is what the record shows; whether only that one was RUN is not
     observable.) All five stages, each at all three scopes, alongside the count of that token's
@@ -2579,27 +2581,50 @@ def _return_task_bullet(text: str) -> str:
     тул», has no twin anywhere in SKILL.md and reddens at every scope: it shows that assertion is
     live, not that the slice is.
 
-    The superseded claim is written down so it is not re-derived, and it was wrong about the
-    MECHANISM rather than about the round: it said `Done` recurs in this section's reviewer
+    The superseded claim is written down so it is not re-derived. Beside the quotation dealt with
+    above, its MECHANISM is wrong too: it said `Done` recurs in this section's reviewer
     sub-bullet. It does not — that bullet contains `Done` zero times, and all ten occurrences in
-    the section sit inside THIS one. The round it recorded is the SECOND one bulleted above, and
-    identifying it takes reading #626's own wording rather than guessing: «delete the Done
-    sentence from the bullet while leaving «Done» and `file_task` elsewhere in the section»
-    points at the sentence that CARRIES `file_task`, that being what leaves `file_task` outside
-    the bullet but inside the section. Deleting it does exactly that — `file_task` goes
-    1 -> 0 in the bullet and 2 -> 1 in the section, while `Done` stays at 9 — and it reproduces
-    on BOTH consumers as RED at bullet, GREEN section-wide, #626's recorded outcome verbatim.
-    What reddens is therefore the `file_task` assertion and not a `Done` check: a bare `Done`
-    substring stays GREEN at EVERY scope on that mutant, and still does with the rule line
-    deleted too (8 left in the bullet). Which token demonstrates a slice is a property of the
-    mutant, never of the token.
+    the section sit inside THIS one. WHICH round it recorded is a THIRD question, and the record
+    cannot settle it. #626's wording — «delete the Done sentence from the bullet while leaving
+    «Done» and `file_task` elsewhere in the section» — fits the SECOND round bulleted above, the
+    lone sentence carrying `file_task`, and fits a WIDER reading just as well: delete the whole
+    «- **Из Done** (#626)» sub-bullet. Both readings were built and compared here, and the two
+    obvious discriminators both fail on measurement.
 
-    A WIDER reading of that round — delete the whole «- **Из Done** (#626)» sub-bullet — was
-    tried first here and is worth writing down, because it looks equivalent and is not. It is RED
-    at bullet for the test below, but the decompose test then reddens at section AND file scope
-    as well, `#649` and the caveat both sitting inside the deleted text. Run the suite rather
-    than that one test and it shows red at every scope, which is precisely why #626's own
-    «section-wide GREEN» picks out the narrow reading and not this one.
+      * `file_task` goes 1 -> 0 in the bullet and 2 -> 1 in the section on EITHER reading, and
+        the survivor is the SAME line both times, in the reviewer bullet's last sub-bullet. So
+        "leaves `file_task` outside the bullet but inside the section" — 308ef14's stated reason
+        for picking the narrow reading — is true of both and picks neither.
+      * Neither does #626's recorded «section-wide GREEN», and that is measured AT 6ac1454 rather
+        than argued from today's tree. Its own docstring says «selection confirmed at exactly 1
+        test», and at that commit this helper HAD exactly one consumer: the decompose test's
+        `stuck = _return_task_bullet(text)` arrived later, with #649's ca05756. Checked out there
+        and run under that one test, BOTH readings score RED at bullet and GREEN section-wide,
+        failing the same `file_task` assertion.
+
+    So this card named the wider reading in its first round and the narrow one in its second, and
+    the record supports neither over the other. Two things still point at the narrow one, and
+    both are weaker than a measurement of what was RUN: #626 wrote «the Done SENTENCE», singular,
+    where the wider reading deletes a whole sub-bullet — five full stops of it at 6ac1454, six
+    today, that being the figure to quote against a claim made then; and only the narrow reading
+    still reproduces that outcome on TODAY's suite. Read what FOLLOWS as being about the narrow
+    MUTANT, then, not as a finding about which round #626 ran.
+
+    Scored with BOTH consumers in the selection, that mutant is RED at bullet and GREEN
+    section-wide, `Done` moving 10 -> 9 in the bullet and in the section alike. What reddens is
+    the `file_task` assertion and not a `Done` check: a bare `Done` substring stays GREEN at
+    EVERY scope there, and still does with the rule line deleted too (8 left in the bullet). On
+    the WIDER mutant it runs the other way — delete that sub-bullet AND the rule line and `Done`
+    is 0 in the bullet, 0 in the section and 12 file-wide, so a bare `Done` check DOES separate
+    file scope there. Which token demonstrates a slice is a property of the mutant, never of the
+    token, and that now rests on a positive case as well as a negative one.
+
+    The wider reading is also where today's suite and #626's selection come apart, which is worth
+    writing down because the two readings look equivalent. Under the test below ALONE it scores
+    RED at bullet, GREEN section-wide — 6ac1454's answer, above. Add the decompose test and it
+    reddens at bullet, section AND file, `#649` and the caveat both sitting inside the deleted
+    text, so the suite scores it RED at every scope. That difference is a property of the SECOND
+    consumer, which #626 did not have.
 
     Scope OUTSIDE the bullet is the only thing this helper decides. Whether each assertion is
     then sliced tightly enough INSIDE it is a separate question, and one is open there: #700,
@@ -2617,9 +2642,9 @@ def _return_task_bullet(text: str) -> str:
     No new code assertion was added here, and the reason first given for it — in #667's own first
     commit message, 72c6879: "would redden on any legitimate rewording of a neighbouring section"
     — does not survive measurement. What is pinnable is the REDUNDANCY behind two of the rounds
-    above: the rule string and `#649` each occur twice in SKILL.md, the second time in the
-    `decompose` bullet. That side is ALREADY
-    pinned, and with THIS file untouched: rewording that bullet's rule line reddens
+    above: the rule string and `#649` each occur twice in SKILL.md, the OTHER time in the
+    `decompose` bullet — which comes FIRST in the file, two sections above this one. That side is
+    ALREADY pinned, and with THIS file untouched: rewording that bullet's rule line reddens
     `test_..._decompose_refuses_from` at its «no longer states WHICH stages decompose refuses
     from» assertion, and deleting `#649` from it reddens the same test at «no longer explains WHY
     Done is shut». So the very rewording said to make a redundancy pin noisy already fails a pin
@@ -2628,16 +2653,17 @@ def _return_task_bullet(text: str) -> str:
     spuriously" — a THIRD copy of the rule string appearing anywhere would trip a count-based pin
     and nothing else. That case was not measured, and is not what the superseded reason claimed.)
 
-    (Every round named above was run for THIS rewrite in an isolated `git clone --no-hardlinks`:
-    the five-stage table, the three bulleted rounds, the caveat round, both readings of #626's
-    round and their `Done` counts, the revision scan, the repo-wide pickaxe, the two decompose
-    probes, and both halves of the #700 coupling — the stage rounds under the patched test and
-    the remaining rounds under it. `vikunja_mcp.__file__` confirmed inside the clone,
+    (Every round named above was re-run for THIS revision in an isolated `git clone
+    --no-hardlinks`: the five-stage table, the three bulleted rounds, the caveat round, both
+    readings of #626's round — suite-wide AND per consumer — and their `file_task` and `Done`
+    counts, the revision scan, the repo-wide pickaxe, the two decompose probes, and both halves
+    of the #700 coupling. The 6ac1454 comparison took a SECOND clone, checked out at that commit
+    and run against its own single consumer. `vikunja_mcp.__file__` confirmed inside each clone,
     `__pycache__` cleared between rounds, restores sha256-verified, an unmutated control PASS at
-    both ends, and the whole sweep repeated on a fresh clone AFTER rebasing onto siblings' work,
-    since these figures are counts over a file other cards edit. The clone is not ceremony: run
-    in the live worktree, an earlier sweep here raced a second agent's on the same two files, and
-    an unmutated control is what caught it — #702.)"""
+    both ends, and the counts re-run once more after the final rebase, since these figures
+    are counts over a file other cards edit. The clone is not ceremony: run in the live worktree,
+    an earlier sweep here raced a second agent's on the same two files, and an unmutated control
+    is what caught it — #702.)"""
     start = text.find("\n- **`return_task`** — внешняя блокировка")
     assert start != -1, "SKILL.md no longer describes return_task in the stuck section"
     end = text.find("\n- **", start + 1)
