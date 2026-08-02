@@ -497,6 +497,38 @@ to "works on whichever machine ran an installer". All of it — coverage, the na
 left uncovered, the collateral, the case split — is pinned in
 `tests/unit/test_repo_browser_isolation.py`.
 
+**The same two layers now also cover the browser's OTHER output, because `.playwright-mcp/`
+covers less than its name suggests** (tracker #629). That directory holds what the browser names
+ITSELF; a `filename` argument is resolved against the SERVER's cwd — the main checkout — so it
+lands in the repo ROOT. Measured on the same 0.0.78:
+`browser_take_screenshot(filename="x.png")` wrote `./x.png` there, unignored, and SKILL.md
+prescribes exactly that call. Layer one is four extension rules (`*.png`, `*.jpg`, `*.jpeg`,
+`*.pdf`), affordable because this repo tracks no image or PDF and never has — measured 2026-08-02
+with `git log --all --name-only`, which asks about ANY commit touching such a path on any ref,
+not just additions. That is the standing `*.html` already had. **But extensions are the wrong axis
+and the honest bound is sharper than "a list can't be complete": the name does not decide the
+content at all.** Measured, a screenshot asked for as `shot.bin`, or with NO extension, is still
+PNG, because the format comes from the `type` argument (png|jpeg). So layer two reads the leading
+MAGIC BYTES of what `git add -A` could publish and fails on PNG/JPEG/PDF under any name, needing
+no size ceiling because a magic number cannot be hidden by growing the file. **It is complete
+about NAMES and about the three formats it names — NOT about formats.** That distinction was the
+card's own first defect: an earlier draft called those three "the entire binary surface", and the
+second pass disproved it by construction. `browser_network_request` — in the DEFAULT capability
+set — takes `part: "response-body"` plus a `filename` and drops the RAW body of any request the
+page made into the same root, in whatever format the server sent; measured, a GIF and a ZIP landed
+as `.bin`, caught by no rule and no signature. What NEITHER layer reaches, measured rather than
+assumed: `tools/list` shows SEVEN tools taking a `filename` on the default capability set (ten
+with every capability on), six of which write, and `browser_snapshot`,
+`browser_console_messages`, `browser_network_requests` and `browser_evaluate` drop the page's own
+TEXT and its request query strings in the same root as plain text — no listable extension, no
+signature, indistinguishable from a legitimate file here. A marker planted on a probe page came
+back in three of those files, and a token placed in a request's query string in two. Writing
+`filename` INTO the already-ignored `.playwright-mcp/` is accepted by the tools and sidesteps all
+of it — but that is a change to what SKILL.md tells agents to do, so it is filed as #703 rather
+than assumed here. Escaping the checkout entirely is refused by default (`File access denied …
+outside allowed roots`, the roots being the server's cwd and its `.playwright-mcp/`), so the
+spill is confined to exactly the directory git can see.
+
 ## Live instance notes
 
 - Tracker: `https://tracker.zz.hgdev.com` (public) / `tracker.vpn.hgdev.com`

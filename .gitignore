@@ -25,6 +25,67 @@ dist/
 # capability on, the same directory is also where a storage-state export lands by default.
 .playwright-mcp/
 
+# Browser artifacts written under a CALLER-CHOSEN name (#629) — the hole beside the rule above,
+# which only covers the AUTO-named ones. A `filename` argument is resolved against the SERVER's
+# cwd, i.e. the main checkout, so it lands in the repo ROOT rather than the output dir. Measured
+# (@playwright/mcp 0.0.78, own `--isolated --headless` server, own stdio client, throwaway
+# origin): `browser_take_screenshot(filename="x.png")` answered `- [Screenshot of viewport]
+# (./x.png)` and wrote it there. Against THIS repo's own pre-#629 `.gitignore`,
+# `git check-ignore --no-index -v` then exited 1 — not ignored — for `shot-629.png` and for the
+# `.jpeg` and `.pdf` artifacts of the same run alike. SKILL.md PRESCRIBES the call that puts the
+# file there ("приложи скриншот", `browser_take_screenshot(filename="vmcp-554-probe.png")`, "в
+# attach_file отдавай АБСОЛЮТНЫЙ путь В ГЛАВНОМ ЧЕКАУТЕ") — and then, separately, tells the agent
+# "Сам артефакт не коммить". So the artifact arrives by the book, and until these rules the ONLY
+# thing between it and a PUBLIC repo was that one sentence of discipline. That is the same trade
+# #607 refused for the auto-named ones, and the same risk: a screenshot of a logged-in page.
+#
+# WHAT THESE FOUR LINES DO AND DO NOT DO. They are a list of EXTENSIONS, and the extension does
+# not decide the content — measured in BOTH directions, `file(1)` judging each time.
+# `filename: "shot-noext"` (no extension at all) and `"shot.bin"` each wrote PNG; a `.jpg` name
+# with `type` left at its png default wrote PNG; and a `.png` name with `type: "jpeg"` wrote
+# JPEG. The format comes from the `type` argument (an enum of png|jpeg) and the name is passed
+# through untouched. So a screenshot under a name none of these four match walks straight past
+# them — and, the other way round, one of them can be "covering" a file that is really the other
+# format, which is a second reason the byte-reading half is not optional. The
+# name-independent half is in tests/unit/test_repo_browser_isolation.py: it reads the leading
+# MAGIC BYTES of what `git add -A` could publish and fails on PNG/JPEG/PDF under ANY name.
+#
+# AND THOSE THREE ARE NOT THE WHOLE BINARY SURFACE — an earlier draft of this comment said they
+# were, and it was disproved by construction. With the DEFAULT capability set `tools/list` shows
+# SEVEN tools taking a `filename`, six of which WRITE, and one of them is
+# `browser_network_request`: with `part: "response-body"` it drops the RAW BODY of any request the
+# page made into the same root, in whatever format the server sent. Measured on a probe page — a
+# GIF (`47494638…`) and a ZIP (`504b0304…`) landed as `.bin` files, ignored by nothing and matched
+# by no signature here. So the byte scan is complete about the three formats it NAMES, and about
+# NAMES; it is not complete about FORMATS, and no version of it could be.
+#
+# Neither half reaches the text writers either — `browser_snapshot`, `browser_console_messages`,
+# `browser_network_requests` and `browser_evaluate` all drop theirs in the root too, carrying the
+# page's TEXT and request query strings under names and in formats indistinguishable from a
+# legitimate file here. Filed as #703, and NOT closable by a rule: the names measured were `.md`,
+# `.txt`, `.json` and one with no extension, while this repo's tracked files are 7 `.md`, 3
+# `.json`, 1 `.yml` and 2 with no extension (LICENSE, skills) — any pattern wide enough to catch
+# the spill hides the repo's own content, so the fix is a change to what SKILL.md asks agents to
+# pass. `*.pdf` is the one rule here that guards a NON-default tool:
+# `browser_pdf_save` appears only with `PLAYWRIGHT_MCP_CAPS=pdf` — measured absent from the
+# default 24 and present in the 53 with every capability on — so it is defence in depth, exactly
+# as the storage-state rules below are for their own capability-gated tool.
+#
+# PRICE, which is why this is a decision and not a tidy-up: `git add -A` will no longer take a
+# legitimate image or PDF. Affordable because this repo has none — measured 2026-08-02,
+# `git ls-files` returns nothing for any of the four, and `git log --all --name-only` (broader
+# than `--diff-filter=A`: ANY commit touching such a path, on any ref, not just additions)
+# returns nothing either. That is the same standing `*.html` above already has, and the present
+# tense of it is held by a test rather than by this sentence. A deliberate asset stays
+# committable via `git add -f <path>`, which
+# refuses out loud first. Case-dependent exactly like the storage-state list below: `shot.PNG` is
+# covered on a macOS checkout and NOT on Linux, where CI runs — no leak follows, because the
+# magic-byte scan reads bytes rather than names on either platform.
+*.png
+*.jpg
+*.jpeg
+*.pdf
+
 # Playwright storage state = LIVE session cookies + localStorage: a credential for whatever
 # the browser was logged into, this project's tracker included. THIS REPO IS PUBLIC.
 #
