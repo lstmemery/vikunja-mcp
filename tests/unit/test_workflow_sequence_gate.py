@@ -1242,21 +1242,33 @@ def test_the_starving_waiting_line_reads_blocked_task_then_blocker_and_the_headl
     ], res["waiting"]
 
     # The two properties of the PARAM SET, read off the RUNNING node rather than off
-    # `[(2, …), (3, …)]` as a module constant — 635's idiom, and it is there because slicing only
+    # `[(1, …), (2, …), (3, …)]` as a module constant — 635's idiom, and it is there because
+    # slicing only
     # the decorator leaves an assert over the constant green while one row runs (measured by an
     # independent pass on 635's own set). The first: some row must sit at ONE tail, the boundary
-    # this card restores (VMCP-158 / #664) and the only count at which a floor like
-    # `max(2, len(waiting))` changes a byte: measured on c0da162, this commit's parent, that floor
+    # this card restores (VMCP-158 / #664) and the only count REACHABLE THROUGH `next_task` at
+    # which a floor like
+    # `max(2, len(waiting))` changes a byte: measured on BASE c0da162, that floor
     # is **0 failed — GREEN** without this row (pristine workflow.py `a29f65f0d11f…`, mutant
     # `03eae4d34575…`) and **1 failed** with it, the one failure being this test's own
-    # `[1-…]` row. Every round quoted in this note ran the whole unit suite against an unmutated
-    # control of 0 failed on the same selection, and is quoted as a FAILURE count rather than as
-    # `N of <total>` on purpose: the total moves with every test a sibling lands, and it moved twice
-    # under this very card. Both halves of that pair were run here, on the SAME parent, rather than
-    # one half
-    # being inherited — the earlier spelling of this note quoted 727/731 off 589190c, a base three
-    # bumps older whose workflow.py differs, so those denominators went stale the moment the branch
-    # was rebased. The second is 632's own property, now STATED
+    # `[1-…]` row. That scope is not decoration — the floor also changes a byte at ZERO, measured
+    # by the same direct call this note uses further down (`0 queued …` pristine, `2 queued …`
+    # under it), and zero is exactly what `next_task` cannot hand it.
+    # That base is named by SHA and never as "this commit's parent": the phrase holds
+    # only until the next rebase, and an earlier spelling of this note carried it here after a
+    # later rebase had already falsified it — c0da162 was never the parent of the commit that said
+    # so. So where this note names a base, it names a sha.
+    # Every failure count this note MEASURED comes from a whole-suite round against an unmutated
+    # control of 0 failed on the same selection, and is quoted as that count rather than as
+    # `N of <total>` on purpose: the total moves with every test a sibling lands, and it kept
+    # moving under this very card — across the rebases that wrote this note, and again after the
+    # note had landed. Both halves of that pair were run on that ONE base rather than one half
+    # being inherited. Numbers here that this note did NOT measure say so on the spot: 632's
+    # one-failure result, cited below, is quoted from its own tree, and the 727/731 denominators the
+    # earlier spelling carried off 589190c — a base three bumps older whose workflow.py differs —
+    # went stale the moment the branch was rebased and are kept as this rule's EXHIBIT, not as
+    # evidence.
+    # The second is 632's own property, now STATED
     # instead of merely being true: the set must span at least two distinct counts, which is what
     # kills a hard-coded numeral and what no single state can do — re-measured here, since the row
     # strengthens it: a headline hard-coded to `2` is **2 failed**, dying at `[1-…]` AND
@@ -1270,12 +1282,15 @@ def test_the_starving_waiting_line_reads_blocked_task_then_blocker_and_the_headl
     # HONEST BOUNDARY, in 635's spirit and not oversold: spanning 1/2/3 kills degenerate CONSTANTS,
     # not arithmetic that renders correctly at every spanned value — `min(3, len(waiting))` is
     # **0 failed — GREEN** after this pin, and that one IS killable HERE: add a 4-tail row and the
-    # same mutant is **1 failed**, dying at `[4-…]` (measured, code otherwise pristine; the
-    # row alone, without the mutant, is 733 passed).
+    # same mutant is **1 failed**, dying at `[4-…]` — against that row's OWN control, the row
+    # added with nothing mutated, which is **0 failed**. (A pass total used to stand here in place
+    # of that control, and it is why the rule above is about the FORM rather than about keeping
+    # numbers fresh: written as one number, it read as another by the time review measured it, and
+    # as a third by the time this line was rewritten. Nothing was wrong with the round.)
     # WHY it survives without that row is NOT "no env builds a bigger tail" — that was this note's
     # first answer and it is FALSE, refuted by instrumenting `_starving_tail` and running the whole
     # suite on c0da162: fifteen calls, and one of them carries **1100** waiting tails. It is
-    # `test_deep_acyclic_chain_not_flagged_as_cycle`, ~600 lines above IN THIS FILE, whose chain is
+    # `test_deep_acyclic_chain_not_flagged_as_cycle`, earlier IN THIS FILE, whose chain is
     # deliberately longer than Python's recursion limit; it asserts `task is None`, no `cycle`, and
     # `starving is True`, and never touches `message`, so it cannot see a corrupted headline at any
     # count. So the boundary on THIS axis is the span of counts this test PINS (1..3), not the span
@@ -1314,16 +1329,19 @@ def test_the_starving_waiting_line_reads_blocked_task_then_blocker_and_the_headl
 #
 # `_starving_tail` decides a tail's retriage flag with
 # `any(b["stage"] == "Backlog" for b in blockers)`. Swapping that `any` for `all` is measured
-# GREEN — **0 failed** on c0da162, this commit's parent, mutant sha a99d30fac406… — i.e.
+# GREEN — **0 failed** on BASE c0da162 (a sha, never "this commit's parent" — see the headline
+# section above for why), mutant sha a99d30fac406… — i.e.
 # genuinely unobservable: the mutated run failed exactly as often as its control, 0 failed, on the
 # same whole-suite selection. Every round quoted in this section is a FAILURE count against that
 # same control of 0 failed; pass totals are left out on purpose, because they move with every test
-# a sibling lands and this card watched them move twice. The
+# a sibling lands and this card watched them move over and over. The
 # reason is NARROWER than "no env ever gives a tail two blockers", which is what the first draft of
-# this note asserted: `test_converging_dag_not_flagged_as_cycle` (~600 lines above, the diamond
+# this note asserted: `test_converging_dag_not_flagged_as_cycle` (earlier in this file, the diamond
 # guard) already builds a two-blocker gated tail — its A follows BOTH B and C — and it asserts
-# `starving is True`, so it does reach this predicate. What no env builds is a tail whose blockers
-# sit at DIFFERENT stages. That is NECESSARY for the two quantifiers to differ but not sufficient,
+# `starving is True`, so it does reach this predicate. What no env built BEFORE the rows below is a
+# tail whose blockers sit at DIFFERENT stages (present tense would now be false — those rows build
+# exactly that, which is the point of them). That is NECESSARY for the two quantifiers to differ
+# but not sufficient,
 # and the loose spelling of this sentence used to claim it was both: they differ exactly when the
 # set holds a Backlog member AND a non-Backlog one, so `("Build", "Design")` differs in stage while
 # both quantifiers still agree (False). The test's own assert uses the exact condition, not this
@@ -1356,8 +1374,8 @@ def test_the_starving_waiting_line_reads_blocked_task_then_blocker_and_the_headl
 # the env below links BOTH blockers with "follows", and the predicate reads the blocker's STAGE and
 # never its relation kind, so nothing here would notice if one of those edges changed kind.
 # Nor was the SHAPE ever the exotic part — the diamond guard above already gives one tail two heads
-# (A follows B and C) and one head two tails (B and C both follow D). What no env gives a tail is
-# two blockers at DIFFERENT stages.
+# (A follows B and C) and one head two tails (B and C both follow D). What no env gave a tail, until
+# the rows below, is two blockers at DIFFERENT stages.
 # (Attribution, and this is the THIRD correction in this one block — recorded rather than quietly
 # rewritten, because the repeat is the finding. Draft 1 credited 606's section with recording a
 # one-head-to-many-tails fan-out; grepped, it does not. Draft 2 replaced that with "and no env in
@@ -1367,7 +1385,7 @@ def test_the_starving_waiting_line_reads_blocked_task_then_blocker_and_the_headl
 # from measuring it; the histogram above is the first one that was measured.
 # Draft 3 then made the SAME mistake twice more, and both were caught by a second independent pass
 # rather than by the author, which is the reason that pass is a rule and not a nicety: "no env in
-# this file builds" a four-tail state — refuted by a 1100-tail env ~600 lines above (see the
+# this file builds" a four-tail state — refuted by a 1100-tail env earlier in this file (see the
 # headline test's boundary note) — and "these rows reach blocker-set sizes ONE and TWO", true of the
 # file and false of the rows it names. FIVE claims about this file's contents, all five wrong, none
 # of them measured before it was written. The standing lesson: about what a suite CONTAINS, do not
