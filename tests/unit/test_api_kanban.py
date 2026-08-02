@@ -1249,8 +1249,12 @@ def _flat(pages, *, page_size=5, total_pages=None, info_status=200,
     IT IS NOT EARNED BY THE `?page=`-IGNORING SHAPES MODELLED HERE, which is worth saying because
     the mechanism sounds like it should be. That mechanism is real but CONDITIONAL, and the
     condition is easy to drop: a server that serves the whole list on every page fills every page
-    only while that list is at least `page_size` long, and only then can neither the fullness rule
-    nor the unproven-page ceiling end it, leaving "this page added nothing new" as the sole exit.
+    only while that list is at least `page_size` long, and only then is the unproven-page ceiling
+    out of reach too, while a non-empty list keeps the empty-page exit out of reach at any length,
+    leaving "this page added nothing new" as the sole exit. (Those two breaks and the ceiling's
+    raise are the whole of `_paged_list`'s loop, by AST census. The FULLNESS rule this sentence
+    named here instead was deleted by VMCP-127 (608) — api.py says so at its own `_paged_list` —
+    so it promised a guard that has not existed since.)
     MEASURED with `if not added_new:` -> `if False:` (its only literal site in api.py, inside
     `_paged_list`; `view_tasks` spells the same rule as its own `keep_going`) on a CONSTRUCTED
     `_flat(lambda page: rows)` at page_size 5: 11 rows and 5 rows run to the cap at 361 requests,
@@ -1263,14 +1267,18 @@ def _flat(pages, *, page_size=5, total_pages=None, info_status=200,
     against page_size 5 and therefore FULL, on the cap side of the boundary measured just above.
     (Both page-length lists were read off the fixtures the tests actually build rather than off the
     source: [1, 1, 1, ...] and [5, 1, 1, ...].) MEASURED with the ceiling gone and the cap lifted
-    to 1e9: neither read TERMINATES — a 20 s alarm cut both off, each six figures of requests deep
-    and still climbing. That depth is throughput and is deliberately not pinned to a figure (the
-    same shape gave 96,882 on one run of this measurement and 191,269 on the next); what reproduces
-    is that no bound is reached at all. Under the `added_new` mutation those same two shapes stop
-    at 120 and 121, and that one-request gap IS that full first page: `max_items_per_page`
-    justifies it, so the budget is never charged for it. MEASURED across budgets rather than
-    inferred — 120 stops them at 120 and 121, budget 2 at 2 and 3, budget 1 at 1 and 2. A server
-    that really did serve one row per page FROM PAGE 1 would stop where its twin does.
+    to 1e9: neither read TERMINATES — a 20 s alarm cut both off, both still climbing. How DEEP
+    each got in those 20 s is throughput rather than a property of the read: runs of this same
+    measurement recorded on VMCP-152 (655) have come back FIVE-digit (96,882 requests) on one and
+    six-digit (212,215) on another, more than a factor of two apart, so no single depth — and no
+    single MAGNITUDE — is a property of the shapes. (This passage said "each six figures" from the
+    card's first commit until its third, with that five-digit run cited a sentence later.) What
+    reproduces is that no bound is reached at all. Under the `added_new` mutation those same two
+    shapes stop at 120 and 121, and that one-request gap IS that full first page:
+    `max_items_per_page` justifies it, so the budget is never charged for it. MEASURED across
+    budgets rather than inferred — 120 stops them at 120 and 121, budget 2 at 2 and 3, budget 1
+    at 1 and 2. A server that really did serve one row per page FROM PAGE 1 would stop where its
+    twin does.
 
     AND NOTHING IN THIS FILE REACHES THE CAP UNDER IT — for two DIFFERENT reasons, which is the
     part a single count hides. The same mutation turns this file red in SEVEN places and reaches
@@ -1290,8 +1298,9 @@ def _flat(pages, *, page_size=5, total_pages=None, info_status=200,
     five — test_projects_filters_pseudo, test_kanban_view_picks_kanban_kind,
     test_kanban_view_missing_raises_actionable_error, test_get_or_create_label_reuses_existing,
     test_share_project_idempotent — are not BELOW the
-    line, they have no line at all: bare `make_api` servers whose catch-all handler answers /info
-    with the same list as every other path, so `max_items_per_page` never arrives and page_size
+    line, they have no line at all: bare `make_api` servers whose handler answers every GET path
+    with the same list, /info included (two of the five branch on METHOD and hand a dict to
+    non-GET, but a page read is all GET), so `max_items_per_page` never arrives and page_size
     stays None. The 508 says exactly that ("could not read max_items_per_page from /info, so it
     cannot tell a full page from a short one at all"): no page is ever justified, and the CEILING
     stops them at 120 requests with a 508 (test_kanban_view_missing_raises_actionable_error
