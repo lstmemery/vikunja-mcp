@@ -70,11 +70,39 @@ dist/
 # Neither half reaches the text writers either — `browser_snapshot`, `browser_console_messages`,
 # `browser_network_requests` and `browser_evaluate` all drop theirs in the root too, carrying the
 # page's TEXT and request query strings under names and in formats indistinguishable from a
-# legitimate file here. Filed as #703, and NOT closable by a rule: the names measured were `.md`,
-# `.txt`, `.json` and one with no extension, while this repo's tracked files are 7 `.md`, 3
-# `.json`, 1 `.yml` and 2 with no extension (LICENSE, skills) — any pattern wide enough to catch
-# the spill hides the repo's own content, so the fix is a change to what SKILL.md asks agents to
-# pass. `*.pdf` is the one rule here that guards a NON-default tool:
+# legitimate file here. That was filed as #703 and is NOT closable by a rule: the names measured
+# were `.md`, `.txt`, `.json` and one with no extension, while this repo's tracked files are 7
+# `.md`, 3 `.json`, 1 `.yml` and 2 with no extension (LICENSE, skills) — any pattern wide enough
+# to catch the spill hides the repo's own content.
+#
+# #703 CLOSED IT AT THE WRITE SITE INSTEAD, and the fix is upstream of every rule in this file:
+# SKILL.md now prescribes `filename` under `.playwright-mcp/` (`browser_snapshot(filename=
+# ".playwright-mcp/vmcp-554-snap.md")`), so the artifact lands in the ONE directory the rule above
+# already covers wholesale. Of the three axes compared — extension, leading bytes, directory — it
+# is the only one that reaches text, and it costs a rule that is already here. (A CONTENT axis
+# was considered and dropped rather than overlooked: aria-snapshot markers appear in no tracked
+# file today, so a scan for them would be free, but it reaches `browser_snapshot` alone of the
+# four and it fires on any file that DOCUMENTS it — this comment included.) Measured
+# (0.0.78, own `--isolated --headless` server, own stdio client, throwaway origin): all four text
+# writers and the screenshot accept the prefix and land there, `check-ignore` answering with the
+# `.playwright-mcp/` rule for each. Two facts that came with it. The directory must EXIST — a
+# caller-chosen filename is resolved by `workspaceFile()`, which does not mkdir, unlike the
+# `outputFile()` path the auto-named artifacts take; measured `ENOENT` on a snapshot, a screenshot
+# and a nested path, which is every writer, since one function resolves them all. SKILL.md carries
+# the `mkdir -p`. And `--output-dir` is NOT an alternative fix: it feeds only `outputFile()`, so
+# pointed outside the repo it moved the auto-named files and left the explicit one in the checkout
+# root. WHAT THIS DOES NOT DO: it is a rule for agents, not a lock. A bare name is still accepted,
+# and the spill is not even root-confined — measured, a `filename` with a subdirectory
+# (`src/vikunja_mcp/…md`) landed beside the sources, unignored, so no root-anchored rule could
+# have covered it either. Nor is "the checkout" the tool's own boundary: the base of that resolve
+# is the first ROOT the MCP client declares (the server's cwd only when none is), which for a
+# `claude` session is the checkout. The one mechanism under the rule is
+# `test_every_filename_skill_md_prescribes_is_excluded_by_this_repos_gitignore`, which asks git
+# whether this repo would publish each `filename` SKILL.md prints — red from either side, a
+# rulebook that drifts back to a bare name or a .gitignore that drops the directory rule — and
+# which reads PROSE, so it sees only the spellings its pattern matches.
+#
+# `*.pdf` is the one rule here that guards a NON-default tool:
 # `browser_pdf_save` appears only with `PLAYWRIGHT_MCP_CAPS=pdf` — measured absent from the
 # default 24 and present the moment that one cap is set — so it is defence in depth, exactly
 # as the storage-state rules below are for their own capability-gated tool. What that clause

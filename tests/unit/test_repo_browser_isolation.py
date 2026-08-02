@@ -73,6 +73,7 @@ answer is a skip rather than the 30 red tests it used to be.
 """
 import inspect
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -237,6 +238,53 @@ MAGIC_PREFIX_BYTES = 8
 # The extensions whose rules the "price" argument rests on. Kept beside the pin that checks the
 # argument is still true, so widening the rules and re-measuring the price happen in one place.
 ARTIFACT_EXTENSION_GLOBS = ("*.png", "*.jpg", "*.jpeg", "*.pdf")
+
+# --- #703: what SKILL.md PRESCRIBES as a caller-chosen `filename` ---------------------------
+#
+# The residual #629 measured and left open on purpose: the four tools that write the page's own
+# TEXT (browser_snapshot / browser_console_messages / browser_network_requests /
+# browser_evaluate). Neither layer above can reach them — the names measured were `.md`, `.txt`,
+# `.json` and one with no extension, which is what this repo's own content looks like, and plain
+# text has no leading signature to match. So #703 fixes it at the WRITE SITE instead: SKILL.md
+# stops printing a bare name and prints a path under `.playwright-mcp/`, which #607's directory
+# rule already covers wholesale — the one axis that is blind to both the name and the format.
+#
+# Measured while doing #703 (@playwright/mcp 0.0.78, own `--isolated --headless` server, own
+# stdio client, throwaway origin, cwd = a real checkout of this repo):
+#   * all four text writers accept the prefix and land in `.playwright-mcp/`, where
+#     `git check-ignore --no-index -v` answers `.gitignore:26:.playwright-mcp/`;
+#   * they also accept a SUBDIRECTORY (`src/vikunja_mcp/…md` landed beside the sources,
+#     unignored), so the spill was never root-confined and a root-only rule could not have
+#     covered it;
+#   * `--output-dir` cannot be the fix: a caller-chosen `filename` is resolved by a different
+#     function than the auto-named artifacts (`workspaceFile()` against the workspace/cwd versus
+#     `outputFile()` against the output dir), so with `--output-dir` pointed OUTSIDE the repo the
+#     auto-named files moved there and the explicit one still landed in the checkout root.
+SKILL_MD_PATH = REPO_ROOT / "src" / "vikunja_mcp" / "skills" / "tracker" / "SKILL.md"
+
+# The directory the rule now sends every caller-chosen artifact to — the browser's own output
+# dir, excluded wholesale by #607's rule. Named once because two different assertions depend on
+# it: that git excludes what SKILL.md prescribes, and that SKILL.md prescribes THIS place.
+PLAYWRIGHT_OUTPUT_DIR = ".playwright-mcp"
+
+# The `filename` value SKILL.md hands an agent to copy, in the spellings a rulebook actually uses:
+# the Python-ish call form `filename="x"`, the JSON form `"filename": "x"` (which is what an MCP
+# argument literally is), spaces around the separator, and a line wrap after it — SKILL.md is
+# hand-wrapped near 90 columns, so the wrap is an editing accident waiting to happen rather than an
+# adversarial case. A bare mention of the word (`` `filename` ``, of which this rulebook has
+# several) carries no separator and is deliberately not a prescription.
+#
+# This list came from an independent pass whose brief was to defeat the pin, and it found the first
+# two forms unseen by the original `filename=`-only pattern — a prescription written in JSON left
+# the gate green. It is WIDER now and still not complete: no pattern over prose can be, and the
+# docstring below says so instead of implying otherwise.
+PRESCRIBED_FILENAME_RE = re.compile(r"""["'`]?\bfilename\b["'`]?\s*[:=]\s*["'`]?([^"'`\s,)]+)""")
+
+# A floor, not a count: SKILL.md prints two such calls today (a screenshot and a snapshot) and
+# the pin must not go quiet if a regex change silently matches nothing. Deliberately NOT pinned
+# to the exact number — adding a third prescribed call is a fine thing to do and must not be a
+# test edit.
+MIN_PRESCRIBED_FILENAMES = 2
 
 # Playwright's storage-state schema, measured off a real export: a JSON object with exactly
 # these two list-valued keys (cookie entries carry name/value/domain/path/expires/httpOnly/
@@ -1146,6 +1194,162 @@ def test_no_image_or_pdf_asset_is_tracked_today():
         "which is what makes excluding those extensions cost nothing. If this asset is " \
         "deliberate, that paragraph has to be rewritten with the new price; if it is browser " \
         "spill, it has to come out of the index — an ignore rule does not retract a tracked path"
+
+
+@requires_git_checkout
+def test_every_filename_skill_md_prescribes_is_excluded_by_this_repos_gitignore():
+    """#703: the one axis that reaches the TEXT writers, pinned across BOTH files it depends on.
+
+    #629 closed the binary surface with two layers and recorded the residual in prose: the four
+    tools that write the page's own text under a caller-chosen name are reachable by neither.
+    That was not an oversight in either layer, it is what those layers ARE. An extension list
+    cannot help — the names measured were `.md`, `.txt`, `.json` and one with no extension, and
+    this repo tracks 7 `.md`, 3 `.json`, a `.yml` and two extensionless files, so any pattern wide
+    enough to catch the spill hides the repo's own content. A signature cannot help either: the
+    payload is plain text.
+
+    What is left is the DIRECTORY, and it costs one rule that is already there (`.playwright-mcp/`,
+    #607) and blind to both name and format. So the fix is a change to what SKILL.md tells agents
+    to PASS — which is why #629 refused to make it and filed this card instead.
+
+    A prescription is a sentence, and this repo's own .gitignore says what a sentence of discipline
+    is worth. This is the mechanism under it, and it is deliberately a CROSS-FILE pin rather than a
+    string match: it takes every `filename` value SKILL.md prints and asks GIT whether this repo
+    would publish it. It therefore goes red from EITHER side — a rulebook that drifts back to a
+    bare name, or a `.gitignore` that stops covering the directory the rulebook now depends on.
+
+    WHAT IT CANNOT DO — found by an independent pass that BUILT the evasion rather than arguing it,
+    and re-measured here. The pin sees only a prescription written in a spelling
+    `PRESCRIBED_FILENAME_RE` matches. Same clone, same selection, control 0 failed: against the
+    first version of the pattern (`filename=` alone) a rule added to SKILL.md as
+    `{"filename": "vmcp-703-console.txt"}` — a bare name, and the form an MCP argument literally
+    takes — measured 0 failed, i.e. the rulebook prescribed the leaking form and nothing went red;
+    with the pattern as it now stands, the identical edit measured 1 failed. It covers that form,
+    spaces around the separator and a line wrap after it (this file is hand-wrapped, so the wrap is
+    an editing accident, not an attack), and it remains a pattern over PROSE: a value that reaches
+    an agent by some other spelling reaches this pin by none. Same class one level up, also built:
+    a sentence AFTER the pinned clauses that contradicts them ("if the directory is missing, just
+    pass a bare name") leaves everything here green. These are gates on the text this repo ships,
+    not proofs about what an agent will do with it.
+
+    The last two assertions are what keep the pin from decorating, and BOTH exist because the
+    sweep below disproved a predicted round. The git-backed checks alone were measured GREEN when
+    the prefix was stripped from the screenshot example — correctly, since `*.png` covers that name
+    in any directory, so "would git publish it" simply cannot see the drift. Hence one assertion on
+    the RULE as SKILL.md states it (every prescribed value under the output dir), and one on the
+    EXAMPLES (at least one whose bare basename git WOULD publish, i.e. one the directory alone
+    saves — the `.md` snapshot, which is the case this whole card is about). Without the second, a
+    rulebook whose examples had drifted to screenshots only would keep this pin green while
+    teaching agents nothing #629 had not already covered.
+
+    Honest boundary, stated because this card's family is claims outrunning evidence. This holds
+    the RULE, not the behaviour: an agent that passes a bare name still spills, and for the TEXT
+    writers nothing detects it — the magic-byte scan above does catch a bare-named PNG/JPEG/PDF,
+    which is precisely the half #629 could close and this one cannot. The spill is not even
+    root-confined: measured, a `filename` carrying a subdirectory landed beside the sources. It is
+    also local twice over. `.playwright-mcp/` is ignored in THIS repo, while SKILL.md self-heals
+    onto consumers whose .gitignore this pin cannot see; and the directory itself is relative to
+    the MCP server's WORKSPACE, which is the first root the client declares (`clientInfo.cwd =
+    firstRootPath(clientRoots)`), falling back to the server's cwd only when a client declares
+    none. For the session's shared browser those coincide with the main checkout — which is how
+    #554 measured the artifact landing there, and what the `mkdir` recipe in SKILL.md resolves —
+    but "the checkout" is a consequence of that setup, not a property of the tool. What the pin
+    buys is that the rulebook no longer PRESCRIBES the leaking form, and that the form it does
+    prescribe is checked against the rules of the repository that ships it.
+
+    MUTATION-CHECKED in a `git clone --no-hardlinks` of this branch (never a `cp -R`, which drags
+    `.venv` and puts the ORIGINAL `src` earlier on `sys.path`, after which every round is green);
+    `vikunja_mcp.__file__` printed each round and confirmed to be the CLONE's;
+    `__pycache__` deleted before each round AND `PYTHONDONTWRITEBYTECODE=1`, since that variable
+    stops Python writing bytecode, not reading a stale `.pyc`; sources restored from a COPY.
+    Selection is BOTH rulebook-facing files (`test_repo_browser_isolation.py` +
+    `test_skill_contract.py`, 112 tests) so a round's effect on the contract pins next door is
+    visible rather than hidden by a narrow selection. Failed counts, never pass totals:
+
+    * control 0 failed
+    * strip the `.playwright-mcp/` prefix from BOTH prescribed calls in SKILL.md -> 1 failed, this
+      test, naming `vmcp-554-snap.md` as unignored (`vmcp-554-probe.png` is NOT named: `*.png`
+      covers it wherever it sits)
+    * strip the prefix from the `.md` call ONLY -> 1 failed, same message: the case no extension
+      rule can cover is caught on its own
+    * strip the prefix from the `.png` call ONLY -> 1 failed, on the RULE assertion, naming
+      `vmcp-554-probe.png` as prescribed outside the output dir. PREDICTED as a failure of the
+      git-backed check and MEASURED, before that assertion existed, as **0 failed** — the round
+      that added it. A pin that only asks git cannot see a screenshot drifting back to a root path
+    * swap the prefix for a directory this repo does NOT ignore (`docs/`) -> 1 failed, naming
+      `docs/vmcp-554-snap.md` as publishable: the round that shows this is not a string match on
+      one blessed path but a question put to git
+    * make BOTH prescribed examples `.png` -> 1 failed, on the EXAMPLES assertion (`assert []`):
+      every value stays ignored and every value stays under the output dir, yet nothing left in
+      the rulebook demonstrates the writer this card exists for
+    * delete the `.playwright-mcp/` line from .gitignore -> 2 failed: this test (both prescribed
+      values now unignored) and #607's `test_the_playwright_output_dir_is_excluded`. The round
+      that shows the pin reaches the ignore rules and not only the prose
+    * break the regex so it matches nothing -> 1 failed on the floor, not a silent green
+    * add a THIRD correctly-prefixed prescription -> 0 failed: writing another rule is not a test
+      edit
+
+    And the rounds that land next door, on the contract pins this card also moved (same selection,
+    control 0 failed): gut the prefix INSTRUCTION while leaving both example values intact -> 1
+    failed, `test_the_shared_browser_rule_stays_detectable_rather_than_wishful` — the round that
+    matters most here, since the values alone would keep THIS test green; drop the mkdir/ENOENT
+    precondition -> 1 failed, same id; revert the `attach_file` clause to its pre-#703 root path
+    -> 1 failed, same id.
+    """
+    text = SKILL_MD_PATH.read_text(encoding="utf-8")
+    prescribed = sorted(set(PRESCRIBED_FILENAME_RE.findall(text)))
+
+    assert len(prescribed) >= MIN_PRESCRIBED_FILENAMES, \
+        f"SKILL.md prints {len(prescribed)} `filename=` prescriptions ({prescribed}), fewer than " \
+        f"the {MIN_PRESCRIBED_FILENAMES} it is supposed to. Either the rule that tells agents " \
+        "where browser artifacts must go was deleted, or this pin's regex stopped matching it — " \
+        "and a guard that matches nothing passes everything, which is the failure mode this " \
+        "floor exists to make loud"
+
+    unignored, foreign = [], []
+    for value in prescribed:
+        ignored, source, _pattern = _ignore_rule(value)
+        if not ignored:
+            unignored.append(value)
+        elif source != ".gitignore":
+            foreign.append(f"{value} (ignored by {source})")
+
+    assert not unignored, \
+        f"{unignored} — SKILL.md tells an agent to pass {'this' if len(unignored) == 1 else 'these'} " \
+        "as a browser tool's `filename`, and git would publish the result. That argument is " \
+        "resolved against the MCP server's workspace, i.e. the MAIN CHECKOUT, so the file lands " \
+        "in a PUBLIC repo carrying whatever page the browser had open — its text, and the query " \
+        "strings of the requests it made. Put the value back under `.playwright-mcp/`, which is " \
+        "the only place covered independently of what the file is called and what format it is in"
+
+    assert not foreign, \
+        f"{foreign} — covered by somebody else's ignore file rather than by this repo's own " \
+        ".gitignore, so the protection exists on whichever machine happens to have that rule and " \
+        "vanishes in a fresh clone. That is how a green here can mean nothing at all"
+
+    astray = [value for value in prescribed if not value.startswith(f"{PLAYWRIGHT_OUTPUT_DIR}/")]
+    assert not astray, \
+        f"{astray} — prescribed outside `{PLAYWRIGHT_OUTPUT_DIR}/`. git happens not to publish " \
+        "this one, but the RULE SKILL.md states is `filename` ВСЕГДА with that prefix, and the " \
+        "assertions above cannot see the difference: a bare `.png` is covered by #629's " \
+        "extension rules whatever directory it is in, so a rulebook drifting back to root paths " \
+        "would read as safe there. Measured on this repo's own sweep, which is why this " \
+        "assertion exists at all: stripping the prefix from the screenshot example alone left " \
+        "the git-backed checks completely green"
+
+    load_bearing = [
+        value for value in prescribed
+        if "/" in value and not _ignore_rule(Path(value).name)[0]
+    ]
+    assert load_bearing, \
+        f"none of {prescribed} is covered by its DIRECTORY: strip the path off each and git " \
+        "still refuses to publish it, which means every example SKILL.md prints happens to be " \
+        "one the #629 extension rules already caught. The whole point of #703 is the writer " \
+        "whose name no rule can match — a text snapshot, a console dump, a network log — so at " \
+        "least one prescribed value must be one that is safe ONLY because of where it is put. " \
+        "An examples list that has drifted to screenshots only still teaches agents the case " \
+        "this card was filed about wrongly, and the directory rule would then be doing no work " \
+        "that #629 was not already doing"
 
 
 @requires_git_checkout

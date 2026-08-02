@@ -789,12 +789,41 @@ and `browser_snapshot`, `browser_console_messages`, `browser_network_requests` a
 `browser_evaluate` drop the page's own
 TEXT and its request query strings in the same root as plain text — no listable extension, no
 signature, indistinguishable from a legitimate file here. A marker planted on a probe page came
-back in three of those files, and a token placed in a request's query string in two. Writing
-`filename` INTO the already-ignored `.playwright-mcp/` is accepted by the tools and sidesteps all
-of it — but that is a change to what SKILL.md tells agents to do, so it is filed as #703 rather
-than assumed here. Escaping the checkout entirely is refused by default (`File access denied …
-outside allowed roots`, the roots being the server's cwd and its `.playwright-mcp/`), so the
-spill is confined to exactly the directory git can see.
+back in three of those files, and a token placed in a request's query string in two — that second
+count is CONDITIONAL, re-measured on #703 rather than carried over: the tokened URL is in the
+network log always and in the CONSOLE log only when the request errors, which is what #629's probe
+happened to do. Escaping the
+checkout entirely is refused by default (`File access denied … outside allowed roots`, the roots
+being the server's cwd and its `.playwright-mcp/`), so the spill is confined to exactly the
+directory git can see — but NOT to its root: measured on #703, a `filename` carrying a
+subdirectory (`src/vikunja_mcp/…md`) is accepted and lands beside the sources, so a root-anchored
+rule would have missed it too.
+
+**#703 closed that residual at the WRITE SITE, the only one of the three axes compared (extension,
+leading bytes, directory) that reaches text.** SKILL.md no longer prints a bare name: it prescribes
+`filename` under `.playwright-mcp/`, the one directory `.gitignore` already covers wholesale,
+independently of name and format. Measured — all four text writers and the screenshot accept the
+prefix and land there. Two things came with it, both of which read as details and are not. The
+directory must EXIST first: a caller-chosen `filename` goes through `workspaceFile()`, which does
+NOT mkdir, whereas the auto-named artifacts go through `outputFile()`, which does — measured
+`ENOENT` on a snapshot, a screenshot and a nested path, all three resolved by that one function, so
+SKILL.md carries the `mkdir -p`. And `--output-dir` is NOT the fix it looks like: it feeds
+`outputFile()` only, so pointed OUTSIDE the repo it moved the auto-named files while the explicit
+one still landed in the checkout root. Nor is there another knob to reach for, and the reason is
+structural rather than a survey of env vars: the base of that resolve is the SERVER'S WORKSPACE —
+`clientInfo.cwd = firstRootPath(clientRoots)`, i.e. the first root the MCP CLIENT declares, falling
+back to the server's cwd only when a client declares none — so it is set by the client, not by
+anything this repository can commit. (That is the same `cwd` whose hash names the browser profile
+in #558's note above.) For a `claude` session both are the main checkout, which is why the
+artifacts land there; "the checkout" is a property of that setup, not of the tool. What the fix
+does NOT do: it is a rule for agents, not a lock, and it protects only where that directory is
+ignored (here, yes; a consumer's repo is its own question). The mechanism under the rule is one
+cross-file pin — `test_every_filename_skill_md_prescribes_is_excluded_by_this_repos_gitignore`
+asks git whether this repo would publish each `filename` SKILL.md prints, so it goes red both if
+the rulebook drifts back to a bare name and if `.gitignore` drops the directory rule. Its own
+bound is pinned in its docstring: it reads PROSE, so it sees only the spellings its pattern
+matches — an independent attack pass got a leaking value past the first version of it by writing
+the prescription in JSON, which is what an MCP argument actually is.
 
 ## Live instance notes
 

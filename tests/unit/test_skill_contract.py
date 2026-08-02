@@ -1431,7 +1431,32 @@ def test_the_shared_browser_rule_stays_detectable_rather_than_wishful():
     the mismatch branch ("перейди заново, пересними, вывод не делай") -> FAIL; drop only "вывод
     не делай" -> FAIL; put the disproved "В каждом ответе печатается `Page URL:`" claim back ->
     FAIL on the negative pin; delete the attach_file PATH clause while the bare token survives
-    elsewhere in the section -> FAIL."""
+    elsewhere in the section -> FAIL.
+
+    #703 moved the `attach_file` path and added the two clauses under it. Its residual is the one
+    #629 recorded and could not close: four tools write the page's own TEXT under a caller-chosen
+    name, and neither an extension list nor a magic-byte scan reaches plain text. The remedy is a
+    place rather than a rule — the artifact goes into the already-ignored output dir — which makes
+    it a change to what the RULEBOOK says, and therefore this pin's business. What the pin holds is
+    the INSTRUCTION and its measured precondition; the VALUE it prescribes is checked against this
+    repo's actual ignore rules by `test_every_filename_skill_md_prescribes_is_excluded_by_this_
+    repos_gitignore`, and the split matters because the sweep showed each half green while the
+    other was gutted.
+
+    MUTATION-CHECKED for those three, in a `git clone --no-hardlinks` of this branch (never
+    `cp -R`), `vikunja_mcp.__file__` confirmed to be the clone's each round, `__pycache__` deleted
+    per round plus `PYTHONDONTWRITEBYTECODE=1`, sources restored from a COPY, selection this file
+    plus `test_repo_browser_isolation.py` (112 tests): control 0 failed; gut the prefix
+    INSTRUCTION ("`filename` ВСЕГДА давай с префиксом") while leaving both prescribed VALUES
+    intact -> 1 failed, this test alone — the round that shows the two pins do not cover for each
+    other, since the git-backed one stays green on unchanged values; drop the mkdir/ENOENT
+    precondition -> 1 failed, this test; revert the `attach_file` clause to its pre-#703 root
+    wording -> 1 failed, this test; delete the fenced `mkdir` RECIPE while keeping both of its
+    prose clauses -> 1 failed, this test; delete the "Граница этого правила" bullet -> 1 failed,
+    this test. The last two rounds exist because an independent pass whose brief was to defeat
+    these pins performed exactly those deletions against the first version and measured 0 failed
+    each: the recipe is the only part that gets the directory right from a linked worktree, and
+    the boundary clause is what stops a rule being read as a lock."""
     section = _shared_resources_section(_skill_text())
     flat = _flat(section)
     # WHAT to read the page identity from — pinned as the INSTRUCTION, not as the token:
@@ -1454,10 +1479,40 @@ def test_the_shared_browser_rule_stays_detectable_rather_than_wishful():
     assert "вывод не делай" in flat, \
         "the rule no longer forbids CONCLUDING from a page that may be a sibling's — " \
         "detect-don't-prevent is worthless if the agent may still use what it saw"
-    assert "`attach_file` отдавай АБСОЛЮТНЫЙ путь В ГЛАВНОМ ЧЕКАУТЕ" in flat, \
+    assert "`attach_file` отдавай АБСОЛЮТНЫЙ путь `<главный чекаут>/.playwright-mcp/<имя>`" in flat, \
         "the browser rule no longer says WHICH path attach_file must be given (absolute, in " \
-        "the MAIN checkout) — the bare token now also occurs in the verify-before-attach " \
-        "clause, so pinning the word alone would survive deleting the path rule"
+        "the MAIN checkout's `.playwright-mcp/`) — the bare token now also occurs in the " \
+        "verify-before-attach clause, so pinning the word alone would survive deleting the path " \
+        "rule. #703 moved this path INTO the output dir, and the two halves are one instruction: " \
+        "an agent told to FETCH the artifact from the checkout root is being told, implicitly, to " \
+        "have WRITTEN it there. That the screenshot in particular would then be caught by `*.png` " \
+        "is luck of the format, and the same sentence covers the text dumps, which nothing catches"
+    # #703: WHERE the artifact must be written in the first place, and the precondition that
+    # makes the instruction executable. The value itself is checked against this repo's ignore
+    # rules next door, by `test_every_filename_skill_md_prescribes_is_excluded_by_this_repos_
+    # gitignore` — that pin holds the PATH, these hold the INSTRUCTION and its measured gotcha.
+    assert "`filename` ВСЕГДА давай с префиксом `.playwright-mcp/`" in flat, \
+        "the rule no longer tells the agent WHERE a caller-chosen `filename` must point. That " \
+        "directory is the only axis covering the four tools that write the page's TEXT " \
+        "(snapshot/console/network/evaluate): their names are `.md`/`.txt`/`.json`/none and " \
+        "their bytes have no signature, so #629's two layers reach neither"
+    assert "Каталог перед этим СОЗДАЙ" in flat and "ENOENT" in flat, \
+        "the rule no longer states that the directory must EXIST first. Measured on " \
+        "@playwright/mcp 0.0.78: a caller-chosen filename is resolved by a function that does " \
+        "not mkdir (unlike the auto-named path, which does), so on a missing `.playwright-mcp/` " \
+        "every such call fails with ENOENT. Without this clause the prescription above reads as " \
+        "working and silently depends on some earlier call having created the directory"
+    assert 'mkdir -p "$MAIN/.playwright-mcp"' in section and "git worktree list" in section, \
+        "the mkdir clause kept its sentence and lost its RECIPE. The sentence says the directory " \
+        "must exist; the two lines say WHERE, and from a linked worktree — where every per-task " \
+        "agent stands — that is the one part an agent cannot reconstruct, because the artifact " \
+        "goes to the MCP server's workspace and not to the tree it is standing in. An attack pass " \
+        "deleted this fenced block with both prose pins intact and the whole suite stayed green"
+    assert "Граница этого правила" in flat and "ПРАВИЛО, а не замок" in flat, \
+        "the rule lost the clause saying what it does NOT do — that a bare name is still accepted " \
+        "and the spill is not root-confined. That is not decoration: this whole card exists " \
+        "because #629's first draft claimed a completeness it did not have, and a rule read as a " \
+        "lock is one nobody double-checks. Measured deletable with everything else green"
     for tool in ("browser_close", "browser_resize"):
         assert tool in section, f"the rule no longer bans {tool} — it destroys a sibling's state"
     assert "browser_tabs" in section, \
