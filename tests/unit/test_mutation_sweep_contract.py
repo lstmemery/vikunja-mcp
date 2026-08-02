@@ -33,6 +33,21 @@ them up.
     baselined: drop guard B -> 9 failed. Round C, likewise never baselined: drop guard C ->
     41 failed." satisfies this scanner completely. Per-number pairing is not recoverable from
     prose, so the rule the assert states is enforced per RECORD and asked of the author per ROUND.
+    Re-measured 2026-08-02 on a REAL record instead of a constructed one, `__pycache__` cleared
+    and PYTHONDONTWRITEBYTECODE=1: the pre-image of the docstring VMCP-161 (668) was filed
+    against — it quotes "5 failed / 102 passed", wrapped across two lines at its site so only a
+    whitespace-flattened read finds it, and no paragraph of its own states a control — is clean
+    here, 0 failed, because a control clause about a DIFFERENT mutation sits 27 lines further down
+    the SAME docstring; deleting that one clause turns it red, 1 failed, naming the key.
+    VMCP-167 (688) carries the granularity question, and two candidate units were measured for it.
+    Splitting a record at BLANK LINES catches that pre-image and flags no new record today: 9
+    offending paragraphs among the 36 that the 7 already-listed records contain. But that result
+    is SPLITTER-DEPENDENT, which is the finding rather than a caveat on it — a comment run has no
+    blank line, its separator is a bare `#`, and counting that as one too gives 16 offending
+    chunks across 8 records, the eighth being new. Splitting at BULLETS is the wrong unit either
+    way: 20 offenders, 11 of them inside records that DO state a control, and all 11 are this
+    file's own MUTATION-CHECKED blocks — a control header with its rounds listed under it, which
+    is the shape this file asks authors to write.
   * A clean control does not mean the round measured anything, and two other forms bound it.
     STALE BYTECODE (VMCP-135 (624)): re-measured here on CPython 3.12 with the `.pyc` header read
     directly, cache validity is the pair (source mtime in SECONDS, source size) — so a same-length
@@ -84,13 +99,31 @@ _ROUND_COUNT = re.compile(r"(?<![:.\w])(?<!of )\d+\s+failed\b", re.IGNORECASE)
 
 # A CONTROL COUNT: the word `control` and a TALLY (`N failed` / `N passed`) close enough together
 # to be one statement, in either order — "control 0 failed", "control 2 passed", "2 failed
-# against an unmutated control round of 0". The tally is the load-bearing half: an earlier version
-# another sense entirely — both examples are strings this repo really contains, "the control at
-# the same call site" and "control: page 1", each in test_api_kanban.py. Re-measured 2026-08-02:
-# that weak form vouches for 22 records under tests/ which this one refuses, and exactly ONE of them
-# quotes a round count — test_api_kanban's honest-server-paginates, a LEGACY entry, which would
-# therefore leave the list with nobody re-measuring it. One is the number that matters here: the
-# ratchet's business is the list, not the tally of near-misses.
+# against an unmutated control round of 0". The tally is the load-bearing half. What it is chosen
+# against is THIS pattern with the tally requirement replaced by a bare digit —
+#     r"control\b[^.;]{0,60}?\d|\d[^.;]{0,60}?\bcontrol\b"
+# — which prose using the word in a non-sweep sense can satisfy. Spell the weak form exactly that
+# way before re-running any number below: the ratchet round further down measures four OTHER
+# readings of "a digit near `control`", and every one of them answers differently. Measurements
+# below are from 2026-08-02, `__pycache__` cleared and PYTHONDONTWRITEBYTECODE=1.
+#
+# On the two "other sense" rows of the pattern test further down, that weak form accepts BOTH and
+# this one refuses BOTH — that is what requiring a tally buys. Those two rows are ADAPTATIONS of
+# test_api_kanban.py prose, NOT strings this repo contains; the docstring above them owns that
+# measurement and quotes the real wording (one of the two is wrapped across a line break at its
+# site, so it is found only with whitespace flattened — which is how both predicates here read
+# prose anyway). This comment said the OPPOSITE until the round that fixed it: 889befd corrected
+# "the exact strings this repo contains" THERE and asserted it HERE in the same breath, and "the
+# control at the same call site" occurs 0 times outside this file (every file in the checkout bar
+# `.git`, counted raw and flattened). No test caught that — a reviewer did — and the ratchet below
+# would not have: it reads this comment run, but only for the SHAPE it refuses. Over `tests/unit`:
+# control 0 failed; a false repo-content quotation planted in this comment -> 0 failed; another
+# planted in a docstring under tests/ -> 0 failed. VMCP-171 (695) carries that class.
+#
+# That weak form also vouches for 22 records under tests/ which this one refuses, and exactly ONE
+# of them quotes a round count — test_api_kanban's honest-server-paginates, a LEGACY entry, which
+# would therefore leave the list with nobody re-measuring it. One is the number that matters
+# here: the ratchet's business is the list, not the tally of near-misses.
 #
 # `[^.;]` NARROWS the window; it does not bound it to a clause, and saying so would oversell it.
 # Constructed and measured, all five accepted by the pattern below: "control PASS! ... says 0
