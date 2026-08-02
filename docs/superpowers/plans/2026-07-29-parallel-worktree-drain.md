@@ -15,6 +15,36 @@
 > re-read this file (tracker #517, then #541, which enumerated all 48 fences and marked sixteen
 > more that #517 had missed — including `workspace_cmd.py`'s own pre-#517 `_release_locked`).
 > Assume a third will find something too.
+>
+> **The MARKING discipline above is about FENCES; the PROSE between them was a separate gap.**
+> The narration makes its own claims about the code — return types, payload shapes, what a task
+> "ships" — and while the opening instruction ("read the SOURCE for what a thing should say
+> today") governs the whole document, the two things that operate per statement did not: the
+> flat "no fence in this document is a current contract" is about fences by construction, and
+> the `SUPERSEDED … DO NOT COPY` marker has nowhere to live in a sentence that is not in a
+> fence. A reader who lands on one paragraph out of context gets a general warning, not a
+> verdict on the sentence in front of them. Stale prose is therefore marked IN PLACE and in the
+> past tense: struck through, with the superseding card and date named beside it — the form the
+> struck-through `Ships inert` constraint below has carried since #524 — plus a pointer to the
+> LIVE SOURCE, which that constraint does not itself have (its pointer goes to another
+> historical document, the design record's Goals).
+>
+> VMCP-79 (528) swept the prose on 2026-08-02 for ONE contract, the drain width (`wip_limit`,
+> `limit: null`, "inert", "no limit"), and marked five statements false: Task 1's preamble and
+> its `Produces:` line, Task 2's `Produces:` line, Task 5's preamble, and Task 6's
+> `Expected: 2`. **Five is the count of statements MARKED, not of hits that sweep produced** —
+> it surfaced more, and the rest were judged either still true (the Goal and Architecture
+> summaries, which merely speak as though the key were always set) or CONTINGENT rather than
+> false (Task 6's other numbers, which are true of the `wip_limit = 2` its own Step 1 tells you
+> to commit). Task 6's `Expected: 2` carried NONE of the swept tokens and turned up only by
+> reading around an already-marked fence — evidence FOR the caveat below, not against it. The
+> fence count was re-measured the same day and still comes to 48 with none unbalanced, though
+> 48 counts the `sh` fence NESTED inside Task 5's `markdown` one, which this document treats as
+> a fence in its own right and marks separately; a strict CommonMark reader sees 47 top-level
+> blocks. Either way that is the COUNT only: their contents were not re-read. The caveat is
+> therefore the fences' own caveat, and it is the load-bearing half of this paragraph: unmarked
+> prose means "nobody has checked it", never "verified current", and a sweep aimed at one
+> contract says nothing about any other.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -61,7 +91,12 @@
 
 ### Task 1: `wip_limit` config and the generalised claim gate
 
-Ships completely inert: with no `wip_limit` in the toml, `claim` behaves exactly as today.
+~~Ships completely inert: with no `wip_limit` in the toml, `claim` behaves exactly as today.~~
+**SUPERSEDED on 2026-07-30 by tracker #524 (prose marked by VMCP-79 on 2026-08-02): the
+inertness this task promised held for about sixteen hours** — Task 1 landed as `8206ee0`
+(2026-07-29 23:38), #524 replaced the property in `ba771b8` (2026-07-30 15:46). **An absent
+`wip_limit` has meant `config.DEFAULT_WIP_LIMIT` = 3 ever since, so this gate is live for every
+consumer, configured or not.** Live resolver: `workflow._effective_wip_limit`.
 
 **Files:**
 - Modify: `src/vikunja_mcp/config.py:30` (Config field), `:112-117` (return)
@@ -71,7 +106,7 @@ Ships completely inert: with no `wip_limit` in the toml, `claim` behaves exactly
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `Config.wip_limit: int | None`; `Workflow(api, project_id, enforce_single_wip=False, wip_limit=None, notifier=None)`; `Workflow._effective_wip_limit() -> int | None` (`None` means no limit).
+- Produces: `Config.wip_limit: int | None`; `Workflow(api, project_id, enforce_single_wip=False, wip_limit=None, notifier=None)`; ~~`Workflow._effective_wip_limit() -> int | None` (`None` means no limit)~~ — **the return type was narrowed to plain `int` on 2026-07-30 by tracker #524 (`ba771b8`), and "no limit" stopped being expressible then. What #524 took away was the UNSET key: omitting `wip_limit` used to resolve to `None` = no gate, and resolves to 3 now. `wip_limit = 0` was NEVER the unbounded spelling and is not what changed — it was already a `ConfigError` before #524 (checked against `ba771b8^`) and still is; only the message moved, from "omit the key entirely for no limit" to one that names the default. Live: `workflow._effective_wip_limit`. Marked by VMCP-79, 2026-08-02.** (`Config.wip_limit` itself is still `int | None` — but `None` there means only "the key is absent from the toml", never "no gate".)
 
 - [ ] **Step 1: Write the failing config tests**
 
@@ -385,7 +420,7 @@ Teaches `next_task` to serve a pump that has several agents in flight, without l
 
 **Interfaces:**
 - Consumes: `Workflow._effective_wip_limit()` from Task 1.
-- Produces: `Workflow.next_task(exclude: list[int] | None = None) -> dict`; every result carries `wip: {"active": int, "limit": int | None, "free": int | None}`; a new saturated result `{"task": None, "wip_saturated": True, "wip": {...}, "message": str, "note": str}`.
+- Produces: `Workflow.next_task(exclude: list[int] | None = None) -> dict`; every result carries ~~`wip: {"active": int, "limit": int | None, "free": int | None}`~~ — **`limit` and `free` were narrowed to plain `int` on 2026-07-30 by tracker #524 (`ba771b8`), and `null` is now unreachable in either BY CONSTRUCTION rather than by luck: `next_task` builds ONE `wip` dict from `_effective_wip_limit()` (which returns `int`) and `max(0, limit - active)`, then every one of its result branches returns through the same `with_wip` closure — so the claim covers the saturated, resume, review-offer, starving, cycle and empty-queue results too, not only the ones a test happened to visit. Read on 2026-08-02 at `workflow.py:475-484`; the four knob combinations spot-checked that day (`wip_limit` unset, `enforce_single_wip = true`, `wip_limit = 1`, `wip_limit = 7`) agreed. Live shape: `workflow.next_task`. Marked by VMCP-79.** Also produced: a new saturated result `{"task": None, "wip_saturated": True, "wip": {...}, "message": str, "note": str}`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1440,7 +1475,7 @@ git commit -m "feat(cli): workspace --gc — reap orphaned trees using tracker l
 
 ### Task 5: The rulebook — SKILL.md and CLAUDE.md
 
-Everything so far is inert machinery. This task is what makes an agent use it — and it auto-propagates to every consumer on the next server start, so it is the highest-blast-radius change in the plan.
+~~Everything so far is inert machinery.~~ This task is what makes an agent use it — and it auto-propagates to every consumer on the next server start, so it is the highest-blast-radius change in the plan. **"Inert" meant only "no agent uses it yet", and even that stopped being true on 2026-07-30 (tracker #524, `ba771b8`): the `claim` gate now refuses a fourth task at the default of 3 whether or not the rulebook ever mentions it, so Tasks 1–4 are live for every consumer on their own. Marked by VMCP-79, 2026-08-02.**
 
 **Files:**
 - Modify: `src/vikunja_mcp/skills/tracker/SKILL.md`, `CLAUDE.md`
@@ -1675,7 +1710,7 @@ wip_limit = 2   # parallel drain: two per-task agents at a time, each in its own
 - [ ] **Step 2: Verify the config resolves**
 
 Run: `uv run python -c "from vikunja_mcp.config import load_config; print(load_config().wip_limit)"`
-Expected: `2`.
+~~Expected: `2`.~~ **SUPERSEDED — that command prints `3` in this repo today (run 2026-08-02), because the toml the fence above is marked against was replaced: `wip_limit = 3`. The `2` was never a property of the code, only of the value Task 6 committed that day — which is equally true of this task's remaining numbers, including Step 4's acceptance bullet about `next_task` stopping at two active tasks. They are contingent on Step 1, not false, so they are left as written. Marked by VMCP-79.**
 
 - [ ] **Step 3: Verify the loop's idle check is unchanged**
 
