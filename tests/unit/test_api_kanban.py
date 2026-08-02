@@ -717,11 +717,18 @@ def test_a_required_bucket_repeating_a_window_SHORTER_than_the_stated_size():
     file, whose server serves 8 against a stated 5.
 
     That is the shape THIS pin uses — NOT the only shape in this file where the two operands
-    disagree. INSTRUMENTED (the count lives in the VMCP-111 comment block): FOUR tests put them in
-    disagreement. Two are the pins themselves — the board one named above and its flat sibling
-    `..._still_reads_the_list_whole`, each serving 8 against a stated 5, one per call site. The
-    third is the direct arithmetic assert `_could_be_full(5, 9)` in the shared-rule test, which
-    calls the helper rather than reading anything. The fourth is a REAL READ that pins NEITHER
+    disagree. INSTRUMENTED, AND THE INSTRUMENT IS GONE: the count came from recording every call to
+    `_could_be_full`, so it cannot be re-run on this tree at all (the VMCP-111 comment block holds
+    its totals). RE-MEASURED at 8b4bfa5^, the last tree that had the helper, rather than inherited:
+    FOUR tests put the operands in disagreement, seven calls between them. Two are the pins
+    themselves — the board one named above and its flat sibling `..._still_reads_the_list_whole`,
+    each serving 8 against a stated 5, one per call site. The third WAS the direct arithmetic
+    assert `_could_be_full(5, 9)`, which called the helper rather than reading anything; VMCP-127
+    (608) deleted the helper and all four of that test's arithmetic asserts with it and renamed the
+    test, so this item is history — no CALL to `_could_be_full` survives anywhere under src or
+    tests, only prose about it, this sentence included. See
+    `test_neither_reader_takes_a_SHORT_page_for_an_exhausted_one` in this file, whose docstring says
+    the same in the past tense. The fourth is a REAL READ that pins NEITHER
     operand: `test_an_endpoint_that_ignores_page_terminates_without_duplicating_rows` serves ELEVEN
     against a stated 5, but its page 2 is a pure repeat, `added_new` ends the read first, and
     shipped / served-only / stated-only / an unreachable threshold all return the same 11 rows in 2
@@ -729,6 +736,19 @@ def test_a_required_bucket_repeating_a_window_SHORTER_than_the_stated_size():
     for a read to notice the stated operand going missing (where they agree, `min(stated, served)`
     and `served` are the same number and the substitution cannot change anything) but NOT
     sufficient: the read has to reach the threshold before some other clause ends it.
+
+    AND THE FOUR ARE THAT TREE'S CENSUS, NOT THIS ONE'S. What CAN still be measured here —
+    recording (stated size, page length) at both readers' page loops across tests/unit at b444914 —
+    gives SIX test functions whose server hands back a page longer than /info states, twenty ids
+    counting the band sweeps' parametrisation, healthy branches only (a degraded read has no stated
+    size to disagree with). The three surviving members of the four above are among them; the other
+    three are VMCP-127's own two band sweeps and the ignored-`?page=` row of its cost table. DO NOT
+    read that as 4 -> 6: the fourth member is not a read at all, so this hook cannot see it on ANY
+    tree, and run at 8b4bfa5^ it returns THREE. Like for like the move is 3 -> 6, and all three
+    arrivals are 608's. The two hooks do not disagree here either — emulating the old bookkeeping on
+    this tree (`longest_page` snapshotted BEFORE the current page is folded in, which is what
+    `_could_be_full` was handed) returns the same six functions and the same twenty ids. Snapshot
+    either way: any new over-serving fixture moves it.
 
     (Scoped to named servers on purpose. This one docstring has now shipped the same error twice:
     first "every server on this side of the file serves at most what /info states", then "the only
@@ -1739,8 +1759,15 @@ def test_neither_reader_takes_a_SHORT_page_for_an_exhausted_one():
 # `_page_size`, and test_neither_read_loses_a_task_an_honest_server_paginates — VMCP-130 (616)
 # renamed it out of the superset claim — in this same
 # file far above): on a 2.3.0 instance stating max_items_per_page=5, GET /projects serves pages of
-# EIGHT — five real rows plus a CONSTANT 3-row pseudo tail appended after the SQL limit — while
-# paging the real ids honestly. Read every row count in that note as one instance's CONTENT and
+# EIGHT — five real rows plus a CONSTANT 3-row pseudo tail that is NOT counted against the page
+# size — while paging the real ids honestly. THAT CLAUSE IS WHERE THE OBSERVATION STOPS. It used to
+# end "appended after the SQL limit" (entered here in ea4e059), which says where the server applies
+# its limit relative to the tail — an internal no black-box read can see. api.py carried the same
+# claim in 603's own words, "Vikunja appends the pseudo-projects AFTER the SQL limit" (4149712),
+# and 603 downgraded THAT copy at 0e84c68 to "which is the OBSERVATION; where the server applies
+# its limit relative to them is its own business and was not measured" — leaving the two files
+# disagreeing about one claim until VMCP-134 (623).
+# Read every row count in that note as one instance's CONTENT and
 # never as an endpoint constant: 603 measured 4 views and 63 buckets on its container, and
 # VMCP-108 (577) had already measured 10 views and 11 buckets on another, both stating 5. THAT
 # SPLIT IS api.py's OWN, and this clause used to hand both pairs to 603: the 10/11 survey is 577's,
@@ -1835,6 +1862,16 @@ def test_neither_reader_takes_a_SHORT_page_for_an_exhausted_one():
 # over the same four tests, the 3x2 mutation table — were each reproduced exactly by two independent
 # reviewers. The last two entries are this card's disease turned on itself: a sentence ABOUT the
 # retractions, retracted.
+#
+# NEITHER OF VMCP-134 (623)'s TWO CORRECTIONS IS A ROW HERE, AND THE BAR IS WHY, NOT THE CARD. This
+# list's bar is its own opening sentence: a sentence a later round MEASURED FALSE. The
+# `_could_be_full(5, 9)` item in the SHORTER-window docstring (entered f00f1e6) was ACCURATE at its
+# tree — re-measured at 8b4bfa5^, it is one of the seven — and went stale only when 608 deleted its
+# subject, which is the case the "ITS POINTER, SEPARATELY, WAS NOT WRONG" paragraph of this block
+# already excludes by name. This block's "appended after the SQL limit" (entered ea4e059) was not
+# measured false either: 603 struck the same claim from api.py as UNSUPPORTED, its replacement
+# saying in as many words that the mechanism "was not measured". Both are retracted at their sites
+# instead.
 #
 # Three of the eleven are provenance and `git log -S` on the exact phrase settles all three in
 # seconds; two more are counts over this card's own commits, settled by `git show <rev>:<path> |
