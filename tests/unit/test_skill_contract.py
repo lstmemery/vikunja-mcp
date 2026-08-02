@@ -15,9 +15,11 @@ what drifts apart.
 """
 import ast
 import inspect
+import os
 import re
 import subprocess
 import textwrap
+import time
 from importlib.resources import files
 from pathlib import Path
 
@@ -490,6 +492,207 @@ def test_the_gc_report_split_the_skill_teaches_is_the_one_the_code_produces():
         "SKILL.md's --gc rule no longer cites the `locked` refusal as a code"
     assert workspace_cmd.CODE_NO_WORKTREE in text, \
         "the --release recipe no longer explains the no-worktree refusal"
+
+
+def _standing_record_bullet(text: str) -> str:
+    """The bullet that tells the pump HOW OFTEN a standing `--gc` refusal is reported.
+
+    Its own bullet rather than `_gc_section`, for that helper's own measured reason: "grace-окно"
+    and "каждый свип" are words the section uses elsewhere (the `expected` notes above it), so a
+    section-wide substring could not tell "the cadence rule is still stated" from "the words
+    survive nearby"."""
+    start = text.find("     - **Стоячая запись приходит на КАЖДОМ свипе")
+    assert start != -1, "SKILL.md no longer states the cadence of a standing --gc record"
+    end = text.find("\n     `--gc` ходит ОДИН", start)
+    assert end != -1, "the cadence bullet no longer ends where the --gc argument rule begins"
+    bullet = text[start:end]
+    assert 0 < len(bullet) < len(text), "the cadence slice is not a proper subset of SKILL.md"
+    assert "Незнакомый `code`" not in bullet, "the slice swallowed the preceding bullet"
+    return bullet
+
+
+def _unreachable_head_note(text: str) -> str:
+    """The `expected` (2) note — the reviewer's in-tree commit, and the ONE record on this board
+    that no pipeline step ever clears. Sliced to the note itself so that restoring the old
+    unconditional wording ("запись вечная") fails here rather than hiding inside the section."""
+    start = text.find("       (2) `unreachable-head` у REVIEW-дерева")
+    assert start != -1, "SKILL.md no longer explains the review tree's unreachable-head record"
+    end = text.find("\n     - ", start)
+    assert end != -1, "the unreachable-head note no longer ends where the next bullet begins"
+    note = text[start:end]
+    assert 0 < len(note) < len(text), "the unreachable-head slice is not a proper subset"
+    assert "(1) `unpushed`" not in note, "the slice swallowed the sibling `expected` note"
+    return note
+
+
+def _quiesce_for_gc(tree: Path) -> None:
+    """Age every marker the grace window reads, so a DEAD tree is eligible for the sweep NOW.
+
+    A local copy of `test_workspace_cmd`'s helper, for `git_repo`'s own stated reason: this module
+    proves the RULEBOOK against the code and must not go red when another test module reshuffles
+    its helpers. Derived from production's reader, and checked against it, so a marker this stops
+    covering fails loudly instead of turning the assertions below into silent skips."""
+    old = time.time() - workspace_cmd._REAP_GRACE_SECONDS - 60
+    index = Path(_git(tree, "rev-parse", "--git-path", "index"))
+    for marker in (tree, index if index.is_absolute() else tree / index):
+        if marker.exists():
+            os.utime(marker, (old, old))
+    quiet_for = time.time() - workspace_cmd._last_activity(tree)
+    assert quiet_for >= workspace_cmd._REAP_GRACE_SECONDS, \
+        f"{tree} still reads as active ({quiet_for:.0f}s) — this helper is missing a marker"
+
+
+def _codes_for(sweep: dict, task_id: int) -> dict[str, list[str]]:
+    """Just this task's refusal codes, per list — every sweep below carries other trees too."""
+    return {
+        name: [e["code"] for e in sweep[name] if e["task_id"] == task_id]
+        for name in ("kept", "expected", "released")
+    }
+
+
+def test_the_standing_gc_record_is_reported_under_the_conditions_the_rulebook_names(git_repo):
+    """VMCP-83 (533): the rulebook used to state the cadence of a standing `--gc` refusal as a
+    FREQUENCY — "запись будет на КАЖДОМ тике, пока человек не ответит" and, for a reviewer's
+    in-tree commit, "запись вечная". Both are counters with their conditions filed off, and both
+    drifted the moment VMCP-71 gave the sweep a grace window: a frequency cannot be re-derived by
+    a reader, so when the code moved underneath it nothing went red and every consumer kept
+    reading it. This pins the CONDITIONS instead, on both sides — the code that produces them and
+    the prose that promises them.
+
+    MEASURED here, by running consecutive sweeps rather than reading the guards (git 2.50.1, real
+    worktrees, the fake board):
+
+      * a dead tree whose last write is YOUNGER than `_REAP_GRACE_SECONDS` appears in NO list at
+        all — the sweep declines to inspect it, so there is no refusal to grade;
+      * past the window the same tree reports on EVERY consecutive sweep, because gc's own
+        inspection takes no optional locks (VMCP-90) and therefore does not renew the window;
+      * the window runs from the last WRITE, not from the death of the task, and "write" is
+        exactly the two markers `_last_activity` stats. Editing a file in a SUBDIRECTORY — an
+        agent's commonest act — moves NEITHER, so the record keeps coming; a new entry at the TOP
+        LEVEL moves one and the tree goes quiet again. Both directions are asserted, because the
+        second pass found the first draft of this rule claiming "любая новая запись" and that is
+        a safety claim a reader would rely on;
+      * a REVIEW tree holding an in-tree commit reports NOTHING while its card sits in Review —
+        the tree is alive by role — and starts reporting only once the card leaves; put the card
+        back in Review and the record disappears again, which is precisely what "вечная" denied.
+        That same fixture carries the corollary: it is quiesced WHILE its card is still in Review,
+        so the first sweep after the card leaves reports it with no waiting at all — "умерло
+        только что" and "invisible for a window" are independent properties.
+
+    So the two ends of the record differ, and that is the distinction the prose now has to carry:
+    the parked build tree's record is CLOSED by the human's answer, while the reviewer's is closed
+    by nothing this pipeline does.
+
+    MUTATION-CHECKED both ways (`__pycache__` cleared between rounds, every run confirmed to
+    select exactly 1 test — "1 passed/failed, 45 deselected" — and both files restored from copies
+    kept aside, never `git checkout --`), control PASS before and after each:
+
+      * delete the grace-window skip from `gc_workspaces` (`if False:`) -> FAIL on the YOUNG
+        sweeps, which is the half a reader would otherwise have to take on trust;
+      * undo VMCP-90 by letting gc's own inspection take optional locks again -> FAIL on the
+        consecutive quiet sweeps. Mutate `_git_inspect`'s BODY (drop its `GIT_OPTIONAL_LOCKS=0`),
+        NOT its call sites: swapping the seven `_git_inspect(` calls for `_git(` raises TypeError
+        and goes red for the wrong reason entirely — a mutation that "fails" without exercising
+        the claim proves nothing;
+      * give `_last_activity` a RECURSIVE marker (max mtime under the tree) -> FAIL, though on
+        `_quiesce_for_gc`'s own self-check rather than on the subdirectory assertion: a reader
+        that looks at more than the two markers can no longer be quiesced by ageing them, which
+        is exactly what that self-check is there to say out loud. Drop the TOP-LEVEL directory
+        marker instead (`candidates = []`) -> FAIL on the top-level assertion, so the two
+        directions are pinned by two different rounds;
+      * restore the old unconditional note ("не сметается НИКОГДА, запись вечная") -> FAIL on the
+        two missing conditions. That assertion started life as its MIRROR — `"вечн" not in note`
+        — and it fired on the new text's own denial ("ЗАПИСЬ вечной НЕ бывает"), i.e. a
+        word-level negative pin cannot tell a claim from its retraction. Positive conditions
+        catch the same restoration and nothing else;
+      * delete the window from the cadence bullet -> FAIL; halve `_REAP_GRACE_SECONDS` in the
+        code alone -> FAIL too, since the bullet's minutes are derived from the constant here
+        rather than compared with a number typed twice; downcase the bullet's `ПОДКАТАЛОГЕ`
+        warning -> FAIL, so the prose half cannot be deleted while the behaviour still holds;
+      * drop `_keep_is_expected`'s review-role conjunct -> still PASS here, deliberately: that
+        cell belongs to test_workspace_cmd, and the attribution was CHECKED rather than assumed —
+        against that whole file the mutation turns
+        test_keep_grading_of_unreachable_head_still_turns_on_the_role and
+        test_the_grading_grid_is_all_kept_outside_the_four_named_cells red (control 0 failed,
+        119 passed; mutated 2 failed, 117 passed)."""
+    text = _skill_text()
+    bullet = _standing_record_bullet(text)
+    note = _unreachable_head_note(text)
+    api = FakeAPI(buckets=workflow.STAGES)
+    wf = workflow.Workflow(api, project_id=3)
+
+    def sweep():
+        return workspace_cmd.gc_workspaces(cwd=git_repo, workflow=wf)
+
+    # --- a BUILD tree under a card parked in Your Call: the routine, no-action state
+    parked = api.add_task("waiting on a human", "Your Call")["id"]
+    tree = Path(workspace_cmd.ensure_workspace(parked, cwd=git_repo)["path"])
+    (tree / "sub").mkdir()
+    (tree / "sub" / "code.py").write_text("x = 1\n")
+    (tree / "wip.txt").write_text("the push that got rejected\n")
+    _git(tree, "add", "wip.txt", "sub/code.py")
+    _git(tree, "commit", "-m", "wip")
+
+    young = [_codes_for(sweep(), parked) for _ in range(2)]
+    assert young == [{"kept": [], "expected": [], "released": []}] * 2, \
+        "a just-written dead tree is reported — the rulebook says the window skips it silently"
+
+    _quiesce_for_gc(tree)
+    quiet = [_codes_for(sweep(), parked) for _ in range(3)]
+    assert [s["expected"] for s in quiet] == [[workspace_cmd.CODE_UNPUSHED]] * 3, \
+        "the standing record does not survive consecutive sweeps — gc is renewing the window"
+    assert tree.exists(), "the sweep removed a tree holding unpushed work"
+
+    # …and the window's markers are the TWO the rulebook names, pinned from both sides: editing a
+    # file in a SUBDIRECTORY (an agent's commonest act) moves neither, so the record keeps coming;
+    # a new entry at the TOP LEVEL moves one, and the tree goes quiet again for a whole window.
+    (tree / "sub" / "code.py").write_text("x = 2   # the agent is back, editing source\n")
+    assert _codes_for(sweep(), parked)["expected"] == [workspace_cmd.CODE_DIRTY], \
+        "a write in a subdirectory now renews the window — the rulebook says it does not"
+    (tree / "scratch.txt").write_text("a new entry at the top level\n")
+    assert _codes_for(sweep(), parked) == {"kept": [], "expected": [], "released": []}, \
+        "a top-level write no longer renews the window — the rulebook says it does"
+
+    # --- a REVIEW tree the reviewer committed its notes into
+    reviewed = api.add_task("under review", "Review")["id"]
+    head = _git(git_repo, "rev-parse", "HEAD")
+    rtree = Path(workspace_cmd.ensure_workspace(
+        reviewed, role="review", at=head, cwd=git_repo)["path"])
+    (rtree / "notes.md").write_text("verdict draft\n")
+    _git(rtree, "add", "notes.md")
+    _git(rtree, "commit", "-m", "reviewer notes")
+    _quiesce_for_gc(rtree)
+
+    assert _codes_for(sweep(), reviewed) == {"kept": [], "expected": [], "released": []}, \
+        "a review tree reports while its card is in Review — the rule says the board keeps it"
+
+    api.task_bucket[reviewed] = api.bucket_id("Build")          # the card leaves Review
+    dead = [_codes_for(sweep(), reviewed) for _ in range(3)]
+    assert [s["expected"] for s in dead] == [[workspace_cmd.CODE_UNREACHABLE_HEAD]] * 3, \
+        "the reviewer's in-tree commit stopped reporting once its card left Review"
+    assert rtree.exists(), "the sweep removed the review tree its own guards refuse to remove"
+
+    api.task_bucket[reviewed] = api.bucket_id("Review")         # …and comes back
+    assert _codes_for(sweep(), reviewed) == {"kept": [], "expected": [], "released": []}, \
+        "the record survived the card returning to Review — then it really would be unconditional"
+
+    # --- and the prose states those conditions rather than a bare frequency
+    # `_flat` for every prose pin: these phrases are long enough that a re-wrap lands inside one
+    # (the first draft of this test pinned "НЕ продлевает" raw and went red on a line break alone).
+    bullet, note = _flat(bullet), _flat(note)
+    minutes = workspace_cmd._REAP_GRACE_SECONDS // 60
+    assert f"grace-окна ({minutes} мин)" in bullet, \
+        "the cadence bullet no longer names the window, or names a length the code disagrees with"
+    assert "окно НЕ продлевает" in bullet, \
+        "the bullet no longer says the sweep itself does not renew the window (VMCP-90's fix)"
+    assert "ПОДКАТАЛОГЕ" in bullet, \
+        "the bullet stopped warning that a write below the top level does not renew the window"
+    assert "ПЕРВОМ же свипе" in bullet, \
+        "the bullet stopped saying a tree that was already quiet is reported the instant it dies"
+    assert "ВНЕ Review" in note and "grace-окна" in note, \
+        "the unreachable-head note lost one of the two conditions its record actually has"
+    assert "в пайплайне нет шага" in note, \
+        "the note no longer says what IS permanent here — that nothing in the pipeline clears it"
 
 
 def test_the_released_entrys_branch_leak_is_documented_where_agents_will_read_it():
