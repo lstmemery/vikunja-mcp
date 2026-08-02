@@ -60,6 +60,54 @@ _MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024  # 25 МБ: щедро для скри�
 # ~255+ байт, а сервер-контролируемое имя вложения может быть любой длины -> режем до этого.
 _MAX_ATTACHMENT_NAME_BYTES = 200
 
+# #657: what `advance` says when a required report field is unusable. The old refusals ran
+# the value through `(x or "").strip()`, which COLLAPSES two different states into one — an
+# argument that never arrived (None) and one that arrived blank ("") — and then named BOTH
+# fields whatever was actually wrong. Two facts are recoverable here and both were thrown
+# away: WHICH field is unusable, and HOW it arrived. Neither proves anything about the cause
+# (an agent who simply omits the argument also produces None), but "did not arrive" is the
+# reading the old text made unavailable, and it is the one that changes what an agent does
+# next. The card that filed this retried the identical ~7 KB call THREE times against a
+# message that only ever said "you owe a report".
+_ARG_STATE_ABSENT = "not passed at all — arrived as null"
+_ARG_STATE_BLANK = "passed, but empty or whitespace-only"
+# Measured 2026-08-02 on #657, at this repo's mcp 2.0.0 / Python 3.12.13, on ONE machine over
+# stdio: Workflow.advance itself carries a 1 MiB worklog byte-exact through FakeAPI, and the
+# real MCPServer over the real stdio transport delivers a 4 MiB argument byte-exact — an
+# independent re-measure using a raw JSON-RPC client and the REAL Workflow got the same result
+# to 8 MiB, and found no content that fails either (Cyrillic, NUL, CRLF, one 8 MiB line with
+# no newline at all). So a kilobyte-sized report is nowhere near anything measured to fail
+# below this line, and an identical retry does not address a report that arrived as null.
+# THREE limits on that, all of which an earlier draft of this comment overstated:
+#  * These are ceilings that were TESTED on one transport, not proof that none exists above.
+#  * "advance behaves like review_task" holds only for a PRESENT, non-empty argument. For a
+#    MISSING one they are opposite, and that opposition is the whole point below.
+#  * The threshold in the ORIGINAL report was never reproduced, so nothing here locates one.
+#    Successes cannot bound a non-deterministic failure — and that one is known to be
+#    non-deterministic (three refusals, then a success).
+_LOST_ARGUMENT_HINT = (
+    "If you DID pass a long value and still read this, it did not reach this tool, and "
+    "retrying the identical call will not change that. CHECK THE PARAMETER NAME FIRST — a "
+    "misspelling ('wroklog') is dropped in silence and lands here identically (measured), and "
+    "that one is yours to fix. Otherwise: measured (#657), this server takes a 4 MiB argument "
+    "byte-exact over its own stdio transport, so a kilobyte-sized report is nowhere near any "
+    "limit here, and a value you did pass that arrives as null was dropped ABOVE this server "
+    "where this tool cannot see it. (Null does not by itself prove any of the three: a "
+    "misspelled, a dropped and a never-passed argument are indistinguishable here.) "
+    "Workaround that is known to work: advance with a SHORT value, then post the full text as "
+    "separate comment() calls marked [worklog]."
+)
+
+
+def _unusable_report_fields(*fields: tuple[str, str | None]) -> list[tuple[str, str]]:
+    """For each (name, value) that cannot serve as a report field, return (name, state) where
+    state says HOW it is unusable — see _ARG_STATE_*. Empty list means every field is usable."""
+    return [
+        (name, _ARG_STATE_ABSENT if value is None else _ARG_STATE_BLANK)
+        for name, value in fields
+        if not (value or "").strip()
+    ]
+
 
 def _sweep_old_attachments(now: float) -> None:
     """Best-effort: снести подкаталоги скачиваний старше _ATTACHMENT_TTL. Полностью
@@ -1158,8 +1206,12 @@ class Workflow:
             )
 
         if to == "build":
-            if not (spec or "").strip():
-                raise WorkflowError("a spec is required: describe your approach before implementing")
+            unusable = _unusable_report_fields(("spec", spec))
+            if unusable:
+                raise WorkflowError(
+                    f"a spec is required — this call's spec was {unusable[0][1]}: describe "
+                    f"your approach before implementing. {_LOST_ARGUMENT_HINT}"
+                )
             self.api.add_comment(task_id, f"[spec]\n{spec.strip()}")
             # (пере)сборка тоже инвалидирует любой прошлый вердикт: человек мог руками
             # вернуть одобренную/отбитую карточку сюда (#119). На свежем клейме меток нет —
@@ -1185,12 +1237,20 @@ class Workflow:
                     f"it back to Review first, then advance this one (a predecessor is 'ready' "
                     f"only at Review or Done)."
                 )
-            if not (worklog or "").strip() or not (evidence or "").strip():
+            # #657: DISJUNCTIVE guard, so it must name WHICH field failed it. The old text
+            # listed both whatever was actually wrong, which made two very different states
+            # read identically: an agent who wrote a full worklog and merely forgot evidence
+            # got the same sentence as an agent whose 7 KB worklog never arrived. See
+            # _LOST_ARGUMENT_HINT for what is and is not provable about the second one.
+            unusable = _unusable_report_fields(("worklog", worklog), ("evidence", evidence))
+            if unusable:
+                named = "; ".join(f"{name} — {state}" for name, state in unusable)
                 raise WorkflowError(
-                    "Review needs a report: worklog (what was done and how it was "
-                    "verified) and evidence (a link to the commit/PR or verification "
-                    "output); for bug fixes also root_cause — the cause of the bug, "
-                    "not the symptom"
+                    f"Review needs a report. Unusable in this call: {named}. worklog = what "
+                    f"was done and how it was VERIFIED (by running it, not by reading the "
+                    f"code); evidence = the commit sha / PR link / verification output; for a "
+                    f"bug fix root_cause too — the cause of the bug, not the symptom. "
+                    f"{_LOST_ARGUMENT_HINT}"
                 )
             report = ["[worklog]"]
             if (root_cause or "").strip():
