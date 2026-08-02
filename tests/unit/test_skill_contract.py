@@ -3755,18 +3755,64 @@ def test_the_second_pass_runs_in_its_own_clone_and_the_recipe_carries_the_workin
     greens; `uv run` in the same copy re-syncs and rewrites it, and the mutation lands), and a pin
     on a runner-dependent mechanism would be pinning today's uv.
 
-    WHAT THIS TEST DOES NOT PIN, so nobody reads it as more than it is. The fence is matched raw,
-    which pins the TEXT of each step and its ORDER, not that the step runs. Measured: a bare
-    newline after `--no-hardlinks` severs the command — `git clone` then exits `fatal: You must
-    specify a repository to clone` and no clone appears — and this test stays GREEN, because the
-    pinned substring survives on the first physical line. An earlier draft claimed the opposite
-    ("a break inside one of those commands turns this red on purpose"); it was DERIVED, never run,
-    and it was false. Two neighbouring claims of that same draft are false in the OTHER direction
-    and are corrected here rather than deleted: the same break after `apply` DOES go red, and so
-    does re-ordering — not by the raw match but by the `_step` ordering assertions below, which
-    this round added. So the honest bound is narrow: what escapes is a break that leaves the
-    pinned prefix intact on its own line. Commenting a step out no longer escapes — `_step`
-    anchors every command to a line start.
+    WHAT THIS TEST DOES NOT PIN, so nobody reads it as more than it is. `_step` is a
+    LINE-START-ANCHORED PREFIX match that reads nothing past its own fragment, so what IT pins is
+    the opening TEXT of six fence lines plus their ORDER — never that a step RUNS, never anything
+    to the right of a prefix, and not the other ELEVEN lines at all (17 non-empty, 6 pinned;
+    counted, not estimated). Re-measured this round, control 0 failed at both ends and `collected
+    1 item` every round: point the clone at a different repo -> 0 failed; redirect the patch to a
+    different file -> 0 failed; delete the whole untracked-copy `while` loop -> 0 failed; delete
+    `export PYTHONDONTWRITEBYTECODE=1` from the fence -> 0 failed (its prose sub-bullet holds the
+    RULE, never the line); and drop a bare NEWLINE immediately after a pinned prefix -> 0 failed
+    on each of the FIVE lines that continue past theirs — the four commands (`--no-hardlinks`,
+    `diff HEAD --binary`, `… apply`, `ls-files --others --exclude-standard`) plus the boundary
+    marker, whose line continues `, с подставленным $CLONE ---`. Only `cd "$CLONE" && uv sync` is
+    consumed WHOLE by its prefix. The right-hand side is not a free-for-all even so: the
+    assertions that read the WHOLE fence still reach it — append `&& rm -rf "$CLONE"` to the
+    `uv sync` step -> 1 failed, drop the `--no-hardlinks` flag -> 1 failed from the slicer, which
+    then finds no fence to pin at all.
+
+    The SHELL is not a backstop for that, and the way it fails is uneven — which is the half worth
+    writing down. Built on a throwaway repo rather than derived. Two of the four severed commands
+    fail loudly: bare `git clone --no-hardlinks` exits 129 `fatal: You must specify a repository
+    to clone.` and no clone appears; bare `git -C … apply` reads STDIN instead of the patch (fed
+    there, it applies), so at `/dev/null` it exits 128 `error: No valid patches in input` and the
+    tracked half never arrives — a `set -e` chain stops at both. The third fails loudly but
+    elsewhere: severed `ls-files` exits 0 and it is the ORPHANED tail the shell refuses (`syntax
+    error near unexpected token '|'`, sh 2 / zsh 1), after the earlier lines have already run. The
+    fourth is SILENT, and is the reason this bound is worth stating at all: severed `git … diff
+    HEAD --binary` exits 0 and prints the diff to STDOUT, the orphaned `> "$P"` leaves an EMPTY
+    patch, and the recipe's OWN `[ ! -s "$P" ] ||` guard then skips the apply — the chain runs to
+    its end at exit 0 and hands the auditor a clone WITHOUT the text under audit. That is exactly
+    the "the rule you describe is not in the file" defect this card exists to prevent, produced
+    with every exit code zero, and neither this test nor the shell says a word about it.
+
+    What DOES go red is a break INSIDE a prefix — same selection, same control 0 failed as the
+    rounds above; the clone split before `--no-hardlinks`, the guard split after its `||` -> 1
+    failed each — by `_step`'s OWN raw match ("the recipe no longer RUNS `…`", `assert None`). One
+    measured exception, to the mechanism and not to the result: a break inside `--no-hardlinks`
+    ITSELF -> 1 failed from the SLICER (`expected exactly 1 fenced second-pass clone recipe, got
+    0`), because that flag is also what SELECTS the fence, so `_step` never runs at all. What is
+    never the answer is the ordering assertions below — and they are not "re-ordering only"
+    either, since `_step` returns the FIRST line-start occurrence: a pure ADDITION trips them too.
+    A duplicate `cd "$CLONE" && uv sync` line inserted above the apply step, with nothing moved,
+    -> 1 failed (`assert 1003 < 404`), beside the re-ordering they are named for — the clone moved
+    under the apply -> 1 failed ("the recipe now patches before it clones"). A break creates no
+    earlier occurrence while every pinned fragment is unique in the fence, so ordering cannot see
+    one today; and where a break does bite, `_step` has already failed above it.
+
+    Three drafts of this paragraph now, the first two wrong in opposite directions, which is why
+    it carries its numbers. `d7eabf8` said "a break inserted inside one of those commands turns
+    this red on purpose" — DERIVED, never run, and false for a break AFTER the prefix. `f107e81`
+    replaced it with the same break after `apply` going red "not by the raw match but by the
+    `_step` ordering assertions", which invents an asymmetry between two calls of one function;
+    its mechanism clause is RIGHT for the re-ordering named in the same breath and wrong for the
+    break, which is not red at all. Both are quoted from the sha that WROTE them because
+    `git log -S` will not settle it: the first sentence WRAPS a line in the blob, so a one-line
+    search for it returns nothing — indistinguishable from the control string, which returns
+    nothing too — while a search for `f107e81`'s rendering of it lands on `f107e81`, never on
+    `d7eabf8` where the claim was actually made. Commenting a step out no longer escapes —
+    `_step` anchors every command to a line start.
 
     MUTATION-CHECKED (`__pycache__` deleted first, THEN PYTHONDONTWRITEBYTECODE=1 — the variable
     stops Python writing bytecode, not reading a stale `.pyc`; each selection confirmed at exactly
