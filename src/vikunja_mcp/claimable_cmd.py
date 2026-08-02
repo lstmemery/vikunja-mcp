@@ -41,10 +41,37 @@ error line, unparseable stdout, unknown `kind`, and `claimable` contradicting it
 (claimable.go, read 2026-08-02). The WEDGE is the lane that MOTIVATES this — it is the one
 where the child said nothing else at all, the old trail of completed GETs was what told you
 where it hung, and hgdev-acp already spent a PR (wedge-kill) on it — but it is not the only
-row that will now carry breadcrumbs. The hub's own comment documents the too-old-sibling row
-as reading exactly `loop idle-check: claimable check: bad verdict json` BECAUSE `detail()`
-was empty; with the trail on, that row gains a trail. Louder, not wrong — and worth knowing
-before someone greps for the old exact string.
+row that will now carry breadcrumbs.
+
+ONE ROW THIS CANNOT REACH IS THE TOO-OLD-SIBLING ONE, and the reason is a rollout order rather
+than a preference. The hub's own comment documents that row as reading exactly
+`loop idle-check: claimable check: bad verdict json` BECAUSE `detail()` was empty, and nothing
+here can add to it: a sibling too old to know this subcommand is older than the file that
+implements it, and older still than the trail. Measured with `git log` rather than assumed —
+`claimable_cmd.py` was ADDED in 713bcdf (`--diff-filter=A`), first shipped in v0.2.41, and
+`_Trail` first appears in 2f4f1bb (`git log -S`), first shipped in v0.2.158, with the first an
+ancestor of the second (`merge-base --is-ancestor`, exit 0). So a build predating the
+subcommand predates the trail too and emits no `[claimable]` marker at all. Grep for the old
+exact string and it still matches.
+(Take those releases from `git tag --contains --sort=version:refname`, not the bare form: the
+DEFAULT sort is LEXICAL, which puts v0.2.100 ahead of v0.2.41 and answers the question wrong.)
+
+That the row is EMPTY, rather than merely trail-free, is the HUB's dated observation and not a
+claim of this change — and it is not structural. Such a build falls through argv dispatch into
+the stdio server, whose `main()` runs the artifact self-heal FIRST, and that prints a
+"refreshed N stale artifact(s)" note to STDERR (read at 713bcdf^). It is conditional on having
+healed something, which is why an empty `detail()` is what the hub measured; a box whose
+installed artifacts came from a NEWER sibling — the very state an inverted rollout produces —
+is where it would not be.
+
+READ THE INVERSE, which is worth more than the warning it replaces: a `bad verdict json` row
+with NO `[claimable]` marker in it now carries information it did not carry before, when that
+was the only shape the row had. What the absence proves is that the sibling is older than the
+trail (< v0.2.158); on THIS lane that means the inverted rollout order the hub's comment was
+written for, since a build between v0.2.41 and v0.2.158 knows the subcommand and answers it.
+The signal is only as good as uv's silence, though — `snippet` keeps the HEAD, so ~200 B of
+uv's own noise ahead of the trail (a cold resolve, an import-time warning from any dependency)
+cuts the marker off too and makes the absence a false positive.
 
 So the trail is back BY DESIGN instead of by accident, and it differs from the httpx lines in
 the three ways that matter there. (1) A token is written BEFORE each request — httpx logged
@@ -63,7 +90,8 @@ then `end/<requests>@<elapsed>` or `fail/<requests>@<elapsed>`.
 
 THE "IT NEVER FINISHED" SIGNAL IS THE ABSENCE OF THAT CLOSING `end/`|`fail/` TOKEN, not the
 absence of the newline. The newline is the clean version of the same fact and it holds for
-SIGKILL (measured: 41 B ending at `tasks:1`, exactly the request that hung) and for SIGTERM,
+SIGKILL (pinned by test_a_killed_check_still_says_where_it_was, which measures 25 B on its own
+fixture ending at `views:1` — exactly the request that hung) and for SIGTERM,
 because neither runs any Python. SIGINT does: the traceback glues itself onto the last token
 and brings its OWN newline, so a trail can end in `\\n` and still be a corpse. Read the last
 TOKEN, not the last byte.
@@ -83,14 +111,33 @@ through `uvx`, whose OWN stderr is written FIRST and is therefore never the part
 cut. Measured: `uvx --refresh-package cowsay cowsay -t hi` emits 27 B (`Installed 1 package
 in 2ms`); the hub's own test models 32 B. So budget the trail against roughly 170 B, not 200.
 
+AND STDOUT PAYS THE REST, on the lanes where stdout IS the evidence — the other half of that
+same shared budget, and the honest cost of this feature rather than a free win. `detail()`
+writes stderr FIRST and the cut keeps the HEAD, so every byte of trail displaces exactly one
+byte of stdout. Against the 84 B this check emitted on the run measured for this paragraph
+(10 requests, live board), an offending stdout keeps 115 B of the 200 rather than all 200, so
+the loss begins at 116 — and that is the BEST case, because it spends uv's share on stdout:
+put the 27 B of the paragraph above in front and stdout keeps 88. Both figures are arithmetic
+on `snippetCap`, where pure ASCII cuts at exactly the cap, as the hub's own test pins.
+
+It costs something on ONE lane: `bad verdict json`, where `detail()` is the only CHILD-derived
+content of the row (the rest is a constant prefix — the row is not "nothing but `detail()`",
+which is why an empty one reads as the bare string above) and the hub's own test
+(TestUvxCheckerMalformedStdoutIsError) asks that "the offending line is shown". It costs nearly
+nothing on `unknown kind` and on `claimable` contradicting its `kind`, where the discriminating
+value is already in the message text OUTSIDE `detail()`. And it costs nothing in the two
+situations this exists for, which is the same reason they need breadcrumbs at all: a killed
+check and a child that never ran leave stdout EMPTY, so there is nothing there to displace.
+Breadcrumbs on the silent lanes, bought with head-room on the loud one.
+
 The form above cost 94 B on the live board (12 requests): 31 B of frame plus 5.25 B per step
 on THAT mix. Against ~170 B that leaves about 14 more steps — not the "twenty" a previous
 draft got by spending uv's share, and not the "thirty" the draft before that got by bad
 arithmetic; the numbers are written out because this one line has now been wrong twice.
 5.25 B is a MEAN and the spread is wide — 3 B for an abbreviated page (`" :2"`), 10 B for a
 task fetch (`" tasks/628"`) — so the same room is ~35 more page-steps or ~10 more task
-fetches, and a Review-heavy board (one fetch per active task) is the mix that eats it
-fastest.
+fetches. What eats it fastest is therefore a run heavy in TASK FETCHES, which is not the same
+as a board heavy in REVIEW; see the length note at the end, which measures that one.
 
 The `cfg` token deliberately omits the URL: the hub passed it in and its own row names the
 binding, and at that per-step cost the ~28 bytes of a scheme+host buy about five more steps.
@@ -114,16 +161,39 @@ opt-out serves humans and other callers.
 
 DO NOT PARSE IT, and do not let it grow a consumer. The key set and the exit-code split on
 stdout are public API; this trail is prose for a human reading a dead process's tail, and its
-shape may change in any release with no hub-side rollout. It is BOUNDED ONLY by api.py's own
-pagination ceiling, not by anything here: measured against a board that never stops paging,
-one line reached 545 B over 123 requests before `fail/123`. So a pathological board does
-overflow and the hub does lose the tail again — the compression buys headroom, not a promise.
+shape may change in any release with no hub-side rollout. TWO things GROW it, and only one of
+them has a ceiling. One is api.py's own pagination ceiling — measured against a board
+that never stops paging, one line reached 545 B over 123 requests before `fail/123`. The other
+is the BOARD's CONTENT, which has no ceiling at all: next_task issues one
+`GET /tasks/<id>/comments` per foreign non-epic card in Review, BEFORE it checks whether that
+card's verdict is stale (workflow.py, the Review offering loop), so the line grows with the
+Review column and nothing here stops it. It grows SLOWLY, though, and that correction is worth
+carrying: those calls repeat one endpoint, so the elision fires and each extra card costs 3 B
+after the first (measured 11, 3, 3, 3, 3, 3 through the real `_Trail`) — the cheapest step
+there is, not the dearest. "Bounded by pagination" is the wrong thing to remember, and so is
+"a Review-heavy board eats the budget fastest": it eats it slowly and without bound, which is
+the harder failure to see coming. (Several things CUT the line short without bounding how fast
+it grows: a write failure disables it, VIKUNJA_MCP_NO_TRACE never starts it, and the hub's own
+ctx bound kills the process. None of them is a size budget.) A pathological board
+does overflow and the hub does lose the tail again — the compression buys headroom, not a
+promise.
 
 STDOUT DID NOT MOVE, and that is the claim that matters: byte-for-byte identical with the
 trail on and off, in both the success and the failure lane, and the exit-code split with it.
 Not "54 B and 140 B are the contract" — those are just what THIS board and THIS server said
 on the day (a 3-digit task id gives 53 B, and the failure line carries the server's own
-message, measured at 165 B elsewhere). #521 pinned the IDENTITY, never the sizes.
+message, measured at 165 B elsewhere).
+
+THAT IDENTITY IS MEASURED, NOT PINNED, and saying so precisely matters because it has been
+mis-attributed twice. #521 asserted it in its commit MESSAGE, not in a test (fe18b4a touches
+CLAUDE.md, server.py and test_server.py — no claimable test at all). Nor do the tests HERE pin
+it: a mutant making stdout differ between trail-on and trail-off on BOTH lanes leaves all 48
+GREEN, because they assert one JSON line whose PARSED verdict matches, and only the SUCCESS
+lane is run both ways at all (the two failure-lane tests both run with the trail on). That is
+deliberate rather than a gap to close: the hub parses the line, so parsed equality is the
+property the contract actually needs, and a byte-level pin would fail on a key reordering the
+consumer cannot see. Byte-identity is a stronger claim, established by `cmp` on real runs, and
+whoever next changes what stdout prints has to re-establish it the same way.
 """
 import json
 import os
@@ -211,17 +281,28 @@ class _Trail:
     def _emit(self, text: str) -> None:
         """The ONE place this class touches stderr — so the guard below cannot be half-applied.
 
-        `sys.stderr` is resolved per WRITE. NOT for the reason an earlier draft gave ("a bound
-        stream would escape capsys"): binding it in __init__ was mutated in and the whole file
-        stayed GREEN, because every test swaps the stream before a _Trail exists. The real
-        reason is the check below, which only a per-write lookup can make: a process whose
-        stderr was CLOSED has `sys.stderr is None`, and `print(..., file=None)` writes to
-        sys.STDOUT by documented default — no exception for the guard to catch. On the single
-        line, that spliced the trail INTO the verdict (`…tasks/812{"claimable": true,…}`), the
-        consumer reads the LAST stdout line, and it got ` end/7@0.0s` instead: bad verdict
-        json, fail-CLOSED, at exit 0. hgdev-acp always sets cmd.Stderr so it never saw this,
-        but `2>&-` or a daemonized caller reproduces it in one line. Pinned by
-        test_a_closed_stderr_never_pushes_the_trail_onto_stdout.
+        TWO INDEPENDENT PROPERTIES LIVE HERE, and a previous draft fused them into one and got
+        both halves wrong. Keep them apart.
+
+        (a) `sys.stderr` is resolved per WRITE, so a caller may replace the stream after a
+        _Trail already exists. That IS load-bearing, and the draft that retracted it as "not
+        the real reason" was itself the error: binding the stream in __init__ instead was
+        mutated in and the file went RED, 1 failed / 47 passed, on
+        test_every_token_is_one_whitespace_free_word — which builds a _Trail and THEN swaps
+        sys.stderr. "Every test swaps the stream before a _Trail exists" was simply false.
+
+        (b) The `is None` guard, which does NOT rest on (a): under that same binding mutation
+        test_a_closed_stderr_never_pushes_the_trail_onto_stdout still PASSED, because a process
+        whose fd 2 was closed has `sys.stderr is None` already at construction — so a bound
+        stream reaches the guard just as well. What the guard answers for is that
+        `print(..., file=None)` writes to sys.STDOUT by documented default, with no exception
+        for a try/except to catch. On the single line that splices the trail INTO the verdict.
+        Run with the guard removed, the pinning test's own fixture prints
+        `[claimable] cfg/3{"claimable": true, "kind": "queue", "task_id": 812}` — and since the
+        consumer reads the LAST stdout line, what it reads is the next one, ` end/1@0.0s`: bad
+        verdict json, fail-CLOSED, at exit 0. hgdev-acp always sets
+        cmd.Stderr so it never saw this, but `2>&-` or a daemonized caller reproduces it in one
+        line. Deleting the guard turns that one test RED and, measured, nothing else.
 
         THE TRAIL MAY NEVER BREAK THE CHECK. It runs inside an httpx event hook, so anything
         raised here leaves through `client.send` -> `_req` -> `next_task` and lands in

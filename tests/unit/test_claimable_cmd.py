@@ -345,10 +345,11 @@ def test_the_whole_trail_fits_the_consumers_200_byte_head_cut(monkeypatch, capsy
     """THE CONSTRAINT THAT SHAPED THE FORMAT, and it is a measurement in the OTHER repo rather
     than a preference here: hgdev-acp puts the child's stderr on a run row through `detail()`,
     which passes it to `snippet()` — capped at `snippetCap = 200` BYTES, keeping the HEAD
-    (internal/hub/vikunja/vikunja.go, read 2026-08-02). On a wedge stdout is empty, so the
-    trail gets that whole budget; overflow silently costs the TAIL, i.e. the only part that
-    says where it hung. The first shape of this feature — one verbose line per request — cost
-    727 B on the live board and would have been cut after four lines.
+    (internal/hub/vikunja/vikunja.go, read 2026-08-02). That budget is NOT the trail's alone —
+    `detail()` is stderr+stdout and uvx's own stderr goes first, so the real room is ~168 B (the
+    module docstring derives it); overflow silently costs the TAIL, i.e. the only part that says
+    where it hung. The first shape of this feature — one verbose line per request — cost 727 B
+    on the live board and would have been cut after four lines.
 
     This is a HEADROOM test, not a promise: a pathological board can still overflow (the
     docstring says so), and the assertion is that an ordinary run leaves room to spare."""
@@ -375,7 +376,9 @@ def test_the_whole_trail_fits_the_consumers_200_byte_head_cut(monkeypatch, capsy
     # assert above INSTEAD (the audit reported 142 B for its own variant of that mutant — the
     # figure here is the one this fixture produces, re-measured rather than copied). Dropping
     # only the repeat-elision stays GREEN on every assertion in this test — that one is pinned
-    # by the token-count assertion in the BEFORE test, not by this budget.
+    # by the ELISION-MIRRORING LOOP in the BEFORE test (`snapshot.endswith(" " + token)`), not
+    # by this budget and not by that test's token COUNT, which does not move at all: it is one
+    # token per request either way. Measured, because the wrong assertion was named here first.
     budget = 200 - 32                          # snippetCap minus uv's own head-of-buffer noise
     per_step = (len(trail) - len("[claimable] cfg/3 end/0@0.0s\n")) / len(seen)
     assert (budget - len(trail)) / max(per_step, 1) >= 10, (len(trail), per_step)
@@ -486,14 +489,17 @@ def test_a_broken_trail_cannot_break_the_check(monkeypatch, capsys, tmp_path, br
     have escaped, and it escapes AFTER the verdict is on stdout, where the hub reads exit != 0
     beside a perfectly good verdict line); and a `_step` that raises on every request.
 
-    An unwritable stderr costs the trail entirely; an unnameable request costs only that token
-    (`?`), because the failure is per-request and the count must still be right."""
+    An unwritable stderr costs the trail entirely — and costs it ONCE, which is the second half
+    of that guard and is asserted below on its own; an unnameable request costs only that token
+    (`!`), because the failure is per-request and the count must still be right."""
     class Exploding(io.StringIO):
         def __init__(self, only_newline=False):
             super().__init__()
             self.only_newline = only_newline
+            self.attempts = 0        # WRITES ATTEMPTED, not written — see the assertion below
 
         def write(self, s="", *a, **kw):
+            self.attempts += 1
             if not self.only_newline or "\n" in s:
                 raise OSError("no space left on device")
             return super().write(s, *a, **kw)
@@ -510,6 +516,20 @@ def test_a_broken_trail_cannot_break_the_check(monkeypatch, capsys, tmp_path, br
     assert len(out) == 1
     assert json.loads(out[0]) == {"claimable": True, "kind": "queue", "task_id": task["id"]}
     assert len(seen) >= 5, "and the check really did run, rather than dying early"
+    if break_it == "stderr":
+        # THE OTHER HALF OF THE GUARD, and until this line nothing held it down: `except:
+        # self.enabled = False` both SWALLOWS the error and DISABLES the trail, and only the
+        # swallowing was pinned — before this line existed, mutating that assignment to `pass`
+        # left the ENTIRE unit suite green (measured). Nothing else CAN catch it: every other
+        # assertion in this case is about stdout and the exit code, and a stderr whose every
+        # write raises stays equally empty either way. Attempts are the observable that moves:
+        # 1 with the flag flipped, 11 without it on this fixture (one per _emit — the marker,
+        # cfg, 7 request tokens, the closing token, the newline). That count is also what makes
+        # _emit's "retrying would pay the same cost N times" true.
+        assert buf.attempts == 1, (
+            "the first write failure must DISABLE the trail, not just be swallowed per token: "
+            f"{buf.attempts} writes attempted over {len(seen)} requests"
+        )
     if break_it == "_step":
         tokens = buf.getvalue().split()
         assert tokens.count("!") == len(seen), tokens        # every request still left a mark

@@ -148,16 +148,25 @@ docker rm -f vikunja-test
   **The terseness is forced by a measurement in the CONSUMER, not a preference here:**
   hgdev-acp puts the child's stderr on a run row via `detail()` → `snippet()`, capped at
   `snippetCap = 200` BYTES and keeping the **HEAD** (`internal/hub/vikunja/vikunja.go`, read
-  2026-08-02), and on a wedge stdout is empty so the trail gets the whole budget. The first
-  shape of this feature — a verbose line per request — cost 727 B on the live board, i.e. the
+  2026-08-02). The first shape of this feature — a verbose line per request — cost 727 B on
+  the live board, i.e. the
   hub would have shown four lines and cut off exactly the tail, the only part that says where
   it hung. A trail that overflows that cap is worse than none, because it looks like a
   diagnosis. The compact form costs 94 B for 12 requests — 31 B of frame + 5.25 B/step. And
   the cap is NOT ours alone: `detail()` is stderr+stdout, and `uvx`'s own stderr is written
   FIRST (27 B measured; 32 B in the hub's own test), so it is never the part cut — budget
   against ~170 B, which leaves ~14 more steps, not the 20 an earlier draft got by spending
-  uv's share. 5.25 B is a MEAN over one mix (3 B for an abbreviated page, 10 B for a task
-  fetch), so a Review-heavy board eats it fastest. Headroom, not a promise — measured against
+  uv's share. The other half of that sharing is STDOUT's, and naming it is the difference
+  between a trade and a free win: since `detail()` writes stderr FIRST and the cut keeps the
+  head, every byte of trail displaces one byte of stdout on the lanes where stdout IS the
+  evidence — chiefly `bad verdict json`, where `detail()` is the row's only CHILD-derived
+  content; measured, 84 B of trail leaves an offending stdout 115 B of the 200 instead of all
+  200, and 88 B once uv's own 27 B goes in front of it. The wedge and spawn lanes — the ones
+  this exists for — leave stdout EMPTY, so there it costs nothing.
+  5.25 B is a MEAN over one mix (3 B for an abbreviated page, 10 B for a task
+  fetch), so TASK FETCHES eat it fastest — NOT a Review-heavy board, whose extra cards repeat
+  one endpoint and so cost 3 B each after the first (measured): that one grows the line slowly
+  and without bound, which is the harder failure to see coming. Headroom, not a promise — measured against
   a board that never stops paging, one line reached 545 B over 123 requests. ON BY DEFAULT
   with a
   `VIKUNJA_MCP_NO_TRACE=1` opt-out, and on-by-default is settled rather than weighed: a wedge
