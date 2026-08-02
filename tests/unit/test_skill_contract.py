@@ -2507,11 +2507,61 @@ def test_exactly_ONE_agent_tool_walks_a_card_out_of_Review(tmp_path):
 def _return_task_bullet(text: str) -> str:
     """The `return_task` bullet inside the stuck section — where its shut stages are spelled out.
 
-    Sliced to the BULLET, not the section, and that is measured too: «Done» occurs in this same
-    section's reviewer sub-bullet («карточка … ждущей человеческого Done») and `file_task` occurs
-    in its last sub-bullet, so even a SECTION-wide substring stays green with this bullet's Done
-    sentence deleted. The bullet is the smallest slice that can tell "return_task's shut stages are
-    written down" from "those words exist nearby"."""
+    Sliced to the BULLET, and #667 re-derived WHY, because the reason standing here until then
+    cited a sentence of SKILL.md that never existed. Not stale, and not an elision either: across
+    all 67 revisions of SKILL.md this history holds (2026-08-02) the sentence never appears, and
+    neither does the bare word «ждущей» — 0 of 67 read RAW and 0 of 67 read whitespace-FLATTENED
+    alike, against a present-control scoring 8 of 67. Both readings are reported because only the
+    SENTENCE could ever have wrapped: `git log -S` matches raw bytes and this file line-wraps,
+    which is not hypothetical — the nearest live text, «ждёт человеческого Done» in the
+    `decompose` bullet, wraps between its first two words and answers the pickaxe only as
+    «человеческого Done». Repo-wide, with the full sentence as the needle, it APPEARED in exactly
+    one commit: 6ac1454, the one that ADDED this docstring line. Named that way because the
+    needle decides the caveat — the sentence now also names the commit that DELETED it, while the
+    bare word never will, its count being unchanged across that edit. Nothing to re-quote, so the
+    rationale is now the mutants themselves, each run at three scopes: this bullet as shipped,
+    `_stuck_section(text)`, and all of `text`.
+
+      * delete the bold rule sentence and its parenthesised open list -> RED at bullet AND at
+        section scope, GREEN file-wide: the very string this pin asserts also stands in the
+        `decompose` bullet two sections up, where only a whole-file read can reach it.
+      * delete the sentence routing unusable Done work to `file_task` -> RED at bullet scope
+        ONLY, `file_task` recurring inside this same section, in the reviewer bullet's last
+        sub-bullet. This is the one half of the superseded rationale that was true.
+      * delete the `#649` ref the caveat rests on, which the decompose test reads from HERE ->
+        RED at bullet AND at section scope, GREEN file-wide, `#649` sitting in that bullet too.
+
+    So the slice is load-bearing at BOTH steps of the narrowing, and by different rounds. File
+    scope is blind to all three above — and to a FOURTH assertion not given a round of its own,
+    the loop requiring each open stage: dropping «Queue» from the promise is RED at bullet and at
+    section scope, GREEN file-wide, stage names being everywhere in this rulebook. Section scope
+    recovers those three (the rule's twin and `#649`'s both sit in the `decompose` bullet,
+    outside this section) but stays blind to `file_task`, whose twin is INSIDE this section; so
+    exactly one round justifies the last step, section down to bullet. The FIFTH assertion read
+    from here, the caveat's «следующий мутирующий тул», has no twin anywhere in SKILL.md and
+    reddens at every scope: it shows that assertion is live, not that the slice is.
+
+    The superseded claim is written down so it is not re-derived, and it was wrong about the
+    MECHANISM rather than about the round: it said `Done` recurs in this section's reviewer
+    sub-bullet. It does not — that bullet contains `Done` zero times, and all ten occurrences in
+    the section sit inside THIS one. The round it named reproduces, and its OUTCOME is the one
+    the test below records: delete the whole «- **Из Done** (#626)» sub-bullet -> RED at bullet
+    scope, GREEN section-wide. What reddens, though, is the `file_task` assertion that sub-bullet
+    carries — on that mutant a bare `Done` check stays GREEN at BULLET scope too, its survivor
+    being this bullet's own rule line, INSIDE the bullet rather than elsewhere in the section.
+    Read that as a statement about THAT mutant and not as a universal: delete the rule line as
+    well and a bare `Done` check does separate file scope from the other two, just as `file_task`
+    separates nothing on the two rounds that leave it standing. Which token demonstrates a slice
+    is a property of the mutant, never of the token.
+
+    Scope OUTSIDE the bullet is the only thing this helper decides. Whether each assertion is
+    then sliced tightly enough INSIDE it is a separate question, and one is open there: #700,
+    where dropping «Backlog» from the promise list is measured green.
+
+    (Every round above re-run in an isolated `git clone --no-hardlinks`, `vikunja_mcp.__file__`
+    confirmed inside it, `__pycache__` cleared between rounds, restores sha256-verified, control
+    PASS at both ends. The clone is not ceremony: run in the live worktree, these sweeps raced a
+    second agent's on the same two files, and an unmutated control is what caught it — #702.)"""
     start = text.find("\n- **`return_task`** — внешняя блокировка")
     assert start != -1, "SKILL.md no longer describes return_task in the stuck section"
     end = text.find("\n- **", start + 1)
