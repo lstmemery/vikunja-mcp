@@ -127,11 +127,16 @@ def test_return_task_refuses_from_review_and_still_works_everywhere_else(env):
     2 failed against a control that is likewise 0 failed, and the two are this test and
     test_return_task_refuses_from_done_the_human_only_transition_run_backwards. Those two NAMES are
     the durable half, and this paragraph is its own warning about the rest: the kill count moved
-    from 0 to 2 — not because the suite grew, but because the branch below pins this exact mutant —
-    while a pass total moves with EVERY test the repo adds, which is why no total is recorded here
-    (CLAUDE.md: "Record the FAILED count, never the pass total"). That branch mirrors the sibling
-    assertion already in the `call_human` test — the two tools share a ruling, so they must share
-    a pin.
+    from 0 to 2 for TWO reasons, and BOTH pins postdate the base point — the branch below is
+    dcd31ef's own (delete it alone and the same inversion is 1 failed, measured), and the second
+    kill is the Done sibling, added later by a different card, #626 (6ac1454, NOT an ancestor of
+    dcd31ef^), pinning the same mutant on a multi-identity branch of its own. So the suite really
+    did grow between the two measurements, and the warning survives that: both kills are deliberate
+    pins rather than blind growth, which is why the NAMES are recorded and no total is — a total
+    moves with EVERY test the repo adds, so it could not have told a deliberate pin from blind
+    growth (CLAUDE.md: "Record the FAILED count, never the pass total"). The branch below mirrors
+    the sibling assertion already in the `call_human` test — the two tools share a ruling, so they
+    must share a pin.
 
     All four parts below are load-bearing. The refusal must leave the BOARD untouched: a guard that
     raises after the comment/label/unassign already landed is not a guard. The CONTROL sweep is
