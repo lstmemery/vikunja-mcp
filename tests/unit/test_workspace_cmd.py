@@ -1879,9 +1879,12 @@ def test_a_parked_card_does_not_launder_a_reviewers_dirty_tree(repo, tracker):
     Reachable on the ordinary path, which is what this builds: the reviewer files `needs_work`
     without `--release`, the card goes back to Build, the build agent hits a conflict and calls
     `call_human`. BOTH trees in ONE sweep, at the same age, with the same code and the same board
-    state — the only difference the GRADER can see is the role (the fixtures also differ in task id
-    and in which file is dirty, neither of which reaches `_keep_is_expected`), so the test holds one
-    code to opposite verdicts and cannot pass by nothing ever being graded routine."""
+    state — the only difference that can MOVE the verdict is the role (the fixtures also differ in
+    task id and in which file is dirty: the task id DOES reach `_keep_is_expected` — it is the only
+    key the grader takes by subscript rather than `.get`, `entry["task_id"] in parked` — but BOTH
+    cards are parked, so it cannot change the answer, while which file is dirty never reaches the
+    grader at all), so the test holds one code to opposite verdicts and cannot pass by nothing ever
+    being graded routine."""
     api, wf = tracker
     head = _git(repo, "rev-parse", "HEAD")
 

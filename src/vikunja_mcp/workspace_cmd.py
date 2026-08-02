@@ -1251,8 +1251,10 @@ def _build_workflow(root: Path) -> tuple:
 # rather than an accident: the build pair needs THREE conditions (code, role, and the card in Your
 # Call) because the card is the human's second signal, while `unreachable-head` needs TWO (code and
 # role) because a reviewer's in-tree commit has a rule — write the verdict as a comment — rather
-# than a chore, so no board state ever clears or excuses it. Everything else is a broken tool state
-# or a statement about gc itself, and a parked card must never launder one. Pinned as a grid by
+# than a chore, so no board state ever clears or excuses it. Every other row is `kept` in all four
+# columns, and a parked card must never launder one: a broken tool state, a statement about gc
+# itself, a standing human lock (CODE_LOCKED — its own paragraph above says why an explicit human
+# action is still not routine), or a code this module does not know at all. Pinned as a grid by
 # test_the_grading_grid_is_all_kept_outside_the_four_named_cells, so a new code lands in `kept` by
 # default and a widened set has to argue with a test.
 _EXPECTED_IN_A_PARKED_BUILD_TREE = frozenset({CODE_DIRTY, CODE_UNPUSHED})
