@@ -137,10 +137,14 @@ def test_review_refusal_offers_the_workaround_instead_of_an_identical_retry(env)
     """The old text sent agents to retry an identical call — the filing card did it 3x.
 
     Pinned as "NOT the fix" rather than "will not help", which is what this file said first and
-    is stronger than anything measured: the loss was never reproduced, and the filing card's own
-    evidence (three refusals, then a success) makes it look non-deterministic — under which a
-    retry may well pass. It still is not the fix, because it addresses no cause and the next
-    long report meets the same wire; that weaker claim is the one the measurements support."""
+    is stronger than anything measured: the loss was never reproduced, and WHICH KIND of loss it
+    is was never established either. The filing card's success came from replacing the ~7 KB
+    worklog with `worklog="probe"`, not from repeating the identical call, so its evidence does
+    NOT show non-determinism — three failures at ~7 KB then a success at 5 characters is what a
+    SIZE-DEPENDENT, deterministic loss looks like. The successes bound nothing in either
+    direction, and nobody knows whether a retry would be futile or merely lucky; either way it is
+    not the fix, because it addresses no cause and the next long report meets the same wire. That
+    weaker claim is the one the measurements support."""
     api, wf, t = env
     wf.advance(t["id"], to="build", spec="s")
     with pytest.raises(WorkflowError) as exc:
@@ -274,7 +278,11 @@ def test_the_two_tools_fail_differently_on_a_dropped_argument():
     and optionality has nothing to do with it — the asymmetry below only bites when a key is
     LOST, which never happened on review_task. Two OTHER things are what actually sink the
     conclusion. (1) One success cannot bound a threshold when the failure is not
-    deterministic, and this one is already known not to be: three refusals, then a success.
+    deterministic — and whether this one is deterministic was never established: the card's
+    success came from `worklog="probe"`, not from repeating the call, so "three refusals, then
+    a success" sounds like proof of non-determinism and is not. That leaves (1) withholding the
+    ground for a bound rather than refuting one: neither "longer than N always fails" nor "up to
+    N is safe" follows from a success.
     (2) SELECTION — a lost key on review_task is LOUD and can never be mistaken for "the agent
     wrote no report", so it could not have appeared in the observed sample at all, while the
     same loss on advance is silent and looks exactly like forgetting. The two tools' observed
