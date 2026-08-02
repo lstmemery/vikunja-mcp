@@ -3785,20 +3785,52 @@ def test_the_second_pass_runs_in_its_own_clone_and_the_recipe_carries_the_workin
 
     WHAT THIS TEST DOES NOT PIN, so nobody reads it as more than it is. `_step` is a
     LINE-START-ANCHORED PREFIX match that reads nothing past its own fragment, so what IT pins is
-    the opening TEXT of six fence lines plus their ORDER — never that a step RUNS, never anything
-    to the right of a prefix, and not the other ELEVEN lines at all (17 non-empty, 6 pinned;
-    counted, not estimated). Re-measured this round, control 0 failed at both ends and `collected
-    1 item` every round: point the clone at a different repo -> 0 failed; redirect the patch to a
-    different file -> 0 failed; delete the whole untracked-copy `while` loop -> 0 failed; delete
+    the opening TEXT of seven fence lines and, across those seven, a PARTIAL order of SEVEN pairs
+    — never that a step RUNS, never anything to the right of a prefix, and not the other TEN
+    lines at all (17 non-empty, 7 pinned; counted, not estimated). Pairs and not "their ORDER":
+    that phrasing is the third draft's, retracted below. The seven say three things — nothing
+    writes into the clone before the clone exists (`clone` above `apply` and above the copy loop),
+    nothing consumes a file before it is produced (`diff` above `apply`, `ls-files` above the copy
+    loop), and each of the FIVE author-side steps it pins stays above the auditor's boundary
+    marker, which in turn sits above the seventh and last, `uv sync` — the auditor's own first
+    command, and the one pinned step that belongs BELOW the boundary (asserted for `apply` and for
+    the copy loop; `clone`, `diff` and `ls-files` reach it by transitivity, measured rather than
+    deduced — push any one of them alone below the marker -> 1 failed each). Author-side lines it
+    does NOT pin are not held at all: the fence's two verification lines slide below the marker at
+    0 failed. PARTIAL is the operative word, and free does not mean harmless.
+    Free and harmless, each round green and each one BUILT: swap `clone` with
+    `diff`, lift the `ls-files` line above the clone, slide the patch pair below the whole
+    untracked block -> 0 failed each, and on a throwaway repo all three still hand over a clone
+    carrying the tracked edit AND the untracked module. Free and HARMFUL — four built so far, and
+    that is a list rather than a census: the untracked block slid down to just above the marker,
+    which lands it below those two verification lines, whose `diff` then reads a list that does
+    not exist yet (exit 2, module never copied); the loop's one working line, `mkdir … && cp …`,
+    deleted while `while`/`done` stay, which sh and bash refuse as a syntax error at exit 2 while
+    ZSH — what this repo's agents run — accepts the empty loop and copies nothing (exit 1, the
+    verification naming the lost file); any pinned line lifted ABOVE the `SP=`/`TREE=`/`P=`
+    assignments, which leaves its variables EMPTY — built for the clone line, that is
+    `git clone --no-hardlinks "" ""` at exit 128; and `cd "$CLONE" &&
+    uv sync` slid below the `__file__` print, its only pin being marker < sync, which runs the
+    print in the ORIGINAL tree and so aims this card's own anti-VMCP-148 check at the wrong `src`.
+    Three of those four are the second pass's, not the author's. None is pinned, deliberately —
+    but they do NOT all report the same way, and collapsing that would be the same overclaim
+    again. Three halt the chain with a non-zero exit. The `uv sync` one does not: it is exit 0 and
+    reports only as a PATH the auditor has to COMPARE with his own, which is why the section
+    mandates that print every round and why its own bullet says a control round will not catch it.
+    Naming what a pin does not reach is this paragraph's job; pinning the fence line by line is
+    not. Re-measured this round, control
+    0 failed at both ends and `collected 1 item` every round: point the clone at a different repo
+    -> 0 failed; redirect the patch to a different file -> 0 failed; delete
     `export PYTHONDONTWRITEBYTECODE=1` from the fence -> 0 failed (its prose sub-bullet holds the
-    RULE, never the line); and drop a bare NEWLINE immediately after a pinned prefix -> 0 failed
-    on each of the FIVE lines that continue past theirs — the four commands (`--no-hardlinks`,
-    `diff HEAD --binary`, `… apply`, `ls-files --others --exclude-standard`) plus the boundary
-    marker, whose line continues `, с подставленным $CLONE ---`. Only `cd "$CLONE" && uv sync` is
-    consumed WHOLE by its prefix. The right-hand side is not a free-for-all even so: the
-    assertions that read the WHOLE fence still reach it — append `&& rm -rf "$CLONE"` to the
-    `uv sync` step -> 1 failed, drop the `--no-hardlinks` flag -> 1 failed from the slicer, which
-    then finds no fence to pin at all.
+    RULE, never the line); and drop a bare
+    NEWLINE immediately after a pinned prefix -> 0 failed on each of the SIX lines that continue
+    past theirs — the five commands (`--no-hardlinks`, `diff HEAD --binary`, `… apply`, `ls-files
+    --others --exclude-standard`, `while IFS= read -r f; do`) plus the boundary marker, whose line
+    continues `, с подставленным $CLONE ---`. Only `cd "$CLONE" && uv sync` is consumed WHOLE by
+    its prefix. The right-hand side is not a free-for-all even so: the assertions that read the
+    WHOLE fence still reach it — append `&& rm -rf "$CLONE"` to the `uv sync` step -> 1 failed,
+    drop the `--no-hardlinks` flag -> 1 failed from the slicer, which then finds no fence to pin
+    at all.
 
     The SHELL is not a backstop for that, and the way it fails is uneven — which is the half worth
     writing down. Built on a throwaway repo rather than derived. Two of the four severed commands
@@ -3823,28 +3855,66 @@ def test_the_second_pass_runs_in_its_own_clone_and_the_recipe_carries_the_workin
     0`), because that flag is also what SELECTS the fence, so `_step` never runs at all. What is
     never the answer is the ordering assertions below — and they are not "re-ordering only"
     either, since `_step` returns the FIRST line-start occurrence: a pure ADDITION trips them too.
-    A duplicate `cd "$CLONE" && uv sync` line inserted above the apply step, with nothing moved,
-    -> 1 failed (`assert 1003 < 404`), beside the re-ordering they are named for — the clone moved
-    under the apply -> 1 failed ("the recipe now patches before it clones"). A break creates no
+    A second `cd "$CLONE" && uv sync` line at the fence's own two-space indent, inserted directly
+    above the `[ ! -s "$P" ] ||` guard with nothing moved, -> 1 failed (`assert 992 < 404`),
+    beside the re-ordering they are named for — the clone moved under the apply -> 1 failed
+    (`assert 454 < 360`, "the recipe now patches before it clones"). A break creates no
     earlier occurrence while every pinned fragment is unique in the fence, so ordering cannot see
     one today; and where a break does bite, `_step` has already failed above it.
 
-    Three drafts of this paragraph now, the first two wrong in opposite directions, which is why
-    it carries its numbers. `d7eabf8` said "a break inserted inside one of those commands turns
-    this red on purpose" — DERIVED, never run, and false for a break AFTER the prefix. `f107e81`
-    replaced it with the same break after `apply` going red "not by the raw match but by the
-    `_step` ordering assertions", which invents an asymmetry between two calls of one function;
-    its mechanism clause is RIGHT for the re-ordering named in the same breath and wrong for the
-    break, which is not red at all. Both are quoted from the sha that WROTE them because
-    `git log -S` will not settle it: the first sentence WRAPS a line in the blob, so a one-line
-    search for it returns nothing — indistinguishable from the control string, which returns
-    nothing too — while a search for `f107e81`'s rendering of it lands on `f107e81`, never on
-    `d7eabf8` where the claim was actually made. Commenting a step out no longer escapes —
-    `_step` anchors every command to a line start.
+    Four drafts of this paragraph now, which is why it carries its numbers, and the fourth is
+    here because the third failed in a direction the first two did not — true about TEXT and
+    false about ORDER inside one sentence. `d7eabf8` said "a break inserted inside one of those
+    commands turns this red on purpose" — DERIVED, never run, and false for a break AFTER the
+    prefix. `f107e81` replaced it with the same break after `apply` going red "not by the raw
+    match but by the `_step` ordering assertions", which invents an asymmetry between two calls
+    of one function; its mechanism clause is RIGHT for the re-ordering named in the same breath
+    and wrong for the break, which is not red at all. `f2eb1be` then wrote "the opening TEXT of
+    six fence lines plus their ORDER" while TWO of those six `_step` calls threw their result
+    away, so only four indices ever reached a comparison. Measured against that sha, control 0
+    failed at both ends: move the `diff` step to the bottom of the fence -> 0 failed; move it
+    below the `apply` step that consumes its output -> 0 failed; move `ls-files` to the bottom ->
+    0 failed; move it below the `while` loop that reads its list -> 0 failed. Narrowing the
+    sentence was the cheap fix and is NOT what happened, because building the second of those on
+    a throwaway repo showed it is the SILENT kind — exit 0, the chain printing its last line, and
+    a clone without the text under audit. So the two discarded results were named and asserted,
+    and the same four rounds re-run against the fix — again control 0 failed at both ends — read
+    1 failed each (`assert 1187 < 317`, `411 < 317`, `1181 < 498`, `691 < 498`). Two further
+    pairs went in beside them once the remaining free placements were BUILT rather than argued
+    about: the copy loop above the clone is exit 128 (`git clone` refuses a destination that
+    exists and is not empty), and the copy loop below the marker leaves the author's clone short
+    the untracked files while the auditor's own `git -C "$TREE"` degrades rather than errors,
+    `-C ""` being a documented no-op. Retracted with that draft as well: its `assert 1003 < 404`,
+    which reproduces as `assert 992 < 404` — an operand pair quoted in a paragraph and false at
+    the sha that wrote it, which is the shape the marker assertion's own message warns about
+    («it said three, the marker sat after five»). All three are quoted from the sha that WROTE
+    them
+    because `git log -S` settles only some of them: the first sentence WRAPS a line in the blob,
+    so a one-line search for it returns nothing — indistinguishable from the control string,
+    which returns nothing too — while a search for `f107e81`'s rendering of it lands on
+    `f107e81`, never on `d7eabf8` where the claim was actually made, and `plus their ORDER` does
+    land on `f2eb1be` — with no count beside it, because quoting the phrase HERE puts a second
+    commit into the same search, and a sentence counting its own occurrences is the same defect
+    this card removed from SKILL.md. (It was written with the count. The second pass ran the
+    search again after the quote had landed, and got two.) Commenting a step out no longer
+    escapes — `_step` anchors
+    every command to a line start.
+
+    One more thing that pass caught, worth its own note because it is a way to be WRONG WITH
+    NUMBERS IN HAND: a stand can lie by being SHORT. The untracked-half orderings were first built
+    on a stand that stopped before the recipe's own two verification lines, and reported exit 0
+    with the loss unremarked — from which "silent outright" went into an assert message. Re-built
+    on the FULL recipe, all four combinations of (`&&` chain | `set -e`) × (stale list | none)
+    exit 1, so that half is LOUD and only the patch ordering is silent. The shortened stand was
+    not the only axis it got wrong, which is the part worth keeping: WHICH line reports varies by
+    shell and by chaining form — `zsh -e` with no list halts at the loop's redirect and never
+    reaches the verification, where `sh -e` and `bash -e` run both. Same family as VMCP-148
+    (646)'s four false greens: what was measured was not what runs.
 
     MUTATION-CHECKED (`__pycache__` deleted first, THEN PYTHONDONTWRITEBYTECODE=1 — the variable
     stops Python writing bytecode, not reading a stale `.pyc`; each selection confirmed at exactly
-    1 test; `vikunja_mcp.__file__` printed every round and confirmed inside the clone under test).
+    1 test; `vikunja_mcp.__file__` printed every round and confirmed to point inside the working
+    tree under test — a clone for the rounds run from one, this worktree for the rest).
     On this test's selection: control 0 failed; then ONE round per assertion, each deleting
     exactly the text its own message names and nothing wider — the bullet title «ГДЕ он работает»,
     «ШУМНО», «ТИХО», «НЕ закреплена за ролью», «селекцию», the `cp -R` WARNING, «exit 128»,
@@ -3852,9 +3922,12 @@ def test_the_second_pass_runs_in_its_own_clone_and_the_recipe_carries_the_workin
     whole prose sub-bullet behind each of them with the FENCE left untouched -> 1 failed every
     time. On the fence: drop the clone line, drop `--binary`, invert the guard to `[ -s "$P" ] &&
     …`, drop the untracked listing, drop `uv sync`, delete the boundary marker, MOVE the marker to
-    the top so it divides nothing, move the clone below the apply, comment a step out while
-    leaving its text, and re-add a `rm -rf` cleanup line -> 1 failed each. Re-wrap the prose
-    paragraph -> 0 failed, green BY DESIGN (`_flat`).
+    the top so it divides nothing, move the clone below the apply, move the `diff` step below the
+    apply, move the tree `ls-files` step below the `while` loop that reads its list, lift the
+    whole untracked block above the clone, drop that block below the marker, drop the loop alone
+    below the marker, DELETE the loop outright (0 failed until this round pinned its opening
+    line), comment a step out while leaving its text, and re-add a `rm -rf` cleanup line -> 1
+    failed each. Re-wrap the prose paragraph -> 0 failed, green BY DESIGN (`_flat`).
 
     Rounds that were GREEN first are the reason the assertions look the way they do, and they are
     listed rather than counted because a count here would describe the very text it stands in —
@@ -3932,15 +4005,55 @@ def test_the_second_pass_runs_in_its_own_clone_and_the_recipe_carries_the_workin
         return m.start()
 
     clone_at = _step("git clone --no-hardlinks")
-    _step('git -C "$TREE" diff HEAD --binary')       # --binary: one staged binary else rejects all
+    # --binary is part of the pinned prefix: one staged binary without it and `apply` rejects all
+    diff_at = _step('git -C "$TREE" diff HEAD --binary')
     apply_at = _step('[ ! -s "$P" ] || git -C "$CLONE" apply')
-    _step('git -C "$TREE" ls-files --others --exclude-standard')
+    list_at = _step('git -C "$TREE" ls-files --others --exclude-standard')
+    copy_at = _step("while IFS= read -r f; do")
     sync_at = _step("cd \"$CLONE\" && uv sync")
     marker_at = _step("# --- дальше в брифе аудитора")
 
     assert clone_at < apply_at, \
         "the recipe now patches before it clones — `git apply` would run against a clone that " \
         "does not exist yet"
+    assert diff_at < apply_at, (
+        "the recipe now applies the patch before it PRODUCES it — built rather than reasoned, and "
+        "the ONLY silent one of the four orderings added here: `$P` does not exist yet, so the "
+        "recipe's own `[ ! -s \"$P\" ] ||` guard skips the apply, the diff is written a line too "
+        "late, and the chain runs to its end at exit 0 under `set -e` and under the `&&` form "
+        "SKILL.md prescribes alike. Nothing downstream notices either, because the recipe's own "
+        "verification compares untracked NAMES and a missing TRACKED edit is invisible to it — so "
+        "the auditor gets a clone without the text under audit, the defect this card exists to "
+        "prevent"
+    )
+    assert list_at < copy_at, (
+        "the recipe now copies the untracked files before it LISTS them, so the loop reads a list "
+        "that is missing or STALE, copies nothing, and the clone is short exactly them — a new "
+        "test module being the ordinary state of a task here. Unlike the patch ordering above "
+        "this one is LOUD, measured on the FULL recipe rather than on a shortened stand: all four "
+        "combinations of (`&&` chain | `set -e`) × (stale list | none) exit 1. WHICH line speaks "
+        "is not constant, so do not read one mechanism into all four: with a stale list the "
+        "recipe's own verification `diff` names the lost file, while with no list the loop's "
+        "redirect error names the MISSING LIST instead and, under `&&` and under zsh's `set -e`, "
+        "halts before that `diff` runs at all. Asserted anyway, because the verification is "
+        "UNPINNED — its two lines slide below the marker at 0 failed — and asserted against the "
+        "LOOP rather than the marker, which a stale-list placement clears"
+    )
+    assert clone_at < copy_at, (
+        "the recipe now copies untracked files into the clone before it clones — and `git clone` "
+        "refuses a destination that already exists and is not empty, which is what the loop "
+        "leaves behind the moment the tree has one untracked file (built: exit 128, and the "
+        "tracked half never arrives either). The copy loop belongs below the clone for the same "
+        "reason `git apply` does"
+    )
+    assert copy_at < marker_at, (
+        "the untracked-copy loop is now BELOW the boundary marker, i.e. in the auditor's half — "
+        "but it reads `$TREE`, and the auditor's brief carries only `$CLONE` substituted, so the "
+        "author's clone never receives the untracked files. Loud on the author's side (built: the "
+        "verification `diff` names the lost file, exit 1) and not one behaviour on the auditor's: "
+        "`git -C \"\"` is a DOCUMENTED no-op rather than an error, so his listing quietly "
+        "describes whatever directory he happens to stand in"
+    )
     assert apply_at < marker_at < sync_at, (
         "the marker line no longer SPLITS the author's commands from the auditor's — it must sit "
         "below the steps needing $TREE and above the ones the auditor runs in $CLONE. Presence "
