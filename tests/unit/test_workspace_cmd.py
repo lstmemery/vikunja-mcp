@@ -6,6 +6,7 @@ matters: that housekeeping can never destroy an agent's unpushed work.
 import fcntl
 import json
 import os
+import shutil
 import subprocess
 import time
 import tomllib
@@ -573,23 +574,37 @@ def test_gc_from_inside_a_live_self_tree_reports_nothing(repo, tracker):
 
 def test_gc_isolates_a_release_failure_and_keeps_sweeping_the_rest(repo, tracker):
     """Important 3: one bad tree must not abort the whole sweep and discard every verdict
-    already decided for the OTHERS. `git worktree lock` gives a REAL, non-contrived
-    WorkspaceError (git refuses to remove a locked tree without --force) on an otherwise
-    dead, clean, pushed tree — not a mocked failure standing in for an untested branch."""
-    api, wf = tracker
-    locked_path = Path(ensure_workspace(42, cwd=repo)["path"])   # dead, clean, pushed
-    _git(repo, "worktree", "lock", str(locked_path))
-    other_path = Path(ensure_workspace(43, cwd=repo)["path"])    # also dead
-    _quiesce(locked_path)
-    _quiesce(other_path)
+    already decided for the OTHERS — reported like any other refusal, as CODE_RELEASE_ERROR.
 
-    res = gc_workspaces(cwd=repo, workflow=wf)
+    THE INJECTOR CHANGED IN VMCP-142, and the reason is the finding itself. This test used to
+    lock the tree with `git worktree lock`, because git refusing to remove a locked tree is a
+    real, non-contrived WorkspaceError. That state is no longer one: `_release_locked` now
+    answers a lock with its own coded verdict, so the lock reaches `git worktree remove` never
+    and this test would have pinned a branch nothing can reach. A read-only worktree DIRECTORY
+    is the replacement and keeps the property that mattered — real git, real failure, no mock
+    standing in for an untested branch: `git status` inside it still succeeds (so the dirty
+    guard passes) and `git worktree remove` dies on `failed to delete …: Permission denied`.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores the directory mode this test uses to make removal fail")
+    api, wf = tracker
+    doomed_path = Path(ensure_workspace(42, cwd=repo)["path"])   # dead, clean, pushed
+    other_path = Path(ensure_workspace(43, cwd=repo)["path"])    # also dead
+    _quiesce(doomed_path)
+    _quiesce(other_path)
+    doomed_path.chmod(0o500)                                     # git cannot delete its contents
+    try:
+        res = gc_workspaces(cwd=repo, workflow=wf)
+    finally:
+        doomed_path.chmod(0o700)                                 # or tmp_path cleanup inherits it
 
     assert [r["task_id"] for r in res["released"]] == [43]
     assert not other_path.exists()
-    assert [k["task_id"] for k in res["kept"]] == [42]
+    assert [(k["task_id"], k["code"]) for k in res["kept"]] == [
+        (42, workspace_cmd.CODE_RELEASE_ERROR)
+    ]
     assert "WorkspaceError" in res["kept"][0]["reason"]
-    assert locked_path.exists()
+    assert doomed_path.exists()
 
 
 def test_gc_reads_liveness_under_the_lock(repo, tracker):
@@ -2473,3 +2488,220 @@ def test_gc_still_defers_to_a_real_write_in_a_tree_it_has_already_inspected(repo
 
     assert second == {"released": [], "kept": [], "expected": []}
     assert path.is_dir() and (path / "feature.txt").exists()
+
+
+# --- VMCP-142 (631): a HUMAN `git worktree lock` is a coded VERDICT, not a raise ---
+
+def _human_locked(repo, task_id, role="build", reason="human says hands off", at=None):
+    """A tree a human pinned with `git worktree lock` — the state this section is about.
+
+    Deliberately built through the real CLI helpers and real git: the whole finding was that the
+    module's own guards all pass on this tree and the refusal only happens inside `git worktree
+    remove`, which no fake would reproduce.
+    """
+    path = Path(ensure_workspace(task_id, role=role, at=at, cwd=repo)["path"])
+    args = ["worktree", "lock"]
+    if reason is not None:
+        args += ["--reason", reason]
+    _git(repo, *args, str(path))
+    return path
+
+
+def test_release_refuses_a_human_locked_tree_with_a_code_in_both_porcelain_shapes(repo):
+    """THE finding, reproduced before the fix and pinned here in the shape the fix produces.
+
+    A tree a human locked, and OTHERWISE clean, pushed and on its branch, passed every guard in
+    `_release_locked` — not half-created, not dirty, not unpushed, not detached — and then died
+    inside `git worktree remove` ("fatal: cannot remove a locked working tree"). That qualifier is
+    load-bearing and was missing from the first draft of this docstring: a locked tree that is ALSO
+    dirty or unpushed never reached the remove at all, because those guards answered first (see
+    `test_a_locked_tree_reports_the_lock_even_when_it_is_also_dirty`).
+    `run_workspace`'s catch-all rendered that raise as `{"error": …}` +
+    exit 1, i.e. the CREATE channel, for a state that is unambiguously the OTHER kind: the work is
+    intact and a human deliberately pinned the tree. SKILL.md has agents branch on exactly that
+    split, so the shape decided whether an agent shrugged ("the tool could not run, degrade to one
+    slot") or reported a tree a human is holding.
+
+    BOTH porcelain shapes, because the guard must key on the `locked` BOOL and never on the reason
+    TEXT: a bare `git worktree lock` reports `lock_reason: None`, so a guard written against a
+    reason string would refuse the documented case and sail past the reasonless one.
+    """
+    path = _human_locked(repo, 42)
+
+    res = release_workspace(42, cwd=repo)
+
+    assert res["released"] is False
+    assert res["code"] == workspace_cmd.CODE_LOCKED
+    assert "human says hands off" in res["reason"]              # git's own reason, not our guess
+    assert f"git worktree unlock {path}" in res["reason"]       # the human's actual next step
+    assert path.is_dir()
+
+    _git(repo, "worktree", "unlock", str(path))
+    _git(repo, "worktree", "lock", str(path))                   # the REASONLESS shape
+    bare = release_workspace(42, cwd=repo)
+    assert bare["released"] is False and bare["code"] == workspace_cmd.CODE_LOCKED
+    assert f"git worktree unlock {path}" in bare["reason"]
+    assert path.is_dir()
+
+
+def test_release_refuses_a_locked_review_tree_with_the_same_code(repo):
+    """Same guard, the other role. A reviewer's detached tree reaches the refusal down a DIFFERENT
+    branch of `_release_locked` (no `task/<id>` branch, so the unpushed-commits guard is skipped
+    for the reachability one), and the lock has to be answered before either — a lock is a
+    statement about the DIRECTORY, and git refuses removal regardless of what is checked out."""
+    head = _git(repo, "rev-parse", "HEAD")
+    path = _human_locked(repo, 7, role="review", reason="reviewer pinned this", at=head)
+
+    res = release_workspace(7, role="review", cwd=repo)
+
+    assert res["released"] is False and res["code"] == workspace_cmd.CODE_LOCKED
+    assert res["role"] == "review"
+    assert "reviewer pinned this" in res["reason"]
+    assert path.is_dir()
+
+
+def test_release_of_a_locked_entry_whose_directory_is_gone_is_a_verdict_not_a_crash(repo):
+    """The state that pins the guard's PLACEMENT rather than its condition, and the one that used
+    to fail loudest: a locked entry whose directory a human moved or deleted.
+
+    `git worktree prune` REFUSES to drop a locked entry (measured, and the reason `list_worktrees`
+    reads HEAD out of the porcelain instead of running git inside the tree), so `_find` still hands
+    it back — and the very next line used to be `_git_inspect("status", cwd=path)`, whose
+    `subprocess.run(cwd=<gone>)` raises a bare `FileNotFoundError` that `_git` cannot convert into
+    a WorkspaceError. Verdict shape aside, that is a DIFFERENT mechanism from the lock refusal with
+    the same root, and only a guard placed BEFORE the first git call with cwd inside the tree
+    answers both. Move the lock guard below the dirty check and this test goes red while every
+    other test in this section stays green."""
+    path = _human_locked(repo, 44, reason="moved this aside")
+    shutil.rmtree(path)
+
+    res = release_workspace(44, cwd=repo)
+
+    assert res["released"] is False and res["code"] == workspace_cmd.CODE_LOCKED
+    assert not path.exists()
+    # the entry is still registered, so a human still has something to unlock
+    assert "task-44" in _git(repo, "worktree", "list", "--porcelain")
+
+
+def test_run_workspace_release_of_a_locked_tree_stays_in_the_release_channel(
+    repo, monkeypatch, capsys
+):
+    """End to end through the CLI, which is where the channel is actually observable — and the
+    whole point of the card. Exit 0 and the release channel's EXACT key set, asserted as a whole
+    for the reason `test_the_two_refusal_channels_are_not_interchangeable` gives: a shape that
+    grows or loses a key silently is one SKILL.md's branch stops fitting."""
+    path = _human_locked(repo, 42)
+    monkeypatch.chdir(repo)
+
+    assert run_workspace(["--release", "42"]) == 0, (
+        "a locked tree is a NEGATIVE VERDICT, not a CLI failure: the command RAN and is protecting "
+        "a tree a human pinned"
+    )
+    payload = json.loads(capsys.readouterr().out.strip())
+    assert payload["released"] is False
+    assert payload.get("code") == workspace_cmd.CODE_LOCKED
+    assert set(payload) == {"released", "task_id", "role", "path", "code", "reason"}, (
+        f"the RELEASE channel's key set moved to {sorted(payload)} for a locked tree"
+    )
+    assert path.is_dir()
+
+
+def test_gc_reports_a_human_locked_tree_in_kept_and_keeps_sweeping(repo, tracker):
+    """The unattended path: `--gc` meets this state on a tick, and it must produce ONE actionable
+    `kept` line without costing the sweep its other verdicts.
+
+    It already kept the tree before the fix — via the catch-all that turns any raise into
+    `release-error` — so what changes here is WHICH code a human reads: `locked` names the state
+    and the one command that clears it, where `release-error` handed them git's text and left the
+    diagnosis to them."""
+    api, wf = tracker
+    locked = _human_locked(repo, 42)
+    other = Path(ensure_workspace(43, cwd=repo)["path"])          # also dead, clean, pushed
+    _quiesce(locked)
+    _quiesce(other)
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert [r["task_id"] for r in res["released"]] == [43]
+    assert not other.exists()
+    assert [(k["task_id"], k["code"]) for k in res["kept"]] == [(42, workspace_cmd.CODE_LOCKED)]
+    assert res["expected"] == []
+    assert locked.is_dir()
+
+
+def test_a_human_lock_stays_in_kept_even_when_the_board_would_excuse_it(repo, tracker):
+    """THE GRADING DECISION, constructed rather than asserted against the frozensets.
+
+    `_keep_is_expected` excuses a refusal only in two board states, and this tree is built to
+    satisfy BOTH conjuncts at once — it is a REVIEW tree (what excuses `unreachable-head`) whose
+    card is PARKED in Your Call (what excuses `dirty`/`unpushed`) — so the only thing that can send
+    it to `kept` is the code itself.
+
+    Why `kept` and not `expected`: `expected` is for states the pipeline produces on the happy path
+    AND that already carry their own signal to the human (the parked card IS that signal, for
+    hours, while `call_human` waits). A `git worktree lock` is neither — nothing on the board says
+    a tree is pinned, and the lock makes it permanently unreapable until a human clears it, which
+    is the shape of `half-created`, the code the policy calls correctly-never-routine. Add
+    CODE_LOCKED to either `_EXPECTED_*` set and this goes red."""
+    api, wf = tracker
+    task = api.add_task("parked work", "Queue")
+    task_id = task["id"]
+    wf.claim(task_id)
+    wf.call_human(task_id, "rebase conflict")                     # -> Your Call, i.e. parked
+    assert task_id in set(wf.parked_task_ids())
+    head = _git(repo, "rev-parse", "HEAD")
+    locked = _human_locked(repo, task_id, role="review", reason="human is inspecting", at=head)
+    _quiesce(locked)
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert res["expected"] == [], "a human lock was graded routine — nobody reads `expected`"
+    assert [(k["task_id"], k["code"]) for k in res["kept"]] == [
+        (task_id, workspace_cmd.CODE_LOCKED)
+    ]
+    assert locked.is_dir()
+
+
+def test_a_locked_tree_reports_the_lock_even_when_it_is_also_dirty(repo, tracker):
+    """THE ONE BEHAVIOUR CHANGE THIS CARD MADE BEYOND THE CHANNEL, found by an independent second
+    pass over its own prose and measured on both sides rather than reasoned about.
+
+    The lock guard sits ahead of the dirty/unpushed guards, so a tree that is locked AND dirty now
+    reports `locked` where it used to report `dirty`. That is the right code — the lock is what
+    makes the tree unremovable, and `dirty`'s recovery ("commit, push, retry") cannot work while it
+    stands — but it also changes how `--gc` GRADES the tree when its card is parked in Your Call:
+    `dirty`/`unpushed` are excused there (`expected`, the list nobody reads), a lock is not
+    (`kept`). MEASURED on the pre-fix code with the same construction: `expected: [(42, "dirty")]`
+    and `expected: [(42, "unpushed")]`; now `kept: [(42, "locked")]` for both.
+
+    The direction is the safe one: the parked card excuses UNSAVED WORK because a human is coming
+    back to it, and a lock is not unsaved work — nothing on that card says the tree cannot be
+    reaped at all. Pinned so a future reordering cannot flip it back silently, into a list whose
+    whole purpose is that it does not get read."""
+    api, wf = tracker
+    task = api.add_task("parked work", "Queue")
+    task_id = task["id"]
+    wf.claim(task_id)
+    wf.call_human(task_id, "rebase conflict")                     # -> Your Call, i.e. parked
+    path = Path(ensure_workspace(task_id, cwd=repo)["path"])
+    (path / "scratch.txt").write_text("uncommitted\n")            # what `dirty` would answer
+    _git(repo, "worktree", "lock", "--reason", "human says hands off", str(path))
+
+    res = release_workspace(task_id, cwd=repo)
+    assert res["released"] is False
+    assert res["code"] == workspace_cmd.CODE_LOCKED, (
+        "a dirty tree that is ALSO locked must report the lock: `dirty`'s recovery is to commit "
+        "and retry, and no retry can release a locked tree"
+    )
+
+    _quiesce(path)
+    swept = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert swept["expected"] == [], (
+        "a locked tree was filed under `expected` because its card is parked — the parked card "
+        "excuses unsaved work, not a lock nothing can reap"
+    )
+    assert [(k["task_id"], k["code"]) for k in swept["kept"]] == [
+        (task_id, workspace_cmd.CODE_LOCKED)
+    ]
+    assert path.is_dir() and (path / "scratch.txt").exists()

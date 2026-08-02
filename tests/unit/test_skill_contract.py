@@ -472,11 +472,20 @@ def test_the_gc_report_split_the_skill_teaches_is_the_one_the_code_produces():
         workspace_cmd.CODE_UNREACHABLE_HEAD,  # routine in a REVIEW tree, an alarm in a build one
         workspace_cmd.CODE_DETACHED_BUILD,    # VMCP-86: a build tree off its own task/<id> branch
         workspace_cmd.CODE_HALF_CREATED,      # never expected: only a human can clear it
-        workspace_cmd.CODE_SELF_TREE,
+        workspace_cmd.CODE_LOCKED,            # VMCP-142: a human `git worktree lock`, also never
+        workspace_cmd.CODE_SELF_TREE,         #   expected — see the grading note in workspace_cmd
         workspace_cmd.CODE_RELEASE_ERROR,
     ):
         assert code in section, \
             f"refusal code {code!r} is no longer explained in SKILL.md's --gc report rule"
+    # CODE_LOCKED alone gets a second, tighter anchor: its VALUE is an ordinary English word, and a
+    # bare substring is satisfiable by prose that has nothing to do with the code — SKILL.md
+    # already contains `locked` inside `blocked` (the follows/blocked gate) and inside `uv sync
+    # --locked`, neither of which would tell an agent anything about a pinned worktree. The
+    # backticked form is how the rulebook cites every other code, so requiring it costs nothing and
+    # is not satisfiable by a stray word.
+    assert f"`{workspace_cmd.CODE_LOCKED}`" in section, \
+        "SKILL.md's --gc rule no longer cites the `locked` refusal as a code"
     assert workspace_cmd.CODE_NO_WORKTREE in text, \
         "the --release recipe no longer explains the no-worktree refusal"
 

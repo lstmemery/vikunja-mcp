@@ -360,13 +360,18 @@ trees to release (default `build`); a review tree is detached and carries no
 branch, so only the `worktree remove` half applies to it.
 
 > **SUPERSEDED IN PART on 2026-07-30 (tracker #516) — the POLICY above is unchanged and still
-> binding; the PAYLOAD is not.** Every `--release`/`--gc` refusal now also carries a
-> machine-readable `code` alongside the human `reason`, and that key — never the prose — is what
-> `--gc` grades on: `dirty`, `unpushed`, `half-created`, `unreachable-head`, `detached-build`,
-> `no-worktree`, plus two that only `--gc` can produce (`self-tree`, `release-error`). Two of those
-> refusals did not exist when this was written: a build tree left DETACHED by an interrupted rebase
-> (`detached-build`, tracker #540) and a tree left `locked "initializing"` by a killed
-> `worktree add` (`half-created`, tracker #514). A `released: true` entry can also now carry
+> binding; the PAYLOAD is not.** Every `--release`/`--gc` entry that says `released: false` also
+> carries a machine-readable `code` alongside the human `reason`, and that key — never the prose —
+> is what `--gc` grades on: `dirty`, `unpushed`, `half-created`, `locked`, `unreachable-head`,
+> `detached-build`, `no-worktree`, plus two that only `--gc` can produce (`self-tree`,
+> `release-error`). The predicate is `released: false` and NOT the word "refusal" (tracker #631):
+> a `--release` can still RAISE — a non-git cwd, a malformed toml — and a raise is `{"error": …}`
+> + exit 1 with no code, the create channel's shape, because it goes through the same catch-all.
+> THREE of those refusals did not exist when this was written: a build tree left DETACHED by an
+> interrupted rebase (`detached-build`, tracker #540), a tree left `locked "initializing"` by a
+> killed `worktree add` (`half-created`, tracker #514), and a tree a HUMAN pinned with `git
+> worktree lock` (`locked`, tracker #631 — until then that state raised, i.e. it wore the create
+> channel's shape while holding intact work). A `released: true` entry can also now carry
 > `branch_deleted: false` + `warning` — the tree went, the branch leaked (tracker #517). Read
 > `workspace_cmd.py`'s `CODE_*` constants for the current set.
 

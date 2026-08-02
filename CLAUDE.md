@@ -153,7 +153,17 @@ docker rm -f vikunja-test
   Housekeeping is never how an agent's work disappears. **Only ONE of the two refusal channels is
   coded, and the split is deliberate — do not restate it as "every refusal".** A `--release`/`--gc`
   refusal is exit 0 + `released: false` + a machine-readable `code` beside the prose `reason` ("the
-  tool RAN and is protecting your work"), and `--gc` GRADES those codes into two lists
+  tool RAN and is protecting your work"). The invariant is over `released: false`, NOT over the word
+  "refusal" (#631): `--release` can still RAISE, and a raise is the create channel's shape by
+  construction — `{"error"}` + exit 1, no code — because it goes through the same catch-all over the
+  same open set (a non-git cwd, a malformed toml, a directory git cannot delete). That sentence is
+  false before AND after #631; what #631 removed is the instance that mattered, not the class — a
+  tree a HUMAN pinned with `git worktree lock`, codeable precisely because git's own porcelain NAMES
+  it, so the guard recognises it before touching the tree. It is now `locked`, one guard covering
+  all four spellings (with a reason, reasonless, on a review tree, and a locked entry whose
+  directory is gone — that last only because the guard sits BEFORE the first git call with cwd
+  inside the tree, where it used to raise a bare `FileNotFoundError`). `--gc` GRADES those codes
+  into two lists
   (`_keep_is_expected`): `kept` = a human should
   look, `expected` = the two routine states that used to keep `kept` permanently non-empty — a
   parked Your Call card's unsaved work (hence `Workflow.parked_task_ids`, off the same board

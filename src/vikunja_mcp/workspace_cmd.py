@@ -45,6 +45,19 @@ _ROLE_BY_PREFIX = {"task": "build", "review": "review"}
 # which is worse to parse than absent-always. Pinned both ways by
 # test_the_two_refusal_channels_are_not_interchangeable; change the split and the docs move with it.
 #
+# THE PREDICATE THAT CARRIES A CODE IS `released: false`, NOT THE WORD "REFUSAL" (VMCP-142). A
+# `--release` can still RAISE, and then it wears the create channel's shape by construction —
+# `{"error": …}` + exit 1, no code — because it went through the same catch-all: a non-git cwd, a
+# malformed toml, anything in that open set. What VMCP-142 closed is the state git's OWN `worktree
+# list --porcelain` already names, so the module can recognise it BEFORE touching the tree: a tree
+# pinned by `git worktree lock` (four spellings measured — with a reason, reasonless, on a review
+# tree, and a locked entry whose directory is gone). Not every raise with intact work is like that
+# — a worktree directory git cannot delete (mode 0500) still raises, and the gc isolation test
+# depends on it doing so; what makes the lock codeable is that it is a NAMED git state, not an
+# OS-level surprise. Quote the invariant over `released: false`; "every release-side refusal is
+# coded" is the sentence that keeps drifting back into the docs, and it is FALSE both before and
+# after 142 — 142 removed the instance that mattered, not the class.
+#
 # `--gc` has to grade its own refusals — routine vs
 # "a human should look" (see _keep_is_expected) — and the only other thing a refusal carries is
 # `reason`, which is PROSE: human-facing, deliberately reworded whenever a message turns out to
@@ -55,6 +68,7 @@ _ROLE_BY_PREFIX = {"task": "build", "review": "review"}
 # agents to read, so a value change here must drag the rulebook along.
 CODE_NO_WORKTREE = "no-worktree"
 CODE_HALF_CREATED = "half-created"
+CODE_LOCKED = "locked"                # a human `git worktree lock` — see _release_locked's guard
 CODE_DIRTY = "dirty"
 CODE_UNPUSHED = "unpushed"
 CODE_UNREACHABLE_HEAD = "unreachable-head"
@@ -886,16 +900,55 @@ def _release_locked(root: Path, task_id: int, role: str) -> dict:
         # Say what it actually is, once, in a line `--gc`'s `kept` can be acted on.
         #
         # Keyed on the marker TEXT (unlike _ensure_locked's guard, which keys on the bool): both
-        # branches KEEP the tree, so a miss costs only wording. Deliberately narrow, because a
-        # human `git worktree lock` should keep falling through to `git worktree remove`'s own
-        # refusal ("is a locked working tree, use 'remove -f -f' if you insist") — that message is
-        # already correct and specific, and swallowing it into a synthesised reason would replace
-        # git's report with our guess about it.
+        # branches KEEP the tree, so a miss costs only wording — and since VMCP-142 the fall-
+        # through is a coded verdict too, so a miss no longer changes the CHANNEL either.
         return {"released": False, "task_id": task_id, "role": role, "path": str(path),
                 "code": CODE_HALF_CREATED,
                 "reason": f"half-created worktree (git's own `locked {_LOCK_INITIALIZING}` "
                           f"marker from a killed `worktree add`) — needs a human: "
                           f"`git worktree unlock {path} && git worktree remove -f -f {path}`"}
+    if wt["locked"]:
+        # VMCP-142, and it REVERSES the note that used to sit above: a human `git worktree lock`
+        # was deliberately left to fall through to `git worktree remove`'s own refusal ("cannot
+        # remove a locked working tree … use 'remove -f -f' to override or unlock first"), on the
+        # ground that git's message is already correct and specific and a synthesised reason would
+        # replace git's report with our guess. The MESSAGE was never the problem; the CHANNEL was.
+        # That refusal arrives as a raise, which `run_workspace` renders as `{"error": …}` + exit 1
+        # — the CREATE channel — and SKILL.md reads that shape as "the tool could NOT do the work":
+        # its «Не завелось — цикл НЕ роняем» branch is written for a failed CREATE, and it is the
+        # only rule an agent has for an `{"error"}` + rc 1 line (degrade to one slot, keep
+        # draining), while this tree is the other kind entirely, the kind rc 0 + `released: false`
+        # + `code` exists for. The work is intact and a HUMAN pinned it; an agent that reads that
+        # as a broken tool and moves on is the one outcome nobody wants.
+        #
+        # Keyed on the `locked` BOOL, like _ensure_locked's guard and for its reason: a tree we
+        # cannot vouch for is refused whatever the lock SAYS, and a reasonless lock (`lock_reason
+        # is None`, a real porcelain shape) must not slip past a text comparison. Its own prose
+        # rather than `_locked_refusal`'s, for the same reason the half-created branch above has
+        # its own: that helper is create-side ("refusing to hand it back", "working in it would
+        # leave a tree nothing can reap"), and neither clause describes what happened here.
+        #
+        # PLACED BEFORE THE FIRST GIT CALL WITH CWD INSIDE THE TREE (the `git status` inspect
+        # below), which is load-bearing rather than tidy: a locked entry survives `git worktree
+        # prune` (measured), so an entry whose DIRECTORY a human moved or deleted is still handed
+        # back by `_find`, and `_git_inspect(cwd=<gone>)` raises a bare FileNotFoundError that
+        # `_git` cannot convert into anything. Same root, a different mechanism, and only an
+        # ordering ahead of that call answers both with one guard. It also decides which code a
+        # locked-AND-dirty tree reports — the lock, because it is the fact that makes the tree
+        # unremovable, and "commit and retry" would be advice that cannot work. See the grading
+        # note by `_EXPECTED_WHEN_PARKED` for what that changes in `--gc`.
+        #
+        # `-f -f` is deliberately NOT offered here, unlike the half-created message above: there
+        # the tree is unusable debris and force is the recovery, here the lock IS the human's
+        # instruction and the tool must not teach agents how to override it. Grading: neither
+        # `_EXPECTED_*` set holds this code, so `--gc` files it under `kept` by the fail-toward-
+        # shouting default — see the policy note there for why a lock is never routine.
+        reason = wt["lock_reason"] or "no reason given"
+        return {"released": False, "task_id": task_id, "role": role, "path": str(path),
+                "code": CODE_LOCKED,
+                "reason": f"worktree is LOCKED ({reason}) — a deliberate hands-off marker, and "
+                          f"git refuses to remove a locked tree. Nothing was removed and nothing "
+                          f"was lost: `git worktree unlock {path}`, then release it again"}
     # _git_inspect, not _git: this is a READ of a tree we may end up refusing to touch, and it must
     # not leave a footprint the grace window will later mistake for an agent's (VMCP-90).
     dirty = _git_inspect("status", "--porcelain", cwd=path)
@@ -1118,10 +1171,27 @@ def _build_workflow(root: Path) -> tuple:
 #     lines away staying exactly as it is, and the whole policy is "fail toward shouting". Pinned
 #     directly (test_keep_grading_of_unreachable_head_still_turns_on_the_role) rather than through
 #     a sweep, precisely because no sweep can construct it any more.
-# Neither set contains CODE_HALF_CREATED, CODE_SELF_TREE, CODE_RELEASE_ERROR or CODE_NO_WORKTREE:
-# a parked card must not launder a broken tool state. A half-created tree needs a human with two
-# git commands whether or not its card is parked, and the other three describe gc itself, not the
-# work in the tree.
+# Neither set contains CODE_HALF_CREATED, CODE_LOCKED, CODE_SELF_TREE, CODE_RELEASE_ERROR or
+# CODE_NO_WORKTREE: a parked card must not launder a broken tool state. A half-created tree needs a
+# human with two git commands whether or not its card is parked, and the last three describe gc
+# itself, not the work in the tree.
+#
+# CODE_LOCKED (VMCP-142) is the one whose grading was an actual decision rather than a reading, so
+# say why it is `kept`. A human `git worktree lock` IS an explicit human action, which sounds like
+# the definition of "expected" — but expectedness here means "the pipeline produces this on the
+# happy path AND the human already has a signal for it". Neither holds: nothing on the board says a
+# tree is pinned (that is exactly what the parked card does for `dirty`/`unpushed`), and the lock
+# makes the tree unreapable for as long as it stands, so filed under "do not look" it would leak in
+# silence. That is the shape of CODE_HALF_CREATED, which is correctly never routine.
+#
+# WHAT THIS DID AND DID NOT MOVE in `--gc`, measured on both sides rather than assumed (the first
+# wording here claimed "the alarm did not move" and a second pass disproved it). A locked tree that
+# is otherwise CLEAN and PUSHED — the one that used to reach `git worktree remove` — kept its list:
+# `release-error`/`kept` before, `locked`/`kept` now. But a locked tree that is ALSO dirty or
+# unpushed never reached the remove at all: the guards above answered first, so under a PARKED card
+# it graded `expected`, and now the lock answers first and it grades `kept`. That IS a move, in the
+# safe direction: the parked card excuses unsaved work because the human will come back to it, and
+# a lock is not unsaved work — nothing on that card says the tree cannot be reaped at all.
 _EXPECTED_WHEN_PARKED = frozenset({CODE_DIRTY, CODE_UNPUSHED})
 _EXPECTED_IN_A_REVIEW_TREE = frozenset({CODE_UNREACHABLE_HEAD})
 
