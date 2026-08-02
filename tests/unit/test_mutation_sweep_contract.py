@@ -28,22 +28,35 @@ them up.
     — a record that says `control 0 failed` without running one satisfies it. Nothing in a repo
     of hand-run sweeps can check that; what a scanner CAN do is make the omission impossible to
     ship silently, which is the difference between this and a rule kept in prose alone.
-  * A clean control does not mean the round measured anything. It catches the INFLATION class
-    (594/622) and stale bytecode (VMCP-135 (624): rewriting a constant to the SAME LENGTH leaves
-    the `.pyc` valid, so the round replays the previous budget). It does NOT catch VMCP-146
-    (646)'s form — a tree copied with `cp -R` drags `.venv`, the ORIGINAL `src` lands earlier on
-    `sys.path`, the mutation never reaches the interpreter, and control AND rounds are all green
-    together. Four false greens in a row came out of that one. `vikunja_mcp.__file__` printed per
-    round is what catches it; the control round is not, and this file does not claim otherwise.
+  * One control vouches for the WHOLE record, not for each number in it. Constructed and measured:
+    a banner reading "Round A: control 0 failed; drop guard A -> 2 failed. Round B, never
+    baselined: drop guard B -> 9 failed. Round C, likewise never baselined: drop guard C ->
+    41 failed." satisfies this scanner completely. Per-number pairing is not recoverable from
+    prose, so the rule the assert states is enforced per RECORD and asked of the author per ROUND.
+  * A clean control does not mean the round measured anything, and two other forms bound it.
+    STALE BYTECODE (VMCP-135 (624)): re-measured here on CPython 3.12 with the `.pyc` header read
+    directly, cache validity is the pair (source mtime in SECONDS, source size) — so a same-length
+    rewrite replays the previous budget only when the mtime ALSO fails to advance a whole second,
+    which is a scripted sweep's hazard rather than a hand edit's. The remedy needs the same
+    correction: `PYTHONDONTWRITEBYTECODE=1` stops Python WRITING bytecode, not READING it — with a
+    stale `.pyc` already on disk the round replayed the old value under that variable, and only
+    deleting `__pycache__` moved it. THE MUTATION THAT NEVER RAN (VMCP-148 (646), whose WORKLOG
+    records it — that card's own subject is a different defect, so the tree holds no trace):
+    a tree copied with `cp -R` drags `.venv`, the ORIGINAL `src` lands earlier on `sys.path`, the
+    mutation never reaches the interpreter, and control AND rounds come out green together — four
+    false greens in a row. `vikunja_mcp.__file__` printed per round is what catches that; the
+    control round is not, and this file does not claim otherwise.
   * It is a RATCHET, not a retrofit. `LEGACY_RECORDS_WITHOUT_A_CONTROL_COUNT` names the records
     that already quote a count without one. They are deliberately NOT "fixed": the control that
     belongs beside a historical number is the one measured in THAT environment at THAT sha, and
     it is unrecoverable. Writing today's `0 failed` next to a number measured last week would be
     a fabricated measurement — precisely the defect cards 646/655/663/674 exist to remove. So the
-    list is the honest record of which numbers in this repo are uninterpretable, and it may only
-    SHRINK, by someone re-measuring a sweep and stating its control.
+    list records which numbers this SCANNER cannot see a baseline for — narrower than
+    "uninterpretable", since two entries do state one in a form the pattern cannot read (the list's
+    own comment names them). It may only SHRINK, by someone re-measuring a sweep and its control.
 """
 import ast
+import itertools
 import re
 from pathlib import Path
 
@@ -72,27 +85,45 @@ _ROUND_COUNT = re.compile(r"(?<![:.\w])(?<!of )\d+\s+failed\b", re.IGNORECASE)
 # A CONTROL COUNT: the word `control` and a TALLY (`N failed` / `N passed`) close enough together
 # to be one statement, in either order — "control 0 failed", "control 2 passed", "2 failed
 # against an unmutated control round of 0". The tally is the load-bearing half: an earlier version
-# of this pattern asked only for a DIGIT near `control`, and three blocks satisfied it on prose
-# that used the word in another sense entirely ("the control at the same call site", "control:
-# page 1"). `[^.;]` keeps the window inside one clause so a control mentioned a sentence away
-# from an unrelated number cannot vouch for it.
+# another sense entirely — both examples are strings this repo really contains, "the control at
+# the same call site" and "control: page 1", each in test_api_kanban.py. Re-measured 2026-08-02:
+# that weak form vouches for 22 records under tests/ which this one refuses, and exactly ONE of them
+# quotes a round count — test_api_kanban's honest-server-paginates, a LEGACY entry, which would
+# therefore leave the list with nobody re-measuring it. One is the number that matters here: the
+# ratchet's business is the list, not the tally of near-misses.
+#
+# `[^.;]` NARROWS the window; it does not bound it to a clause, and saying so would oversell it.
+# Constructed and measured, all five accepted by the pattern below: "control PASS! ... says 0
+# failed", the same with "?", with ",", with " - ", and with a LINE BREAK — because the scanner
+# flattens whitespace before matching, so a bullet list is one string to it. What the exclusion
+# really buys is 60 characters and a stop at `.`/`;`; a control and an unrelated number that sit
+# closer than that, in the same record, still vouch for each other.
 _CONTROL_COUNT = re.compile(
     r"control\b[^.;]{0,60}?\b\d+\s+(?:failed|passed)\b"
     r"|\b\d+\s+(?:failed|passed)\b[^.;]{0,60}?\bcontrol\b",
     re.IGNORECASE,
 )
 
-# Records that quote a round count with no control count, as they stood when #656 landed. See the
-# module docstring: this list may only SHRINK, and only by re-MEASURING the sweep behind an entry.
+# Records whose prose has the SHAPE this scanner refuses — a round quoted as a number, with no
+# control count in the SAME record — as they stood when #656 landed. A SHAPE list is all it is,
+# and the difference matters: at least two entries do state a baseline in a form this pattern
+# cannot read (test_the_degraded_stop_rule quotes a set-wise negative AND positive control;
+# test_the_checkout_probe runs a fully controlled qualitative sweep and lands here only for an
+# unrelated tally describing a CONSTRUCTED broken tree, not a mutation round). Read it as "cannot
+# confirm a baseline here", never as "these numbers are uninterpretable". See the module
+# docstring: it may only SHRINK, and only by re-MEASURING the sweep behind an entry.
 LEGACY_RECORDS_WITHOUT_A_CONTROL_COUNT = frozenset({
     "tests/unit/test_api_kanban.py::_serving_lengths",
     "tests/unit/test_api_kanban.py::test_the_degraded_stop_rule_does_not_depend_on_bucket_order",
     "tests/unit/test_api_kanban.py::test_neither_read_loses_a_task_an_honest_server_paginates",
     "tests/unit/test_repo_browser_isolation.py"
     "::test_the_checkout_probe_is_not_an_off_switch_for_a_broken_git",
-    "tests/unit/test_workflow_sequence_gate.py::comments-above:_blocker_moved_to_backlog",
-    "tests/unit/test_workflow_sequence_gate.py::comments-above:_spelled_ref",
-    "tests/unit/test_workflow_wip.py::comments-above:_clause_free_base",
+    "tests/unit/test_workflow_sequence_gate.py::comments-above:_blocker_moved_to_backlog"
+    ":--- the starving-tail message is the plain tail ",
+    "tests/unit/test_workflow_sequence_gate.py::comments-above:_spelled_ref"
+    ":--- the prose's INTERPOLATED VALUES, not just it",
+    "tests/unit/test_workflow_wip.py::comments-above:_clause_free_base"
+    ":--- the free == 0 note is the base plus the ENUM",
 })
 
 
@@ -124,6 +155,21 @@ def _comment_runs(source: str):
     above a group of tests (test_workflow_sequence_gate, test_workflow_wip). Keying by LINE NUMBER
     would make the ratchet break on any edit above it; keying by the following definition survives
     the file moving under it, which is the whole point of a list that must stay accurate.
+
+    The run's own opening line is the second half of the key, and it is not decoration — it closes
+    a HOLE the first half had alone, found by construction rather than by reading. Several runs
+    stand above the SAME definition, and keying on the definition alone collapsed them: over tests/
+    on 2026-08-02, 961 records shared 790 keys, 72 of them colliding, and all three banner entries
+    in the legacy list sat on colliding keys (`comments-above:_spelled_ref` covered SIX runs).
+    Because the offender set is a set of KEYS, a grandfathered key vouched for every run beneath
+    it. Measured from a control round of 0 failed, 1 passed, on the ratchet test below: the
+    IDENTICAL new uncontrolled banner `# MUTATION-CHECKED: drop the guard -> 2 failed` gave
+    1 passed inserted above `_spelled_ref`, and 1 failed inserted above a definition with no legacy
+    entry. That is the regression this file exists to stop, shipping green in exactly the places
+    most likely to grow another banner. `_docstrings` above calls a collision worse than a miss;
+    this is what that looks like when it happens. With the opening line in the key both
+    constructions give 1 failed, and reverting the key to the definition alone turns the ratchet
+    red — so the second half is load-bearing, not belt-and-braces.
     """
     lines = source.splitlines()
     defs = [
@@ -139,6 +185,10 @@ def _comment_runs(source: str):
                 return name
         return "<end of file>"
 
+    def key(run: list[str], start: int) -> str:
+        opening = " ".join(run[0].lstrip().lstrip("#").strip().split())[:48] or "<blank>"
+        return f"comments-above:{following(start)}:{opening}"
+
     run: list[str] = []
     start = 0
     for i, line in enumerate(lines, 1):
@@ -148,21 +198,30 @@ def _comment_runs(source: str):
             run.append(line)
             continue
         if run:
-            yield f"comments-above:{following(start)}", "\n".join(run)
+            yield key(run, start), "\n".join(run)
             run = []
     if run:
-        yield f"comments-above:{following(start)}", "\n".join(run)
+        yield key(run, start), "\n".join(run)
 
 
 def _records():
-    """(key, prose) for every docstring and comment run under tests/."""
+    """(key, prose) for every docstring and comment run under tests/, EVERY KEY DISTINCT.
+
+    Distinctness is load-bearing rather than tidy: the offender set is a set of keys and the legacy
+    list suppresses BY key, so two records under one key mean a grandfathered entry vouching for
+    the other — measured, and written up in `_comment_runs`. Each extractor avoids its own
+    collisions (dotted qualnames there, the opening line here); this counter is the backstop for
+    what neither rules out, a redefined function name or two runs above one definition whose first
+    48 characters agree. A `#2` suffix in a message means exactly that, and it is loud, not silent.
+    """
     for path in sorted(TESTS_DIR.rglob("*.py")):
         source = path.read_text(encoding="utf-8")
         relative = path.relative_to(REPO_ROOT).as_posix()
-        for key, text in _docstrings(path, source):
-            yield f"{relative}::{key}", text
-        for key, text in _comment_runs(source):
-            yield f"{relative}::{key}", text
+        seen: dict[str, int] = {}
+        for key, text in itertools.chain(_docstrings(path, source), _comment_runs(source)):
+            full = f"{relative}::{key}"
+            seen[full] = seen.get(full, 0) + 1
+            yield (full if seen[full] == 1 else f"{full}#{seen[full]}"), text
 
 
 def _quotes_a_round_count(prose: str) -> bool:
@@ -196,9 +255,20 @@ def test_a_sweep_record_that_quotes_a_failure_count_states_its_control_count():
         card's whole thesis: the weak form must not satisfy the numeric one
       * drop one entry from LEGACY_RECORDS_WITHOUT_A_CONTROL_COUNT -> 1 failed, and add a
         non-existent one -> 1 failed, so the list cannot rot in either direction
-      * weaken `_CONTROL_COUNT` back to "a digit near the word control" -> 0 failed but 3 legacy
-        entries stop being offenders, so the equality assert goes red instead: the tally
-        requirement is held by the ratchet, not by taste
+      * weaken `_CONTROL_COUNT` to "a digit near the word control" -> 1 failed, on the SECOND
+        assert rather than the first: no NEW offender appears, but one legacy entry
+        (test_api_kanban's honest-server-paginates) stops being one, and a list that may shrink
+        only by re-measurement must not shrink by a looser regex. Re-measured 2026-08-02 over four
+        readings of "a digit near control" — clause-bounded window or any characters, one
+        direction or both, and the loosest "the word anywhere plus any digit anywhere": the first
+        three move that one entry, the loosest moves three (only 3 of the 7 entries contain the
+        word at all, so three is the ceiling). Never the 3 this row shipped with; that figure did
+        not reproduce, and this is the corrected one. The tally requirement is held by the ratchet
+        rather than by taste either way
+      * key a comment run by its definition ALONE, dropping the opening line -> 1 failed: three
+        legacy entries collapse onto keys shared with other runs, which is the hole `_comment_runs`
+        documents. The same new uncontrolled banner is 1 failed above `_spelled_ref` WITH the
+        opening line in the key and was 1 passed without it
     """
     offenders = sorted(
         key for key, prose in _records()
@@ -233,7 +303,12 @@ def test_the_scanner_tells_a_pytest_tally_from_the_other_numbers_in_this_repo():
     any regex that happens to reproduce today's offender set, including a `\\d+ failed` with no
     exclusions at all (which would then report a docker error message and an exit code as sweep
     records) and including one that never matches (which would report nothing, forever). The rows
-    below are the exact strings this repo contains, not invented ones.
+    below are of two kinds, and saying which is the correction of an earlier version of this
+    sentence that called them all repo strings. Measured verbatim against every `.py` and `.md`
+    outside this file: 5 of the 13 occur word for word, two more are ADAPTATIONS of real ones
+    (test_api_kanban's "a positive control at the same call site" and "The control: page 1 serving
+    EXACTLY the stated 5"), and the rest are constructed to pin the pattern at its edges, which is
+    what a pattern test is for.
 
     MUTATION-CHECKED, `PYTHONDONTWRITEBYTECODE=1`, exactly 1 test selected per round, restores
     confirmed by re-running to the control. Control round: 0 failed, 1 passed.
@@ -244,8 +319,10 @@ def test_the_scanner_tells_a_pytest_tally_from_the_other_numbers_in_this_repo():
         version of this test claimed the weakening was caught by the `control PASS; -> 2 failed`
         row, ran it, and got 0 failed — that row is refused by the weak pattern too. The claim
         was true about the ratchet test above and false here, and only running it said so
-      * widen `[^.;]` to `.` in `_CONTROL_COUNT` -> 1 failed on the row where the control and the
-        count sit in DIFFERENT sentences of the same record
+      * widen `[^.;]` to `.` in `_CONTROL_COUNT` -> 1 failed, reported on the `control PASS; drop
+        the rule -> 2 failed` row and NOT on the different-sentences row: both flip, and the loop
+        asserts in order, so it stops at the first. Re-measured after an earlier version of this
+        line named the later one of the same record
       * widen the 60-character window to 200 -> 1 failed on the long-clause row
       * delete either direction of the `_CONTROL_COUNT` alternation -> 1 failed, so both the
         "control first" and "count first" phrasings this repo actually uses stay covered
@@ -315,6 +392,8 @@ def test_claude_md_states_the_control_round_rule_and_its_limit():
         the slicer is load-bearing and not decoration
       * delete the `## Testing Philosophy` heading itself -> 1 failed from the slicer, with its
         own message rather than a confusing IndexError
+      * delete the sentence saying only removing `__pycache__` moved the round -> 1 failed: the
+        variable alone reads as the whole remedy otherwise, and measurement says it is not
     """
     section = _testing_philosophy()
 
@@ -333,7 +412,10 @@ def test_claude_md_states_the_control_round_rule_and_its_limit():
         "control means the mutation applied — and #646's four false greens each had one"
     assert "PYTHONDONTWRITEBYTECODE=1" in section, \
         "CLAUDE.md no longer names the stale-bytecode form (#624): a constant rewritten to the " \
-        "SAME LENGTH leaves the .pyc valid and the round replays the previous budget"
+        "SAME LENGTH replays the previous budget when the mtime does not advance a whole second"
+    assert "only deleting `__pycache__` moved" in section, \
+        "CLAUDE.md no longer says the variable alone is not the remedy. Measured: it stops " \
+        "Python WRITING bytecode, not READING it, so a stale .pyc already on disk still replays"
     assert "rsync -a --exclude .venv" in section and "vikunja_mcp.__file__" in section, \
         "CLAUDE.md no longer names the form a control round CANNOT catch (#646) or the check " \
         "that does: copy without .venv, and print where the package was actually imported from"

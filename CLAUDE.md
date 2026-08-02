@@ -248,10 +248,16 @@ control is what tells you so before you write either number down.
 
 **A clean control does not mean the round MEASURED anything.** It is the cheapest
 detector, not a complete one, and three forms met in one day bound it. CAUGHT: a
-constant background failure (594/622 above), and stale bytecode — rewriting a
-constant to the SAME LENGTH leaves the `.pyc` valid and the round silently
-replays the PREVIOUS budget (card 624), so sweep under
-`PYTHONDONTWRITEBYTECODE=1`. NOT caught: a mutation that never reached the
+constant background failure (594/622 above), and stale bytecode — though that one
+is narrower than card 624's summary of it, and its remedy weaker. Re-measured
+2026-08-02 by reading the `.pyc` header: cache validity is the pair (source mtime
+in SECONDS, source size), so a same-length rewrite replays the PREVIOUS budget
+only when the mtime ALSO fails to advance a whole second — a scripted sweep's
+hazard, not a hand edit's. And `PYTHONDONTWRITEBYTECODE=1` stops Python WRITING
+bytecode, not READING it: with a stale `.pyc` already on disk, the same round
+replayed the old value under that variable, and only deleting `__pycache__` moved
+it. So do both — delete the caches, then set the variable so new ones do not
+appear. NOT caught: a mutation that never reached the
 interpreter — a tree copied with `cp -R` drags `.venv` along, which puts the
 ORIGINAL `src` earlier on `sys.path`, after which control and rounds are all
 green and four false greens in a row read as "nothing kills this mutation" (card
