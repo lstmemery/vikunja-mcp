@@ -1356,15 +1356,29 @@ def test_the_starving_waiting_line_reads_blocked_task_then_blocker_and_the_headl
 # which drags `.venv` and puts the ORIGINAL `src` earlier on `sys.path`) and `vikunja_mcp.__file__`
 # printed per round to prove the mutated file is the one that ran. FAILED counts only — pass totals
 # move with every test a sibling lands. Restores were checksum-verified against a pristine
-# workflow.py every round — but rounds here ran on TWO trees, so a checksum is named WITH ITS TREE
-# and never once for all: BASE 75a1e52 (workflow.py `2271861474add8cd…`) and the tree this card
-# landed as, 52d6085 (workflow.py `24ccf733…`), eight commits later and #657 having
-# touched workflow.py in between. The rule for reading any round below is that a round can only have
+# workflow.py every round — but rounds here did NOT all run on one tree, so a checksum is named
+# WITH ITS TREE and never once for all. TWO trees carry checksums: BASE 75a1e52 (workflow.py
+# `2271861474add8cd…`) and the tree this card landed as, 52d6085 (workflow.py `24ccf733…`), eight
+# commits later and #657 having touched workflow.py in between. A THIRD tree appears further down
+# and deliberately carries NO checksum: the two-row DRAFT of the equality test never landed, so it
+# has no sha to pin one to, and its rounds are placed by the sentence that names them instead. Read
+# "two trees" as "the two trees a checksum can belong to", not as the count of trees measured on.
+# The rule for reading any round below is that a round can only have
 # run where its subject EXISTS: anything measured against the equality below is the landed tree,
 # since that test does not exist at BASE, and the rest is BASE. Do not read the two groups off the
-# headings alone — the ONE-LINE ALTERNATIVE paragraph is headed "on BASE" and its last round, the
-# wordless clause against the equality, is the landed tree by that rule.
-# Both are shas, never "this commit's parent", and each checksum is
+# headings alone — the ONE-LINE ALTERNATIVE paragraph SAYS "on BASE" inside itself, while the
+# paragraph actually HEADED that way is the WITHOUT one above it; the ONE-LINE ALTERNATIVE's own
+# last round, the wordless clause against the equality, is the landed tree by that rule. That two-way split is NOT
+# exhaustive, and reading it as exhaustive is the very failure it was written to prevent: measuring
+# below runs on a THIRD tree too — the two-row DRAFT of the equality test, which carries both its
+# own control and the clause round under it — and "the rest is BASE" would send it to a tree
+# holding neither that test (0 hits at `75a1e52`, 1 at `6dfd68b`) nor
+# `_STARVING_LEAD_IN` (0 against 3) — measured, not assumed. What governs is the subject-EXISTS
+# rule; the two-way split is only its answer for the rounds whose tree is one of these two, and a
+# round on any other tree NAMES ITS OWN TREE where it stands, as that draft round does — which is
+# also the fallback where subject-EXISTS cannot place a round by itself, as with a round that
+# mutates an assert HAND-ADDED for it and therefore present in no tree at all.
+# The two checksummed trees are named by sha, never "this commit's parent", and each checksum is
 # pinned TO its sha: workflow.py moves with any sibling that edits it, so a reader who re-hashes
 # today's file gets a third number without anything here being wrong. Re-derive either with
 # `git show "${rev}:src/vikunja_mcp/workflow.py" | shasum -a 256` — BRACED, because in zsh the
@@ -1383,9 +1397,15 @@ def test_the_starving_waiting_line_reads_blocked_task_then_blocker_and_the_headl
 # rows. Each digit was right on its own tree — which is the argument for re-running rather than
 # carrying one over, not evidence that the older one was wrong.
 #
-# WITH this section — every round below ran on the LANDED tree named above, 52d6085, and NOT on
-# BASE; an earlier spelling of this note said "same base", which was true of the WITHOUT rounds and
-# false of these. Same selection, control 0 failed: that `len(waiting)` clause is
+# WITH this section — every round IN THIS PARAGRAPH ran on the LANDED tree named above, 52d6085,
+# and NOT on BASE; an earlier spelling of this note said "same base", which was true of the WITHOUT
+# rounds and false of these. The scope is this paragraph's four rounds and not "everything below",
+# which is what that earlier spelling said and is false of the text under it: the ONE-LINE
+# ALTERNATIVE paragraph below CONTAINS "constructed on BASE and measured" — in its third sentence,
+# not its opening, so locate it by reading rather than by position. This narrowing is about which
+# TREE a round ran on and nothing else; the later paragraphs' "this section's control of 0 failed"
+# still names the control stated here, which is the only one this section has.
+# Same selection, control 0 failed: that `len(waiting)` clause is
 # -> 3 failed, all three rows of the test below and nothing else; the `len(retriage)` variant is
 # -> 5 failed, this test's three rows plus 606's two. Both compositions were read off a round run
 # with the failures LISTED, not inferred from a total — the first spelling of this note inferred

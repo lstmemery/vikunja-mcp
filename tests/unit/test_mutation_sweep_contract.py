@@ -151,8 +151,8 @@ TESTS_DIR = REPO_ROOT / "tests"
 # (688) at `6dd2803`, 16:36 the SAME DAY, it is TWO, and the second is REAL: `claimable_cmd`'s
 # `_Trail._emit` docstring quotes a round as a failure count with no control in its paragraph (not
 # reproduced here — it is a number with no baseline), so it WOULD be an offender if src/ were in
-# scope. It landed at 16:08 (VMCP-91 / 536), between the two runs. The scope is left where it
-# stands, because widening it is a behaviour change rather than a prose fix, and VMCP-172 (712)
+# scope. It landed at 16:08 (VMCP-85 / 536), between the two runs. The scope is left where it
+# stands, because widening it is a behaviour change rather than a prose fix, and VMCP-187 (712)
 # carries that decision — but the sole-false-positive argument no longer supports it, and note WHY
 # nobody caught this: the count carried a DATE, and it rotted inside its own date.
 # Repo markdown is in the SAME position now, and this line is where that was proved twice over.
@@ -309,15 +309,55 @@ _KEY_HEAD = 48
 # THAT is why the paragraph above spends a COMMAND where this repo's rule asks for an ASSERT when a
 # reader acts on a count — but NOT because no check is constructible. An independent pass built one
 # and it is recorded rather than waved away: require every «…»-quoted phrase to occur MORE THAN
-# ONCE in this file. Re-measured here, it is GREEN at `75a1e52`, `e77b0cf` and `9489de3` and RED at
-# `52d6085`, naming «16-key offender set» as the phantom — the exact defect, caught lexically. It is
-# PARTIAL twice over: it misses the other phantom of that note, which was plain prose and never
-# quoted, and it fires on legitimate quotes too — a phrase quoted BECAUSE it was just deleted is
-# lexically identical to a phantom, and this very paragraph writes several. (No count of them here:
-# it would be a tally of the file stating it, moved by the next word typed.) So shipping it needs a
-# retraction set of its own, the idiom this file already runs on. Filed as VMCP-181 (732), not
-# folded in here. What stays genuinely unassertable is the SIZE question: «is this sixteen the
-# list's SIZE?» is semantic, not lexical — the same token spells an inflation factor, a grep's match
+# ONCE in this file. Re-measured here, it is GREEN at `75a1e52`, `e77b0cf` and `9489de3` —
+# VACUOUSLY, those three revisions carrying no «» at all (0, 0, 0, measured), so the greens show an
+# EMPTY INPUT and not specificity — and RED at `52d6085`, naming «16-key offender set» as the
+# phantom, the exact defect caught lexically. It is PARTIAL, and an earlier spelling of this
+# sentence COUNTED the ways ("twice over") and undercounted — the same self-tally this file refuses
+# elsewhere. It misses the other phantom of that note, which was plain prose and never quoted. It
+# fires on legitimate quotes too — a phrase quoted BECAUSE it was just deleted is lexically
+# identical to a phantom, and this very paragraph writes several. (No count of them here: it would
+# be a tally of the file stating it, moved by the next word typed.) And it goes SILENT on a phantom
+# quoted MORE than once — the mode that already cost something, since a note discussing a phantom
+# quotes it again by nature: at `6dfd68b` this note carried «16-key offender set» in TWO places, so
+# the check run there does not name that phrase among its violations at all, and every later
+# spelling of the note — this one included — only adds occurrences. The card filed below first
+# listed it among what the check flags, and carries a correction comment saying otherwise. So
+# shipping it needs a retraction set of its own, the idiom this file already runs on, and it is
+# filed as VMCP-195 (732) — the ref read back from `get_task(732)`, not composed: an earlier
+# spelling wrote `VMCP-181`, which is a live unrelated card (id 706), because `file_task` returns
+# no `ref` to echo. Not folded in here. THAT MISS IS A CLASS RATHER THAN A SLIP, and the useful
+# part is its SHAPE, because the count below rots and the shape does not. In every instance found
+# the NUMERIC id was RIGHT and only the human-readable half was wrong, which is not chance: that
+# half is the one you have to fetch ON PURPOSE — `file_task` never returns it at all, and for a card
+# you are merely CITING it costs a `get_task` you have no other reason to make — so it is the half
+# supplied from memory, and memory returns a plausible NEIGHBOURING index rather than a
+# self-announcing blank. Swept at this landing by resolving ids through the same call the tool makes
+# (`api.get_task(id)` -> `Workflow._ref`): of the 62 `VMCP-N (id)` pairs this repo held BEFORE this
+# commit, THREE disagreed. That 62 is pinned to the PRE-COMMIT tree on purpose — citing the filed
+# card below adds a 63rd, so a total stated here without its tree would be falsified by the
+# sentence that states it, which is the self-tally this file refuses. Two of the three are this
+# file's and are corrected here — `VMCP-181` -> VMCP-195 above, and VMCP-172 -> VMCP-187 at both of
+# its sites. THE THIRD IS STILL STANDING, deliberately: it is in test_skill_contract.py, another
+# card's slice, and is filed as VMCP-203 (745) — so do NOT read this paragraph as "the repo is
+# clean", which is exactly the over-reading a swept-and-reported class invites.
+# AND THE SWEEP COVERED ONE SPELLING, not the class. `VMCP-N (id)` is not the only form: this file
+# also writes `VMCP-N / id`, which that grep does not match, and a fourth instance was sitting FOUR
+# LINES above the first correction — the scope comment, which paired id 536 with `VMCP-91` where
+# 536 is VMCP-85, the breadcrumb card it is actually about, while VMCP-91 is live and unrelated
+# (id 547). Corrected too, and named here because it is the measurement that keeps the framing
+# honest: a sweep bounded by a regex reports on the regex, not on the class. (The composed form is
+# described rather than reproduced, so the re-run below does not rediscover this sentence.)
+# Re-run both forms rather than trusting either count, which the next landing
+# moves:
+# `git grep -ohE 'VMCP-[0-9]+ \([0-9]+\)' | sort -u` and `git grep -nE 'VMCP-[0-9]+ ?/ ?#?[0-9]{3,}'`,
+# then resolve each id. How such a re-run lies if done carelessly, met here rather than imagined:
+# from a LINKED worktree every fetch 401s, because the gitignored env file sits beside the toml in
+# the MAIN checkout only, and a swallowed exception then renders those 401s as "nothing found" —
+# true by the numbers, false in meaning, which is the shape this whole note is about.
+# What stays genuinely unassertable is the SIZE question:
+# «is this sixteen the list's SIZE?» is semantic, not lexical — the same token spells an inflation
+# factor, a grep's match
 # count and a chunk tally in this very file — so a regex could only pin HOW MANY `16`s exist, which
 # says nothing about staleness and which any neighbouring landing moves. Line numbers are worse:
 # this note sat at line 258 at `52d6085` and at 279 by `62a8fe2`. And either would be a counter
@@ -1267,7 +1307,7 @@ def test_the_tree_wide_claims_in_this_file_are_asserted_rather_than_counted():
         f"(uncontrolled markdown paragraphs found: {uncontrolled_markdown}), so the SCOPE comment "
         "at the top is wrong where it says repo markdown holds a real offender and is in the same "
         "position as src/. Rewrite that half of the scope comment; the argument the scope actually "
-        "rests on — that widening it is a behaviour change, VMCP-172 (712) — is untouched either "
+        "rests on — that widening it is a behaviour change, VMCP-187 (712) — is untouched either "
         "way. This names CLAUDE.md rather than asking for a non-empty list because ANY stray `.md` "
         "in a checkout would satisfy the looser form, which was constructed and measured"
     )
