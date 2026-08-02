@@ -319,8 +319,18 @@ had drifted again to 529 by the time card 555 removed it). It is also an
 attractive nuisance in a repo that verifies by running: **capture your own count
 from your own run — a figure read out of this file was only ever true at the sha
 that wrote it.** Touch the floor only if the suite ever shrinks below it, which
-is itself worth noticing. Where a figure genuinely needs precision, DATE it
-instead — as the release section does with its landings-per-day snapshot.
+is itself worth noticing. Where a figure genuinely needs precision, name the
+SHA it was measured at, because **a DATE does not name a TREE** — card 688
+shipped FOUR counts in one commit that were true when it measured them at
+`6dd2803` and already false 80 minutes later at `bba4fed`, the commit that
+carried them, because a sibling landed in between. Three were labelled with the
+day and one with "on this tree", and neither label names a tree; the two shas
+share a date. Date as well by all means (the release section's landings-per-day
+snapshot is genuinely a fact about a day), but a count over a tree belongs to
+the tree. Better still, where a reader will ACT on the figure, assert the
+property instead of writing the number — that is the one form that cannot go
+stale, and `tests/unit/test_mutation_sweep_contract.py` carries the worked
+example.
 
 **And the sweep that HUNTS stale figures must not be LINE-FED — but do not
 "fix" that by writing a cleverer grep: which lever reaches a wrapped figure
