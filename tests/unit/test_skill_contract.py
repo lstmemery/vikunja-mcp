@@ -21,10 +21,11 @@ import textwrap
 from importlib.resources import files
 from pathlib import Path
 
+import httpx
 import pytest
 
 from tests.unit.fakes import FakeAPI
-from vikunja_mcp import config, server, setup_cmd, workflow, workspace_cmd
+from vikunja_mcp import config, notify, server, setup_cmd, workflow, workspace_cmd
 
 
 def _skill_text() -> str:
@@ -2820,7 +2821,12 @@ def _independent_review_section(text: str) -> str:
     assert end != -1, "the independent-review section no longer ends where the next section begins"
     section = text[start:end]
     assert 0 < len(section) < len(text), "the review-section slice is not a proper subset"
-    assert "Застрял?" not in section, "the slice swallowed the following section"
+    # The guard names the following section's HEADING, not its NAME. It used to match the bare
+    # name, which made it fire on any prose that merely CROSS-REFERENCES that section — and #628
+    # added exactly such a reference inside this section («см. «Застрял? Выход зависит от РОЛИ»»),
+    # turning a slice guard into a ban on pointing at a neighbour. A cross-reference by name is
+    # legitimate rulebook prose; a swallowed HEADING is the thing that would break the slice.
+    assert "\n## Застрял?" not in section, "the slice swallowed the following section"
     return section
 
 
@@ -3399,3 +3405,188 @@ def test_the_post_push_check_reads_the_runs_OUTCOME_and_not_only_its_existence()
         "files. Without it the lean reads as `integration` failing early — which is measurably "
         "false, and was this card's own first defect"
     )
+
+
+def _after_review_section(text: str) -> str:
+    """The «После Review» section — the one place written to the implementer who RECEIVES a
+    bounced card, and today the LAST section of the rulebook (so the slice may legitimately run
+    to end-of-file, unlike every other section helper here; it still stops at a `## ` heading if
+    one is ever appended below).
+
+    Sliced to the SECTION rather than grepped whole-file for a MEASURED reason: `call_human` and
+    `decompose` both occur many times elsewhere in this rulebook — the stuck section, the drain
+    tick, the push recipe, the decomposition section — so a whole-file `"call_human" in text`
+    stays GREEN with this entire rule deleted. It cannot tell "the receiver is told to forward
+    the question" from "the words exist somewhere". Verified by running exactly that mutation
+    both ways, which is the whole argument; no occurrence COUNT is quoted, because the count is
+    a number this file's own edits keep moving (the commit that first wrote this docstring
+    quoted 27 and made it 29 in the same diff)."""
+    start = text.find("\n## После Review\n")
+    assert start != -1, "SKILL.md no longer has the section written to a post-review implementer"
+    end = text.find("\n## ", start + 1)
+    section = text[start:] if end == -1 else text[start:end]
+    assert 0 < len(section) < len(text), "the После-Review slice is not a proper subset of SKILL.md"
+    return section
+
+
+def _needs_work_cycle_bullet(text: str) -> str:
+    """The «Цикл needs_work» bullet — where BOTH sides of a bounce are told what to expect: its
+    first clause is the implementer's move (rework, then advance), its last is the orchestrator's
+    (push a fresh reviewer), and #628 added the branches where neither applies.
+
+    Sliced to the BULLET, not to its section, for the same MEASURED reason `_reviewer_bullet`
+    records: move the question branch into any OTHER bullet of «Независимое ревью изменений» and
+    a section-wide `"call_human" in section` goes green while this bullet still teaches exactly
+    one outcome — which is the defect. Verified by running exactly that mutation both ways.
+
+    Both edges are guarded: the end is whichever comes first, the next top-level bullet or the
+    next heading (sub-bullets are indented and do not match). The guard below names the bullet
+    BELOW this one, which is the edge that can actually be lost — the slice runs forward, so text
+    above the anchor can never enter it. Note that `_reviewer_bullet`'s twin guard names the
+    bullet ABOVE and therefore cannot fire; that is known dead weight there, not a pattern to
+    copy, and saying so here is cheaper than letting the next reader mirror it."""
+    start = text.find("\n- **Цикл needs_work")
+    assert start != -1, "SKILL.md no longer has the bullet describing the needs_work cycle"
+    end = text.find("\n## ", start + 1)
+    assert end != -1, "the needs_work-cycle bullet no longer sits inside a section"
+    following = text.find("\n- **", start + 1)
+    if following != -1:
+        end = min(end, following)
+    bullet = text[start:end]
+    assert 0 < len(bullet) < len(text), "the needs_work-cycle slice is not a proper subset"
+    assert "Мульти-идентити" not in bullet, "the slice swallowed the bullet below it"
+    return bullet
+
+
+def test_the_implementer_RECEIVING_a_needs_work_report_is_told_it_may_be_a_QUESTION():
+    """#628: the reviewer's escalation channel (#590) does not reach the human on its own, and
+    the receiving end of it was unwritten.
+
+    The channel is three hops — review_task(needs_work) → next_task → call_human — and the code
+    half below MEASURES it rather than quoting the card: hop1 pages NOBODY (zero webhook
+    requests, and its result has no `notified` key at all), hop2 pages nobody, and only the
+    implementer's hop3 reaches the human. So the whole PUSH channel «reviewer → human» hangs on
+    one call made by the RECEIVING agent — while until this card every mention of a *question*
+    beside `needs_work` sat in the reviewer's bullet, i.e. on the SENDING side. The prose that
+    speaks to the RECEIVER framed the bounce as rework wherever it spoke at all: «Правки по
+    ревью» (twice — the active-task priority and «После Review»), «Доработанная задача снова
+    уходит в Review» (this cycle bullet), and the queue-discipline resume rule's «доработка
+    после `review-failed`» — that last one WRAPPED across a line, which is why `git log -S` and
+    `grep` are both silent on it as a contiguous string. No count is quoted for that set on
+    purpose: its membership is a judgement about who a paragraph addresses (the cycle bullet
+    speaks to both sides), which is exactly the kind of number that goes stale silently. A
+    question could therefore land in Build unremarked, looking on the board like ordinary rework.
+
+    `needs_work` also carries a THIRD kind of report, which the second independent pass caught
+    and which is measured here: «this should be SPLIT». `decompose` is shut from Review too
+    (#663), so it too rides back as a needs_work bounce and is done by the owner from Build —
+    MEASURED, the parent then leaves for Backlog with the `epic` label, not for Review. A binary
+    "defect or question?" rule would have routed it to rework, so the pins below require all
+    three destinations to be named.
+
+    The prose half and the code half are both here on purpose: the code half is what makes this
+    card's RULING falsifiable. The alternative weighed and rejected was pinging the human on hop1
+    (optionally flagged) — rejected because a hop1 ping pages about a card that is NOT parked
+    (asserted below: after hop1 the card is live BUILD work and next_task hands it straight back
+    for dispatch), so the ping would race the resume agent, and because the flag would only MOVE
+    the page-or-not judgement from one LLM to another. If a hop1 ping is ever added, the prose
+    above («до твоего `call_human` человека о вопросе никто не УВЕДОМЛЯЕТ») becomes false and
+    this test is what says so."""
+    text = _skill_text()
+
+    # ── prose: the RECEIVER is told to recognise a question and where to forward it
+    receiver = _after_review_section(text)
+    assert "ВОПРОС К ЧЕЛОВЕКУ" in receiver, (
+        "«После Review» no longer tells the implementer a [review] NEEDS WORK report may be a "
+        "QUESTION rather than a defect — the recognition step the whole channel hangs on"
+    )
+    assert "call_human" in receiver, (
+        "«После Review» no longer names the tool that forwards the reviewer's question. The "
+        "recognition without the route leaves the agent to guess the human's answer itself"
+    )
+    assert "review_task(verdict='needs_work')` не пингует" in receiver, (
+        "«После Review» no longer states the measured fact that makes forwarding URGENT: hop1 "
+        "pages nobody, so the human learns of the question only from the implementer's call"
+    )
+    # NOT a bare `"decompose" in receiver`: the recognition paragraph above already names the
+    # tool while explaining WHY the reviewer cannot use it, so the bare token stays green with
+    # the split BRANCH deleted — measured, that mutation passed until this assert named the
+    # route instead of the word.
+    assert "`decompose` из Build" in receiver, (
+        "«После Review» no longer routes the THIRD thing a needs_work report can be. A binary "
+        "defect-or-question rule sends «this should be split» to rework — measured below"
+    )
+
+    # ── prose: the cycle bullet no longer teaches Review as the only destination
+    cycle = _needs_work_cycle_bullet(text)
+    assert "call_human" in cycle and "Your Call" in cycle, (
+        "the needs_work-cycle bullet is back to promising Review as the only destination. In the "
+        "question branch the card goes to Your Call instead, and there is no reviewer to push"
+    )
+    assert "родитель уезжает в **Backlog** с меткой `epic`" in cycle, (
+        "the needs_work-cycle bullet no longer names the split branch's DESTINATION. A bare "
+        "`decompose` token would not do here either — the same bullet names the tool while "
+        "explaining why the reviewer cannot call it, so only the destination is branch-specific"
+    )
+
+    # ── code: the three hops, and which one of them actually pages a human
+    calls = []
+    api = FakeAPI(buckets=workflow.STAGES)
+    client = httpx.Client(transport=httpx.MockTransport(
+        lambda request: calls.append(request) or httpx.Response(200, text="ok")))
+    wf = workflow.Workflow(api, project_id=3, notifier=notify.WebhookNotifier(
+        "https://hooks.test/x", tracker_url="https://tracker.test", client=client))
+    card = api.add_task("починить дренаж", "Review", assignee=api.me_user)
+
+    hop1 = wf.review_task(card["id"], verdict="needs_work",
+                          report="ВОПРОС ЧЕЛОВЕКУ: какой из двух вариантов конфига верный?")
+    assert hop1["moved_to"] == "Build"
+    assert calls == [], (
+        "review_task(needs_work) now pings the human. That may be an improvement, but it makes "
+        "SKILL.md's «до твоего call_human человека о вопросе никто не УВЕДОМЛЯЕТ» false and it "
+        "pages about a card that is not parked — move the prose and the ruling with it"
+    )
+    assert "notified" not in hop1, (
+        "review_task's result grew a `notified` key. With a webhook configured — as here — that "
+        "key is call_human's alone, and an agent reading notified=false on a bounce would "
+        "conclude the reviewer's question had been sent to the human when nothing was sent"
+    )
+
+    hop2 = wf.next_task()
+    assert hop2["task"]["id"] == card["id"] and hop2["stage"] == "Build" and hop2["resume"]
+    assert calls == [], "next_task pings the human now — the rulebook says the ping is hop3's"
+
+    # the measured cost of pinging on hop1 instead: the card is not parked, it is live build work
+    board = wf.liveness_board()
+    assert wf.active_task_ids(board) == [card["id"]] and wf.parked_task_ids(board) == [], (
+        "after a bounce the card is supposed to be LIVE build work being dispatched, which is "
+        "exactly why the human is paged only once the implementer parks it in Your Call"
+    )
+    assert "review-failed" in [lb["title"] for lb in api.tasks[card["id"]]["labels"]]
+
+    hop3 = wf.call_human(card["id"], question="какой из двух вариантов конфига верный?")
+    assert hop3["moved_to"] == "Your Call" and hop3["notified"] is True, (
+        "forwarding the reviewer's question from Build no longer parks it and reports delivery — "
+        "the rulebook tells the implementer this call is the whole channel"
+    )
+    assert len(calls) == 1, f"expected exactly one page for the whole channel, got {len(calls)}"
+    board = wf.liveness_board()
+    assert wf.parked_task_ids(board) == [card["id"]] and wf.active_task_ids(board) == []
+
+    # ── code: the THIRD kind of needs_work report, on a fresh board — «this should be SPLIT».
+    # It rides the same bounce because decompose is shut from Review (#663), and it lands the
+    # card somewhere else again: Backlog, as an epic. This is what makes a binary
+    # defect-or-question rule wrong rather than merely incomplete.
+    api2 = FakeAPI(buckets=workflow.STAGES)
+    wf2 = workflow.Workflow(api2, project_id=3)
+    split = api2.add_task("слишком крупная задача", "Review", assignee=api2.me_user)
+    with pytest.raises(workflow.WorkflowError):
+        wf2.decompose(split["id"], [{"title": "часть A"}, {"title": "часть B"}])
+    wf2.review_task(split["id"], verdict="needs_work", report="это надо разбить на две")
+    parent = wf2.decompose(split["id"], [{"title": "часть A"}, {"title": "часть B"}])["parent"]
+    assert parent["moved_to"] == "Backlog" and parent["labeled"] == "epic", (
+        "the split branch no longer ends in Backlog as an epic. SKILL.md tells the receiving "
+        f"implementer exactly that destination, and the orchestrator not to wait for Review: "
+        f"got {parent}"
+    )
+    assert api2.stage_of(split["id"]) == "Backlog"
