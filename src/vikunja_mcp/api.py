@@ -187,9 +187,12 @@ class VikunjaAPI:
         *, timeout: float = 30, max_retries: int | None = None,
         event_hooks: dict | None = None,
     ):
-        """`timeout`/`max_retries`/`event_hooks` exist for ONE caller: `workspace --gc`, whose
-        board read happens while it holds the repo-wide worktree flock (see
-        workspace_cmd._build_workflow). Everything else keeps the defaults. All three are ignored
+        """`timeout`/`max_retries` exist for ONE caller: `workspace --gc`, whose board read
+        happens while it holds the repo-wide worktree flock (see workspace_cmd._build_workflow).
+        `event_hooks` now has TWO — gc hangs its read deadline there, and `claimable` hangs its
+        stderr breadcrumb trail (claimable_cmd._Trail, VMCP-85), which is why the parameter is
+        described below as httpx's own hook mapping rather than as gc's deadline slot.
+        Everything else keeps the defaults. All three are ignored
         when `client` is supplied — the caller then owns the whole client (tests pass a
         MockTransport one, and a test that wants a hook builds it into its own client).
 

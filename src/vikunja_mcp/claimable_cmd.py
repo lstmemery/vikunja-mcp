@@ -28,12 +28,264 @@ without mutating the tracker.
 Config comes from the standard 4 layers; the hub supplies layer 1 (VIKUNJA_URL/
 VIKUNJA_TOKEN/VIKUNJA_PROJECT_ID in this process's own env). stdout carries the one
 JSON line and NOTHING else — uv/python/anything-else noise belongs on stderr.
+
+STDERR CARRIES A BREADCRUMB TRAIL, AND IT IS DELIBERATELY *NOT* PART OF THE CONTRACT.
+Until #521 deferred the MCP SDK import, `MCPServer.__init__` ran `logging.basicConfig(INFO)`
+process-wide from module scope, so this check ACCIDENTALLY emitted one httpx INFO line per
+tracker call. #521 removed that side effect and stderr went silent. That costs nothing on the
+two lanes that dominate — on SUCCESS the hub discards stderr entirely (pinned hub-side by
+TestUvxCheckerStderrNoiseIgnoredOnSuccess), and on this check's own failure lane (exit 1 +
+`{"error"}`) it reads only `error` from STDOUT — but stderr does reach a run row, via
+`detail()`, on FIVE lanes, not one: ctx timeout, spawn failure / nonzero exit without an
+error line, unparseable stdout, unknown `kind`, and `claimable` contradicting its `kind`
+(claimable.go, read 2026-08-02). The WEDGE is the lane that MOTIVATES this — it is the one
+where the child said nothing else at all, the old trail of completed GETs was what told you
+where it hung, and hgdev-acp already spent a PR (wedge-kill) on it — but it is not the only
+row that will now carry breadcrumbs. The hub's own comment documents the too-old-sibling row
+as reading exactly `loop idle-check: claimable check: bad verdict json` BECAUSE `detail()`
+was empty; with the trail on, that row gains a trail. Louder, not wrong — and worth knowing
+before someone greps for the old exact string.
+
+So the trail is back BY DESIGN instead of by accident, and it differs from the httpx lines in
+the three ways that matter there. (1) A token is written BEFORE each request — httpx logged
+AFTER the response (its INFO line carries the status code, so it cannot be anything else),
+which makes the request that never finished visible only as an ABSENCE. (2) It is written and
+flushed incrementally, so a process killed mid-flight has ALREADY said it. (3) It is SMALL,
+for the reason below, which is the constraint that shaped everything else here.
+
+    [claimable] cfg/10 info views:1 :2 tasks:1 :2 :3 :4 user tasks/628 /164 /547 /536 end/12@2.4s
+
+One line, one token per request, appended as the run goes and terminated by a NEWLINE only
+when the run finishes. Read it as: `cfg/<project>` — config loaded, we are past uvx and the
+imports; then the last path segment of each request, `:N` for a page and `/N` for an id, with
+a repeat of the same endpoint abbreviated to its suffix alone (`views:1 :2` is two requests);
+then `end/<requests>@<elapsed>` or `fail/<requests>@<elapsed>`.
+
+THE "IT NEVER FINISHED" SIGNAL IS THE ABSENCE OF THAT CLOSING `end/`|`fail/` TOKEN, not the
+absence of the newline. The newline is the clean version of the same fact and it holds for
+SIGKILL (measured: 41 B ending at `tasks:1`, exactly the request that hung) and for SIGTERM,
+because neither runs any Python. SIGINT does: the traceback glues itself onto the last token
+and brings its OWN newline, so a trail can end in `\\n` and still be a corpse. Read the last
+TOKEN, not the last byte.
+
+WHY SO TERSE — MEASURED IN THE CONSUMER, not guessed. hgdev-acp puts the child's stderr on a
+run row through `detail()`, and that string goes through `snippet()`, which is capped at
+`snippetCap = 200` BYTES and keeps the HEAD (internal/hub/vikunja/vikunja.go and
+claimable.go, read 2026-08-02). The first shape of this feature, one verbose line per
+request, cost 727 B on this project's live board: the hub would have shown its first four
+lines and cut off exactly the tail, which is the only part that says where it hung. A trail
+that overflows that cap is worse than no trail, because it looks like a diagnosis.
+
+AND THE TRAIL DOES NOT GET THAT BUDGET TO ITSELF, which an earlier draft here got wrong by
+saying "a wedge's stdout is empty, so the trail gets the whole budget". True about stdout,
+irrelevant about the budget: `detail()` is `stderr + "\\n" + stdout`, and the child is spawned
+through `uvx`, whose OWN stderr is written FIRST and is therefore never the part that gets
+cut. Measured: `uvx --refresh-package cowsay cowsay -t hi` emits 27 B (`Installed 1 package
+in 2ms`); the hub's own test models 32 B. So budget the trail against roughly 170 B, not 200.
+
+The form above cost 94 B on the live board (12 requests): 31 B of frame plus 5.25 B per step
+on THAT mix. Against ~170 B that leaves about 14 more steps — not the "twenty" a previous
+draft got by spending uv's share, and not the "thirty" the draft before that got by bad
+arithmetic; the numbers are written out because this one line has now been wrong twice.
+5.25 B is a MEAN and the spread is wide — 3 B for an abbreviated page (`" :2"`), 10 B for a
+task fetch (`" tasks/628"`) — so the same room is ~35 more page-steps or ~10 more task
+fetches, and a Review-heavy board (one fetch per active task) is the mix that eats it
+fastest.
+
+The `cfg` token deliberately omits the URL: the hub passed it in and its own row names the
+binding, and at that per-step cost the ~28 bytes of a scheme+host buy about five more steps.
+There is no per-step timing for the same reason — the hub's own ctx bound already dates a
+wedge.
+
+ON BY DEFAULT; opt out with VIKUNJA_MCP_NO_TRACE=1 (stderr is then empty again, byte for
+byte). On-by-default is the design decision, not laziness, and there are two reasons rather
+than one. First: a wedge is not reproducible on demand, so a flag you must set IN ADVANCE only
+ever gets set by someone who already knows — i.e. never on the tick that actually hung.
+Second, and it settles the question rather than weighing it: had this been default-OFF, the
+hub could not have turned it ON by environment at all. Its child gets an ALLOWLISTED env —
+PATH/HOME/TMPDIR/locale, the proxy and CA vars, UV_*/XDG_*, plus the three
+VIKUNJA_URL/TOKEN/PROJECT_ID the hub appends itself — and everything else is dropped,
+INCLUDING every inherited VIKUNJA_* name, deliberately (checkerEnv/checkerAllowedEnv in
+internal/hub/vikunja/claimable.go, read 2026-08-02), which is exactly the prefix any switch
+of ours would carry. A default-off trail would therefore be off in the ONE process that needs
+it until somebody changed the other repo — and by the same mechanism the hub cannot turn this
+one off either, which is the honest cost of the choice: the 94 B is unconditional there. The
+opt-out serves humans and other callers.
+
+DO NOT PARSE IT, and do not let it grow a consumer. The key set and the exit-code split on
+stdout are public API; this trail is prose for a human reading a dead process's tail, and its
+shape may change in any release with no hub-side rollout. It is BOUNDED ONLY by api.py's own
+pagination ceiling, not by anything here: measured against a board that never stops paging,
+one line reached 545 B over 123 requests before `fail/123`. So a pathological board does
+overflow and the hub does lose the tail again — the compression buys headroom, not a promise.
+
+STDOUT DID NOT MOVE, and that is the claim that matters: byte-for-byte identical with the
+trail on and off, in both the success and the failure lane, and the exit-code split with it.
+Not "54 B and 140 B are the contract" — those are just what THIS board and THIS server said
+on the day (a 3-digit task id gives 53 B, and the failure line carries the server's own
+message, measured at 165 B elsewhere). #521 pinned the IDENTITY, never the sizes.
 """
 import json
+import os
+import sys
+import time
 
 from vikunja_mcp.api import VikunjaAPI
 from vikunja_mcp.config import load_config
 from vikunja_mcp.workflow import Workflow
+
+TRACE_OPT_OUT_ENV = "VIKUNJA_MCP_NO_TRACE"
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def trace_enabled(environ: dict | None = None) -> bool:
+    """The opt-out, spelled exactly like setup_cmd's VIKUNJA_MCP_NO_SKILL_SYNC one.
+
+    Duplicated rather than imported ON PURPOSE: setup_cmd carries the whole install-skill
+    machinery, and the hub pays this process's import cost on EVERY poll tick — which is the
+    entire point of #521. Keeping claimable's import surface at api/config/workflow is worth
+    three duplicated lines; the shared thing here is a CONVENTION, not code."""
+    env = os.environ if environ is None else environ
+    return env.get(TRACE_OPT_OUT_ENV, "").strip().lower() not in _TRUTHY
+
+
+def _step(request) -> tuple[str, str]:
+    """(name, suffix) for one request — the compression the 200-byte budget forces.
+
+    Generic on purpose, so a path this module has never seen still produces something: the
+    LAST path segment names the step, and when that segment is all digits it is an id, so the
+    segment before it names the step and the id becomes the suffix. `?page=N` is the other
+    suffix. Both sigils are kept distinct (`:` page, `/` id) because the two collide on name:
+    the board read is `.../views/40/tasks?page=1` and a single task is `/tasks/628`, and
+    `tasks:1` vs `tasks/628` is what tells them apart. A non-GET keeps its method (nothing on
+    this path sends one — next_task is all GETs — but a token that silently dropped the verb
+    would be a lie the day one appears)."""
+    parts = [p for p in request.url.path.split("/") if p]
+    if parts[:2] == ["api", "v1"]:
+        parts = parts[2:]
+    name, suffix = (parts[-1] if parts else "/"), ""
+    if name.isdigit():
+        name, suffix = (parts[-2] if len(parts) > 1 else "?"), "/" + name
+    page = request.url.params.get("page")
+    if page:
+        suffix += ":" + page
+    if request.method != "GET":
+        name = f"{request.method} {name}"
+    return name, suffix
+
+
+class _Trail:
+    """The stderr breadcrumbs — and also httpx's request event hook, because it IS the callable
+    passed as one. See the module docstring for the shape, the byte budget behind it, and why
+    it is diagnostics rather than a contract."""
+
+    def __init__(self, enabled: bool = True):
+        self.enabled = enabled
+        self.requests = 0
+        self._t0 = time.monotonic()
+        self._last: str | None = None
+        self._open = False
+
+    def _write(self, token: str) -> None:
+        """One token, written and flushed NOW, on the ONE line the whole run shares.
+
+        Written straight through rather than accumulated and printed at exit: the lane this
+        serves is a process that never reaches its exit, so a buffered trail would be lost in
+        exactly the case it exists for. Here `flush=True` is load-bearing rather than
+        belt-and-braces, and that is a consequence of the single line: CPython line-buffers
+        sys.stderr, and this never emits a newline until the run ENDS — so without the flush a
+        killed process would say nothing at all. Both halves are pinned by the SIGKILL test,
+        which goes RED under either mutation."""
+        # Collapse ANY whitespace inside the token, so "one token per request" is true by
+        # CONSTRUCTION rather than by the shapes _step happens to produce today. It was not:
+        # a non-GET yields `POST tasks` + `/628`, which is two whitespace-separated tokens for
+        # one request — false prose and a broken test invariant the day a non-GET appears. A
+        # `page` value carrying a newline (unreachable from api.py, reachable by construction)
+        # would likewise have split the ONE line the 200-byte budget is built on.
+        token = "_".join(token.split())
+        if not self._open:
+            self._emit("[claimable]")
+            self._open = True
+        self._emit(f" {token}")
+
+    def _emit(self, text: str) -> None:
+        """The ONE place this class touches stderr — so the guard below cannot be half-applied.
+
+        `sys.stderr` is resolved per WRITE. NOT for the reason an earlier draft gave ("a bound
+        stream would escape capsys"): binding it in __init__ was mutated in and the whole file
+        stayed GREEN, because every test swaps the stream before a _Trail exists. The real
+        reason is the check below, which only a per-write lookup can make: a process whose
+        stderr was CLOSED has `sys.stderr is None`, and `print(..., file=None)` writes to
+        sys.STDOUT by documented default — no exception for the guard to catch. On the single
+        line, that spliced the trail INTO the verdict (`…tasks/812{"claimable": true,…}`), the
+        consumer reads the LAST stdout line, and it got ` end/7@0.0s` instead: bad verdict
+        json, fail-CLOSED, at exit 0. hgdev-acp always sets cmd.Stderr so it never saw this,
+        but `2>&-` or a daemonized caller reproduces it in one line. Pinned by
+        test_a_closed_stderr_never_pushes_the_trail_onto_stdout.
+
+        THE TRAIL MAY NEVER BREAK THE CHECK. It runs inside an httpx event hook, so anything
+        raised here leaves through `client.send` -> `_req` -> `next_task` and lands in
+        run_claimable's catch-all — turning a working check into `{"error": ...}` + exit 1,
+        i.e. a fail-CLOSED hub loop, over a closed pipe or a full disk. A diagnostic that can
+        do that is worse than no diagnostic, so a write failure disables the trail for the
+        rest of the process and the check goes on. "Retrying would pay the same cost N times"
+        is the reason, and it is only true of a PERMANENT failure: a single transient write
+        error (a non-blocking pipe returning EAGAIN) costs the whole trail from that point,
+        which is the accepted price of not carrying retry state into a diagnostic. Genuine
+        EINTR never arrives here at all — PEP 475 retries it inside the interpreter.
+
+        Funnelling every write through here is the FIX for a hole this card found in itself:
+        close()'s terminating newline used to be printed directly, outside any guard, and
+        passed the first test only because close() calls _write first and that earlier failure
+        had already flipped `enabled` — correct by accident, and wrong for a stream that fails
+        on THAT write alone, which would have raised AFTER the verdict was on stdout. Pinned
+        by test_a_broken_trail_cannot_break_the_check, all three cases."""
+        if not self.enabled:
+            return
+        stream = sys.stderr
+        if stream is None:                 # see above: file=None means STDOUT, not "nowhere"
+            self.enabled = False
+            return
+        try:
+            print(text, end="", file=stream, flush=True)
+        except Exception:  # noqa: BLE001 — see _write: the verdict outranks its own breadcrumbs
+            self.enabled = False
+
+    def note(self, token: str) -> None:
+        """A step that is not a request (`cfg/<project>`); never abbreviated against a neighbour."""
+        self._last = None
+        self._write(token)
+
+    def close(self, token: str) -> None:
+        """The last step, plus the NEWLINE that is the whole difference between a run that
+        finished and a run that was killed on its last token."""
+        self.note(token)
+        self._emit("\n")
+
+    def __call__(self, request) -> None:
+        """httpx's `request` event hook: fires BEFORE the bytes go out — that is the whole
+        difference from the httpx INFO lines this replaces — and once per RETRY too (api.py
+        retries by re-entering client.request, verified: three attempts, three tokens), so a
+        retry storm reads as repeats rather than as a hang. Only the compressed path and, for
+        a non-GET, the method are printed: the token lives in the Authorization HEADER and no
+        call here builds a URL out of it (pinned by test_the_trail_never_leaks_the_token).
+
+        `_step` is guarded for the same reason `_emit` is (see there): it is generic, but
+        "generic" is a claim about inputs nobody has seen yet, and the cost of being wrong
+        inside a hook is the whole check failing closed. An unnameable request still counts
+        and still leaves a mark — `!` — rather than taking the verdict down with it. (`!` and
+        not `?`: `_step` already spells an unnameable PARENT `?`, as in `/api/v1/7` -> `?/7`,
+        and a marker that reads like a near-miss of another marker is a bad marker.)"""
+        self.requests += 1
+        try:
+            name, suffix = _step(request)
+        except Exception:  # noqa: BLE001 — a token we cannot build is not worth the verdict
+            name, suffix = "!", ""
+        self._write(suffix if name == self._last and suffix else name + suffix)
+        self._last = name
+
+    def elapsed(self) -> str:
+        return f"{time.monotonic() - self._t0:.1f}s"
 
 
 def classify_next(result: dict) -> dict:
@@ -86,10 +338,22 @@ def classify_next(result: dict) -> dict:
 
 def run_claimable() -> int:
     """The CLI body: print the verdict line, return the exit code."""
+    trail = _Trail(enabled=trace_enabled())
+    # The two closing tokens below sit in their branches instead of in one `finally`: `finally`
+    # ALSO runs on KeyboardInterrupt (verified by running it), so an INTERRUPTED check would
+    # sign off with a terminating token AND the newline — telling the reader this trail exists
+    # for that the run completed. (A hub wedge-kill is SIGKILL — verified in the consumer:
+    # exec.CommandContext cancels with Process.Kill and its own comment expects "signal:
+    # killed" — where no Python cleanup runs at all, so there nothing is printed either way.)
     try:
         cfg = load_config()
+        trail.note(f"cfg/{cfg.project_id}")
+        # event_hooks is api.py's own pass-through to httpx (the same door `workspace --gc`
+        # hangs its read deadline on), so the trail needs no new surface there at all. It is
+        # ignored when a `client` is supplied — which is why the end-to-end trail test patches
+        # httpx.Client's transport instead of handing VikunjaAPI a prebuilt client.
         wf = Workflow(
-            VikunjaAPI(cfg.url, cfg.token), cfg.project_id,
+            VikunjaAPI(cfg.url, cfg.token, event_hooks={"request": [trail]}), cfg.project_id,
             enforce_single_wip=cfg.enforce_single_wip,
             wip_limit=cfg.wip_limit,
         )
@@ -101,6 +365,8 @@ def run_claimable() -> int:
         # names files and env VAR NAMES, VikunjaError carries the server's body, httpx errors
         # carry the URL — never the Authorization header. The hub logs this line verbatim.
         print(json.dumps({"error": f"{e.__class__.__name__}: {e}"}))
+        trail.close(f"fail/{trail.requests}@{trail.elapsed()}")
         return 1
     print(json.dumps(verdict))
+    trail.close(f"end/{trail.requests}@{trail.elapsed()}")
     return 0
