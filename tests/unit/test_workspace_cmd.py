@@ -57,6 +57,13 @@ def _git(cwd, *args):
 # open fd on `<tmp>/work/.git/worktrees/task-<id>/index.lock` belongs to the CHECKOUT alone, not to
 # all three: `lsof` on the shell lists its cwd, its pipes and the script, and no lock.
 #
+# `git log` disagrees with both of those, and this file is the measured side. b1139db's own commit
+# MESSAGE names only two of the three ("`git reset …` plus its `/bin/sh slow-smudge.sh`") and
+# attributes the lock to both ("each with its cwd inside the tmp worktree and an open fd on that
+# tree's index.lock") — while the file that same commit landed already said THREE, and the lock on
+# the checkout alone. A pushed message cannot be rewritten, so the correction is named here rather
+# than left for a `git log -S` reader to take as measured.
+#
 # Counted rather than derived, by polling `ps` through one pre-fix run of this FILE and unioning
 # distinct pids: THIRTY-TWO processes — 6 orphaned checkouts, one per `_half_created_tree` call
 # site as the file then stood; the 12 filter shells those spawn, TWO per site because the filter
@@ -64,9 +71,18 @@ def _git(cwd, *args):
 # stand-in plus its sleep. An arithmetic guess of "two per call site" is exactly half of that.
 #
 # What the leak was OBSERVED not to touch — inferred from where it wrote, not from a constraint
-# that forbids it: every cwd and every open fd sat inside that run's own basetemp, so nothing
-# reached the real checkout or a concurrent run under another basetemp. The cost is background
-# processes holding a tmp dir pytest owns and may be deleting.
+# that forbids it. A full `lsof -p` on one such family is 24 rows across the three, and inside that
+# run's own basetemp sit all three cwds plus the only two regular-file rows the loader did NOT map
+# (`txt`): the checkout's `3u` on index.lock and the shell's `255r` on its script — the `sleep` has
+# no such row at all. The other 19 name nothing of ours: eight shared system paths (the git, bash
+# and sleep binaries, three `dyld`, a locale table, `/dev/null` on the checkout's fd 0) and eleven
+# anonymous PIPE rows carrying no path to read — the stdio slots, minus the checkout's fd 0 which
+# is that `/dev/null`, plus an fd-4 pipe on each of the three. Note
+# what that leaves standing: "every open fd sat inside basetemp" is false, and so is any version
+# resting on "regular file" or "binary" — a locale table is a mapped REG row and sits outside. It
+# is the same overreach retracted higher up about the index.lock, so the claim is now the cwds and
+# those two handles. The cost is background processes holding a tmp dir pytest owns and may be
+# deleting.
 #
 # So the stand-ins PARK ON A FILE instead of sleeping a flat 30s, and the fixture unlinks it. The
 # reap is COOPERATIVE on purpose. `pgrep`-by-name is out: this suite runs beside sibling agents
@@ -171,8 +187,37 @@ def _reap_parked_children(tmp_path: Path, deadline: float = 30.0) -> None:
     # BEFORE the unlink: while everything is still parked, the orphaned checkout is reliably
     # visible as a live parent. That holds only WHILE something is parked — with the ceiling
     # forced to 0.1s and a repo big enough to keep the checkout churning, a live checkout was
-    # measured missing from 8 of 20 samples — so it rests on every test body here finishing well
-    # inside `_PARK_CEILING`, which at 33s they all do by two orders of magnitude.
+    # measured missing from 8 of 20 samples — so it rests on every test body here THAT PARKS
+    # finishing inside `_PARK_CEILING`. THE MARGIN IS ONE ORDER OF MAGNITUDE, NOT TWO, and which
+    # it is matters because this is a number an editor DIVIDES. Instrumenting this function over
+    # three full runs: nine reap calls each, of which EIGHT are real park windows (the ninth is
+    # this file's hand-driven teardown firing a second time, after the hold file is already gone,
+    # so its stand-in never parks). Those windows run ~1.8s median, WORST 2.26s — so against the
+    # 33.2s the constant records (re-timed standalone here at 32.76s and 33.13s) the headroom is
+    # ~15x. Quote the worst, not the median: the median is what usually happens, the worst is
+    # what the guarantee has to cover.
+    #
+    # WHERE IT STOPS BEING A GUARANTEE, in the units you would actually edit. Forcing the
+    # constant to 25 (~2.8s of real parking) still kept each of the four `_half_created_tree`
+    # tests swept — four of the seven that use the helper — inside ONE park; at 20 (~2.2s, just
+    # under that 2.26s
+    # worst window) the longest outran its first park and teardown caught the SECOND stand-in
+    # 0.01s old — green, but by timing rather than by construction. So 25 holds and 20 does not;
+    # anything at or below 20 is already in the degraded band. In wall-clock that floor is ~2.3s
+    # — INTERPOLATED between those two measured points, never run on its own, and deliberately
+    # not restated as its own multiple of the ceiling, since that is a second ratio nobody
+    # measured. What "two orders" would have promised, ~100x, overstates the real ~15x by about
+    # sevenfold, and in the direction that invites the cut.
+    #
+    # Below 20 the degradation stays SILENT for a while, which is the danger: at 10 the reap saw the
+    # checkout in all four, because this repo leaves it almost no work between its two tracked
+    # files before the next stand-in parks — under 0.03s, DERIVED from the `pids=2` rows rather
+    # than timed. The 0.1s/big-repo sample above (the previous round's measurement, not re-run
+    # here) is that same gap opened wide enough to show. Push down to 5 and it turns loud
+    # instead: two parks then total ~1.1s, inside the 2s `_GIT_TIMEOUT` `_half_created_tree`
+    # patches in, so `worktree add` SUCCEEDS and these tests fail DID NOT RAISE — 3 of those 4 in
+    # one run, 4 of 4 in the next. Where quiet flips to loud was not sampled: it is somewhere
+    # between 10 and 5, and the same arithmetic puts it near 9.
     watched = _parked_pids(tmp_path)
     (tmp_path / _PARK_HOLD).unlink(missing_ok=True)
     alive = {pid for pid in watched if _pid_alive(pid)}
