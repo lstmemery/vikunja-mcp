@@ -1883,7 +1883,8 @@ class Workflow:
         deliberately OWN-PROJECT-ONLY: injecting ready-for-pickup work into ANOTHER
         project's Queue would bypass that project's human (and wake their fleet loop
         with work nobody there sanctioned), so queue+cross is refused before anything
-        is created."""
+        is created. The result's filed.ref (#735) is the card's human-searchable name —
+        echo it VERBATIM, never reconstruct one from the id."""
         if not (title or "").strip():
             raise WorkflowError("a non-empty title is required for the new task")
         target = self.project_id if project_id is None else int(project_id)
@@ -1932,8 +1933,41 @@ class Workflow:
         if related_task_id is not None:
             marker += f" (по ходу работы над #{related_task_id})"
         self.api.add_comment(new_id, marker)
+        # `ref` (#735): the human-searchable name of the card THIS tool just created. The tools
+        # that HAND BACK a task already carry one (_summary for next_task/claim, get_task), so an
+        # agent told by SKILL.md to echo a ref, having only `filed.id`, had to invent the half no
+        # tool gave it — and #660 shipped exactly that: "Filed as VMCP-181 (732)", where 732 is
+        # really VMCP-195 and VMCP-181 is a LIVE unrelated card (id 706). A fabricated identifier
+        # resolves to plausibly the WRONG card, which is worse than a broken link: it takes the
+        # reader somewhere. Note the scope: this closes file_task, NOT the class — `decompose`
+        # creates cards too and still records its children as {id, title}, measured by running it
+        # and by reading every historical version of the line that records a child (introduced by
+        # f6508ac, unchanged since; no `git log -S` spelling is quoted for it, because a command
+        # written INTO the file it interrogates changes its own answer — this comment would be a
+        # new match). So #735's own description was wrong to list decompose among the tools that
+        # already return a ref; that half is filed as VMCP-206 (749), and until it lands a child's
+        # ref costs a get_task, which SKILL.md says rather than implying otherwise.
+        # It costs ZERO extra requests, and that is measured twice, not assumed: real 2.3.0
+        # returns `identifier` in the PUT /projects/{id}/tasks response itself ('PRB-1'; '#1' for
+        # a project with no prefix — byte-identical to the read-back), and a hooked call
+        # inventory of a live file_task shows NO GET of the new card in either branch. So _ref is
+        # a pure format over the dict `create_task` already returned — which is also why "the
+        # token may not see the card it just filed" cannot arise here: nothing is re-read.
+        # CROSS-PROJECT: the identifier is computed by the TARGET's board, so the ref carries
+        # THEIR prefix (measured live: 'TGT-1 (5)' filed from a project prefixed OWN) — that
+        # prefix is what makes the card findable on the board it actually lives on, and the note
+        # says so out loud.
+        # What `ref` still does NOT cover, pre-existing and deliberately not widened here: the
+        # result is assembled LAST, so a failure between create and here (a scope gap on the
+        # move, the relation or the marker) raises with the card already on the board and hands
+        # back neither id nor ref. `decompose` takes the other choice a few hundred lines up —
+        # it records each child the instant it exists, BEFORE its relation and move — and the
+        # asymmetry is worth knowing about rather than assuming away.
         result = {
-            "filed": {"id": new_id, "title": created["title"], "stage": stage},
+            "filed": {
+                "id": new_id, "ref": self._ref(created),
+                "title": created["title"], "stage": stage,
+            },
             "note": (
                 "in Queue, unassigned — immediately claimable (Backlog triage bypassed; "
                 "queue=True is only for tasks a human explicitly asked to file as work)"
@@ -1947,7 +1981,9 @@ class Workflow:
                 f"filed into project {target}'s Backlog for THAT project's human to "
                 f"triage (not Queue — a human prioritizes). The card lives on the TARGET "
                 f"board: your other tools (get_task/comment/next_task) are bound to your "
-                f"own project and won't see it — the 'related' link is the cross-reference"
+                f"own project and won't see it — the 'related' link is the cross-reference. "
+                f"`ref` carries the TARGET project's identifier prefix, not yours: that is "
+                f"the name their humans search by, so echo it verbatim"
             )
         if related_task_id is not None:
             result["related_to"] = related_task_id

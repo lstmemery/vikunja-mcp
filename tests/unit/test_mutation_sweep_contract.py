@@ -325,14 +325,18 @@ _KEY_HEAD = 48
 # listed it among what the check flags, and carries a correction comment saying otherwise. So
 # shipping it needs a retraction set of its own, the idiom this file already runs on, and it is
 # filed as VMCP-195 (732) — the ref read back from `get_task(732)`, not composed: an earlier
-# spelling wrote `VMCP-181`, which is a live unrelated card (id 706), because `file_task` returns
-# no `ref` to echo. Not folded in here. THAT MISS IS A CLASS RATHER THAN A SLIP, and the useful
+# spelling wrote `VMCP-181`, which is a live unrelated card (id 706), because at that landing
+# `file_task` returned no `ref` to echo. That cause is now CLOSED for this tool — #735 added
+# `filed.ref`, so a card you FILE names itself — which is why this sentence is in the past tense.
+# Not folded in here. THAT MISS IS A CLASS RATHER THAN A SLIP, and the useful
 # part is its SHAPE, because the count below rots and the shape does not. In every instance found
 # the NUMERIC id was RIGHT and only the human-readable half was wrong, which is not chance: that
-# half is the one you have to fetch ON PURPOSE — `file_task` never returns it at all, and for a card
-# you are merely CITING it costs a `get_task` you have no other reason to make — so it is the half
-# supplied from memory, and memory returns a plausible NEIGHBOURING index rather than a
-# self-announcing blank. Swept at this landing by resolving ids through the same call the tool makes
+# half is the one you have to fetch ON PURPOSE — for a card you are merely CITING it costs a
+# `get_task` you have no other reason to make — so it is the half supplied from memory, and memory
+# returns a plausible NEIGHBOURING index rather than a self-announcing blank. (#735 removed one
+# source of that cost, not the class: a card you FILE now names itself in `filed.ref`, but a card
+# you CITE, and a `decompose` child, still cost the deliberate fetch — VMCP-206 (749).)
+# Swept at this landing by resolving ids through the same call the tool makes
 # (`api.get_task(id)` -> `Workflow._ref`): of the 62 `VMCP-N (id)` pairs this repo held BEFORE this
 # commit, THREE disagreed. That 62 is pinned to the PRE-COMMIT tree on purpose — citing the filed
 # card below adds a 63rd, so a total stated here without its tree would be falsified by the

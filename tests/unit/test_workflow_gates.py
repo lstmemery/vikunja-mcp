@@ -1002,6 +1002,141 @@ def test_file_task_queue_cross_project_refused_nothing_created(env):
     assert api.stage_of(res["filed"]["id"]) == "Queue"
 
 
+def test_file_task_returns_the_ref_and_its_index_is_the_servers_not_the_id(env):
+    """#735: the card file_task just created comes back with `ref` — its human-searchable
+    name — so an agent told by SKILL.md to echo one is not left to invent it.
+
+    What the exact-equality assertion buys over "ref is a non-empty string" is the ANTI-
+    FABRICATION property: the readable half must be the index the SERVER assigned and not
+    anything derived from the global id. That is precisely the failure this fixes — #660 shipped
+    "Filed as VMCP-181 (732)" where 732 is really VMCP-195 and VMCP-181 is a LIVE unrelated card
+    (id 706), i.e. the numeric half was right and the readable half pointed somewhere else. So an
+    id-deriving implementation, f"HGI-{new_id}", is RED here.
+
+    That property depends on the FIXTURE keeping index and id apart (FakeAPI counts indexes from
+    1 and ids from 100), which is why the second assertion checks the fixture itself: were they
+    ever to coincide, the first assertion would still pass while testing nothing about
+    fabrication. It is a guard on the test, not a second pin — and a separate `ref != HGI-<id>`
+    assertion is deliberately NOT written, because given these two it could never fail, and a
+    redundant assert reads like independent coverage it does not provide.
+
+    The last assertion pins cross-TOOL agreement — the name file_task gives must be the name
+    get_task gives, which is what makes echoing either safe. Its honest limit: no mutation of
+    file_task reaches it, because any ref this test can distinguish already fails the first
+    assertion; what it would catch is the two sides DRIFTING APART later. Delete
+    `"ref": self._ref(created)` from workflow.file_task and this test is RED at the first
+    assertion (KeyError)."""
+    api, wf, _t = env
+    res = wf.file_task(title="a finding worth naming")
+    new_id = res["filed"]["id"]
+    index = api.tasks[new_id]["index"]
+
+    assert res["filed"]["ref"] == f"HGI-{index} ({new_id})", \
+        "not the server's index — an id-derived readable half is the #660 fabrication"
+    assert index != new_id, \
+        "fixture guard: index and id coincided, so the assertion above pins nothing"
+    assert res["filed"]["ref"] == wf.get_task(new_id)["ref"], \
+        "file_task names the card differently from get_task — echoing either becomes a guess"
+
+
+def test_file_task_never_reads_back_the_card_it_just_created(env):
+    """#735: the ref must keep costing NOTHING — it is formatted from the dict create_task
+    already returned, and the whole safety argument for the cross-project branch rests on that.
+    If a later edit "simplified" this into a read-back (`get_task(new_id)` to fetch the
+    identifier), the ref value would look identical in every other test here while the tool
+    acquired a new failure mode: filing into a project the token may WRITE to but not READ back
+    from would start raising AFTER the card exists — the card lands, the caller gets an error and
+    no ref, and the fix for the fabrication becomes a new way to lose the reference entirely.
+
+    Measured on live 2.3.0 before relying on it: a hooked call inventory of file_task shows no GET
+    of the new card in either branch, and PUT /projects/{id}/tasks carries `identifier` itself.
+    This pins that property against a re-read that no value assertion can see: it is the one
+    mutation that keeps every other test in this file green (verified — inserting a gratuitous
+    get_task before the result dict leaves the three ref tests passing and only this one RED)."""
+    api, wf, _t = env
+    reads = []
+    real_get = api.get_task
+
+    def counting_get(task_id):
+        reads.append(task_id)
+        return real_get(task_id)
+
+    api.get_task = counting_get
+
+    res = wf.file_task(title="own-project finding")
+    assert reads.count(res["filed"]["id"]) == 0, \
+        f"file_task read back the card it just created ({reads}) — the ref must stay free"
+
+    other = api.add_project("neighbor", buckets=STAGES, identifier="NB")
+    reads.clear()
+    res = wf.file_task(title="cross finding", project_id=other["id"])
+    assert reads.count(res["filed"]["id"]) == 0, \
+        "cross-project file_task read the new card back — that is the branch where the token " \
+        "is least likely to be able to, and the card would already exist when it failed"
+
+
+def test_file_task_cross_project_ref_carries_the_targets_prefix(env):
+    """#735, decided deliberately rather than by inertia: filed into ANOTHER project, the ref
+    carries the TARGET board's identifier prefix, because that is the name THEIR humans search
+    by — the card lives there, and the filer's own tools cannot even see it. A ref built from
+    the SOURCE project (or a bare id) would name a card nobody can find on either board.
+
+    Costs nothing extra: Vikunja computes `identifier` per project and returns it in the create
+    response itself (measured on real 2.3.0 — 'PRB-1'; '#1' for a prefix-less project), so no
+    second call is made — which is also why "the token may not see the card it just filed"
+    cannot arise here. Point _ref at anything source-derived and this is RED."""
+    api, wf, t = env
+    other = api.add_project("neighbor", buckets=STAGES, identifier="NB")
+    res = wf.file_task(title="repo B needs an endpoint", related_task_id=t["id"],
+                       project_id=other["id"])
+    new_id = res["filed"]["id"]
+
+    assert res["filed"]["ref"] == f"NB-{api.tasks[new_id]['index']} ({new_id})"
+    assert not res["filed"]["ref"].startswith("HGI-"), \
+        "cross-filed card named with the SOURCE project's prefix — unfindable on the target board"
+    assert "TARGET project's identifier prefix" in res["note"], \
+        "the note stopped warning that the prefix is theirs, not yours"
+
+
+def test_file_task_ref_degrades_to_the_bare_id_when_the_server_omits_the_identifier(env):
+    """#735: the fallback must stay HONEST. If a server ever answers create without
+    `identifier`, the ref degrades to "#<id>" — a reference that is merely unhelpful — and must
+    NEVER synthesise a plausible index, which is the one outcome worse than no ref at all (it
+    resolves to a different live card). Pinning the fallback also pins that nothing downstream
+    of file_task assumes an identifier is present: without it, a `KeyError`/`None` here would
+    break filing entirely for prefix-less or older servers.
+
+    Two shapes are covered because they are NOT the same on the wire, and both were measured on
+    real 2.3.0: a project with NO prefix still gets an identifier — the string "#<index>", which
+    _ref keeps verbatim, so the ref reads "#1 (107)" — whereas a MISSING key is the defensive
+    branch and yields "#<id>". Make _ref invent an identifier from the id and the "HGI-"
+    assertions are RED; drop its `or ""` guard and the missing-key case raises instead."""
+    api, wf, _t = env
+
+    # (1) prefix-less PROJECT: the server still sends an identifier, "#<index>" — kept verbatim
+    plain = api.add_project("no-prefix", buckets=STAGES, identifier="")
+    res = wf.file_task(title="filed into a project with no prefix", project_id=plain["id"])
+    new_id = res["filed"]["id"]
+    assert res["filed"]["ref"] == f"#{api.tasks[new_id]['index']} ({new_id})"
+    assert res["filed"]["ref"] != f"#{new_id}", \
+        "the server's index was dropped in favour of the id — that half is not ours to invent"
+
+    # (2) server OMITS the key entirely: degrade to the bare id, never to a synthesised index
+    real_create = api.create_task
+
+    def create_without_identifier(*a, **kw):
+        created = real_create(*a, **kw)
+        created.pop("identifier")
+        return created
+
+    api.create_task = create_without_identifier
+    res = wf.file_task(title="filed against a server that omits identifier")
+    new_id = res["filed"]["id"]
+    assert res["filed"]["ref"] == f"#{new_id}"
+    assert "HGI-" not in res["filed"]["ref"], \
+        "an identifier was synthesised where the server supplied none"
+
+
 def test_comment_and_get_task(env):
     api, wf, t = env
     with pytest.raises(WorkflowError):

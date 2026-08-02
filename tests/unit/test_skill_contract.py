@@ -4879,3 +4879,40 @@ def test_both_texts_that_teach_the_ownerless_bounce_name_its_MEASURED_destinatio
             f"SKILL.md line {i + 1} names **{assigned}** at the #705 citation — that is the "
             f"ASSIGNED destination; an ownerless bounce measurably lands in {ownerless}:\n{near}"
         )
+
+
+def test_skill_and_tool_docstring_tell_agents_to_echo_the_filed_ref_not_build_one():
+    """#735: the CODE half of this fix (file_task returning `filed.ref`) cannot stop a fabricated
+    reference on its own — nothing forces an agent to use the value. The rule that does is prose,
+    in two places an agent actually reads: SKILL.md's «Ссылайся на задачу человекочитаемо» and
+    the `file_task` tool docstring. Both were shipped unpinned, so deleting either left the whole
+    suite green while the behaviour that #660 shipped — inventing `VMCP-181` for a card that is
+    really `VMCP-195` — became allowed again by the only text that ever forbade it.
+
+    Pinned here as three claims, each the reason the fix works rather than a wording:
+      * the rulebook names `filed.ref` — i.e. tells the agent the value EXISTS, which is what
+        makes "don't invent one" an instruction rather than a scolding;
+      * the rulebook forbids composing a ref, and says what a composed one costs (it resolves to
+        a live UNRELATED card, the property that makes it worse than a broken link);
+      * the tool docstring, which agents read without the skill loaded, carries the same rule.
+
+    Measured RED for each: delete the `filed.ref` sentence from SKILL.md -> first assert; delete
+    the «СОБИРАТЬ его самому нельзя» bullet -> second; delete the NAMING paragraph from
+    server.file_task's docstring -> third."""
+    text = _skill_text()
+    assert "filed.ref" in text, \
+        "SKILL.md no longer tells agents that a filed card comes back WITH its ref (#735) — " \
+        "without that, 'do not invent one' asks for a value the agent believes it lacks"
+    ref_rule = text[text.index("Ссылайся на задачу человекочитаемо"):][:2500]
+    assert "СОБИРАТЬ его самому нельзя" in ref_rule, \
+        "SKILL.md no longer forbids composing a ref by hand — the #660 failure mode"
+    assert "ПОСТОРОННЮЮ" in ref_rule, \
+        "SKILL.md no longer says WHY a composed ref is worse than none: it resolves to a live " \
+        "unrelated card rather than announcing itself as broken"
+
+    doc = inspect.getdoc(server.file_task) or ""
+    assert "filed.ref" in doc, \
+        "the file_task tool docstring no longer names filed.ref — agents reading the tool " \
+        "schema alone (no skill loaded) lose the rule entirely"
+    assert "NEVER assemble" in doc, \
+        "the file_task docstring no longer forbids assembling a ref from the id (#735/#660)"

@@ -543,7 +543,20 @@ def file_task(
     lands in the TARGET's Backlog for THAT project's human to triage; the marker names
     your project, and related_task_id still links it back to your current task across the
     project boundary. The filed card lives on the target board — your get_task/comment
-    won't see it afterwards. Omit project_id (default) to file into your own project."""
+    won't see it afterwards. Omit project_id (default) to file into your own project.
+    NAMING THE CARD YOU JUST FILED: the result carries filed.ref — the human-searchable
+    reference ("VMCP-195 (732)"). ECHO IT VERBATIM in comments/worklogs; NEVER assemble
+    one yourself from the id, and never carry over an index you saw elsewhere. A guessed
+    identifier does not read as broken — it resolves to a DIFFERENT live card and sends
+    the reader there (#660 shipped "VMCP-181 (732)": 732 is VMCP-195, and VMCP-181 is an
+    unrelated card). No extra call is needed: the ref comes back with the card. Filed
+    cross-project, it carries the TARGET project's prefix — that is correct, echo it as
+    is. A project with NO identifier prefix is not a failure and not the fallback: the
+    server sends "#<index>" and the ref reads "#1 (107)" — echo that too. Only when the
+    identifier is absent or blank does ref degrade to bare "#<id>"; that honest fallback
+    is still the string to echo. One case the ref cannot cover: if the call RAISES after
+    the card was created (a scope gap on the move/relation/marker write), the card exists
+    but you got no id and no ref — say so plainly rather than reconstructing either."""
     return _wf().file_task(
         title, description=description, priority=priority,
         related_task_id=related_task_id, project_id=project_id, queue=queue,
