@@ -3484,8 +3484,8 @@ def _after_review_section(text: str) -> str:
     stays GREEN with this entire rule deleted. It cannot tell "the receiver is told to forward
     the question" from "the words exist somewhere". Verified by running exactly that mutation
     both ways, which is the whole argument; no occurrence COUNT is quoted, because the count is
-    a number this file's own edits keep moving (the commit that first wrote this docstring
-    quoted 27 and made it 29 in the same diff)."""
+    a number this file's own edits keep moving — the first draft of this docstring quoted one
+    and the same diff had already changed it, so run the mutation instead of counting."""
     start = text.find("\n## После Review\n")
     assert start != -1, "SKILL.md no longer has the section written to a post-review implementer"
     end = text.find("\n## ", start + 1)
@@ -3542,12 +3542,26 @@ def test_the_implementer_RECEIVING_a_needs_work_report_is_told_it_may_be_a_QUEST
     speaks to both sides), which is exactly the kind of number that goes stale silently. A
     question could therefore land in Build unremarked, looking on the board like ordinary rework.
 
-    `needs_work` also carries a THIRD kind of report, which the second independent pass caught
-    and which is measured here: «this should be SPLIT». `decompose` is shut from Review too
-    (#663), so it too rides back as a needs_work bounce and is done by the owner from Build —
-    MEASURED, the parent then leaves for Backlog with the `epic` label, not for Review. A binary
-    "defect or question?" rule would have routed it to rework, so the pins below require all
-    three destinations to be named.
+    A needs_work bounce carries OTHER kinds of report too, and this test pins their ROUTES
+    rather than their NUMBER — deliberately, because the number is what kept going stale. The
+    rule shipped saying «исходов ДВА», the second independent pass measured a third («this
+    should be SPLIT» — `decompose` is shut from Review by #663, so it rides back as a bounce and
+    the owner runs it from Build, landing the parent in Backlog as an `epic`), the rule then
+    shipped saying «Три случая», and independent review measured a FOURTH («потеряла смысл» /
+    external block — `return_task` is shut from Review by #590 and open to the owner from Build,
+    landing the card in Backlog with `blocked` and no assignee). Twice the closed list was the
+    defect, and both times the closure was sewn into this pin as well, so the wrong shape stayed
+    green. It is not sewn in now: `_sweep_bounced_card_movers` MEASURES the membership on every
+    run, and the prose is pinned for its catch-all instead of for a count. A binary — or ternary —
+    "which is it?" rule sends the branch it lacks to rework, which is the receiver's documented
+    default bias and the whole failure mode this card is about.
+
+    What "measured" covers, exactly, since this is the claim that was too wide on the first
+    attempt: a branch is a (TOOL, FORM) pair, so the sweep re-derives BOTH — the tools from
+    `server._DEFERRED_TOOLS`, and the forms of the two multi-form tools from `AGENT_ADVANCE` and
+    from review_task's own verdict tuple. Deriving only the tools left a real hole: a new
+    `advance` transition is a fifth branch that adds no tool, and the suite stayed green on
+    exactly that mutant until the forms were derived too.
 
     The prose half and the code half are both here on purpose: the code half is what makes this
     card's RULING falsifiable. The alternative weighed and rejected was pinging the human on hop1
@@ -3578,8 +3592,35 @@ def test_the_implementer_RECEIVING_a_needs_work_report_is_told_it_may_be_a_QUEST
     # the split BRANCH deleted — measured, that mutation passed until this assert named the
     # route instead of the word.
     assert "`decompose` из Build" in receiver, (
-        "«После Review» no longer routes the THIRD thing a needs_work report can be. A binary "
+        "«После Review» no longer routes the split branch of a needs_work report. A binary "
         "defect-or-question rule sends «this should be split» to rework — measured below"
+    )
+    assert "`return_task` из Build" in receiver, (
+        "«После Review» no longer routes the external-block branch — the fourth thing a "
+        "needs_work report can be, and the one a ternary defect/question/split rule sends to "
+        "rework. `return_task` is shut from Review (#590) and open to the owner from Build, so "
+        "the reviewer has to package it as a bounce like the rest — measured below"
+    )
+    # the catch-all is what keeps the list from reading CLOSED, which is the defect this card
+    # shipped twice. Pinned by the instruction it gives, not by the hedge around it: a reader
+    # acts on «спроси человека», and a hedge with no action would leave the guessing in place.
+    assert "не подошло НИЧЕГО" in receiver and "НЕ УГАДЫВАЙ" in receiver, (
+        "«После Review» lost the catch-all branch, so its enumeration reads as closed again. "
+        "Every closed version of this list has so far been measurably incomplete, and a missing "
+        "member routes to rework by default — name the fallback, not a count"
+    )
+    # The no-assignee caveat has to generalise over the routes, not name one of them: naming a
+    # single refusal invites trying the next route down the list, and all of them refuse
+    # identically (measured at the end of this test).
+    assert "отказывают ВСЕ маршруты выше" in receiver, (
+        "«После Review»'s no-assignee caveat is back to naming one refusing tool. With several "
+        "routes listed above it, a reader who is told only that `call_human` refuses will try "
+        "`return_task` next — and get the same refusal, having burned a round to learn it"
+    )
+    assert "НЕЗАВЕРШЁННЫМ предшественником" in receiver, (
+        "«После Review» lost the second measured edge. Both edges are pinned as prose because "
+        "the measurement below only proves the BEHAVIOUR — an agent that is not told a branch "
+        "can be gated away reads its refusal as the rulebook being wrong about the branch"
     )
 
     # ── prose: the cycle bullet no longer teaches Review as the only destination
@@ -3592,6 +3633,20 @@ def test_the_implementer_RECEIVING_a_needs_work_report_is_told_it_may_be_a_QUEST
         "the needs_work-cycle bullet no longer names the split branch's DESTINATION. A bare "
         "`decompose` token would not do here either — the same bullet names the tool while "
         "explaining why the reviewer cannot call it, so only the destination is branch-specific"
+    )
+    # the LABEL, not the column: Backlog is shared with the split branch, so `epic` vs `blocked`
+    # is what tells the two apart. Deliberately not a phrase spanning the two — «**Backlog** с
+    # меткой `blocked`» wraps in the file, and this test's own docstring records that a wrapped
+    # phrase is invisible to a contiguous search, which would make the assert reflow-fragile.
+    assert "меткой `blocked`" in cycle, (
+        "the needs_work-cycle bullet no longer names the external-block branch's DESTINATION. "
+        "The orchestrator reading this bullet needs to know a `blocked` card went to Backlog "
+        "for human re-triage and is not coming back to Review on its own"
+    )
+    assert "не читай список как закрытый" in cycle, (
+        "the needs_work-cycle bullet promises its branch list is complete again. It is the "
+        "orchestrator's half of the same enumeration «После Review» keeps open, and the two "
+        "going out of step is how the closed version survived review twice"
     )
 
     # ── code: the three hops, and which one of them actually pages a human
@@ -3638,7 +3693,7 @@ def test_the_implementer_RECEIVING_a_needs_work_report_is_told_it_may_be_a_QUEST
     board = wf.liveness_board()
     assert wf.parked_task_ids(board) == [card["id"]] and wf.active_task_ids(board) == []
 
-    # ── code: the THIRD kind of needs_work report, on a fresh board — «this should be SPLIT».
+    # ── code: the SPLIT kind of needs_work report, on a fresh board — «this should be SPLIT».
     # It rides the same bounce because decompose is shut from Review (#663), and it lands the
     # card somewhere else again: Backlog, as an epic. This is what makes a binary
     # defect-or-question rule wrong rather than merely incomplete.
@@ -3655,3 +3710,218 @@ def test_the_implementer_RECEIVING_a_needs_work_report_is_told_it_may_be_a_QUEST
         f"got {parent}"
     )
     assert api2.stage_of(split["id"]) == "Backlog"
+    # the two Backlog branches are NOT label-symmetric, and the rulebook now says so: decompose
+    # CLEARS the verdict, return_task (below) adds to it. Both measured, both pinned, because
+    # side-by-side bullets invite the reader to assume the halves match.
+    assert [lb["title"] for lb in api2.tasks[split["id"]]["labels"]] == ["epic"], (
+        "the split branch no longer leaves the parent carrying `epic` alone. SKILL.md contrasts "
+        "it with the external-block branch precisely on the labels — if that changed, the "
+        "contrast now teaches the wrong board state"
+    )
+
+    # ── code: the EXTERNAL-BLOCK kind — «потеряла смысл». Structurally the split branch again
+    # (shut to the reviewer from Review by #590, open to the owner from Build) but with its own
+    # destination, and it is the member the shipped ternary lacked. The DROPPED assignee is the
+    # part worth pinning: it is what makes this a hand-off to a human rather than a move.
+    api3 = FakeAPI(buckets=workflow.STAGES)
+    wf3 = workflow.Workflow(api3, project_id=3)
+    stale = api3.add_task("задача потеряла смысл", "Review", assignee=api3.me_user)
+    with pytest.raises(workflow.WorkflowError):
+        wf3.return_task(stale["id"], reason="зависимость выпилена")
+    assert api3.stage_of(stale["id"]) == "Review", (
+        "the refused return_task moved the card anyway — #590's gate is what forces this branch "
+        "through a needs_work bounce, and the whole paragraph rests on it"
+    )
+    wf3.review_task(stale["id"], verdict="needs_work", report="зависимость выпилена, работа мертва")
+    returned = wf3.return_task(stale["id"], reason="зависимость выпилена")
+    assert returned["moved_to"] == "Backlog" and returned["labeled"] == "blocked", (
+        f"the external-block branch no longer ends in Backlog as `blocked`. SKILL.md routes the "
+        f"receiving implementer to exactly that destination, and distinguishes it from the split "
+        f"branch by the LABEL, since both land in Backlog: got {returned}"
+    )
+    assert api3.stage_of(stale["id"]) == "Backlog"
+    assert not api3.tasks[stale["id"]]["assignees"], (
+        "return_task no longer clears the assignee. SKILL.md says this branch hands the card to a "
+        "human for re-triage — a card still assigned in Backlog is a different promise entirely"
+    )
+    assert sorted(lb["title"] for lb in api3.tasks[stale["id"]]["labels"]) == [
+        "blocked", "review-failed"], (
+        "the external-block branch no longer leaves the verdict label in place. SKILL.md tells "
+        "the reader this is where the two Backlog branches DIFFER — the human triaging sees "
+        "`blocked` on top of `review-failed` here, and a bare `epic` on the split branch"
+    )
+
+
+def _review_task_verdicts() -> tuple[str, ...]:
+    """review_task's accepted verdicts, READ from workflow.py's own validation tuple rather than
+    copied here. A third verdict would be a new FORM, and a form is how a new branch arrives with
+    no new tool in sight — see _bounced_card_tool_forms."""
+    match = re.search(r"if verdict not in (\([^)]*\))", _workflow_src())
+    assert match, (
+        "review_task no longer validates its verdicts as a literal tuple. The bounce sweep DERIVES "
+        "its forms from that tuple so a new verdict cannot slip past it — re-point it at whatever "
+        "declares the verdicts now, do not paste the list back in"
+    )
+    return ast.literal_eval(match.group(1))
+
+
+def _bounced_card_tool_forms() -> dict[str, list[tuple[str, dict]]]:
+    """One plausible call per agent tool FORM, each enough to reach that form's GATE rather than
+    its argument validation — a call that dies on a missing argument measures nothing and reads as
+    "does not move the card". Placeholders are filled in per call by the sweep below.
+
+    The multi-form tools are DERIVED from their source of truth and deliberately NOT listed here,
+    because a branch of a needs_work bounce is a (tool, FORM) pair: a new `advance` transition is a
+    new candidate branch with no new tool in sight, so a guard that only watches tool NAMES is the
+    wrong dimension. That is measured, not hypothetical — the second independent pass added
+    {"backlog": ("Build", "Backlog")} to AGENT_ADVANCE, which hands the receiving implementer a
+    genuine fifth destination (measured: the card lands in Backlog with the assignee KEPT, unlike
+    `return_task`), and while these forms were a hand-written literal the entire suite, this sweep
+    included, stayed GREEN on it. `to='done'` rides along as a deliberate NON-member: the sweep
+    should measure a refusal it expects rather than assume the accepted set has no edges."""
+    advance_extra = {"spec": "подход", "worklog": "сделано", "evidence": "abc1234",
+                     "root_cause": "причина"}
+    return {
+        "next_task": [("next_task", {})],
+        "claim": [("claim", {"task_id": None})],
+        "get_task": [("get_task", {"task_id": None})],
+        "comment": [("comment", {"task_id": None, "text": "заметка"})],
+        "advance": [
+            (f"advance(to={to!r})", {"task_id": None, "to": to, **advance_extra})
+            for to in (*workflow.AGENT_ADVANCE, "done")
+        ],
+        "review_task": [
+            (f"review_task({verdict!r})", {"task_id": None, "verdict": verdict, "report": "отчёт"})
+            for verdict in _review_task_verdicts()
+        ],
+        "call_human": [("call_human", {"task_id": None, "question": "какой из вариантов?"})],
+        "return_task": [("return_task", {"task_id": None, "reason": "зависимость выпилена"})],
+        "decompose": [("decompose", {"task_id": None,
+                                     "subtasks": [{"title": "часть A"}, {"title": "часть B"}]})],
+        "file_task": [("file_task", {"title": "находка", "related_task_id": None})],
+        "attach_file": [("attach_file", {"task_id": None, "path": None, "note": "проба"})],
+        "download_attachment": [("download_attachment", {"task_id": None,
+                                                         "attachment_id": None})],
+    }
+
+
+def _sweep_bounced_card_movers(monkeypatch, tmp_path, assignee: bool = True,
+                               predecessor: bool = False) -> dict[str, str]:
+    """Call EVERY agent tool against a freshly bounced card and report which ones move it off
+    Build, and to where. Each call gets its OWN board, so one tool's move cannot mask the next.
+
+    This exists so that «После Review»'s branch list is MEASURED on every run instead of being a
+    number somebody wrote down. That distinction is not theoretical here: the list shipped closed
+    twice (as two branches, then as three) and was measurably incomplete both times, because
+    nothing re-derived it. A tool that is shut from Review and open to the owner from Build IS a
+    branch of a needs_work bounce, whether or not the rulebook mentions it.
+
+    The default board is PLAIN — one card, no relations — because that is the state the branch
+    list describes. Other gates can take a branch away without removing it from the list, and the
+    rulebook names the two measured ones as EDGES rather than as branches; each gets its own
+    sweep here rather than muddying the main one, which would then measure the gate instead of
+    the enumeration. `assignee=False` is the card a human left unassigned in Review: nothing can
+    move it at all. `predecessor=True` gives it an unfinished `follows` head: that costs it the
+    defect branch specifically, since `advance(to='review')` latches until the predecessor
+    reaches Review."""
+    forms = _bounced_card_tool_forms()
+    unknown = [f.__name__ for f in server._DEFERRED_TOOLS if f.__name__ not in forms]
+    assert not unknown, (
+        f"new agent tool(s) {unknown} are not in this sweep. Add a plausible call for each and "
+        f"see whether it moves a card that was bounced out of Review: if it does, it is a new "
+        f"branch of a needs_work report and «После Review» has to name it. This assert guards the "
+        f"tool NAMES; the per-tool FORMS are derived, which is the other half of the same job"
+    )
+    movers: dict[str, str] = {}
+    for fn in server._DEFERRED_TOOLS:
+        for label, form in forms[fn.__name__]:
+            api = FakeAPI(buckets=workflow.STAGES)
+            wf = workflow.Workflow(api, project_id=3)
+            card = api.add_task("починить дренаж", "Review",
+                                assignee=api.me_user if assignee else None)
+            if predecessor:
+                head = api.add_task("предшественник", "Build", assignee=api.me_user)
+                api.add_relation(card["id"], head["id"], "follows")
+            wf.review_task(card["id"], verdict="needs_work", report="отбой")
+            monkeypatch.setattr(server, "_wf", lambda wf=wf: wf)
+            kwargs = dict(form)
+            for key in ("task_id", "related_task_id"):
+                if key in kwargs:
+                    kwargs[key] = card["id"]
+            if "path" in kwargs or "attachment_id" in kwargs:
+                probe = tmp_path / "probe-628.txt"
+                probe.write_text("проба", encoding="utf-8")
+                if "path" in kwargs:
+                    kwargs["path"] = str(probe)
+                else:   # download needs something to download, or it dies before its gate
+                    kwargs["attachment_id"] = wf.attach_file(
+                        card["id"], str(probe))["attachment_id"]
+            result = fn(**kwargs)
+            # "moved AND did not report an error". The conjunction has a known blind spot: a tool
+            # that moves the card and THEN fails would be counted a non-mover. No agent tool does
+            # that today (`_tool` turns a WorkflowError into {"error"} and the gates all run before
+            # the writes), and the alternative — counting any move — would report a half-finished
+            # refusal as a branch. Named rather than left for the next reader to rediscover.
+            refused = isinstance(result, dict) and "error" in result
+            landed = api.stage_of(card["id"])
+            if landed != "Build" and not refused:
+                movers[label] = landed
+    return movers
+
+
+def test_the_needs_work_branch_list_is_MEASURED_not_a_number_somebody_wrote_down(
+        monkeypatch, tmp_path):
+    """#628 round 2: «После Review» enumerates what a `[review] NEEDS WORK` report can be, and
+    twice that enumeration shipped CLOSED and measurably incomplete — «исходов ДВА» missed the
+    split branch, «Три случая» missed the external block. Both times the pin agreed with the
+    prose, so the wrong shape stayed green and only a human reviewer caught it.
+
+    The repair is to stop asserting a count anywhere. The prose keeps a catch-all instead (pinned
+    above), and membership is re-derived HERE, from `server._DEFERRED_TOOLS`, every run. What the
+    branches have in common is structural, not thematic: shut to the reviewer from Review, open
+    to the owner from Build, own destination — so the sweep asks exactly that question of every
+    tool rather than trusting a list.
+
+    Note what this does and does not guarantee. It pins the four branches that exist TODAY and
+    fails loudly on a new tool (the `unknown` assert in the sweep), which is what makes the
+    rulebook's «список НЕ обещан закрытым» honest rather than decorative. It does not make
+    SKILL.md self-updating: a fifth branch turns this test red, and a human or agent still has to
+    write the branch down. That is the intended cost — red is what the previous two rounds
+    lacked. It also does not speak for a MUTATING tool that never moves a card (`comment`,
+    `attach_file`): those are not branches because the receiver has nothing to route."""
+    movers = _sweep_bounced_card_movers(monkeypatch, tmp_path)
+    assert movers == {
+        "advance(to='review')": "Review",       # the defect branch — rework, then back to Review
+        "call_human": "Your Call",              # the question branch — the reviewer's escalation
+        "return_task": "Backlog",               # the external-block branch — `blocked`, no assignee
+        "decompose": "Backlog",                 # the split branch — `epic`, children into Queue
+    }, (
+        f"the set of tools that can move a bounced card off Build changed: {movers}. Every member "
+        f"is a branch a needs_work report can be, and «После Review» routes the receiving "
+        f"implementer by name — a member missing from that list is routed to rework by default, "
+        f"which is the exact failure this card was bounced for, twice"
+    )
+
+    # The rulebook's caveat about a card bounced with NO assignee says every one of those routes
+    # refuses, identically. That is a closed universal in prose, so it is measured here rather
+    # than trusted: sweep the same tools with the assignee off and require that NOTHING moves the
+    # card. Written as "no movers" instead of a list of four refusals on purpose — it stays true,
+    # and stays the right assert, if a fifth branch is ever added above.
+    stranded = _sweep_bounced_card_movers(monkeypatch, tmp_path, assignee=False)
+    assert stranded == {}, (
+        f"a card bounced out of Review with NO assignee can now be moved by {stranded}. SKILL.md "
+        f"tells the implementer every route refuses and that the card cannot be rescued without "
+        f"a human — if that changed, the caveat now sends them to a human for nothing"
+    )
+
+    # The other measured edge, and the other closed universal in that caveat: an unfinished
+    # predecessor costs the card the DEFECT branch and only that one. Pinned for the same reason
+    # as the line above — the rulebook says «отпадает ровно ветка „дефект“», and "ровно" is a
+    # claim about the whole set, so it is re-derived here instead of remembered.
+    gated = _sweep_bounced_card_movers(monkeypatch, tmp_path, predecessor=True)
+    assert gated == {"call_human": "Your Call", "return_task": "Backlog",
+                     "decompose": "Backlog"}, (
+        f"an unfinished predecessor no longer costs exactly the defect branch: {gated}. SKILL.md "
+        f"tells the implementer the other routes still work and not to start guessing — if the "
+        f"gate widened, that advice now strands them"
+    )
