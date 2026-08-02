@@ -930,7 +930,7 @@ def test_next_task_offers_free_task_despite_off_board_gated_candidate(env):
 # technique. Spanning 1 and 2 does kill BOTH degenerate hard-codes — measured, a hard-coded `2` is
 # GREEN under 606's single env and RED here (at the 1/1 row), while `1` was already red and stays
 # red (at the 3/2 row) — but arithmetic that renders correctly at both spanned values still passes:
-# `max(1, len(retriage))` is GREEN at 724, as it would be under any finite set of states.
+# `max(1, len(retriage))` is GREEN, as it would be under any finite set of states.
 # And the loss this repairs really was confined to the escalation's own predicate, which bounds the
 # claim from the other side too. Re-measured against the pre-fix tree: deleting the escalation is
 # `1 failed`, emitting it unconditionally `3 failed` (this test plus both of 632's rows), and the
@@ -1201,7 +1201,7 @@ def test_the_starving_waiting_line_reads_blocked_task_then_blocker_and_the_headl
     """The waiting line states WHICH task waits on WHICH blocker, and the headline says how many.
     606's differential cannot see either: it changes one attribute between two calls, so a
     corruption that renders identically in both states cancels out of the equality. Both mutations
-    measured green at 716 without this test — the line's LEFT side replaced by the blocker's own
+    measured green without this test — the line's LEFT side replaced by the blocker's own
     ref, so the line reads `X ← X in 'Build'` and the task that actually waits vanishes from it
     (nothing is transposed, hence not an inversion), and the headline count corrupted
     state-independently.

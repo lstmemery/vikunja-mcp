@@ -950,9 +950,9 @@ def test_neither_read_loses_a_task_an_honest_server_paginates():
     sweep that gains an assert can quietly take a "sole guard" row over — and one of them did.
     Whole suite, this sweep's scope assert muted:
 
-        `_offset_pages` over-serving by +3 on EVERY page   -> 706 passed. Nothing but the scope
+        `_offset_pages` over-serving by +3 on EVERY page   -> 0 failed. Nothing but the scope
                                                              assert sees this widening, as before.
-        `_offset_pages` over-serving by +3 on PAGE 1 ONLY  -> 1 failed / 705 passed — and the
+        `_offset_pages` over-serving by +3 on PAGE 1 ONLY  -> 1 failed — and the one
                                                              failure is the COMPLETENESS assert,
                                                              not the scope one: `('Queue', 1,
                                                              {'Build', 'Queue', 'Review'})`,
@@ -1992,7 +1992,7 @@ def test_a_server_serving_MORE_than_it_stated_still_reads_the_list_whole():
 #
 #   delete `if not items: break` entirely        => NO behaviour change at all (5 rows in 2
 #                                                   requests, byte-identical on five shapes) and
-#                                                   the whole unit suite still 600 passed
+#                                                   the whole unit suite still GREEN
 #   the card's own `not items and not header_more`
 #                                                => the same, inert for the same reason
 #
@@ -2058,8 +2058,8 @@ def test_a_page_with_no_rows_ends_a_flat_read_even_when_the_header_says_there_is
 #      121       605 rows in 122 requests        RAISED 508 at request 120, nothing returned
 #      160       800 rows in 161 requests        RAISED 508 at request 120, nothing returned
 #
-# — and with that mutation applied alone (`__pycache__` cleared) the whole unit suite stayed GREEN
-# at 612 passed. So an honest long list read at the advertised rate would have started raising 508
+# — and with that mutation applied alone (`__pycache__` cleared) the whole unit suite stayed GREEN.
+# So an honest long list read at the advertised rate would have started raising 508
 # instead of completing, and nothing in the suite would have said a word.
 #
 # Not cosmetic, because this is the reader every flat list uses: `projects()`, `labels()`,

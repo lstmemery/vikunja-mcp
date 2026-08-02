@@ -118,10 +118,20 @@ def test_return_task_refuses_from_review_and_still_works_everywhere_else(env):
 
     #627: that ORDER sentence used to live in this docstring as prose only — every card built here
     was `assignee=api.me_user`, so the "in Review AND not mine" cell no one asserted was the one
-    cell the order decides. Measured on this tree: inverting the order (`_require_mine` first) left
-    all three pins of #590 green AND the whole unit suite green (712 passed). The multi-identity
-    branch below is what closes that, mirroring the sibling assertion already in the `call_human`
-    test — the two tools share a ruling, so they must share a pin.
+    cell the order decides. RE-MEASURED for VMCP-159 (665) at dcd31ef^, the commit's own parent —
+    named, because this sentence used to say "on this tree" and quote a whole-suite pass total that
+    does not reproduce even there: inverting the order (`_require_mine` first) killed NOTHING,
+    0 failed against an unmutated control of 0 failed, with all three pins of #590 among the green
+    (three re-counted here, not inherited: this test, the `call_human` sibling below, and
+    test_skill_contract's rulebook pin). WITH the branch below in place that same inversion is
+    2 failed against a control that is likewise 0 failed, and the two are this test and
+    test_return_task_refuses_from_done_the_human_only_transition_run_backwards. Those two NAMES are
+    the durable half, and this paragraph is its own warning about the rest: the kill count moved
+    from 0 to 2 — not because the suite grew, but because the branch below pins this exact mutant —
+    while a pass total moves with EVERY test the repo adds, which is why no total is recorded here
+    (CLAUDE.md: "Record the FAILED count, never the pass total"). That branch mirrors the sibling
+    assertion already in the `call_human` test — the two tools share a ruling, so they must share
+    a pin.
 
     All four parts below are load-bearing. The refusal must leave the BOARD untouched: a guard that
     raises after the comment/label/unassign already landed is not a guard. The CONTROL sweep is
@@ -131,8 +141,9 @@ def test_return_task_refuses_from_review_and_still_works_everywhere_else(env):
     the "externally blocked" case this tool exists for. And the OWNERSHIP control is what makes the
     order assertion mean anything: `"not assigned to you" not in msg` names a guard it does not
     exercise, so on its own it would stay green for a `return_task` with no `_require_mine` AT ALL
-    — measured, deleting that guard also left the whole suite green (712 passed). Together the two
-    say what one cannot: BOTH guards are live, and in their intersection STAGE wins.
+    — re-measured at that same dcd31ef^, deleting the guard killed nothing either: 0 failed against
+    an unmutated control of 0 failed. Together the two say what one cannot: BOTH guards are live,
+    and in their intersection STAGE wins.
 
     MUTATION-CHECKED: control PASS; delete the Review gate -> FAIL (the card walks to Backlog);
     invert the order (`_require_mine` first) -> FAIL on the multi-identity branch; delete
