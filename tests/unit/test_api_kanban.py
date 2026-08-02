@@ -1204,8 +1204,11 @@ def test_a_page_filtered_down_to_nothing_still_ends_the_read(info_status):
 
 def _flat(pages, *, page_size=5, total_pages=None, info_status=200,
           harness_cap=3 * MAX_UNPROVEN_PAGES):
-    """A server that answers ONE list endpoint out of `pages`, with the x-pagination-total-pages
-    header real Vikunja sends on these endpoints.
+    """A server that answers ONE list endpoint out of `pages`, and — when `total_pages` names one —
+    with the x-pagination-total-pages header real Vikunja sends on these endpoints. That header is
+    OPT-IN rather than a property of this helper: at the default `total_pages=None` the list
+    response carries NO such header at all (measured off the live responses rather than read off
+    the signature; /info carries it in neither case).
 
     `pages` is either a mapping {page_no: [row, ...]} — every page it does not name is EMPTY, which
     is how a finite list ends — or a CALLABLE page -> [row, ...] for a server that HAS no last page.
@@ -1223,13 +1226,38 @@ def _flat(pages, *, page_size=5, total_pages=None, info_status=200,
     199 on. A mapping fixture is therefore BUDGET-COUPLED, and past that point it does not merely
     fail — it stops PINNING, because the guard no longer changes what it does:
 
-        budget edited 120 -> 500    ceiling as shipped       ceiling -> `if False:`
-        callable, no last page      508 at request 500       harness cap at 1501 (cap = 3 * budget)
-        mapping of 499 pages        499 rows, DID NOT RAISE  499 rows, DID NOT RAISE  <- the same
-        that 199-page mapping       203 rows, DID NOT RAISE  203 rows, DID NOT RAISE  <- the same
+        budget edited 120 -> 500      ceiling as shipped       ceiling -> `if False:`
+        callable, never fills a page  508 at request 500       harness cap at 1501
+        callable, full first page     508 at request 501       harness cap at 1501
+        mapping of 499 pages          499 rows, DID NOT RAISE  499 rows, DID NOT RAISE  <- the same
+        that 199-page mapping         203 rows, DID NOT RAISE  203 rows, DID NOT RAISE  <- the same
 
-    So the callable tells the two states apart at every budget measured — it has no page count to
-    outgrow, which is the whole point — while a mapping does so only below its own. NO
+    THE CALLABLE LINE IS TWO ROWS BECAUSE THE CATEGORY HAS TWO MEMBERS, and one figure would be
+    wrong about one of them. The two are the only `_flat` call sites here handed a CALLABLE rather
+    than a mapping — test_a_list_that_never_finishes_paging_raises_instead_of_truncating (never
+    fills) and the dribbler named above (full first page) — and a third would owe this column a
+    third row. Their one-request gap is not noise, it is the accounting rule above at work — "one
+    MORE when the server fills its first page": the dribbler's first page is 5 rows against
+    page_size 5, so `max_items_per_page` justifies it and the budget is never charged for it.
+    BETWEEN THESE TWO ROWS only the CEILING cell is shape-specific — the cap cell is not, and that
+    was measured rather than reasoned: `harness_cap` counts REQUESTS, not justified pages, so both
+    raise on request 1501, one past the cap of 3 * budget. Say it no wider than that, because the
+    cap column DOES vary further down the table: at this budget neither mapping reaches the cap at
+    all, each ending on its own empty page, 500 and 200 requests in, against a cap of 1500. (Both
+    callable rows are the real test FUNCTIONS driven through a spy around `_flat`, so the counts
+    come off the objects the tests build rather than off this source, and the mutated ceiling is
+    `_paged_list`'s site only — the `view_tasks` twin named below is left alone. At the shipped
+    budget of 120 the same pair is 120 and 121, both capping at 361.) THE ROW WAS TRUE WHEN WRITTEN
+    AND WENT STALE UNDER A LATER LANDING, which is why the maintenance note above is the
+    load-bearing half of this repair: f07a815 (VMCP-119 (594)) wrote the callable row when the file
+    held exactly ONE lambda-backed `_flat` fixture, and 47379c6 (VMCP-135 (624), the very move this
+    paragraph goes on to describe) made it two. That commit added the `that 199-page mapping` row
+    for the fixture it was retiring and left the callable row standing as unchanged context —
+    growing the category without revisiting the cell that counts it. VMCP-168 (690) drove both and
+    split it.
+
+    So BOTH callables tell the two states apart at every budget measured — neither has a page count
+    to outgrow, which is the whole point — while a mapping does so only below its own. NO
     RUNAWAY-READ FIXTURE IN THIS FILE IS A MAPPING ANY MORE: VMCP-135 (624) moved the last one —
     the test named above, green at today's budget of 120 and pinning nothing from 199 on — onto a
     callable for exactly this reason. Mappings remain right for the FINITE lists everything else
