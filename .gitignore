@@ -58,9 +58,12 @@ dist/
 # GIF (`47494638…`) and a ZIP (`504b0304…`) landed as `.bin` files, ignored by nothing and matched
 # by no signature here. One MORE format sits a single capability away, and the durable way to say
 # so is to name the CAP rather than count tools: `browser_start_video` is absent from the default
-# set and present with `PLAYWRIGHT_MCP_CAPS=devtools`, where
-# `browser_start_video(filename="vmcp629-video.webm")` answered `- [Video](./vmcp629-video.webm)`
-# and left WebM (`1a45dfa3…`) in the server's cwd root — no rule and no signature here reaches it.
+# set and present with `PLAYWRIGHT_MCP_CAPS=devtools`. Two tools, and only the first takes the
+# name: `browser_start_video(filename="vmcp629-video.webm")` answers "Video recording started."
+# and — measured — leaves the cwd still empty; the WebM (`1a45dfa3…`) is there the moment
+# `browser_stop_video` answers `- [Video](./vmcp629-video.webm)`, in the server's cwd root, where
+# no rule and no signature here reaches it. Naming and writing are different calls, so a reader
+# driving only the tool named above sees neither the quoted line nor any WebM bytes.
 # So the byte scan is complete about the three formats it NAMES, and about
 # NAMES; it is not complete about FORMATS, and no version of it could be.
 #

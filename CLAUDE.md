@@ -537,19 +537,26 @@ set — takes `part: "response-body"` plus a `filename` and drops the RAW body o
 page made into the same root, in whatever format the server sent; measured, a GIF and a ZIP landed
 as `.bin`, caught by no rule and no signature. One more binary format is a single capability away,
 and the CAP NAME is the anchor that survives, not a tool count: `browser_start_video` is absent
-from the default set and present with `PLAYWRIGHT_MCP_CAPS=devtools`, where it answered
-`- [Video](./vmcp629-video.webm)` and left WebM (`1a45dfa3…`) in the root of the server's cwd.
+from the default set and present with `PLAYWRIGHT_MCP_CAPS=devtools`. Naming and writing are
+different calls there, which is worth stating precisely because the earlier draft did not: it is
+`browser_start_video` that takes the `filename`, and it answers only "Video recording started."
+with the cwd still empty; the WebM (`1a45dfa3…`) appears in the root of the server's cwd when
+`browser_stop_video` answers `- [Video](./vmcp629-video.webm)`.
 **A tool total for "every capability on" is deliberately NOT the anchor for those**, and that is
-the correction this card was bounced for: the shipped text used the label once — `.gitignore` in
-690d648 called the 53-tool set "every capability on" — and 53 is not that set. Nor does 53 name a
+the correction this card was bounced for: in 690d648 `.gitignore` hung that label on a tool total
+of 53, and 53 is not that set. That round carried the same label in two more files, on
+acceptor/writer counts rather than on a total — enumerated in
+`tests/unit/test_repo_browser_isolation.py`, with why a `git log -S` commit count is not a count
+of occurrences. Nor does 53 name a
 set at all: measured, three different cap combinations reach 53, with 10 or 11 `filename`
 acceptors depending which. Every capability on is 69. Cap names survive; tool counts belong to an
 npm package pulled at `@latest`, and the full measurement is in
 `tests/unit/test_repo_browser_isolation.py`. What NEITHER layer reaches, measured rather than
 assumed: `tools/list` shows SEVEN tools taking a `filename` on the default capability set — the
-one the shared session server runs, since the plugin launches it as bare `npx
-@playwright/mcp@latest` with no `--caps` — six of which write, and `browser_snapshot`,
-`browser_console_messages`, `browser_network_requests` and `browser_evaluate` drop the page's own
+one the shared session server runs, which its tool ROSTER says and the absence of a `--caps` flag
+does not, since `PLAYWRIGHT_MCP_CAPS` and `--config` carry capabilities too — six of which write,
+and `browser_snapshot`, `browser_console_messages`, `browser_network_requests` and
+`browser_evaluate` drop the page's own
 TEXT and its request query strings in the same root as plain text — no listable extension, no
 signature, indistinguishable from a legitimate file here. A marker planted on a probe page came
 back in three of those files, and a token placed in a request's query string in two. Writing
