@@ -251,6 +251,19 @@ _KEY_HEAD = 48
 # of the 16 paragraphs, so SIX of the nine additions sit inside them, where one grandfathered key
 # was vouching for every paragraph under it, which is this card's own bug one level down. The
 # other THREE are a single record that had been green outright.
+# It has SHRUNK since, by the first of the two routes above: VMCP-155 (660) re-measured the
+# starving base's rounds under its own control, so the `DELIBERATELY NOT PINNED` entry left. No new
+# total is written here on purpose — a size stated beside the list it counts goes stale the next
+# time the list does its job, which is the self-reference the scope comment above flags. What that
+# landing DID do is leave every SIXTEEN elsewhere in this file one too high, and there are four of
+# them, not one: the module docstring's «a fifth of sixteen» (the fraction survives, only the total
+# moved), the «16-key offender set» in the `_CONTROL_COUNT` block, `_paragraphs`'s «16 in 8», and
+# the ratchet test's weakening row. The last three are ROUNDS, each true of the tree it ran on;
+# tense does not sort them, since two of those are written in the present. Nothing here moves what
+# any of them CONCLUDED: no entry leaves under the weakened pattern, and three of the entries below
+# can still go without any new measurement. The sentences about what 688's rekey PRODUCED — seven
+# record keys becoming sixteen paragraph keys — are history, and stay true whatever the list's size
+# does afterwards.
 LEGACY_RECORDS_WITHOUT_A_CONTROL_COUNT = frozenset({
     "tests/unit/test_api_kanban.py::_serving_lengths"
     "::¶sweep 2's own page draw widened to -> 1 failed /",
@@ -280,9 +293,6 @@ LEGACY_RECORDS_WITHOUT_A_CONTROL_COUNT = frozenset({
     "tests/unit/test_workflow_sequence_gate.py::comments-above:_spelled_ref"
     ":--- the prose's INTERPOLATED VALUES, not just it"
     "::¶WHAT THE ENVS HOLD APART. The cycle env gives it",
-    "tests/unit/test_workflow_sequence_gate.py::comments-above:_spelled_ref"
-    ":--- the prose's INTERPOLATED VALUES, not just it"
-    "::¶DELIBERATELY NOT PINNED, measured rather than as",
     "tests/unit/test_workflow_sequence_gate.py::comments-above"
     ":test_a_tail_needs_retriage_when_ANY_of_its_blockers_sits_in_backlog_not_when_all_do"
     ":--- the QUANTIFIER over a tail's blockers (VMCP-"

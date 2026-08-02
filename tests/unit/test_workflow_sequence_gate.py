@@ -876,10 +876,17 @@ def test_next_task_offers_free_task_despite_off_board_gated_candidate(env):
 # constant moves both and stays green), and counting clauses by splitting on a marker (pins a naming
 # convention the code never promised).
 #
-# DELIBERATELY NOT PINNED: the base prose. Reading it from the sibling state instead of copying it
-# keeps a rewording of the shared sentence a one-file edit, and a clause inserted INSIDE the base
-# is by construction emitted in every state — a wording change, not a state-dependent hazard. The
-# endswith anchor is what stops an unconditional clause from hiding in the derived base.
+# NOT PINNED BY THIS TEST: the base prose. Reading it from the sibling state instead of copying it
+# keeps a rewording of the shared sentence a one-file edit HERE, and that trade still stands for
+# this differential. What no longer stands is the REASON this note used to give — «a clause
+# inserted INSIDE the base is by construction emitted in every state — a wording change, not a
+# state-dependent hazard». VMCP-143 (632) showed that true of EMISSION and false of CONTENT, and
+# the mechanism is this equality's own: a clause emitted in BOTH states appears on both sides and
+# cancels, so being emitted everywhere is precisely what makes it invisible here rather than what
+# makes it harmless. The endswith anchor stops an unconditional clause from hiding in the derived
+# base; it does not see one inserted MID-base. That gap is READ elsewhere in this file, not here —
+# see «the plain starving base, pinned WHOLESALE» (VMCP-155 / #660), which pins the plain base
+# outright at the tail counts it builds and states its own boundary.
 #
 # THE COUNT, and why this env holds THREE waiting tasks (VMCP-125 / #606). The escalation
 # interpolates `len(retriage)`, the base interpolates `len(waiting)`. This test's first env built
@@ -1117,24 +1124,21 @@ def test_the_starving_message_is_the_plain_tail_plus_the_retriage_escalation_and
 # the loop CLOSED ... so a 2-cycle and a self-loop both read unambiguously" — it names both, and
 # both are parametrized): drop the closure and a self-loop renders as a bare ref with no arrow.
 #
-# DELIBERATELY NOT PINNED, measured rather than assumed — but NOT "free by construction", which is
-# what this note claimed until a constructed counterexample killed it. A clause inserted INSIDE the
-# starving base prose that CARRIES an interpolation — `f" ({len(waiting)} need human re-triage)"`,
-# false in the plain state where ZERO tails need re-triage — is green at 716 without these pins and
-# green at 721 with them. That is clause growth (#586's class), not one of this card's values. What
-# guards that region is 606's differential, and it guards exactly one thing: a clause that renders
-# DIFFERENTLY in the plain and the retriage states. Measured — same insertion, same position,
-# `len(retriage)` instead of `len(waiting)`: 1 failed, at the `retriage["message"] == expected + …`
-# equality above. So the base is free of STATE-INDEPENDENT edits only.
-# Nor is wholesale pinning the only close available, which this note also used to claim: the
-# measured clause happens to carry the word `re-triage`, so a plain-state `assert "re-triage" not
-# in plain_msg`, beside the existing `_RETRIAGE_ANNOTATION not in plain_msg` (which misses it only
-# because it needles the FULL annotation), closes THIS clause in one line. It does not close the
-# CLASS — a clause interpolating a count with no retriage vocabulary walks past it — and the class
-# does need the base pinned wholesale, which #586 and 606 both decided against with a stated
-# reason. Card 632's own review comment calls that reason true of EMISSION and false of CONTENT;
-# it is recorded here as INHERITED, not endorsed. Recorded so the next reader does not re-measure
-# it as a fresh finding.
+# NOT PINNED HERE — AND NO LONGER UNPINNED, which is a narrower sentence than "closed" and is meant
+# to be. This paragraph is now a POINTER, kept rather than deleted because the note it replaces was
+# the only record the finding had, and the pin it points at states its own boundary. What was open: a
+# clause inserted INSIDE the starving base prose — `f" ({len(waiting)} need human re-triage)"`,
+# FALSE in the plain state where ZERO tails need re-triage — is invisible to this card's value pins
+# AND to 606's differential alike whenever it renders IDENTICALLY in the plain and the retriage
+# states, since the differential rewrites the plain message in place and a state-independent edit
+# cancels out of it. That is clause growth (#586's class), not one of the interpolated VALUES this
+# section owns, which is why 632 measured it and correctly closed nothing here. The justification
+# #586 and 606 both inherited («a clause inserted INSIDE the base is by construction emitted in
+# every state — a wording change, not a state-dependent hazard») is true of EMISSION and false of
+# CONTENT: 632's review said so, VMCP-155 (660) acted on it. What reads that region now is the
+# wholesale equality in «the plain starving base, pinned WHOLESALE» later in this file — position
+# closed at the tail counts it builds, with its own boundary stated there rather than here; the
+# rounds live THERE too, re-measured against their own control instead of carried up.
 
 _CYCLE_STAGES = ["Queue", "Build", "Design"]   # pairwise distinct, and never equal to a ref
 
@@ -1323,6 +1327,157 @@ def test_the_starving_waiting_line_reads_blocked_task_then_blocker_and_the_headl
     assert msg.endswith(" | ".join(
         f"{_spelled_ref(t)} ← {_spelled_ref(h)} {_IN_BUILD}" for t, h in zip(tails, heads)
     )), msg
+
+
+# --- the plain starving base, pinned WHOLESALE (VMCP-155 / #660) ---
+#
+# WHAT WAS OPEN. `_starving_tail`'s base prose was anchored at both ENDS and nowhere between them:
+# the headline test above pins a `startswith` and an `endswith`, and 606's differential reads the
+# plain message and rewrites it IN PLACE. So a clause inserted in the middle — after "This is NOT
+# an empty queue", before "Waiting:" — moves neither anchor and cancels out of the differential
+# whenever it renders IDENTICALLY in the plain and the retriage states. VMCP-143 (632) measured
+# exactly that and left it open ON PURPOSE (it closed plenty else — six interpolated VALUES): this
+# is CLAUSE growth, #586's class, not one of the values that card enumerated, and a partial guard
+# shipped inside a card about VALUES would have read as a whole one — the shape CLAUDE.md prices as
+# «a guard oversold is worse than one honestly described». Its reviewer filed the follow-up so the
+# state had a home other than a comment. The pin below is the whole
+# plain base as ONE equality, which makes POSITION stop mattering: wherever in the base a clause is
+# inserted it moves a byte this literal does not have. Position is the axis it closes; the other
+# axis — whether a clause renders in these rows at all — is the boundary at the end of this note.
+#
+# BOTH SIDES ABSOLUTE — 606's rule, and the reason these two sides can genuinely disagree with each
+# other. `_STARVING_LEAD_IN` is respelled in THIS file instead of imported from workflow.py,
+# `_spelled_ref` already does the same for the refs, and each row's headline numeral is spelled in
+# the parametrize rather than formatted from the parameter: a test-side `str(n_tails)` would put the
+# message's number and the expectation's back on ONE source, which is #570's same-source trap.
+#
+# MEASURED. Whole `tests/unit` selection every round, `PYTHONDONTWRITEBYTECODE=1` with
+# `__pycache__` deleted first, each tree a separate `git clone --no-hardlinks` (never `cp -R`,
+# which drags `.venv` and puts the ORIGINAL `src` earlier on `sys.path`) and `vikunja_mcp.__file__`
+# printed per round to prove the mutated file is the one that ran. FAILED counts only — pass totals
+# move with every test a sibling lands. Restores checksum-verified, pristine workflow.py
+# `2271861474add8cd…`. BASE 75a1e52, named as a sha and never as "this commit's parent". WITHOUT
+# this section: control 0 failed; the clause `f" ({len(waiting)} need human re-triage)"` inserted
+# before `Waiting:` -> 0 failed — GREEN, the hole reproduced; the same insertion carrying
+# `len(retriage)` instead -> 2 failed, both rows of 606's differential — the state-DEPENDENT half.
+# Read the first round for the other half rather than a claim about it: nothing in the suite saw
+# the state-INDEPENDENT clause. That second number is MINE and not 632's, and the two digits differ
+# without either being an error: at 1bcdede that differential took `env` alone and ran as ONE case
+# (checked with `git show "1bcdede:…"`, no parametrize above it), and #635 later split it into two
+# rows. Each digit was right on its own tree — which is the argument for re-running rather than
+# carrying one over, not evidence that the older one was wrong.
+#
+# WITH this section, same base, same selection, control 0 failed: that `len(waiting)` clause is
+# -> 3 failed, all three rows of the test below and nothing else; the `len(retriage)` variant is
+# -> 5 failed, this test's three rows plus 606's two. Both compositions were read off a round run
+# with the failures LISTED, not inferred from a total — the first spelling of this note inferred
+# one and an independent pass was right to ask. Attribution is measured too, because a red suite no
+# more names the assert that did the work than a green one does: with the same clause applied and
+# ONLY the equality below deleted, the round goes back to -> 0 failed. These rounds ran on THIS
+# tree's asserts; only this prose moved afterwards, and nothing executes prose.
+#
+# WHAT IT BUYS OVER THE ONE-LINE ALTERNATIVE, which is why that one is recorded as REJECTED and not
+# as pending. It is blindness to VOCABULARY, not closure of the class — an earlier draft of this
+# note said "it closes the class" and a round refuted that; see the boundary below. The clause 632
+# measured happens to carry the word `re-triage`, so a plain-state `assert "re-triage" not in
+# plain_msg` in 606's test kills THAT SPELLING and only it: constructed on BASE and measured,
+# control 0 failed with that assert added and nothing mutated, the `len(waiting)` clause under it
+# is -> 2 failed, while a clause with no retriage vocabulary and no interpolation at all,
+# `" (nothing here is claimable)"`, is -> 0 failed under the very same assert. Against the equality
+# below that wordless clause is -> 3 failed. Any spelling versus one spelling, at the counts these
+# rows build — that is the whole of the difference, and it is enough: the one-liner could only ship
+# honestly labelled PARTIAL, and unlabelled it would be the oversold guard CLAUDE.md names.
+#
+# THE COST, stated rather than waved through: the base's wording is now a TWO-FILE edit — change
+# the prose in workflow.py and this literal moves with it. Measured, not assumed: against this
+# section's control of 0 failed, moving BOTH together is -> 0 failed, so nothing else in the suite
+# pins that prose and the two-file edit really is the whole cost. It is the price #586
+# declined to pay in 037db94 and 606 inherited, on a stated reason ("a clause inserted INSIDE the
+# base is by construction emitted in every state — a wording change, not a state-dependent
+# hazard") that 632's review showed to be true of EMISSION and false of CONTENT. The same price is
+# already paid elsewhere in this repo — by #570's clause literals in test_workflow_wip.py, and by
+# this file's own value pins.
+#
+# HONEST BOUNDARY, and it was measured AGAINST THIS NOTE rather than conceded in the abstract. An
+# equality is a SET OF POINTS, not a property — `_clause_free_base` says of the same shape that it
+# "CLOSES nothing" — and the points here are the plain state at ONE, TWO and THREE tails, every
+# blocker in Build. A clause guarded on a count OUTSIDE that span walks straight past: the wordless
+# clause guarded on `len(waiting) == 4` is -> 0 failed against this section's control of 0 failed.
+# The span is 632's headline span and not a taste, and the reason it is three rows rather than two
+# is a round on the two-row DRAFT of this test: an independent second pass guarded the same clause
+# on `len(waiting) == 2` and got -> 0 failed there — re-measured here on that draft, control
+# 0 failed, the clause -> 0 failed — while the headline test above RENDERED the corrupted message
+# at its own `[2-…]` row and passed. With the third row in place the same clause is -> 1 failed,
+# and the one failure IS the `[2-…]` row, so the row is what does the work. That round is what
+# struck "a clause guarded on a particular `len(waiting)` cannot hide" out of this note, and it is
+# why the span a pin BUILDS should match the span its neighbours build — 2 was never "the count
+# nobody built", it was built forty lines up. A clause keyed on something no row varies — the
+# blockers' stage,
+# the board, anything reachable through `self` at that point — is invisible the same way; the
+# answer to any of these is another row, not a bigger claim about the rows here. And a clause that
+# renders ONLY in the retriage state is outside this pin BY CONSTRUCTION, no row building that
+# state; it belongs to the half 606's differential is for, of which the `len(retriage)` round above
+# is one instance measured caught — an instance, not a proof about every such clause. The two pins
+# are complementary, neither being the other's backstop.
+
+_STARVING_LEAD_IN = (
+    " — each waits on an unfinished predecessor (a predecessor is 'ready' only at Review or "
+    "Done). This is NOT an empty queue. Waiting: "
+)
+
+
+@pytest.mark.parametrize("n_tails, headline", [
+    (1, "1 queued task(s) can't be claimed"),
+    (2, "2 queued task(s) can't be claimed"),
+    (3, "3 queued task(s) can't be claimed"),
+])
+def test_the_plain_starving_message_is_the_headline_the_lead_in_and_the_waiting_lines_only(
+    request, env, n_tails, headline
+):
+    """The plain starving message is those three parts and NOTHING else — the wholesale anchor the
+    base prose never had. The headline test above pins its two ENDS; this one pins the whole of it,
+    ends included, which is what it takes to see the MIDDLE — where a clause can sit without moving
+    either anchor and without rendering differently in the two states 606's differential compares.
+
+    Read the equality as the assertion of record and the anchors above as the ones that NAME what
+    moved: a `startswith` failure says the headline moved, this one says the message did."""
+    api, wf = env
+    heads = [api.add_task(f"chain head {i}", "Build") for i in range(n_tails)]
+    tails = [api.add_task(f"tail {i}", "Queue") for i in range(n_tails)]
+    for tail, head in zip(tails, heads):
+        api.add_relation(tail["id"], head["id"], "follows")
+
+    res = wf.next_task()
+    # The state this pin is ABOUT, asserted so a mutation that flipped the env into the retriage
+    # state could not be read here as a wording change: no blocker in Backlog, so neither the
+    # per-blocker annotation nor the escalation may render, and the base is the whole message.
+    assert res["starving"] is True and res["needs_retriage"] is False
+
+    # The env properties every literal below rests on — the failure this file records for 606, an
+    # env that silently collapsed into an equality and blinded a correct pin. Every tail has a head
+    # of its OWN (so no
+    # task is its own blocker), all refs are pairwise distinct, and the pairing is the one this test
+    # built. The spelling is checked against the payload's own `ref`, so a ref-FORMAT change fails
+    # by name here instead of as a wall of diff at the equality.
+    assert len({_spelled_ref(t) for t in tails + heads}) == 2 * n_tails
+    assert [(w["task"]["ref"], w["blocked_by"][0]["ref"]) for w in res["waiting"]] == [
+        (_spelled_ref(t), _spelled_ref(h)) for t, h in zip(tails, heads)
+    ], res["waiting"]
+
+    # The rows that ACTUALLY RAN, read off the running node rather than off the decorator's list as
+    # a module constant — 635's idiom, whose reason THAT card measured: slicing only the decorator
+    # leaves an assert over the constant green while a single row runs. The property asserted is the
+    # SPAN, a property no single row can carry: with one count only, a clause guarded on any other
+    # count renders nowhere here and this pin never sees it.
+    marker = request.node.get_closest_marker("parametrize")
+    assert marker.args[0] == "n_tails, headline", marker.args
+    rows = marker.args[1]
+    assert (n_tails, headline) in rows, rows
+    assert len({n for n, _h in rows}) >= 2, rows
+
+    assert res["message"] == headline + _STARVING_LEAD_IN + " | ".join(
+        f"{_spelled_ref(t)} ← {_spelled_ref(h)} {_IN_BUILD}" for t, h in zip(tails, heads)
+    ), res["message"]
 
 
 # --- the QUANTIFIER over a tail's blockers (VMCP-158 / #664) ---
