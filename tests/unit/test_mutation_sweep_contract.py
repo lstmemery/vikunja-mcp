@@ -830,20 +830,38 @@ def test_claude_md_states_the_control_round_rule_and_its_limit():
 def test_claude_md_says_a_stale_figure_sweep_is_not_line_fed():
     """The OTHER sweep in this section — the text one that hunts stale figures — and its trap.
 
-    Pinned in three pieces, and two of them are the counter-intuitive half rather than the rule.
+    Pinned in four pieces, and three of them are the counter-intuitive half rather than the rule.
     The rule alone ("do not be line-fed") invites the obvious fix, and the obvious fix is measured
     wrong: on `e86b2c9^` a whitespace CLASS in place of the literal space returns the same 15 hits
-    in test_api_kanban.py and still misses the wrapped figure at :1473, because grep is fed one
-    line at a time and no PATTERN changes that. A FLAG does, and the honest version of this rule
-    has to say so: `grep -z` takes the file as one record and finds the figure, 16 hits to 15 —
-    then reports every hit as line 1, which is why it replaces the blind spot rather than closing
-    it. Measured on both greps here. And a spanning matcher reported
-    without the DIFF against the per-line hits is unusable rather than merely noisy: of the few
-    hundred hits `\\d+ (?:passed|failed)` returned over tests/ on 2026-08-02, all but TWO were
-    ones the line-anchored sweep already found. The total is deliberately not pinned and the TWO
-    is, because only one of them survived the day: THIS docstring lives under tests/, so writing
-    it added 8 to the total, and rebasing onto a sibling's landing added 55 more — while the
-    wrapped count stayed 2 across both.
+    in test_api_kanban.py and still misses the wrapped figure at :1473 — on BOTH greps here.
+
+    What DOES reach it was re-measured per engine, calling each by NAME, because this shell wraps
+    `grep` in a function that routes `-[Zz]*` -- and `--null-data` -- to `command grep` while a
+    bare `grep` goes to ugrep: every "I checked both greps" that reaches for -z runs BSD TWICE.
+    That is not hypothetical, it is how the round-1 claims survived an author pass AND a review.
+    Called explicitly, the two disagree in OPPOSITE directions, which is why neither lever is
+    written down as the fix:
+      * /usr/bin/grep, BSD 2.6.0-FreeBSD — the FLAG works, but only WITH the loosened class,
+        and only if you count with `-o`: `grep -zo` (its -z IS --null-data) plus `[[:space:]]\\+`
+        gives 16 MATCHES and finds :1473, against 15 for 665's literal space. Count matches, not
+        lines — a bare `-z` makes the file one record, so `-zc` says 1 for either pattern and
+        `-zo | wc -l` says 17, the wrapped match spanning two lines. `-zn` then numbers every
+        match line 1, so it moves the blind spot instead of closing it. No `-P` on this grep.
+      * ugrep 7.5.0 — no FLAG helps: `-z` there is `--decompress`, and its real null-data
+        (`-00`) leaves it at 15 and blind too. The PATTERN does it, specifically an explicit
+        `\\n` inside it: `ugrep -n -o '[0-9]{2,}\\n\\s+passed'` prints `1473:102` and
+        `1474|    passed` on the default matcher, with `-E` or `-P` alike — while `-P` with
+        `\\s+` in place of that `\\n` drops back to 15. So `-P` is not the lever; the `\\n` is.
+
+    And a spanning matcher reported without the DIFF against the per-line hits is unusable rather
+    than merely noisy: of the hits `\\d+ (?:passed|failed)` returns over tests/, all but a couple
+    are ones the line-anchored sweep already found. The total is deliberately NOT pinned and the
+    WRAPPED count is, because the total counts the file it is written in: over
+    94bae3d -> aadde71 -> 7718e6c it ran 245 -> 319 -> 330 while wrapped stayed 2. Not "it moves
+    with every landing", which is the tempting shortcut and is false — measured over those same
+    11 landings, 5 moved it by ZERO, every one of them a `chore: vX.Y.Z` release bump that
+    touches no file under tests/, and 7718e6c, one of the three shas anchored above, is itself
+    one of them. Which is the point restated: a total is a fact about a TREE, not about time.
 
     Why a pin at all, when the class has no live instance — the whole value of these sweeps is the
     NEGATIVE answer, so the rule is read exactly once per sweep, by an agent about to write "this
@@ -857,21 +875,35 @@ def test_claude_md_says_a_stale_figure_sweep_is_not_line_fed():
       * keep the rule, delete the measured `[[:space:]]` counter-example -> 1 failed: without it
         the paragraph reads as "write a better regex", which is the fix that does not work
       * keep both, drop the requirement to report the DIFF -> 1 failed
+      * keep those, drop ugrep's `--decompress` -> 1 failed: without it the flag reads as the
+        portable answer, and on one of the two greps NAMED in the paragraph it does nothing
       * move the paragraph out of Testing Philosophy into Releases -> 1 failed, so the section
-        slicer is load-bearing for this pin too and not just inherited from the one above
-      * restore -> 0 failed, 1 passed, back to the control
+        slicer is load-bearing for this pin too and not just inherited from the one above.
+        Read the FIRST attempt at this round as the warning it is: inserting the paragraph
+        before the `## Releases` HEADER scored 1 passed, and the honest reading of that is not
+        "the slicer is decoration" but "the mutation never happened" — Releases is the section
+        immediately after this one, so the text landed inside the slice it was supposed to
+        leave. Verify a move by re-slicing and asserting the literal is GONE from the slice and
+        still present in the file, which is the cheap version of #646's `vikunja_mcp.__file__`.
+      * restore -> 0 failed, 1 passed, back to the control, CLAUDE.md byte-identical to the copy
     """
     section = _testing_philosophy()
 
     assert "must not be LINE-FED" in section, \
-        "CLAUDE.md no longer says a sweep for stale figures must not be line-fed. Prose here " \
-        "wraps at ~100 columns, so `grep -rn` reports a file CLEAN at a wrapped figure — which " \
-        "is the one answer a sweep exists to give"
+        "CLAUDE.md no longer says a sweep for stale figures must not be line-fed. Test prose " \
+        "here is hand-wrapped near 100 columns — a convention, not the gate, which sits at " \
+        "`max-line-length = 120` since #669 — so `grep -rn` reports a file CLEAN at a wrapped " \
+        "figure, which is the one answer a sweep exists to give"
     assert "[[:space:]]" in section, \
         "CLAUDE.md no longer carries the measured counter-example, and the rule is worth less " \
-        "without it: loosening the PATTERN does not help, because grep is handed one line at a " \
-        "time. Without this the next reader fixes the regex and stays blind"
+        "without it: read PER LINE, loosening the PATTERN does not help — the same 15 hits on " \
+        "both greps. Without this the next reader fixes the regex and stays blind"
     assert "DIFF against the per-line hits" in section, \
         "CLAUDE.md no longer says WHAT to report. A raw spanning hit list is dominated by what " \
         "the line-anchored sweep already found, so the difference is the only useful output — " \
         "and the noise a wrap-crossing pattern adds has to be eyeballed, not counted"
+    assert "--decompress" in section, \
+        "CLAUDE.md no longer records that the two greps need OPPOSITE levers: on ugrep 7.5.0 " \
+        "`-z` is --decompress, not --null-data, so the flag that works on BSD grep finds " \
+        "nothing there, while a pattern carrying an explicit \\n finds it AND says where. " \
+        "Without this the paragraph reads as 'add -z', wrong on one of the two greps it names"

@@ -322,34 +322,52 @@ that wrote it.** Touch the floor only if the suite ever shrinks below it, which
 is itself worth noticing. Where a figure genuinely needs precision, DATE it
 instead — as the release section does with its landings-per-day snapshot.
 
-**And the sweep that HUNTS stale figures must not be LINE-FED — the defect is
-grep's input unit, not its pattern.** Test prose wraps at the 100-column lint
-limit, so a figure straddling a break cannot match a single-line pattern, and
-loosening the regex does not recover it: measured on `e86b2c9^`, swapping the
-literal space of `grep -n "[0-9]\{2,\} passed" tests/unit/test_api_kanban.py`
-for `[[:space:]]\+` returns the SAME 15 hits and still misses the wrapped one
-at :1473, on both greps on this machine (BSD 2.6.0-FreeBSD and ugrep 7.5.0). A
-FLAG changes the input unit where no pattern can — `grep -z` reads the file as
-one record and DOES find it, 16 hits to 15 — but it then reports every hit as
-line 1, so it cannot say WHERE, which is the one thing a sweep owes its
-reader. Read each file WHOLE, collapse every whitespace run to one space, then
-match — and report the DIFF against the per-line hits, never the raw list: the
-raw one is dominated by what the old sweep already found. Measured 2026-08-02,
-`\d+ (?:passed|failed)` returned a few hundred hits over `tests/` and exactly
-TWO were new. Price those two, since a pattern loose enough to cross a wrap
-also catches `<number> failed` in prose — both were false positives, a docker
-port (`Bind for 0.0.0.0:3456 failed`) and an illustrative `-> 7 failed` in the
-scanner named below, while the narrower `[0-9]\{2,\} passed` found no wrapped
-hit at all. The TWO is the durable half and the total is not, which this
-paragraph learned on itself: writing the docstring below — it lives under
-`tests/` — added 8 hits to the total, and a sibling landing between that
-measurement and this push added 55 more, while the wrapped count stayed 2. A
-small footprint is the argument for fixing the METHOD rather than the sites:
-what a sweep is FOR is its NEGATIVE answer, and 665's sweep reported
-`test_api_kanban.py` clean at the exact site 668 was later filed against.
-Coda, because it cuts the other way — 668's implementer and its reviewer both
-re-measured that figure RIGHT, so what the sweep could not see there was a
-missing ATTRIBUTION, not a stale total.
+**And the sweep that HUNTS stale figures must not be LINE-FED — but do not
+"fix" that by writing a cleverer grep: which lever reaches a wrapped figure
+depends on WHICH grep, and the two on this machine need OPPOSITE ones.** Test
+prose here is hand-wrapped near 100 columns, and that is the repo's wrap
+TARGET (`line-length`) rather than a checked limit — since #669 the enforced
+ceiling is `max-line-length = 120`, so where a line actually breaks is a
+convention, and a reflow can push a figure across a break without touching a
+digit. Measured on `e86b2c9^`, where `test_api_kanban.py` carried a real one
+at :1473-1474 ("… 5 failed / 102" ending one line, "passed for the whole
+file" opening the next): read PER LINE, both greps return the SAME 15 hits
+and miss it — with 665's literal space and with a `[[:space:]]\+` class alike
+— so loosening the regex by itself recovers nothing. What DOES reach it
+splits by implementation, and neither half transfers to the other. BSD grep
+2.6.0-FreeBSD needs the FLAG *and* the class TOGETHER — and needs `-o` to
+count at all: `grep -zo` with `[[:space:]]\+` yields 16 MATCHES and finds it,
+against 15 for 665's literal space. Count matches, not lines: a bare `-z`
+makes the file ONE record, so `-zc` answers 1 for either pattern, and
+`-zo | wc -l` answers 17, because the wrapped match itself spans two lines.
+`grep -zn` then numbers every match line **1**, trading the blind spot for an
+inability to say WHERE. ugrep 7.5.0 is the mirror image: there `-z` is
+`--decompress`, and its real null-data (`-00`) does not recover the figure
+either — 15 matches, still blind. What works there is the PATTERN, and
+specifically an explicit `\n` inside it:
+`ugrep -n -o '[0-9]{2,}\n\s+passed'` prints `1473:102` and `1474|    passed`
+on the default matcher, with `-E` or `-P` alike — while that same `-P` with
+`\s+` in place of the `\n` falls back to 15 and misses it. And this BSD grep
+has no `-P` at all. So the portable move
+is to stop using grep as the READER. Read each file WHOLE, collapse every
+whitespace run to one space, then match — and report the
+DIFF against the per-line hits, never the raw list: the raw one is dominated
+by what the old sweep already found. Price it, since a pattern loose enough to
+cross a wrap also catches `<number> failed` in prose: with
+`\d+ (?:passed|failed)`, `e86b2c9^` had THREE spanning-only hits — one
+genuine, :1473, and two false, a docker port (`Bind for 0.0.0.0:3456 failed`)
+and an illustrative `-> 7 failed` in the contract test named below — and from
+`94bae3d` on only those two false ones remain, while the narrower
+`[0-9]\{2,\} passed` finds no wrapped hit at all today. That WRAPPED count is
+the durable half and the total is not: over `94bae3d` → `aadde71` →
+`7718e6c` the total ran 245 → 319 → 330 while wrapped stayed 2 — and since
+the sweep counts the file it is written in, the pin below moved that total
+itself. A small footprint is the argument for fixing the METHOD rather than
+the sites: what a sweep is FOR is its NEGATIVE answer, and 665's sweep
+reported `test_api_kanban.py` clean at the exact site 668 was later filed
+against. Coda, because it cuts the other way — 668's implementer and its
+reviewer both re-measured that figure RIGHT, so what the sweep could not see
+there was a missing ATTRIBUTION, not a stale total.
 
 **A mutation sweep opens with an UNMUTATED CONTROL round on the SAME selection,
 and every round count is a DELTA against it.** Sweeps here are hand-run — edit
