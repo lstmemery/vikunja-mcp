@@ -161,6 +161,20 @@ def canonical_base_url(base_url: str) -> str:
     standing reason not to read 36 as a total. The split is on the LAST `@`, which is httpx's too
     (`https://a@b:PW@HOST` → host `host`, userinfo `a%40b:PW`) — an un-encoded `@` in the userinfo
     is illegal per RFC anyway, and this way it makes the function fold LESS, never more.
+    Read "CREDENTIAL" above operationally: the one the request AUTHENTICATES with, i.e. the
+    `Authorization` header. httpx derives BasicAuth from a url's userinfo, and because this
+    constructor passes no `auth=`, that derivation REPLACES the `Authorization: Bearer` it sets —
+    measured on httpx 0.28.1 through a real client, base `https://User:PassWord@t.example` sent
+    `Basic` over `user:password` under the pre-#164 body and over `User:PassWord` under this one,
+    one Authorization header on the wire either way. (A bare `@` with neither user nor password
+    derives nothing and the Bearer stands; an explicit `auth=` would beat the url.) Folding a
+    query-before-slash does NOT move that header: with no userinfo present it stays `Bearer …`
+    byte-identical across both bodies. Do not read that as "the query class is harmless" — it is
+    the same permissive over-fold, still open, which is what #706 is filed about; and a url
+    carrying BOTH is moved by its userinfo, not by its query
+    (`https://User:PassWord@t.example?apiToken=SeCrEt` diverges, and its query folds either way).
+    Pinning the word down is not decoration: #164 lost a review round to a reader who took
+    CREDENTIAL to include a secret carried in the query string.
 
     The PATH's case is likewise kept, and #164 pins it: `https://h/vikunja` and `https://h/Vikunja`
     are different endpoints on a case-sensitive server. That was already true when #154 wrote it —
