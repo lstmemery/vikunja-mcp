@@ -102,6 +102,19 @@ dist/
 # rulebook that drifts back to a bare name or a .gitignore that drops the directory rule — and
 # which reads PROSE, so it sees only the spellings its pattern matches.
 #
+# #736 FOUND A SECOND DOOR INTO THIS SAME DIRECTORY and put it behind the same pin (whose name is
+# now narrower than its job). `--output-dir`, the flag in SKILL.md's recipe for launching an
+# agent's own browser, feeds the AUTO-named artifacts, and it said `<каталог с id задачи>` — a
+# placeholder that reads equally as a subdirectory of the worktree and as one of the scratchpad.
+# Measured: with `--output-dir 736-out` git reported `?? 736-out/` and `git add -A --dry-run`
+# STAGED `page-<ts>.yml` (the aria snapshot: the page's text, plus a link's `?token=`) and
+# `console-<ts>.log`; only the screenshot was covered, by `*.png` above. The recipe now points at
+# `.playwright-mcp/<id>` and the pin asks git about each `--output-dir` value the rulebook prints.
+# Same bound as its other half, plus one of its own: pointed OUTSIDE the repo the flag WORKS (no
+# `File access denied … outside allowed roots` — that refusal is the `filename` resolver's), so
+# "outside" is a real second answer which SKILL.md names and no pin can check, there being no path
+# to put to git.
+#
 # `*.pdf` is the one rule here that guards a NON-default tool:
 # `browser_pdf_save` appears only with `PLAYWRIGHT_MCP_CAPS=pdf` — measured absent from the
 # default 24 and present the moment that one cap is set — so it is defence in depth, exactly

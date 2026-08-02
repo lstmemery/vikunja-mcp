@@ -286,6 +286,100 @@ PRESCRIBED_FILENAME_RE = re.compile(r"""["'`]?\bfilename\b["'`]?\s*[:=]\s*["'`]?
 # test edit.
 MIN_PRESCRIBED_FILENAMES = 2
 
+# --- #736: the OTHER path into the same directory — `--output-dir` ---------------------------
+#
+# #703 closed the caller-chosen `filename`. Beside it, untouched by that card, stood the recipe
+# an agent runs to get its OWN browser at all:
+#
+#     npx -y @playwright/mcp@latest --isolated --headless --output-dir <каталог с id задачи>
+#
+# That flag feeds `outputFile()`, i.e. the AUTO-named artifacts — and one of them, `page-*.yml`,
+# is the aria snapshot, which is the page's TEXT: exactly the payload #703 exists for, arriving
+# by a different door. `<каталог с id задачи>` reads equally as a subdirectory of the worktree
+# and as one of the scratchpad, and the first reading is not covered by anything.
+#
+# MEASURED for this card (@playwright/mcp@latest, own `--isolated --headless` server, own stdio
+# client, throwaway origin on 127.0.0.1:20736, cwd = this worktree):
+#   * `--output-dir 736-out` (inside the tree, named after the task exactly as the old recipe
+#     invites) wrote `page-<ts>.yml` + `console-<ts>.log` + `page-<ts>.png`. `git status` showed
+#     `?? 736-out/`; `git check-ignore --no-index -v` exited 1 for the `.yml` and the `.log` and
+#     0 only for the `.png` (`.gitignore:123:*.png`, #629's rule); `git add -A --dry-run` STAGED
+#     both text files. Their contents carried the probe markers planted on the page — the aria
+#     text, and a link's `?token=` query string in the `.yml`, another in the `.log`.
+#   * `--output-dir .playwright-mcp/736`: same three files, `git status` empty, `git add -A
+#     --dry-run` empty, every one answering `.gitignore:26:.playwright-mcp/`.
+#   * `--output-dir` pointed OUTSIDE the repo works — no `File access denied … outside allowed
+#     roots`. That refusal is real but belongs to the caller-chosen `filename` path (a different
+#     resolver); `--output-dir` DEFINES a root rather than escaping one. So "outside" is a valid
+#     answer too, and SKILL.md says so; it is not the PRESCRIBED one, because it splits one
+#     server's output across two places and leaves `.playwright-mcp/` uncreated.
+#   * WHEN the directory appears: not at server start and not after `initialize` — the first
+#     `browser_navigate` creates it, INCLUDING a missing `.playwright-mcp/` parent, after which a
+#     caller-chosen `filename` under that prefix succeeded with no manual `mkdir -p`.
+#
+# The value SKILL.md prints after `--output-dir`, in the spellings this rulebook uses: a fenced
+# command line, and prose where the flag and its value sit inside ONE backtick pair (`` `--output
+# -dir .playwright-mcp/<id>` ``). What keeps the many BARE mentions of the flag out is `\s+`, and
+# nothing cleverer: SKILL.md has nine `--output-dir` occurrences and seven of them are
+# `` `--output-dir` `` followed by prose, where the next character is the closing BACKTICK, not
+# whitespace, so the pattern never starts a value there.
+#
+# A negative lookahead `(?!`)` stood here first, with a comment crediting it for exactly that.
+# The sweep disproved it: on the two rulebook-facing files, control 0 failed; deleting the
+# lookahead measured 0 failed too, because `\s+` had been doing the work all along. Dead code is
+# bad enough; dead code with a paragraph explaining its importance is what this repo keeps
+# catching, so it is gone rather than kept "for safety".
+#
+# BOTH separators, and the `=` half is here because an independent attack pass BUILT the evasion,
+# exactly as one did for `PRESCRIBED_FILENAME_RE` twenty lines up — the same defect, reintroduced
+# by a pattern written from the spelling that happened to be in the file. Measured on the server
+# first: `--output-dir=736-out` behaves identically to the space form (three artifacts in
+# `736-out/`, `git add -A --dry-run` staging the `.yml` and the `.log`). Then on the gate, with
+# only `\s+` here: control 0 failed; recipe rewritten to `--output-dir=554-out` -> 0 failed. Fully
+# green while the line an agent copies spilled the page's text, because the recipe stopped
+# matching and the lone prose value satisfied every assertion below. With `(?:\s+|=)` the same
+# round measures 1 failed, and the equals form pointed at the RIGHT directory measures 0 — caught
+# without a false red.
+#
+# The residual is real and is left LOUD on purpose: this reads PROSE. An `--output-dir` written
+# WITHOUT backticks in a sentence hands the next word to git as if it were a path — measured, a
+# round that unbackticks one prose mention goes red naming a Russian word. That is a false RED,
+# which is noise; the failure mode this repo refuses is the quiet one.
+PRESCRIBED_OUTPUT_DIR_RE = re.compile(r"--output-dir(?:\s+|=)([^\s`]+)")
+
+# Same shape of floor as MIN_PRESCRIBED_FILENAMES, same reason: a regex that matches nothing
+# passes everything. SKILL.md prints two such values today (the recipe and one prose restatement),
+# and the floor stays at 1 rather than 2 for the same reason as its neighbour — adding or dropping
+# a prose restatement is a fine edit and must not be a test edit. What that costs is measured, not
+# guessed: a PROSE mention alone satisfies this floor, so deleting the flag from the fenced recipe
+# left everything here green (control 0 failed; that mutation 0 failed).
+#
+# An earlier version of this comment went one step further and said raising the floor "would not
+# have caught it either". That was a counterfactual, not a measurement, and an attack pass
+# measured it FALSE: control 0 failed; floor 2 + the flag deleted from the fence -> 2 failed, one
+# of them this very floor, because SKILL.md prints exactly ONE prose restatement today. The
+# argument survives, the claim did not — a floor COUNTS, it cannot LOCATE, so at 2 it would catch
+# this by accident today and false-red tomorrow on a correct edit that drops a restatement. The
+# runnable line is pinned where a runnable line belongs, inside the fence, in
+# test_skill_contract.py.
+MIN_PRESCRIBED_OUTPUT_DIRS = 1
+
+# What an `--output-dir` actually receives, so the pin asks git about a FILE rather than about a
+# directory name. Both are auto-named artifacts measured landing there in this card's runs, and
+# both are the case no other rule in this repo reaches: the `.yml` is the page's aria text, the
+# `.log` its console (URLs with query strings included).
+#
+# The `.png` from the same run is deliberately NOT probed, and the reason is narrower than the
+# first draft of this comment claimed. #629's `*.png` is DIRECTORY-BLIND — measured,
+# `git check-ignore` answers `.gitignore:123:*.png` for `554-out/page-<ts>.png` and for
+# `any/dir/at/all/page-x.png` alike — so a png probe can never report a directory drift. Measured
+# rather than reasoned: narrowing the probes to the png AND drifting the recipe to `554-out`
+# still went red, but on the separate RULE assertion below, with the git-backed check green.
+# So a png probe would not make this pin decoration; it would make the GIT-BACKED half of it
+# blind, leaving the rule assertion below as the only assertion HERE that still sees a directory
+# drift — and that one checks the prefix as a string, not what git would do with it.
+AUTO_NAMED_PROBES = ("page-2026-08-02T22-28-55-167Z.yml", "console-2026-08-02T22-28-55-042Z.log")
+
 # Playwright's storage-state schema, measured off a real export: a JSON object with exactly
 # these two list-valued keys (cookie entries carry name/value/domain/path/expires/httpOnly/
 # secure/sameSite; origin entries carry origin/localStorage). This is what the name-independent
@@ -1295,6 +1389,94 @@ def test_every_filename_skill_md_prescribes_is_excluded_by_this_repos_gitignore(
     matters most here, since the values alone would keep THIS test green; drop the mkdir/ENOENT
     precondition -> 1 failed, same id; revert the `attach_file` clause to its pre-#703 root path
     -> 1 failed, same id.
+
+    ============================================================================================
+    #736: THE SECOND DOOR INTO THE SAME DIRECTORY, gated by the second half of this test.
+
+    The name of this test still says `filename`, and that is now narrower than what it checks —
+    kept deliberately, because the name is quoted in four places (.gitignore, CLAUDE.md and two
+    docstrings in test_skill_contract.py) and a rename buys nothing a sentence cannot. What it
+    checks is BOTH routes SKILL.md prescribes today — a caller-chosen `filename` and
+    `--output-dir` — each in the spellings its own pattern matches. Not "every path": the browser
+    has other flags that write, and one this rulebook never prints is one this pin never sees.
+
+    #703 fixed the caller-chosen `filename`. Beside it stood the recipe that launches an agent's
+    own server — `--output-dir <каталог с id задачи>` — untouched by that card and feeding the
+    OTHER resolver, `outputFile()`, which is where the AUTO-named artifacts go. One of them is
+    `page-*.yml`, the aria snapshot, i.e. the page's own text: the exact payload #703 exists for,
+    arriving through a door #703 did not close. The placeholder reads equally as a subdirectory of
+    the worktree and as one of the scratchpad, and only the second reading was safe.
+
+    Reproduced BEFORE the fix, not argued (constants above carry the full measurement): with
+    `--output-dir 736-out` git reported `?? 736-out/` and `git add -A --dry-run` STAGED the `.yml`
+    and the `.log`, both carrying markers planted on the probe page — including a link's `?token=`
+    query string. Only the screenshot was covered, by #629's `*.png`.
+
+    MUTATION-CHECKED with the same discipline as the rounds above (`git clone --no-hardlinks` of
+    this branch; `__pycache__` deleted each round AND `PYTHONDONTWRITEBYTECODE=1`;
+    `vikunja_mcp.__file__` printed and confirmed to be the CLONE's; sources restored from a COPY
+    and `git status --porcelain` confirmed EMPTY after every round; `collected 115 items` printed
+    and cross-checked against the count of `^FAILED` lines each time). Failed counts, never pass
+    totals:
+
+    * control 0 failed
+    * revert the recipe to the old `<каталог с id задачи>` placeholder -> 1 failed, this test.
+      The round this card exists for
+    * point the recipe at `554-out`, a plain directory named after the task -> 1 failed
+    * point it at `dist/554` — ignored HERE, but for an unrelated reason -> 1 failed, and on the
+      RULE assertion, with the git-backed check GREEN. That measurement is why the rule assertion
+      is separate rather than folded in, exactly as #703 found for the screenshot example
+    * delete the `.playwright-mcp/` line from .gitignore -> 2 failed: this test and #607's
+      `test_the_playwright_output_dir_is_excluded`. The pin reaches the ignore rules, not only
+      the prose
+    * break `PRESCRIBED_OUTPUT_DIR_RE` so it matches nothing -> 1 failed on the floor
+    * add a THIRD correctly-prefixed value -> 0 failed: writing another rule is not a test edit
+    * narrow `AUTO_NAMED_PROBES` to the screenshot AND drift the recipe to `554-out` -> 1 failed,
+      but on the RULE assertion: `*.png` is directory-blind, so the git-backed half went blind
+      with it. See that constant — the round corrected an overclaim in its own comment
+    * remove the negative lookahead the regex was written with -> **0 failed**. It was dead code:
+      `\\s+` already refuses to start a value where a backtick follows the flag. Removed, and the
+      comment that credited it rewritten
+    * unbacktick ONE prose mention of the flag -> 1 failed. A FALSE red, kept as the honest
+      residual: this reads prose, and prose punctuation can hand it a Russian word as a path
+    * rewrite the recipe in the EQUALS spelling with a bad directory (`--output-dir=554-out`) ->
+      1 failed. Against the pattern as first written (`\\s+` only) the same round measured **0
+      failed** — the bypass an attack pass BUILT, after first measuring on the server that the
+      equals form spills identically. See PRESCRIBED_OUTPUT_DIR_RE
+    * the equals spelling with the CORRECT directory -> 0 failed: the widened pattern costs no
+      false red
+    * set the floor to 2 AND delete the flag from the fence -> 2 failed, one of them the floor.
+      The round that disproved a COUNTERFACTUAL this docstring's neighbour had asserted as
+      measured; see MIN_PRESCRIBED_OUTPUT_DIRS
+
+    THE ROUND THAT CHANGED THE FIX, and the reason a sweep is run instead of predicted (same
+    selection, control 0 failed): delete
+    `--output-dir` from the FENCED launch line entirely, leaving the several prose mentions of the
+    flag alone -> **0 failed**. Everything here stayed green while the line an agent copies had
+    lost the flag — because this pin asks whether git would publish each value the file PRINTS,
+    and a prose restatement is still a value. That is the same defect #703's neighbour recorded
+    for `--isolated` and `--channel=chrome`, so it was closed where those are: one assertion in
+    `test_the_browser_answer_leads_with_the_isolation_an_agent_can_launch_itself`, matching INSIDE
+    the fence. Re-run after it -> 1 failed, there. What that assertion guards is the NAMING rule
+    and not a leak — the first version of it claimed a leak, and an independent attack pass
+    disproved that by running the server with no `--output-dir` at all: the DEFAULT output dir is
+    `<cwd>/.playwright-mcp/`, the ignored one, `git status` empty and `git add -A --dry-run`
+    staging nothing. Re-measured here. Its own comment carries the correction.
+
+    HONEST BOUNDARY, and it is not the same one #703 has. Two facts measured for this card:
+    `--output-dir` pointed OUTSIDE the repo WORKS — there is no `File access denied … outside
+    allowed roots` here, because that refusal belongs to the caller-chosen `filename` path and
+    `--output-dir` defines a root rather than escaping one. So "outside the repo" is a genuine
+    second answer, and SKILL.md says so; it is not the prescribed one, and this pin cannot check
+    it, because a directory outside the repository has no path to put to git. And the directory
+    appears on the first `browser_navigate` — measured absent at server start and absent after
+    `initialize`, present after that one call —
+    which is what makes a caller-chosen `filename` under the same prefix work with no manual
+    `mkdir -p` in the measured order, and is a fact about ordering rather than a guarantee.
+    Everything the #703 boundary above says still applies unchanged: this holds the RULE, not the
+    behaviour; `.playwright-mcp/` is ignored in THIS repo while SKILL.md self-heals onto consumers
+    whose .gitignore no pin here can see; and a flag this rulebook never prints is a flag this
+    pin never sees.
     """
     text = SKILL_MD_PATH.read_text(encoding="utf-8")
     prescribed = sorted(set(PRESCRIBED_FILENAME_RE.findall(text)))
@@ -1350,6 +1532,48 @@ def test_every_filename_skill_md_prescribes_is_excluded_by_this_repos_gitignore(
         "An examples list that has drifted to screenshots only still teaches agents the case " \
         "this card was filed about wrongly, and the directory rule would then be doing no work " \
         "that #629 was not already doing"
+
+    # --- #736: the same question, put to the OTHER door into the same directory --------------
+    out_dirs = sorted(set(PRESCRIBED_OUTPUT_DIR_RE.findall(text)))
+
+    assert len(out_dirs) >= MIN_PRESCRIBED_OUTPUT_DIRS, \
+        f"SKILL.md prints {len(out_dirs)} `--output-dir` values ({out_dirs}), fewer than the " \
+        f"{MIN_PRESCRIBED_OUTPUT_DIRS} it is supposed to. Either the own-browser launch recipe " \
+        "stopped naming its output directory — which is the ambiguity #736 exists to remove, " \
+        "not a leak: the DEFAULT is `.playwright-mcp/`, measured — or this pin's regex stopped " \
+        "matching it, and a guard that matches nothing passes everything"
+
+    spilling = []
+    for value in out_dirs:
+        for probe in AUTO_NAMED_PROBES:
+            candidate = f"{value}/{probe}"
+            ignored, source, _pattern = _ignore_rule(candidate)
+            if not ignored:
+                spilling.append(candidate)
+            elif source != ".gitignore":
+                spilling.append(f"{candidate} (ignored by {source}, not by this repo)")
+
+    assert not spilling, \
+        f"{spilling} — SKILL.md tells an agent to launch its own browser with this " \
+        "`--output-dir`, and git would publish what lands there. `page-*.yml` is the ARIA " \
+        "SNAPSHOT: the page's own text, plus the query strings of its links. Measured for " \
+        "#736, a directory merely named after the task (`736-out/`) shows up as `?? 736-out/` " \
+        "and `git add -A` stages both the .yml and the .log — only the screenshot is covered, " \
+        "by #629's `*.png`. Point the flag at `.playwright-mcp/<id>`: not the only directory " \
+        "this repo excludes regardless of filename (measured, eight rules do that — `dist/`, " \
+        "`.venv/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`, `.superpowers/`, `.auth/` " \
+        "and this one), but the only one that is ALSO where the `filename` prescription already " \
+        "sends the caller-named artifacts, which is what keeps it one directory to reason about"
+
+    out_astray = [v for v in out_dirs if not v.startswith(f"{PLAYWRIGHT_OUTPUT_DIR}/")]
+    assert not out_astray, \
+        f"{out_astray} — prescribed outside `{PLAYWRIGHT_OUTPUT_DIR}/`. git may happen not to " \
+        "publish it, and that is precisely why this assertion is separate: measured on this " \
+        "card's sweep, swapping the recipe to `dist/554` (ignored here for an unrelated reason) " \
+        "left the git-backed check above completely green while the rule SKILL.md states was " \
+        "gone. The rule is ONE place — the same `.playwright-mcp/` the `filename` prescription " \
+        "names — so that an agent has one directory to reason about and this repo one line of " \
+        ".gitignore to keep"
 
 
 @requires_git_checkout

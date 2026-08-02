@@ -894,6 +894,45 @@ bound is pinned in its docstring: it reads PROSE, so it sees only the spellings 
 matches — an independent attack pass got a leaking value past the first version of it by writing
 the prescription in JSON, which is what an MCP argument actually is.
 
+**`--output-dir` was the SECOND door into that same directory, and #703 did not close it**
+(tracker #736). The `filename` fix reaches the caller-named artifacts; the AUTO-named ones are
+resolved by a different function, and where they go is set by the flag in SKILL.md's own recipe
+for launching an agent's OWN browser, which said `--output-dir <каталог с id задачи>` — a
+placeholder that reads equally as a subdirectory of the worktree and as one of the scratchpad.
+Only the second reading was safe. Measured before fixing: with `--output-dir 736-out`, git
+reported `?? 736-out/` and `git add -A --dry-run` STAGED both `page-<ts>.yml` — the ARIA
+SNAPSHOT, i.e. the page's own text, a link's `?token=` query string included — and
+`console-<ts>.log`; only the screenshot was covered, by the `*.png` rule above. The recipe now
+says `--output-dir .playwright-mcp/<id>`, the same directory the `filename` rule already names,
+and the pin above grew a second half that asks git the same question about each `--output-dir`
+value the rulebook prints. Two measurements shape what is claimed for it. Pointing the flag
+OUTSIDE the repo WORKS — no `File access denied … outside allowed roots`, because that refusal
+belongs to the `filename` resolver and `--output-dir` defines a root rather than escaping one —
+so "outside" stays a legitimate answer that SKILL.md names and no pin here can check, having no
+path to put to git. And the directory is created by the first `browser_navigate`, not at server
+start, which is why a `filename` under the same prefix then needs no manual `mkdir -p`: an
+ordering fact, not a guarantee. The sweep also moved the fix: deleting `--output-dir` from the
+FENCED recipe while leaving the prose mentions measured control 0 failed / mutation 0 failed,
+because a prose restatement is still a value — so the flag's presence in the runnable line is
+pinned next door, where `--isolated` and `--channel=chrome` already are.
+
+**Two things that pin does NOT mean, both established by an attack pass that BUILT them rather
+than argued them.** First, **the flag's absence is not a leak**: run with no `--output-dir` at
+all, the DEFAULT output dir is `<cwd>/.playwright-mcp/` — the ignored one — with `git status`
+empty and `git add -A --dry-run` staging nothing (the tool prints it too: `Allowed roots:
+<cwd>/.playwright-mcp, <cwd>`, and #585's note recorded the same default long before). The card's
+hazard is the FREE CHOICE the old placeholder invited, not the flag's absence, so that assertion
+guards the naming rule and the first version of it claimed a leak it had borrowed from a round
+where the flag was present and pointed somewhere bad. Second, **a pattern over prose is only as
+wide as the spellings it was written from**: `--output-dir=VALUE` is accepted by the server and
+spills identically, and against a `\s+`-only pattern the recipe rewritten to `--output-dir=554-out`
+measured control 0 failed / mutation 0 failed — fully green. That is the SAME defect this file's
+`filename` pattern was already widened for once; the pattern now takes `(?:\s+|=)`. A directory
+that is merely *some* ignored directory is not the point either — eight rules here exclude
+regardless of filename (`dist/`, `.venv/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`,
+`.superpowers/`, `.auth/` and this one); `.playwright-mcp/` is the one that is ALSO where the
+`filename` prescription sends things, which is what keeps it one directory to reason about.
+
 ## Live instance notes
 
 - Tracker: `https://tracker.zz.hgdev.com` (public) / `tracker.vpn.hgdev.com`

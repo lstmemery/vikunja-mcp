@@ -1721,6 +1721,34 @@ def test_the_browser_answer_leads_with_the_isolation_an_agent_can_launch_itself(
     assert "--headless" in srv[0], \
         "the own-server RECIPE lost `--headless` — the browser is headed by default, so a " \
         "window pops up on the human's screen"
+    # #736. Same reason the two flags above are matched INSIDE the fence, measured the same way:
+    # the sweep round that deleted `--output-dir` from this line — leaving the several prose
+    # mentions of the flag untouched — was GREEN across both rulebook files, because the pin next
+    # door (`test_every_filename_skill_md_prescribes_is_excluded_by_this_repos_gitignore`) asks
+    # whether git would publish each `--output-dir` VALUE the file prints, and a prose restatement
+    # is still a value.
+    #
+    # WHAT THIS ASSERTION IS NOT, and the first version of it said the opposite: deleting the flag
+    # does NOT spill. An independent attack pass disproved that by running the server with no
+    # `--output-dir` at all, and re-measured here — the DEFAULT output dir is `<cwd>/.playwright
+    # -mcp/`, the ignored one. All three auto-named artifacts landed there, `git status` came back
+    # empty and `git add -A --dry-run` staged nothing. (The tool says so itself: its access-denied
+    # error prints `Allowed roots: <cwd>/.playwright-mcp, <cwd>`, and #585's note in the sibling
+    # file recorded the same default years of cards ago.) The claim had also borrowed its evidence
+    # from a round where the flag was PRESENT and pointed somewhere bad.
+    #
+    # So this pin guards a CONVENTION, not a leak: the recipe must NAME the directory, with the
+    # per-task `<id>` in it, because the ambiguity is what #736 is about — a rulebook that says
+    # nothing about where artifacts go is how `<каталог с id задачи>` got there, and a rulebook
+    # that names one place keeps the own browser and the shared one on the same answer. Where it
+    # POINTS is the other pin's question, not this one's.
+    assert "--output-dir" in srv[0], \
+        "the own-server RECIPE lost `--output-dir` — the line an agent copies no longer says " \
+        "WHERE the auto-named artifacts go (`page-*.yml` is the page's aria TEXT), and #736 " \
+        "exists because a recipe that leaves that to the reader gets read the unsafe way. This " \
+        "is not a leak on its own: measured, the default is `<cwd>/.playwright-mcp/`, which this " \
+        "repo ignores. It is the naming rule. Prose about the flag is not a command — this round " \
+        "measured green on the value-checking pin next door with the flag gone from the fence"
     for old in ("изнутри его изолировать НЕЛЬЗЯ", "НЕ выполнимо"):
         assert old not in section, \
             f"the disproved framing is back in SKILL.md ({old!r}) — an agent CAN launch its " \
