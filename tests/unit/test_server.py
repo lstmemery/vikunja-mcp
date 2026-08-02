@@ -492,6 +492,67 @@ def test_reload_still_refuses_a_rotation_to_a_genuinely_different_endpoint(
     assert capsys.readouterr().out == ""
 
 
+# --- tracker #164: the CASE the url is sensitive to is a repoint too ----------------------------
+# The test above varies the url's SUBSTANCE (other scheme value / host / port / path) and leaves
+# its CASE alone, so it cannot see a canonicalizer that folds case where case is meaningful — and
+# that is the permissive direction, the one #148 exists to close. Measured on 2026-08-02,
+# `__pycache__` cleared: control 0 failed; mutating canonical_base_url to lowercase the path
+# (`{path}` -> `{path.lower()}`) -> 0 failed over the whole unit suite. These rows are that
+# mutation's kill at the level that matters — the guard, not the helper.
+
+
+@pytest.mark.parametrize(
+    ("baseline_url", "rotated_url"),
+    [
+        ("https://tracker.zz.hgdev.com/Vikunja", "https://tracker.zz.hgdev.com/vikunja"),
+        ("https://User@tracker.zz.hgdev.com", "https://user@tracker.zz.hgdev.com"),
+        ("https://u:PassWord@tracker.zz.hgdev.com", "https://u:password@tracker.zz.hgdev.com"),
+    ],
+    ids=["path-case", "userinfo-user-case", "userinfo-password-case"],
+)
+def test_reload_still_refuses_a_rotation_that_changes_only_a_CASE_SENSITIVE_part(
+    monkeypatch, capsys, baseline_url, rotated_url
+):
+    """A rotation whose url differs from the running session ONLY in the case of a case-SENSITIVE
+    component is a genuine repoint and must be refused, exactly like a different host.
+
+    The path rows are the ones #154's reviewer found unprotected: `/Vikunja` and `/vikunja` are
+    different endpoints on a case-sensitive server, so folding them would let a rotation walk the
+    session onto another deployment behind the same host. The userinfo rows are the same argument
+    about a CREDENTIAL — RFC 3986 6.2.2.1 folds the case of the scheme and a US-ASCII host and of
+    nothing else, so userinfo is case-sensitive and two credentials are not one endpoint. Neither
+    may rebuild, and stdout stays byte-clean (MCP stdio channel).
+
+    The row that carries the card is `path-case`, and it is not covered by the negative test above
+    even though that one has a `different-path` row: there the baseline has NO path at all, so
+    lowercasing the path leaves the two strings different anyway and the refusal still fires.
+    Measured — under the `path.lower()` mutation the `different-path` row stays GREEN and only this
+    row goes red.
+
+    MUTATION-CHECKED over the whole `tests/unit` selection, `__pycache__` cleared and
+    `PYTHONDONTWRITEBYTECODE=1`, restores confirmed by re-running to the control. Control round:
+    0 failed.
+      * `{path}` -> `{path.lower()}` in canonical_base_url -> 4 failed, the `path-case` row here
+        among them. On the PRE-card tree, control 0 failed, that mutation was 0 failed
+      * fold the authority WHOLE again (`authority.lower()`, the pre-#164 body) -> 6 failed, BOTH
+        `userinfo-*` rows here among them, each as `DID NOT RAISE ConfigError` — i.e. that body
+        had the guard accepting a CHANGED CREDENTIAL as the same endpoint, which is why those two
+        rows were red-first rather than pins of behaviour that was already correct
+    """
+    sentinel = object()
+    monkeypatch.setattr(server, "_workflow", sentinel, raising=False)
+    _set_session_baseline(monkeypatch, token="OLD", url=baseline_url, project_id=10)
+    monkeypatch.setattr(
+        server, "load_config",
+        lambda: Config(url=rotated_url, token="ROTATED", project_id=10),
+    )
+    with pytest.raises(ConfigError, match="MID-SESSION"):
+        server._reload_workflow_from_disk()
+    assert server._workflow is sentinel                # did NOT rebuild onto the other endpoint
+    assert server._workflow_token == "OLD"             # baseline not advanced by a refused reload
+    assert capsys.readouterr().out == ""
+
+
 def test_401_rotation_with_a_cosmetic_url_change_still_self_heals(monkeypatch, capsys):
     """End-to-end through the REAL _tool + _reload: a 401 whose rotated config differs only by a
     trailing slash on the url must self-heal (rebuild + retry once), NOT surface the repoint refusal.

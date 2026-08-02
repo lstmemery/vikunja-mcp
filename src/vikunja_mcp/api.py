@@ -122,17 +122,57 @@ def canonical_base_url(base_url: str) -> str:
 
     Folds ONLY what is the same endpoint by definition, and keeps every genuine change:
       * strips a trailing slash — cosmetic;
-      * lowercases the scheme and the authority (host[:port]) — the RFC-3986 case-insensitive parts;
+      * lowercases the scheme and the HOST[:port] — the RFC-3986 case-insensitive parts;
         httpx folds these the same way when it builds a request, so routing the client through this
-        leaves its observable behaviour identical (the existing api tests pass untouched);
+        leaves the request it builds unchanged for every url a Vikunja base url can be (the existing
+        api tests pass untouched). NOT for every url, though — #154 said "identical" flat, and #164
+        measured THREE divergences on httpx 0.28.1, none reachable from a real config: an uppercase
+        scheme with an explicit DEFAULT port (`HTTPS://h:443` keeps `:443` on the wire, the
+        canonicalized `https://h:443` drops it, because that drop is case-sensitive about the
+        scheme); an IPv6 literal written with UPPERCASE HEX (`[::FFFF:1]` folds to `[::ffff:1]`,
+        changing the Host header); and a query or fragment BEFORE the first `/`, which lands in the
+        authority slice and gets lowercased. The first two are the same endpoint either way; the
+        third is a genuine over-fold of the shape this card removed from userinfo, left open and
+        FILED rather than fixed here. All three predate this card — they come from folding the
+        scheme and host, which is #154's. The point is that "identical" was wider than its
+        measurement; the second test in tests/unit/test_api.py now pins the rule AND all three;
       * ensures the `/api/v1` suffix.
     It deliberately does NOT touch the scheme VALUE (http vs https — a plaintext downgrade is REAL),
     the host, the port, or the path (all case-sensitive): a rotation moving any of those is a genuine
-    repoint the guard must still refuse."""
+    repoint the guard must still refuse.
+
+    USERINFO IS NOT FOLDED, and that is tracker #164's fix rather than an omission. The authority
+    used to be lowercased WHOLE, so `https://u:PassWord@h` came back as `https://u:password@h` — a
+    different CREDENTIAL collapsed onto one string, i.e. the guard reading two of them as the same
+    endpoint, in the permissive direction #148 exists to close. RFC 3986 6.2.2.1 normalizes the case
+    of the scheme and the host and of nothing else, and assumes every other generic-syntax component
+    case-sensitive unless a scheme defines otherwise — http and https do not, so userinfo and path
+    are case-sensitive. (That section names neither component individually, and 3.2.1 deprecates the
+    `user:password` form outright, so do not restate this as an RFC rule about "passwords".) httpx
+    agrees: measured, `httpx.URL('https://User:PassWord@HOST/api/v1')` reads host `host` and
+    userinfo `b'User:PassWord'`. Folding it was the only class where this function changed a
+    CREDENTIAL the client then sent — NOT the only class where it changed the request at all; the
+    three named above are the ones MEASURED, which is not the same as all there are. Swept over 540
+    constructed urls (3 schemes x 6 userinfo shapes x 5 hosts x 6 paths), comparing each body
+    against the pre-#154 raw path through `httpx.URL`: the old one differed on 288, this one on 36,
+    and all 36 of those are the uppercase-scheme + default-port class — userinfo has stopped being a
+    difference at all. That grid is a GRID, though, and the IPv6-hex and query-before-slash classes
+    are precisely shapes it cannot contain; they were found by looking outside it, which is the
+    standing reason not to read 36 as a total. The split is on the LAST `@`, which is httpx's too
+    (`https://a@b:PW@HOST` → host `host`, userinfo `a%40b:PW`) — an un-encoded `@` in the userinfo
+    is illegal per RFC anyway, and this way it makes the function fold LESS, never more.
+
+    The PATH's case is likewise kept, and #164 pins it: `https://h/vikunja` and `https://h/Vikunja`
+    are different endpoints on a case-sensitive server. That was already true when #154 wrote it —
+    what was missing is any test that would notice it stopping being true. #154's own reviewer ran
+    the "lowercase the path too" mutation and the whole suite stayed green; #164 re-ran it before
+    changing anything and got the same result, then again after, where it reddens the four tests
+    named in tests/unit/test_api.py's MUTATION-CHECKED record."""
     prefix, sep, rest = base_url.partition("://")
     if sep:
         authority, slash, path = rest.partition("/")
-        base = f"{prefix.lower()}{sep}{authority.lower()}{slash}{path}"
+        userinfo, at, host = authority.rpartition("@")     # ("", "", authority) when there is no @
+        base = f"{prefix.lower()}{sep}{userinfo}{at}{host.lower()}{slash}{path}"
     else:
         base = base_url
     base = base.rstrip("/")

@@ -4,7 +4,7 @@ import time
 import httpx
 import pytest
 
-from vikunja_mcp.api import VikunjaAPI, VikunjaError
+from vikunja_mcp.api import VikunjaAPI, VikunjaError, canonical_base_url
 
 
 def make_api(handler):
@@ -309,3 +309,163 @@ def test_connection_drop_retried_for_get_not_for_put(no_sleep):
         api.create_task(3, "t")
     assert calls["GET"] == VikunjaAPI._MAX_RETRIES + 1   # idempotent -> retried to exhaustion
     assert calls["PUT"] == 1                             # create -> raised immediately
+
+
+# --- tracker #164: what canonical_base_url must NOT fold ----------------------------------------
+# The canonicalizer's dangerous direction is PERMISSIVE. Every pair of urls it folds onto one
+# string is a pair the #148 repoint guard reads as the SAME endpoint, and #148 exists precisely to
+# stop a token rotation from silently repointing an agent at another project's queue. #154 built
+# the function and pinned the three things it SHOULD fold (trailing slash, scheme case, host case
+# — tests/unit/test_server.py) and, in the same file, that a genuinely different scheme VALUE, host,
+# port or path must still refuse. What nothing pinned is CASE where case is meaningful: #154's own
+# reviewer ran the mutation "let it lowercase the path too" and no test went red. Re-measured on
+# the PRE-card tree on 2026-08-02 with `__pycache__` cleared: control 0 failed; `{path}` ->
+# `{path.lower()}` in canonical_base_url -> 0 failed. (On THIS tree that same mutation is 4 failed
+# — see the MUTATION-CHECKED records below.) Correct behaviour resting on nobody having touched it.
+#
+# The second row of the same finding was a real defect rather than a gap: the authority was folded
+# WHOLE, so userinfo — case-sensitive per RFC 3986 6.2.2.1, and a credential — collapsed too
+# ('https://u:PassWord@h' -> 'https://u:password@h'), which is this function disagreeing with the
+# very httpx behaviour its own docstring appeals to. Far from the only such disagreement, as writing
+# the second test below turned up: an uppercase scheme with a default port, an IPv6 literal with
+# uppercase hex, and a query or fragment before the first `/` all diverge too — all three from
+# #154's scheme/host folding rather than from this row, and all three now asserted there rather
+# than described. The third of them is a live permissive fold and is filed as its own card.
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("https://t.example/", "https://t.example/api/v1"),
+        ("HTTPS://t.example", "https://t.example/api/v1"),
+        ("https://T.EXAMPLE", "https://t.example/api/v1"),
+        ("https://t.example/Vikunja", "https://t.example/Vikunja/api/v1"),
+        ("https://t.example/VIKUNJA/Sub", "https://t.example/VIKUNJA/Sub/api/v1"),
+        ("https://User:PassWord@t.example", "https://User:PassWord@t.example/api/v1"),
+        ("https://User:PassWord@T.EXAMPLE:8443", "https://User:PassWord@t.example:8443/api/v1"),
+        ("https://a@b:PW@T.EXAMPLE", "https://a@b:PW@t.example/api/v1"),
+        ("https://[::1]:3456", "https://[::1]:3456/api/v1"),
+        ("https://t.example:443", "https://t.example:443/api/v1"),
+    ],
+    ids=[
+        "trailing-slash-stripped", "scheme-case-folded", "host-case-folded",
+        "path-case-KEPT", "path-case-KEPT-multi-segment",
+        "userinfo-case-KEPT", "userinfo-KEPT-while-host-folds", "split-on-the-LAST-at",
+        "ipv6-literal", "default-port-KEPT",
+    ],
+)
+def test_canonical_base_url_folds_the_case_insensitive_parts_and_nothing_else(raw, expected):
+    """Exact output, row by row — the folding half and the KEEPING half in one table.
+
+    The keeping rows carry this card. `https://h/vikunja` and `https://h/Vikunja` are different
+    endpoints on a case-sensitive server, and `User:PassWord` vs `user:password` is a different
+    CREDENTIAL: fold either and the guard stops being able to tell a genuine repoint from a
+    cosmetic edit, in the permissive direction, which is #148's hole re-opened. `:443` is kept for
+    the same reason from the strict side — folding it would be safe against httpx but is not what
+    this function promises, and a loud refusal beats a quiet repoint (#164 point 3, deliberately
+    unchanged). `split-on-the-LAST-at` follows httpx, measured: `httpx.URL('https://a@b:PW@HOST')`
+    reads host `host` and userinfo `a%40b:PW`, so an illegal un-encoded `@` in the userinfo makes
+    this function fold LESS, never more. `ipv6-literal` is deliberately case-BLIND — `[::1]:3456`
+    holds no alphabetic character, so it pins bracket/port handling and cannot detect any folding
+    mutation at all; the case question for IPv6 is answered by the uppercase-hex assert in the test
+    below, which is where it diverges from httpx.
+
+    MUTATION-CHECKED over the whole `tests/unit` selection, `__pycache__` cleared and
+    `PYTHONDONTWRITEBYTECODE=1`, every round restored with `git checkout --` and the restore
+    confirmed by re-running to the control. Control round: 0 failed.
+      * `{path}` -> `{path.lower()}` in canonical_base_url -> 4 failed, two of them this table's
+        `path-case-KEPT` rows (the others are the httpx test below and the guard row in
+        test_server.py). On the PRE-card tree, control 0 failed, that same mutation was 0 failed —
+        which is the gap this card was filed for
+      * fold the authority WHOLE again (`authority.lower()`, the pre-#164 body) -> 6 failed, three
+        of them this table's `userinfo-case-KEPT`, `userinfo-KEPT-while-host-folds` and
+        `split-on-the-LAST-at` rows
+      * `rpartition("@")` -> `partition("@")` -> 4 failed: `split-on-the-LAST-at` as intended, plus
+        `host-case-folded` here, the test below, and `host-case` in test_server.py — because with no
+        `@` present `partition` puts the WHOLE authority in the userinfo half and then folds nothing
+        at all, so it breaks far more than the `@` split it was aimed at
+      * identity canonicalizer (suffix only, fold nothing) -> 7 failed, four of them rows here, so
+        this table pins the FOLDING side. The test below is among the other three, but only via its
+        divergence asserts; its equal set alone would not notice
+    """
+    assert canonical_base_url(raw) == expected
+
+
+def test_the_canonicalizer_changes_the_client_url_only_in_these_measured_classes():
+    """The behavioural half: routing the client through canonical_base_url leaves the request it
+    builds byte-identical to the pre-#154 raw `rstrip('/') + /api/v1` path for the urls this
+    project's config actually holds — and diverges in three measured classes, each asserted here
+    rather than hedged around.
+
+    This is the function's own docstring claim, made checkable instead of asserted, and checking it
+    is what found the claim overstated. #154 wrote "httpx folds these the same way ... leaves its
+    observable behaviour identical". Measured divergences, httpx 0.28.1:
+      1. UPPERCASE SCHEME + EXPLICIT DEFAULT PORT — the default-port drop is case-SENSITIVE about
+         the scheme, so `HTTPS://h:443` keeps `:443` on the wire while canonicalized `https://h:443`
+         loses it. Same endpoint, so nothing broke.
+      2. IPv6 LITERAL WITH UPPERCASE HEX — `[::FFFF:1]` is folded to `[::ffff:1]`, changing the Host
+         header. Same address (hex digits are case-insensitive; RFC 5952 prefers lowercase anyway).
+      3. QUERY OR FRAGMENT BEFORE THE FIRST `/` — `?Q=A` / `#Frag` land in the authority slice and
+         get lowercased. NOT harmless in principle and NOT endorsed: this is the same permissive
+         fold #164 removed from userinfo, still open for this shape, filed as its own card. The
+         assert below CHARACTERIZES today's behaviour so a fix has to come past it deliberately.
+    All three are PRE-EXISTING — they come from #154's scheme/host folding, not from this card,
+    which only stopped userinfo being a fourth. None is reachable from a Vikunja base url. They are
+    asserted because a sentence wider than its measurement is the defect class this card exists for,
+    and because each must neither spread nor quietly vanish under a future edit or an httpx bump.
+
+    Userinfo is the row that was a real defect rather than an overstatement: the pre-#164 body
+    folded the case of a CREDENTIAL, so `https://User:PassWord@h` went out as
+    `https://user:password@h`. That row is red-first evidence.
+
+    NOT a proof for all urls. The equal set says these ten inputs are unchanged and nothing about an
+    eleventh; the 540-url sweep recorded in canonical_base_url's docstring is a grid, and classes 2
+    and 3 are precisely shapes that grid could not contain — which is how they were found, and why
+    "these measured classes" in the name is not "all classes".
+
+    MUTATION-CHECKED, same selection and hygiene as the table above. Control round: 0 failed.
+      * `{path}` -> `{path.lower()}` -> 4 failed, this test among them
+      * fold the authority WHOLE again (the pre-#164 body) -> 6 failed, this test among them, on
+        the `https://User:PassWord@t.example` row — which is what made this card's fix a fix and
+        not a preference
+      * identity canonicalizer (fold nothing) -> 7 failed, this test among them. It is caught by
+        the divergence asserts, NOT by the equal set — an identity body satisfies every row of the
+        equal set, since httpx folds scheme and host by itself. That is measured per-assert, and it
+        corrects this record's first version, which said 6 failed and "this test is NOT among them":
+        both were true before the divergence asserts were added and went stale inside this card
+      * of the divergence asserts, only the CANONICAL side of each pair can fail from a change to
+        this function; the `pre_154` sides never call it and are httpx-bump tripwires only
+    """
+    def pre_154(url):
+        stripped = url.rstrip("/")
+        return stripped if stripped.endswith("/api/v1") else stripped + "/api/v1"
+
+    def wire(url):
+        return str(httpx.URL(url))
+
+    for raw in [
+        "https://t.example", "https://t.example/", "HTTPS://t.example", "https://T.EXAMPLE",
+        "https://t.example/Vikunja", "https://t.example/vikunja",
+        "https://User:PassWord@t.example", "https://user:password@t.example",
+        "https://[::1]:3456", "https://t.example/api/v1",
+    ]:
+        assert wire(canonical_base_url(raw)) == wire(pre_154(raw)), \
+            f"canonicalizing {raw!r} changed the url the client builds"
+
+    # Class 1 — uppercase scheme + explicit DEFAULT port.
+    assert wire(pre_154("HTTPS://t.example:443")) == "https://t.example:443/api/v1"
+    assert wire(canonical_base_url("HTTPS://t.example:443")) == "https://t.example/api/v1"
+    assert wire(canonical_base_url("HTTPS://t.example:8443")) == \
+        wire(pre_154("HTTPS://t.example:8443")), \
+        "the exception is the DEFAULT port specifically; a non-default port must be unaffected"
+
+    # Class 2 — IPv6 literal written with uppercase hex.
+    assert wire(pre_154("https://[::FFFF:1]:3456")) == "https://[::FFFF:1]:3456/api/v1"
+    assert wire(canonical_base_url("https://[::FFFF:1]:3456")) == "https://[::ffff:1]:3456/api/v1"
+
+    # Class 3 — query/fragment BEFORE the first `/`, so it lands in the authority slice and folds.
+    # Characterization of a KNOWN-OPEN permissive fold, not an endorsement (see the docstring).
+    assert canonical_base_url("https://t.example?Q=A") == "https://t.example?q=a/api/v1"
+    assert canonical_base_url("https://t.example#Frag") == "https://t.example#frag/api/v1"
+    # ... and the same query AFTER a `/` is in the path slice, so it is correctly left alone.
+    assert canonical_base_url("https://t.example/x?Q=A") == "https://t.example/x?Q=A/api/v1"
