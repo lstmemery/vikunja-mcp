@@ -775,3 +775,53 @@ def test_claude_md_states_the_control_round_rule_and_its_limit():
     assert "rsync -a --exclude .venv" in section and "vikunja_mcp.__file__" in section, \
         "CLAUDE.md no longer names the form a control round CANNOT catch (#646) or the check " \
         "that does: copy without .venv, and print where the package was actually imported from"
+
+
+def test_claude_md_says_a_stale_figure_sweep_is_not_line_fed():
+    """The OTHER sweep in this section — the text one that hunts stale figures — and its trap.
+
+    Pinned in three pieces, and two of them are the counter-intuitive half rather than the rule.
+    The rule alone ("do not be line-fed") invites the obvious fix, and the obvious fix is measured
+    wrong: on `e86b2c9^` a whitespace CLASS in place of the literal space returns the same 15 hits
+    in test_api_kanban.py and still misses the wrapped figure at :1473, because grep is fed one
+    line at a time and no PATTERN changes that. A FLAG does, and the honest version of this rule
+    has to say so: `grep -z` takes the file as one record and finds the figure, 16 hits to 15 —
+    then reports every hit as line 1, which is why it replaces the blind spot rather than closing
+    it. Measured on both greps here. And a spanning matcher reported
+    without the DIFF against the per-line hits is unusable rather than merely noisy: of the few
+    hundred hits `\\d+ (?:passed|failed)` returned over tests/ on 2026-08-02, all but TWO were
+    ones the line-anchored sweep already found. The total is deliberately not pinned and the TWO
+    is, because only one of them survived the day: THIS docstring lives under tests/, so writing
+    it added 8 to the total, and rebasing onto a sibling's landing added 55 more — while the
+    wrapped count stayed 2 across both.
+
+    Why a pin at all, when the class has no live instance — the whole value of these sweeps is the
+    NEGATIVE answer, so the rule is read exactly once per sweep, by an agent about to write "this
+    file is clean" into a card. A paragraph nobody re-runs is the first thing a later edit drops.
+
+    MUTATION-CHECKED, `__pycache__` deleted and then `PYTHONDONTWRITEBYTECODE=1`, exactly 1 test
+    selected per round, CLAUDE.md restored from a COPY between rounds (never `git checkout --`:
+    this card's own edit is uncommitted while the card is in Build). Control round: 0 failed,
+    1 passed.
+      * delete the paragraph entirely -> 1 failed, on the rule assert
+      * keep the rule, delete the measured `[[:space:]]` counter-example -> 1 failed: without it
+        the paragraph reads as "write a better regex", which is the fix that does not work
+      * keep both, drop the requirement to report the DIFF -> 1 failed
+      * move the paragraph out of Testing Philosophy into Releases -> 1 failed, so the section
+        slicer is load-bearing for this pin too and not just inherited from the one above
+      * restore -> 0 failed, 1 passed, back to the control
+    """
+    section = _testing_philosophy()
+
+    assert "must not be LINE-FED" in section, \
+        "CLAUDE.md no longer says a sweep for stale figures must not be line-fed. Prose here " \
+        "wraps at ~100 columns, so `grep -rn` reports a file CLEAN at a wrapped figure — which " \
+        "is the one answer a sweep exists to give"
+    assert "[[:space:]]" in section, \
+        "CLAUDE.md no longer carries the measured counter-example, and the rule is worth less " \
+        "without it: loosening the PATTERN does not help, because grep is handed one line at a " \
+        "time. Without this the next reader fixes the regex and stays blind"
+    assert "DIFF against the per-line hits" in section, \
+        "CLAUDE.md no longer says WHAT to report. A raw spanning hit list is dominated by what " \
+        "the line-anchored sweep already found, so the difference is the only useful output — " \
+        "and the noise a wrap-crossing pattern adds has to be eyeballed, not counted"

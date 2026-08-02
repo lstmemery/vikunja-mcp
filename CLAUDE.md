@@ -287,6 +287,35 @@ that wrote it.** Touch the floor only if the suite ever shrinks below it, which
 is itself worth noticing. Where a figure genuinely needs precision, DATE it
 instead — as the release section does with its landings-per-day snapshot.
 
+**And the sweep that HUNTS stale figures must not be LINE-FED — the defect is
+grep's input unit, not its pattern.** Test prose wraps at the 100-column lint
+limit, so a figure straddling a break cannot match a single-line pattern, and
+loosening the regex does not recover it: measured on `e86b2c9^`, swapping the
+literal space of `grep -n "[0-9]\{2,\} passed" tests/unit/test_api_kanban.py`
+for `[[:space:]]\+` returns the SAME 15 hits and still misses the wrapped one
+at :1473, on both greps on this machine (BSD 2.6.0-FreeBSD and ugrep 7.5.0). A
+FLAG changes the input unit where no pattern can — `grep -z` reads the file as
+one record and DOES find it, 16 hits to 15 — but it then reports every hit as
+line 1, so it cannot say WHERE, which is the one thing a sweep owes its
+reader. Read each file WHOLE, collapse every whitespace run to one space, then
+match — and report the DIFF against the per-line hits, never the raw list: the
+raw one is dominated by what the old sweep already found. Measured 2026-08-02,
+`\d+ (?:passed|failed)` returned a few hundred hits over `tests/` and exactly
+TWO were new. Price those two, since a pattern loose enough to cross a wrap
+also catches `<number> failed` in prose — both were false positives, a docker
+port (`Bind for 0.0.0.0:3456 failed`) and an illustrative `-> 7 failed` in the
+scanner named below, while the narrower `[0-9]\{2,\} passed` found no wrapped
+hit at all. The TWO is the durable half and the total is not, which this
+paragraph learned on itself: writing the docstring below — it lives under
+`tests/` — added 8 hits to the total, and a sibling landing between that
+measurement and this push added 55 more, while the wrapped count stayed 2. A
+small footprint is the argument for fixing the METHOD rather than the sites:
+what a sweep is FOR is its NEGATIVE answer, and 665's sweep reported
+`test_api_kanban.py` clean at the exact site 668 was later filed against.
+Coda, because it cuts the other way — 668's implementer and its reviewer both
+re-measured that figure RIGHT, so what the sweep could not see there was a
+missing ATTRIBUTION, not a stale total.
+
 **A mutation sweep opens with an UNMUTATED CONTROL round on the SAME selection,
 and every round count is a DELTA against it.** Sweeps here are hand-run — edit
 the source, `pytest`, read the summary line, restore — and that summary line is
