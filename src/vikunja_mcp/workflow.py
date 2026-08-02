@@ -1532,8 +1532,9 @@ class Workflow:
             comment += " (упорядочено: цепочка precedes — клеймабельна только голова)"
         self.api.add_comment(task_id, comment)
         # #673: a card that BECOMES A CONTAINER carries no verdict. `advance` already clears both
-        # mutually-exclusive verdict labels on both of its forms — "resuming work invalidates the
-        # old assessment" (#119) — and decompose is the same kind of resumption, the work simply
+        # mutually-exclusive verdict labels on both of its forms — #119's ruling, in ITS OWN
+        # words, is that "a resubmission into the active pipeline invalidates any prior verdict"
+        # — and decompose is the same kind of resumption, the work simply
         # moves into the children; it just cleared nothing, so the parent kept whatever label it
         # arrived with. Measured through the real Workflow over a FakeAPI board, along the exact
         # route #663's refusal recommends (a reviewer is refused from Review -> review_task(
@@ -1547,9 +1548,10 @@ class Workflow:
         # ever routes a reviewer to a container and the normal flow can never refresh that
         # verdict. (Not "can never be refreshed at all": `review_task` gates on stage alone, so a
         # reviewer handed the id by hand still lands a verdict on an epic. Measured, not assumed.)
-        # PARENT only — the children are created by create_task just above, which is the only
-        # child-touching call here besides the `ordered` relations, so no decompose path puts a
-        # label on them and there is nothing on them to clear. Placed with the
+        # PARENT only. FOUR calls above touch a child — create_task, the `parenttask` relation,
+        # the move to Queue, and the `ordered` `precedes` chain — and not one of them takes a
+        # label argument, so no decompose path can put a verdict on a child and there is nothing
+        # on them to clear. Placed with the
         # other PARENT mutations instead of before the children: they are grouped here, and
         # clearing earlier would invent a half-applied state (verdict gone, never became an epic).
         self._clear_verdict_labels(task)

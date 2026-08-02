@@ -629,15 +629,24 @@ def test_decompose_clears_the_stale_verdict_off_the_card_it_turns_into_an_epic(e
     """#673: `decompose` turns a card into an epic CONTAINER, but left the verdict label it
     arrived with hanging on it. Measured through the real `Workflow` over a FakeAPI board (not a
     live tracker), along the exact route #663's own refusal recommends — a reviewer is turned away
-    from Review, sends the card back with review_task(verdict='needs_work'), and its owner
-    decomposes from Build: the parent landed in Backlog carrying `epic` AND `review-failed` at
+    from Review (that refusal is #663's pin, context here rather than a step this test runs), sends
+    the card back with review_task(verdict='needs_work'), and its owner decomposes from Build,
+    which are the two steps this test DOES run: the parent landed in Backlog with `epic` AND
+    `review-failed` at
     once. That is the shape #626 (`reviewed` + `blocked`, in its own words the board claiming
     'approved' and 'blocked' at once) and #663 (`reviewed` + `epic`) each closed elsewhere — the
     board asserting two things at once — arriving here by the route those very cards recommend as
-    the correct one. #590 is the stage-gate ANCESTOR of the shape, not another instance of it: it
-    measured `blocked` landing on a card under review, with no verdict label on the board at all
-    (checked by rebuilding its repro card — the 'approved and blocked' phrasing is #626's, and
-    this docstring previously mis-credited it to #590).
+    the correct one. #590 is the stage-gate ANCESTOR of the shape, not another instance of it: its
+    repro adds a BARE task straight into Review, so what it measured was `blocked` landing ALONE
+    on a card with no label at all — `['blocked']`, NOT #626's `['reviewed', 'blocked']`, and
+    collapsing those two is exactly the mistake this sentence exists to prevent. The 'approved and
+    blocked' phrasing is #626's and never #590's, settled with git rather than from memory: the
+    phrase APPEARS in 6ac1454 (#626) per `git log -S`, run in both case forms because that search
+    is case-SENSITIVE, and `git grep` over 51ab50d (#590) finds it nowhere. Expect `git log -S` to
+    name THIS commit as well — a file that quotes the phrase counts as a hit for adding the quote,
+    which is the gotcha rather than a third source. The line in workflow.py crediting the phrase to
+    #590 is no witness either: `git blame` puts it in 6ac1454, so #626 wrote that credit about
+    itself, which is where the confusion starts rather than where it ends.
 
     Not merely STALE. `advance` clears both mutually-exclusive verdict labels on both of its forms
     because resuming work invalidates the old assessment (#119); on an epic the label is
@@ -655,11 +664,15 @@ def test_decompose_clears_the_stale_verdict_off_the_card_it_turns_into_an_epic(e
     assertion existed. Route B carries the OTHER verdict to the same place (an APPROVED card a
     human hand-pulls back to Build — no tool fires there, so `reviewed` survives the move) and is
     what keeps the fix from being one-sided. The CHILDREN assertions run in all three routes
-    because the claim is about every child: create_task is the only child-touching call in
-    decompose besides the `ordered` relations, so the right answer is 'nothing to clear', and this
-    holds it that way. The CONTROL card never carried a verdict, and its exact `== ['epic']` pins
-    that the clear takes NOTHING extra and adds nothing — it does not catch a wholesale strip
-    (it has nothing to strip); the `bug` assertion in route A is what does.
+    because the claim is about every child: FOUR calls in decompose touch one — create_task, the
+    `parenttask` relation, the move to Queue and the `ordered` `precedes` chain — and not one of
+    them takes a label, so the right answer is 'nothing to clear', and this holds it that way.
+    The CONTROL card never carried a verdict, and its exact `== ['epic']` pins that the clear ADDS
+    nothing: a stray `blocked` alongside it reddens there and nowhere else (control 0 failed; that
+    mutant -> 1 failed). It cannot pin the other direction — a card with no labels has nothing to
+    take — so neither a wholesale strip nor an over-take of one non-verdict label is caught there:
+    with route A's `bug` assertion deleted BOTH of those mutants run at 0 failed against a control
+    of 0 failed, and that assertion is what catches both.
 
     MUTATION-CHECKED IN BOTH DIRECTIONS, each round naming the assertion it actually reddens as
     read out of pytest's raw output rather than guessed. Selection: test_workflow_gates.py +
@@ -682,11 +695,11 @@ def test_decompose_clears_the_stale_verdict_off_the_card_it_turns_into_an_epic(e
     ['epic']`. Restored by text substitution, never `git checkout --`, because the tree carried
     uncommitted work.
 
-    Out of this card's slice, measured on the same run and FILED rather than fixed here: the same
-    hanging verdict rides `return_task` (an approved card a human hand-pulled back to Build then
-    hit an external block lands in Backlog as `['reviewed', 'blocked']` — #590's own 'approved and
-    blocked' sentence) and `claim` (a hand-parked verdict rides into Design, where the next
-    `advance(to='build')` clears it)."""
+    Out of this card's slice, measured on the same run and FILED as #693 rather than fixed here:
+    the same hanging verdict rides `return_task` (an approved card a human hand-pulled back to
+    Build then hit an external block lands in Backlog as `['reviewed', 'blocked']` — #626's
+    'approved and blocked' shape, per the attribution measured above, NOT #590's) and `claim` (a
+    hand-parked verdict rides into Design, where the next `advance(to='build')` clears it)."""
     api, wf, _t = env
 
     def _reviewer():
@@ -746,9 +759,14 @@ def test_decompose_clears_the_stale_verdict_off_the_card_it_turns_into_an_epic(e
     for child in res_b["created"]:
         assert _label_titles(api, child["id"]) == []
 
-    # CONTROL: a card that never carried a verdict. The clear has to stay an exact no-op here —
-    # this is what stops the whole test passing for a decompose that strips labels wholesale, and
-    # what pins that `epic` is added even so.
+    # CONTROL: a card that never carried a verdict, where the clear must stay an exact no-op. What
+    # this cell catches, measured over the same selection as the sweep above, is a decompose that
+    # ADDS something: a stray `blocked` alongside the clear reddens here and nowhere else
+    # (control 0 failed; that mutant -> 1 failed, right here). It does NOT catch a wholesale strip,
+    # having nothing to strip: delete route A's `bug` assertion and the strip mutant runs at
+    # 0 failed against a control of 0 failed, so that assertion is the only thing catching it.
+    # The `== ['epic']` asserts the epic label too, but routes A and B assert it as well, so this
+    # cell is not what pins that either.
     clean = api.add_task("чистая работа", "Queue")
     wf.claim(clean["id"])
     assert _label_titles(api, clean["id"]) == []
