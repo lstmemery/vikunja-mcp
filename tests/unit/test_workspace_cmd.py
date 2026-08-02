@@ -1866,6 +1866,102 @@ def test_a_parked_card_past_the_first_page_is_still_graded_as_parked(repo, track
     assert [e["task_id"] for e in res["expected"]] == [task["id"]]
 
 
+# --- VMCP-91 (547): the parked-card branch turns on the ROLE too ---
+
+def test_a_parked_card_does_not_launder_a_reviewers_dirty_tree(repo, tracker):
+    """VMCP-91, and it is VMCP-68's round-2 finding one axis over: `dirty`/`unpushed` were graded
+    routine by the PARKED CARD alone, on a justification written entirely about the BUILD agent
+    (`call_human` is what an agent calls when a rebase conflicts, so its tree holds unsaved work
+    while the card waits). A REVIEW tree reaches the very same role-agnostic `dirty` guard, so a
+    reviewer's stranded draft was filed under "do not look" for as long as a card it merely shares
+    a task id with sat in Your Call.
+
+    Reachable on the ordinary path, which is what this builds: the reviewer files `needs_work`
+    without `--release`, the card goes back to Build, the build agent hits a conflict and calls
+    `call_human`. BOTH trees in ONE sweep, at the same age, with the same code and the same board
+    state — the only difference the GRADER can see is the role (the fixtures also differ in task id
+    and in which file is dirty, neither of which reaches `_keep_is_expected`), so the test holds one
+    code to opposite verdicts and cannot pass by nothing ever being graded routine."""
+    api, wf = tracker
+    head = _git(repo, "rev-parse", "HEAD")
+
+    build_card = _parked(api, wf, title="build agent parked on a conflict")
+    build_tree = Path(ensure_workspace(build_card["id"], cwd=repo)["path"])
+    (build_tree / "README.md").write_text("<<<<<<< HEAD\nhalf-resolved conflict\n")
+
+    review_card = _parked(api, wf, title="bounced back to build, then parked")
+    review_tree = Path(
+        ensure_workspace(review_card["id"], role="review", at=head, cwd=repo)["path"])
+    (review_tree / "review-notes.md").write_text("draft verdict: needs work because...\n")
+
+    _quiesce(build_tree)
+    _quiesce(review_tree)
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert sorted((e["task_id"], e["role"], e["code"]) for e in res["expected"]) == [
+        (build_card["id"], "build", workspace_cmd.CODE_DIRTY)], \
+        "the BUILD tree under a parked card is the state this branch exists for — it must stay " \
+        "`expected`, or the fix has traded one unread signal for a noisy one"
+    assert sorted((k["task_id"], k["role"], k["code"]) for k in res["kept"]) == [
+        (review_card["id"], "review", workspace_cmd.CODE_DIRTY)], \
+        "a reviewer's dirty tree is graded `expected` again — the parked card belongs to someone " \
+        "else's unsaved work, and the reviewer's contract is a verdict as a tracker COMMENT"
+    assert build_tree.exists() and review_tree.exists()    # refused, never destroyed, either way
+
+
+def test_the_grading_grid_is_all_kept_outside_the_four_named_cells():
+    """The completeness pin, and it exists because of this card's own history. Two branches of
+    `_keep_is_expected` had the same role-shaped hole; VMCP-68's round-2 review closed one, and the
+    mirror survived in the other for two more rounds of review OF THAT FUNCTION. What nobody had was
+    the whole grid in one place, so "we checked the branch we were looking at" kept reading as "we
+    checked it".
+
+    Every code the module declares, both roles PLUS a role-less entry, both board states. FOUR of
+    the 66 cells are routine, spread over THREE codes and coming from TWO sets (the two the parked
+    build tree excuses share one); every other cell is `kept`. Counted as CELLS on purpose — this
+    pin's first wording said "two rows", which is the miscount-inside-a-closed-enumeration that the
+    card it belongs to was filed against. The `declared <= grid` assertion is the part that survives
+    the next card: a new `CODE_*` constant fails here until somebody grades it deliberately, rather
+    than inheriting a default nobody read.
+
+    MUTATION-CHECKED, control 0 failed each time, `__pycache__` purged between rounds: drop the
+    `role == "build"` conjunct -> 3 failed; invert it to "review" -> 6; drop `role == "review"`
+    -> 2; drop the `parked` conjunct -> 6; add CODE_DIRTY to the review set -> 4; add CODE_LOCKED
+    to the build set -> 2; declare a new ungraded `CODE_*` -> 1 (this test alone). This test is in
+    every one of those counts."""
+    codes = [workspace_cmd.CODE_DIRTY, workspace_cmd.CODE_UNPUSHED,
+             workspace_cmd.CODE_UNREACHABLE_HEAD, workspace_cmd.CODE_DETACHED_BUILD,
+             workspace_cmd.CODE_HALF_CREATED, workspace_cmd.CODE_LOCKED,
+             workspace_cmd.CODE_NO_WORKTREE, workspace_cmd.CODE_SELF_TREE,
+             workspace_cmd.CODE_RELEASE_ERROR,
+             "a-code-nobody-declared", None]           # the fail-toward-shouting fallbacks
+    declared = {v for k, v in vars(workspace_cmd).items()
+                if k.startswith("CODE_") and isinstance(v, str)}
+    assert declared <= set(codes), \
+        f"a declared code is ungraded by this grid: {sorted(declared - set(codes))} — add it to " \
+        f"the row list AND to the expected-cell set below, deliberately"
+
+    routine = set()
+    for code in codes:
+        for role in ("build", "review", None):
+            for parked in (True, False):
+                entry = {"task_id": 7}
+                if code is not None:
+                    entry["code"] = code
+                if role is not None:
+                    entry["role"] = role
+                if workspace_cmd._keep_is_expected(entry, {7} if parked else set()):
+                    routine.add((code, role, parked))
+
+    assert routine == {
+        (workspace_cmd.CODE_DIRTY, "build", True),
+        (workspace_cmd.CODE_UNPUSHED, "build", True),
+        (workspace_cmd.CODE_UNREACHABLE_HEAD, "review", True),
+        (workspace_cmd.CODE_UNREACHABLE_HEAD, "review", False),
+    }, "the set of cells graded routine moved — every OTHER cell in this grid must be `kept`"
+
+
 # --- VMCP-69 (517): the two behaviour leftovers of the parallel-drain branch ---
 
 def test_the_main_worktree_lookup_runs_git_once_however_often_it_is_asked(repo, monkeypatch):

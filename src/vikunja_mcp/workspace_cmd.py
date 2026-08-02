@@ -936,7 +936,7 @@ def _release_locked(root: Path, task_id: int, role: str) -> dict:
         # ordering ahead of that call answers both with one guard. It also decides which code a
         # locked-AND-dirty tree reports — the lock, because it is the fact that makes the tree
         # unremovable, and "commit and retry" would be advice that cannot work. See the grading
-        # note by `_EXPECTED_WHEN_PARKED` for what that changes in `--gc`.
+        # note by `_EXPECTED_IN_A_PARKED_BUILD_TREE` for what that changes in `--gc`.
         #
         # `-f -f` is deliberately NOT offered here, unlike the half-created message above: there
         # the tree is unusable debris and force is the recovery, here the lock IS the human's
@@ -1135,14 +1135,36 @@ def _build_workflow(root: Path) -> tuple:
     return Workflow(api, cfg.project_id), deadline
 
 
-# THE GRADING POLICY (VMCP-68), and the two-part shape is the point: expectedness is a property of
-# the guard AND of the board, never of the guard alone.
-#   * _EXPECTED_WHEN_PARKED — the two guards that protect ORDINARY in-progress work. Both are
-#     routine while the task's card waits in Your Call: `call_human` parks the card the moment a
-#     rebase conflicts (dirty) or a push is rejected (unpushed), which is exactly when the tree
-#     holds unsaved work, and it stays that way for HOURS until a human answers. The card is
-#     already the human's signal; a `kept` line every tick adds nothing. The SAME two refusals on
-#     a card that is NOT parked mean work nobody is coming back for — that one has to shout.
+# THE GRADING POLICY (VMCP-68), and the shape is the point: expectedness is a property of the
+# guard AND of the board AND of the ROLE, never of the guard alone. Both sets below now name the
+# role they are about, and they arrived at it by the same route a card apart — see VMCP-91.
+#   * _EXPECTED_IN_A_PARKED_BUILD_TREE — the two guards that protect ORDINARY in-progress work.
+#     Both are routine in a BUILD tree while the task's card waits in Your Call: `call_human` parks
+#     the card the moment a rebase conflicts (dirty) or a push is rejected (unpushed), which is
+#     exactly when the tree holds unsaved work, and it stays that way for HOURS until a human
+#     answers. The card is already the human's signal; a `kept` line every tick adds nothing. The
+#     SAME two refusals on a card that is NOT parked mean work nobody is coming back for — that one
+#     has to shout.
+#
+#     VMCP-91 ADDED THE `role` CONJUNCT, and it is the exact mirror of the one the review set got
+#     in VMCP-68's round 2: every word of the justification above is about the BUILD agent — its
+#     conflict, its rejected push, its `call_human` — while `dirty` is emitted by a guard that
+#     "роли НЕ РАЗЛИЧАЕТ" (SKILL.md tells the reviewer so, and test_skill_contract builds the
+#     state), so a REVIEW tree was laundered by a parked card it merely shares a task id with.
+#     MEASURED before the fix, one sweep, three quiesced dead trees, all three cards in Your Call:
+#     `kept=[]`, `expected=[(107,'review','dirty'), (110,'build','dirty'),
+#     (113,'review','unpushed')]` — i.e. a human saw NOTHING. Reachable on the ordinary path for
+#     `dirty`: the reviewer files `needs_work` without `--release`, the card goes back to Build,
+#     the build agent hits a conflict and calls `call_human`. `unpushed` in a review tree needs a
+#     hand-made branch (the tool only ever creates them detached), so it is constructible rather
+#     than routine — both are in the set because the set is graded per CODE, and a conjunct that
+#     held for only the reachable half would be a second thing to keep true.
+#
+#     A reviewer's tree is not excused by ANY board state, which is why the conjunct is on the role
+#     rather than a wider parked set: the reviewer's contract is a verdict as a tracker COMMENT, so
+#     a draft left in its tree is precisely the thing SKILL.md tells it to clear, and the parked
+#     card belongs to someone else's unsaved work. The build side is untouched — deliberately, it
+#     is the whole reason the set exists.
 #   * _EXPECTED_IN_A_REVIEW_TREE — a detached REVIEW tree holding an in-tree commit. Permanent by
 #     construction (the reachability guard rightly refuses to release it and `--gc` cannot reap
 #     it), so it is the entry that would otherwise make `kept` non-empty FOREVER. SKILL.md's
@@ -1184,15 +1206,56 @@ def _build_workflow(root: Path) -> tuple:
 # makes the tree unreapable for as long as it stands, so filed under "do not look" it would leak in
 # silence. That is the shape of CODE_HALF_CREATED, which is correctly never routine.
 #
-# WHAT THIS DID AND DID NOT MOVE in `--gc`, measured on both sides rather than assumed (the first
-# wording here claimed "the alarm did not move" and a second pass disproved it). A locked tree that
-# is otherwise CLEAN and PUSHED — the one that used to reach `git worktree remove` — kept its list:
-# `release-error`/`kept` before, `locked`/`kept` now. But a locked tree that is ALSO dirty or
-# unpushed never reached the remove at all: the guards above answered first, so under a PARKED card
-# it graded `expected`, and now the lock answers first and it grades `kept`. That IS a move, in the
-# safe direction: the parked card excuses unsaved work because the human will come back to it, and
-# a lock is not unsaved work — nothing on that card says the tree cannot be reaped at all.
-_EXPECTED_WHEN_PARKED = frozenset({CODE_DIRTY, CODE_UNPUSHED})
+# WHAT VMCP-142 DID AND DID NOT MOVE in `--gc`, measured on both sides rather than assumed (the
+# first wording here claimed "the alarm did not move" and a second pass disproved it). A locked tree
+# that is otherwise CLEAN and PUSHED — the one that used to reach `git worktree remove` — kept its
+# list: `release-error`/`kept` before, `locked`/`kept` now. But a locked BUILD tree that is ALSO
+# dirty or unpushed never reached the remove at all: the guards above answered first, so under a
+# PARKED card it graded `expected`, and now the lock answers first and it grades `kept`. That IS a
+# move, in the safe direction: the parked card excuses unsaved work because the human will come back
+# to it, and a lock is not unsaved work — nothing on that card says the tree cannot be reaped at
+# all. It moved the REVIEW tree the SAME way at the time (`dirty`/`expected` -> `locked`/`kept`, in
+# BOTH roles); what VMCP-91 changed is that the review half is no longer a move at all, because
+# `dirty`/`unpushed` there are `kept` with or without the lock. A second pass caught this paragraph
+# narrowing itself to "a locked BUILD tree" and then claiming the review tree "was never a move" —
+# the third wording of a paragraph whose whole subject is not overstating a measurement.
+#
+# THE WHOLE GRID, since the absence of one is what let VMCP-91's hole live through two rounds of
+# review of the very function it is in. Every code this module can emit, against both roles and
+# both board states — `E` = expected, `K` = kept:
+#
+#     code               build+parked  build  review+parked  review
+#     dirty                   E          K          K           K
+#     unpushed                E          K          K           K
+#     unreachable-head        K          K          E           E
+#     detached-build          K          K          K           K
+#     half-created            K          K          K           K
+#     locked                  K          K          K           K
+#     no-worktree             K          K          K           K
+#     self-tree               K          K          K           K
+#     release-error           K          K          K           K
+#     <unknown / absent>      K          K          K           K
+#
+# A THIRD COLUMN the fix closed, which the card never named and only running the grid surfaced: an
+# entry whose `role` key is ABSENT ALTOGETHER. Before, `dirty`/`unpushed` on a role-less entry under
+# a parked card graded `expected`. The old docstring did NOT overclaim here — it said the `.get`
+# made a role-less entry "fail the review conjunct", which was exactly true, because the review
+# branch was the only one that read `role` at all; the build branch never asked. Now both do, so a
+# role-less entry is `kept` in every cell. CONTRACT HARDENING, NOT A LIVE BUG, and worth saying so
+# rather than counting it as a third defect: every `_release_locked` return and both entries `--gc`
+# synthesises carry a `role`, so nothing in production reaches that column today.
+#
+# THREE of the ten rows above are not all-`K` — the two codes excused in a parked BUILD tree, plus
+# `unreachable-head` in a review tree — and they come from TWO sets because the first two share
+# theirs. The conjuncts differ in NUMBER, not just in content, and that asymmetry is the policy
+# rather than an accident: the build pair needs THREE conditions (code, role, and the card in Your
+# Call) because the card is the human's second signal, while `unreachable-head` needs TWO (code and
+# role) because a reviewer's in-tree commit has a rule — write the verdict as a comment — rather
+# than a chore, so no board state ever clears or excuses it. Everything else is a broken tool state
+# or a statement about gc itself, and a parked card must never launder one. Pinned as a grid by
+# test_the_grading_grid_is_all_kept_outside_the_four_named_cells, so a new code lands in `kept` by
+# default and a widened set has to argue with a test.
+_EXPECTED_IN_A_PARKED_BUILD_TREE = frozenset({CODE_DIRTY, CODE_UNPUSHED})
 _EXPECTED_IN_A_REVIEW_TREE = frozenset({CODE_UNREACHABLE_HEAD})
 
 
@@ -1205,13 +1268,17 @@ def _keep_is_expected(entry: dict, parked: set[int]) -> bool:
     is UNEXPECTED, so it lands in `kept`. Wrong-and-noisy costs a human one glance; wrong-and-quiet
     is how the never-read signal this split exists to fix comes back in a new guise.
 
-    Same direction on `role`: read with `.get`, so an entry that somehow carries no role fails the
-    review conjunct and shouts rather than KeyError-ing the sweep or being waved through.
+    Same direction on `role`, in BOTH branches (VMCP-68 for the review one, VMCP-91 for the build
+    one): read with `.get`, so an entry that somehow carries no role fails its conjunct and shouts
+    rather than KeyError-ing the sweep or being waved through. `task_id` stays a subscript because
+    a refusal without one cannot be graded against the board at all and a KeyError beats a guess.
     """
     code = entry.get("code")
     if code in _EXPECTED_IN_A_REVIEW_TREE:
         return entry.get("role") == "review"
-    return code in _EXPECTED_WHEN_PARKED and entry["task_id"] in parked
+    return (code in _EXPECTED_IN_A_PARKED_BUILD_TREE
+            and entry.get("role") == "build"
+            and entry["task_id"] in parked)
 
 
 def _read_liveness(wf, deadline) -> tuple[dict, set]:

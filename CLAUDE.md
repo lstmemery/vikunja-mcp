@@ -168,8 +168,17 @@ docker rm -f vikunja-test
   look, `expected` = the two routine states that used to keep `kept` permanently non-empty — a
   parked Your Call card's unsaved work (hence `Workflow.parked_task_ids`, off the same board
   fetch) and a review tree's in-tree commit. Routine is a property of the guard AND the board AND
-  the ROLE — `unreachable-head` is routine only in a REVIEW tree (the conjunct stays as a
-  backstop even though #540 stopped build trees from reaching it). A BUILD tree that is not on
+  the ROLE, and **BOTH rows turn on the role — a claim that was true of one of them for two
+  rounds** (#547): `unreachable-head` is routine only in a REVIEW tree (the conjunct stays as a
+  backstop even though #540 stopped build trees from reaching it), and `dirty`/`unpushed` only in
+  a BUILD tree, because every word of the parked-card justification is about the build agent's
+  own conflict while the `dirty` guard is role-agnostic — so a reviewer's stranded draft used to
+  be laundered by a parked card it merely shared a task id with. The two rows now SHARE the role
+  conjunct and differ in the other one — the build pair additionally needs the card parked — so
+  they are near-mirrors rather than one rule, which is why "we checked the branch we were looking
+  at" kept reading as "we checked it": the whole grid — every code × role (build, review, AND a
+  role-less entry) × parked — is now written out above `_keep_is_expected` and pinned as a grid,
+  and a new `CODE_*` fails that pin until it is graded deliberately. A BUILD tree that is not on
   its own `task/<id>` branch — what an interrupted `git rebase origin/main` leaves: CLEAN, yet
   DETACHED — is refused by BOTH `ensure` (loudly, so a resume agent is never handed a tree whose
   HEAD is not where it is told) and `--release` (`detached-build`, because the unpushed-commits

@@ -468,8 +468,9 @@ def test_the_gc_report_split_the_skill_teaches_is_the_one_the_code_produces():
         "SKILL.md tells the pump to read `expected` but gc_workspaces stopped returning that list"
     assert "`expected`" in section, "SKILL.md's --gc rule no longer names the `expected` list"
     for code in (
-        workspace_cmd.CODE_DIRTY,             # kept, or expected while the card is parked
-        workspace_cmd.CODE_UNPUSHED,          # the Your Call state that made `kept` never-empty
+        workspace_cmd.CODE_DIRTY,             # kept, or expected in a BUILD tree under a parked
+        workspace_cmd.CODE_UNPUSHED,          #   card — VMCP-91; the state that made `kept`
+                                              #   never-empty, and never routine for a REVIEWER
         workspace_cmd.CODE_UNREACHABLE_HEAD,  # routine in a REVIEW tree, an alarm in a build one
         workspace_cmd.CODE_DETACHED_BUILD,    # VMCP-86: a build tree off its own task/<id> branch
         workspace_cmd.CODE_HALF_CREATED,      # never expected: only a human can clear it
@@ -3002,7 +3003,10 @@ def test_the_reviewers_release_rule_carries_the_refusal_its_own_cure_cannot_answ
     `{"released": false, "code": "dirty", "reason": "working tree is dirty (1 entries)"}`; the same
     tree after deleting that file -> `{"released": true}`. And the cost of not clearing it is
     measured here rather than argued: `_keep_is_expected` grades that refusal `kept` — the list a
-    human is told to read in full — on every tick, unless the card happens to be parked.
+    human is told to read in full — on every tick. Unconditionally, since VMCP-91: this test used
+    to carry "unless the card happens to be parked" and a CONTROL that asserted it, which is how a
+    pin came to hold the defect 547 was filed against. The parked card excuses the BUILD agent's
+    unsaved work; the control below now says so with a build tree.
 
     Anchored BEHAVIOURALLY rather than by reading the guard: the claim "роли НЕ РАЗЛИЧАЕТ" is
     about what a REVIEW tree does when it holds a stray file, so this builds exactly that state
@@ -3041,8 +3045,13 @@ def test_the_reviewers_release_rule_carries_the_refusal_its_own_cure_cannot_answ
     assert not workspace_cmd._keep_is_expected(entry, set()), \
         "a dirty review tree is now graded `expected` — SKILL.md tells the reviewer an uncleared " \
         "file shouts at a human every tick, which is the reason the cure matters"
-    assert workspace_cmd._keep_is_expected(entry, {7}), \
-        "control: a PARKED card's dirty tree must still be `expected`, else the assertion above " \
+    assert not workspace_cmd._keep_is_expected(entry, {7}), \
+        "a dirty REVIEW tree is graded `expected` again because a card sharing its task id sits " \
+        "in Your Call — VMCP-91 removed exactly that laundering; the parked card excuses the " \
+        "BUILD agent's unsaved work, not a reviewer's"
+    assert workspace_cmd._keep_is_expected(
+        {"code": workspace_cmd.CODE_DIRTY, "role": "build", "task_id": 7}, {7}), \
+        "control: a PARKED card's BUILD tree must still be `expected`, else the assertions above " \
         "would pass merely because nothing is ever graded routine"
 
 
