@@ -447,8 +447,12 @@ def review_task(task_id: int, verdict: str, report: str) -> dict:
     are real, it stayed in its slice, and look for obvious regressions nearby.
     verdict='approve' — a verdict comment, a human moves it to Done next;
     verdict='needs_work' — a verdict comment and the task returns to Build to the
-    implementer. report is required: what you checked, what you observed, why this
-    verdict."""
+    implementer, EXCEPT when the card has no assignee at all (a human cleared it or
+    hand-placed it in Review): then there is no implementer to return it to, so it goes
+    to QUEUE as free work — in Design/Build an ownerless card can be read and commented
+    on but no agent tool can MOVE it or make it anyone's, so your report would sit there
+    unanswered. Either way the report stays on the card for whoever picks it up. report
+    is required: what you checked, what you observed, why this verdict."""
     return _wf().review_task(task_id, verdict, report)
 
 

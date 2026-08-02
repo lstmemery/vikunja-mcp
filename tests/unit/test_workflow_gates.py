@@ -1780,3 +1780,199 @@ def test_download_attachment_keys_off_attachment_id_not_file_id(env, att_root):
         assert fh.read() == b"png"
     with pytest.raises(WorkflowError, match="no attachment"):
         wf.download_attachment(t["id"], 999000)                    # file.id is not an attachment id
+
+
+# --- #705: an OWNERLESS card bounced out of Review must not become unreachable ---------------
+
+def _ownerless_card_in_review(api, wf):
+    """The card #705 is about, built the way it actually arises: work goes through the pipeline
+    normally, then a HUMAN clears the assignee while it sits in Review (a plain web-UI edit).
+    Measured at 3a0ee77: next_task then OFFERS it for independent review — it is not assigned to
+    me and it carries a [worklog] — so the state is reached through a TOOL, not only by a human
+    hand-placing a card. Deliberately not called "the blessed path": in solo the offer goes to
+    the very token that just implemented the card, because the never-review-your-own-work guard
+    keys off `my_id in assignees` and clearing the assignee is exactly what defeats it (measured:
+    with the assignee still in place the same call answers "the queue is empty"). That hole is
+    older than #705 and is not what this test is about; what matters here is only that a reviewer
+    plausibly ARRIVES at this card and casts needs_work on it. Its own claim: that offer."""
+    t = api.add_task("real work", "Queue")
+    wf.claim(t["id"])
+    wf.advance(t["id"], to="build", spec="approach")
+    wf.advance(t["id"], to="review", worklog="did it", evidence="abc123")
+    api.remove_assignee(t["id"], api.me_user["id"])
+    offered = wf.next_task()
+    assert offered.get("review") is True and offered["task"]["id"] == t["id"], offered
+    return t
+
+
+def test_needs_work_bounces_an_OWNERLESS_card_to_Queue_so_it_stays_reachable():
+    """#705 gate 1 — review_task(verdict='needs_work') routes on the ASSIGNEE.
+
+    Measured at 3a0ee77, before the fix: the bounce put the card in Build still ownerless, and
+    from there no agent tool could MOVE it or make it anyone's (reading and commenting stayed
+    open — those need no ownership) — claim answered "task is in 'Build', you can only claim
+    from Queue", call_human "not assigned to you — claim it first", advice claim provably cannot
+    honour, and next_task offered nothing at all ("the queue is empty"). The reviewer's report —
+    which may be a QUESTION FOR THE HUMAN, the #590/#628 escalation channel — then sat on a card
+    nobody would ever come back for.
+
+    The whole chain is asserted, not just the destination, because "lands in Queue" is only worth
+    anything if Queue actually reopens the pipeline. Remove the split in review_task (always
+    _move to "Build") and this goes RED on the stage assert, and again on every step after it."""
+    api = FakeAPI(buckets=STAGES)
+    wf = Workflow(api, project_id=3)
+    t = _ownerless_card_in_review(api, wf)
+
+    res = wf.review_task(t["id"], verdict="needs_work", report="question for the human: A or B?")
+    assert (res["moved_to"], api.stage_of(t["id"])) == ("Queue", "Queue"), res
+    # the verdict's own effects are unchanged — the label and the report ride along, because the
+    # next owner recognises WHAT this bounce was only by reading them
+    assert "review-failed" in [lb["title"] for lb in api.tasks[t["id"]]["labels"]]
+    assert any(c.startswith("[review] NEEDS WORK") for c in api.comments_text(t["id"]))
+    assert api.tasks[t["id"]]["assignees"] == []      # the bounce never assigns anyone
+
+    # ...and the card is reachable again by the ORDINARY pump: offered as free queue work,
+    # claimable, and the escalation channel the card was filed about is open to its new owner.
+    offered = wf.next_task()
+    assert (offered.get("resume"), offered.get("stage")) == (False, "Queue"), offered
+    assert offered["task"]["id"] == t["id"], offered
+    wf.claim(t["id"])
+    assert api.stage_of(t["id"]) == "Design"
+    assert wf.call_human(t["id"], "A or B?")["moved_to"] == "Your Call"
+
+
+def test_needs_work_still_sends_an_ASSIGNED_card_back_to_its_own_implementer():
+    """#705 gate 1, the half that must NOT move. The redirect keys off "no assignee at all", so a
+    card with an owner — INCLUDING one owned by somebody else — still goes back to Build for THAT
+    implementer, note and all. This is the invariant the fix is easiest to break: routing every
+    bounce through Queue would hand a reviewer someone else's work as claimable, and "assigned to
+    another" has to keep meaning "not yours". Widen the condition to `if False:` (always Queue)
+    and both halves go RED — the stage, and the refusal below."""
+    other = {"id": 99, "username": "someone-else"}
+    api = FakeAPI(buckets=STAGES)
+    me = dict(api.me_user)
+    # "shared" is the case a one-assignee reading would get wrong: the split asks "no assignee
+    # AT ALL", not "not mine" and not "exactly one" — a card I co-own still has an implementer.
+    for owner, assignees in (("me", [me]), ("other", [other]), ("shared", [me, other])):
+        api = FakeAPI(buckets=STAGES)
+        wf = Workflow(api, project_id=3)
+        t = api.add_task("assigned work", "Review")
+        api.tasks[t["id"]]["assignees"] = [dict(a) for a in assignees]
+        res = wf.review_task(t["id"], verdict="needs_work", report="fix it")
+        assert (res["moved_to"], api.stage_of(t["id"])) == ("Build", "Build"), (owner, res)
+        assert res["note"] == "the task went back to the implementer — they'll see it in next_task"
+        assert [a["id"] for a in api.tasks[t["id"]]["assignees"]] == [a["id"] for a in assignees]
+
+    # and the card owned by SOMEBODY ELSE stays out of my reach: in Build, not claimable, and
+    # next_task hands me nothing — "assigned to another" still means "not yours"
+    api = FakeAPI(buckets=STAGES)
+    wf = Workflow(api, project_id=3)
+    theirs = api.add_task("their work", "Review", assignee=other)
+    wf.review_task(theirs["id"], verdict="needs_work", report="fix it")
+    with pytest.raises(WorkflowError, match="you can only claim from Queue"):
+        wf.claim(theirs["id"])
+    assert not wf.next_task().get("task")
+
+
+def test_ownerless_card_in_an_active_stage_gets_a_refusal_it_can_act_on():
+    """#705 gate 2 — the residual case, and the one thing every tool used to say about it.
+
+    review_task no longer PRODUCES an ownerless card in Design/Build, and claim's vanish-window
+    guard refuses before its own move, but a human can still hand-place one, and there
+    `_require_mine`'s "claim it first" names the single call that is guaranteed to refuse
+    (claim works only from Queue). Measured at 3a0ee77: advance, call_human, return_task and
+    decompose all answered exactly that and nothing else, so an agent had no true statement to
+    act on and no reason to stop trying the next tool. Both stages are swept below because the
+    repo's own pre-existing sweep only ever measured Build; re-measured here, an ownerless card
+    in DESIGN is moved by nothing either.
+
+    Narrow on purpose, and both conditions are asserted: in QUEUE "claim it first" is correct
+    advice, and for SOMEONE ELSE'S card "not assigned to you" is the accurate diagnosis — both
+    keep the bare message. Delete the `if stage in ACTIVE_STAGES and not assignees` clause and
+    the first loop goes RED; drop either conjunct from it and one of the two byte-for-byte
+    asserts below goes RED."""
+    api = FakeAPI(buckets=STAGES)
+    wf = Workflow(api, project_id=3)
+    bare = "task {id} is not assigned to you — claim it first"
+
+    for stage in ("Design", "Build"):
+        orphan = api.add_task(f"hand-placed in {stage}", stage)
+        for label, call in (
+            ("advance", lambda tid: wf.advance(tid, to="review", worklog="w", evidence="e")),
+            ("call_human", lambda tid: wf.call_human(tid, "q")),
+            ("return_task", lambda tid: wf.return_task(tid, reason="r")),
+            ("decompose", lambda tid: wf.decompose(tid, [{"title": "a"}, {"title": "b"}])),
+        ):
+            with pytest.raises(WorkflowError) as exc:
+                call(orphan["id"])
+            msg = str(exc.value)
+            assert "UNFOLLOWABLE" in msg and "claim() works only from Queue" in msg, \
+                f"{label} from {stage} still sends the agent to a call that cannot work: {msg}"
+            assert "Only a human can move it back" in msg, f"{label}/{stage}: no real exit: {msg}"
+
+    # unassigned in QUEUE: "claim it first" is exactly right, so the message must not grow
+    queued = api.add_task("free work", "Queue")
+    with pytest.raises(WorkflowError) as in_queue:
+        wf.call_human(queued["id"], "q")
+    # (call_human's own stage gate fires first here — that refusal is about the stage, and the
+    # point is only that no #705 clause reaches a Queue card; advance is the ownership path)
+    assert "UNFOLLOWABLE" not in str(in_queue.value), in_queue.value
+    with pytest.raises(WorkflowError) as queue_own:
+        wf.advance(queued["id"], to="build", spec="s")
+    assert str(queue_own.value) == bare.format(id=queued["id"]), queue_own.value
+
+    # somebody ELSE's card in Build: the bare diagnosis, unchanged
+    theirs = api.add_task("their work", "Build", assignee={"id": 99, "username": "someone-else"})
+    with pytest.raises(WorkflowError) as other:
+        wf.call_human(theirs["id"], "q")
+    assert str(other.value) == bare.format(id=theirs["id"]), other.value
+
+
+def test_needs_work_routes_on_a_FRESH_read_not_the_board_snapshot():
+    """#705, found by this card's own second pass: the ownerless/assigned decision must not be
+    made from the board snapshot `_find_task` took at the top of review_task.
+
+    Measured sequence of that method — view_tasks, add_comment, get_or_create_label, add_label,
+    buckets, move_task — so the snapshot is up to four API calls stale by the time the card
+    moves, and a human clearing the assignee in the web UI inside that window put the card in
+    Build ownerless: #705 reproduced BY the method that exists to prevent it. claim closes the
+    same window with two get_task re-reads before its own move (the vanish-window guard); this
+    closes it with one.
+
+    Both directions are asserted, because a re-read that only looked for disappearing assignees
+    would be half a fix: an assignee APPEARING mid-call means there IS an implementer now, and
+    the card must go to Build. Revert the routing expression to `self._assignee_ids(task)` and
+    both halves go RED."""
+    class _RaceAPI(FakeAPI):
+        """Mirrors the server: the mid-call edit REBINDS the assignee list, so the snapshot
+        handed out earlier by view_tasks stays stale exactly as a frozen JSON body would."""
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self.race_to = None      # what the human sets assignees to, mid-call
+            self.race_on = None
+
+        def add_comment(self, task_id, text):
+            out = super().add_comment(task_id, text)
+            if self.race_on == task_id:
+                self.race_on = None
+                self.tasks[task_id]["assignees"] = self.race_to
+            return out
+
+    # a human CLEARS the assignee mid-call -> no implementer any more -> Queue
+    api = _RaceAPI(buckets=STAGES)
+    wf = Workflow(api, project_id=3)
+    t = api.add_task("work", "Review", assignee=api.me_user)
+    api.race_on, api.race_to = t["id"], []
+    res = wf.review_task(t["id"], verdict="needs_work", report="q")
+    assert (res["moved_to"], api.stage_of(t["id"])) == ("Queue", "Queue"), res
+    assert wf.next_task()["task"]["id"] == t["id"]          # reachable, not stranded in Build
+    wf.claim(t["id"])
+
+    # a human ASSIGNS it mid-call -> there IS an implementer now -> Build, theirs
+    api = _RaceAPI(buckets=STAGES)
+    wf = Workflow(api, project_id=3)
+    t = api.add_task("work", "Review")
+    api.race_on, api.race_to = t["id"], [{"id": 99, "username": "someone-else"}]
+    res = wf.review_task(t["id"], verdict="needs_work", report="q")
+    assert (res["moved_to"], api.stage_of(t["id"])) == ("Build", "Build"), res
+    assert not wf.next_task().get("task")                   # not mine, not offered to me

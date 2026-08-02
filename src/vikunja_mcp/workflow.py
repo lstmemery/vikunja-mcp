@@ -497,9 +497,49 @@ class Workflow:
         self._remove_label(task, LABEL_REVIEW_FAILED)
         self._remove_label(task, LABEL_REVIEWED)
 
-    def _require_mine(self, task: dict) -> None:
-        if self._me()["id"] not in self._assignee_ids(task):
-            raise WorkflowError(f"task {task['id']} is not assigned to you — claim it first")
+    def _require_mine(self, task: dict, stage: str | None = None) -> None:
+        assignees = self._assignee_ids(task)
+        if self._me()["id"] in assignees:
+            return
+        msg = f"task {task['id']} is not assigned to you — claim it first"
+        # #705, residual half: "claim it first" is UNFOLLOWABLE for an OWNERLESS card already in
+        # Design/Build — claim only works from Queue, so the advice names the one call that is
+        # guaranteed to refuse. Narrow on purpose, and both conditions carry weight: with an
+        # assignee (someone else's card) "not assigned to you" is the accurate diagnosis and the
+        # right action — leave it alone — is unchanged, while in Queue "claim it first" is simply
+        # correct (measured: claim from Queue on such a card SUCCEEDS). Every other refusal stays
+        # byte for byte what it was — also measured. `stage` is optional so a caller without one
+        # in hand keeps the plain message rather than guessing.
+        #
+        # It is Design/Build and NOT "every stage claim refuses from", and that is a SCOPE
+        # decision, not a claim that the rest are fine. Measured over all 7 stages: an ownerless
+        # card in BACKLOG, YOUR CALL and DONE gets exactly the same unfollowable bare message
+        # from advance/return_task/decompose, claim refuses there too, and no agent tool moves it
+        # — the identical dead end, uncovered here because it is not what this card measured or
+        # tested, and widening a refusal is not free (Review would need its own wording: an
+        # ownerless card there IS movable, by review_task, so "only a human" would be a lie).
+        # Filed rather than silently left, as #734 — where the Backlog half is noted as the
+        # REACHABLE one: return_task parks a card there and unassigns it, so ownerless-in-Backlog
+        # is an everyday outcome, not the rare hand-placement this branch guards.
+        #
+        # Reaching THIS branch takes a HUMAN hand-placing an unassigned card into Design/Build:
+        # review_task(needs_work) used to be the tool that produced it and now bounces such a
+        # card to Queue — routing on a re-read, so the mid-call window is closed too — and
+        # claim's vanish-window guard refuses before its own move. SWEPT rather than reasoned:
+        # all 12 registered tools (14 forms) run from each of the 7 stages with the card assigned
+        # and unassigned, and no landing leaves a card ownerless in Design/Build. That is a
+        # measurement of today's tool set, not a law: a future tool that moves a card into an
+        # active stage without checking assignees produces the state again, and nothing here
+        # would catch it (the same open-class caveat #649 records for human-only Done, #662).
+        if stage in ACTIVE_STAGES and not assignees:
+            msg += (
+                f" — except that is UNFOLLOWABLE here: this card has NO assignee at all and is "
+                f"already in {stage}, and claim() works only from Queue, so no call of yours can "
+                f"make it yours (advance, call_human, return_task and decompose all refuse it "
+                f"identically — don't work down the list). Only a human can move it back into "
+                f"the pipeline: say so in your report"
+            )
+        raise WorkflowError(msg)
 
     @staticmethod
     def _ref(task: dict) -> str:
@@ -1230,7 +1270,7 @@ class Workflow:
 
         board = self._board()
         task, stage = self._find_task(task_id, board=board)
-        self._require_mine(task)
+        self._require_mine(task, stage)
         if stage != from_stage:
             raise WorkflowError(
                 f"moving to {to_stage} is only possible from {from_stage}; task is now in {stage}"
@@ -1382,10 +1422,72 @@ class Workflow:
         self.api.add_comment(task_id, f"[review] NEEDS WORK\n{report.strip()}")
         self._add_label(task_id, LABEL_REVIEW_FAILED)
         self._remove_label(task, LABEL_REVIEWED)
-        self._move(task_id, "Build")
+        # An OWNERLESS card bounces to QUEUE, not Build (#705). Build means "someone is working
+        # on this"; with no assignee there is no implementer to hand it back TO, and the card
+        # measured UNREACHABLE there. Precisely: it can still be READ and commented on
+        # (get_task/comment/attach_file need no ownership) — what no agent tool could do is MOVE
+        # it or make it anyone's. Measured at 3a0ee77 by sweeping all 12 registered tools (14
+        # forms) against such a card in Design AND in Build: ZERO movers from either, against an
+        # assigned control that yields four. Individually: call_human/advance/return_task/
+        # decompose all answer "not assigned to you — claim it first", claim refuses ("you can
+        # only claim from Queue") so that advice cannot be followed, and next_task offers
+        # nothing — no branch of it can, since resume keys off assignees, the stuck-claim and
+        # free-queue branches off stage == Queue, and the review offer off stage == Review.
+        # The reviewer's question then dies on a card nobody comes back for.
+        # This is the SAME state claim's vanish-window guard already refuses to create ("без меня
+        # в assignees move уведёт задачу в Design «ничьей» (невидимо для next_task и
+        # незаклеймимо из Queue)") — so it is fixed the same way: by not producing it, rather
+        # than by teaching the other tools to live with it. Same way means same WINDOW, too, and
+        # that half was missing from this card's first draft: routing off `task` — the board
+        # snapshot _find_task took at the top of this method — decides ownership up to four API
+        # calls before the move (measured sequence: view_tasks -> add_comment ->
+        # get_or_create_label -> add_label -> buckets -> move_task), so a human clearing the
+        # assignee in the web UI mid-call put the card in Build ownerless and reproduced #705
+        # through this very method. claim pays for the same guarantee with TWO get_task re-reads
+        # before ITS move; this pays one, here, and routes on the FRESH read. The price is one
+        # extra GET on the needs_work path and one more place this method can fail after the
+        # verdict comment has landed — the shape move_task itself already has, and cheaper than
+        # a window that recreates the bug the method exists to close.
+        #
+        # Queue and not Build/Design: an ownerless card that needs work IS free work, so the
+        # ordinary path reopens — next_task offers it (priority-sorted, like any queue item),
+        # claim takes it, and the four routes a bounce can need — advance, call_human,
+        # return_task, decompose — are open to the new owner, who reads the [review] comment
+        # from the dossier and can forward the question with call_human.
+        # It does NOT weaken "the WIP limit gates claim(), it is not an invariant on active"
+        # nor "rework outranks a fresh claim": both are about a card WITH an owner, which
+        # re-enters THEIR active set without passing the gate. This card was in nobody's active
+        # set, so routing it through claim strands nothing — at a saturated board it waits in
+        # Queue, visible and offered the moment a slot frees, exactly like the fresh work beside
+        # it. The ASSIGNED path is untouched, byte for byte, note included: a card assigned to
+        # someone ELSE still goes back to Build for THAT implementer and never becomes claimable
+        # by whoever reviewed it ("assigned to another" keeps meaning "not yours"), and the split
+        # asks for NO assignee AT ALL, so a card I merely CO-own is an assigned card too.
+        #
+        # "Reopens the ordinary path" is measured, not assumed, and it is not universal — two
+        # label sub-cases keep the card out of next_task's free-queue offer, both by PRE-EXISTING
+        # filters and neither made worse by landing in Queue (in Build nothing could see it at
+        # all). Measured: `epic` — not offered AND claim refuses it as a container, so an
+        # ownerless epic ends up parked in Queue for a human rather than in Build for nobody;
+        # `blocked` — not offered, though claim still takes it by id (that asymmetry between the
+        # two is older than this change). An unfinished predecessor behaves as designed: claim
+        # refuses by the sequence gate and the card becomes claimable once the head is ready.
+        if self._assignee_ids(self.api.get_task(task_id)):
+            self._move(task_id, "Build")
+            return {
+                "verdict": "needs_work", "task_id": task_id, "moved_to": "Build",
+                "note": "the task went back to the implementer — they'll see it in next_task",
+            }
+        self._move(task_id, "Queue")
         return {
-            "verdict": "needs_work", "task_id": task_id, "moved_to": "Build",
-            "note": "the task went back to the implementer — they'll see it in next_task",
+            "verdict": "needs_work", "task_id": task_id, "moved_to": "Queue",
+            "note": (
+                "this card had NO assignee, so there is no implementer to hand it back to — it "
+                "went to the QUEUE as free work instead of Build, where an ownerless card can "
+                "be read but no agent tool can move it or make it anyone's. Whoever claims it "
+                "next reads your report in the dossier; if it was a question for the human, "
+                "they forward it with call_human from Design/Build"
+            ),
         }
 
     def call_human(self, task_id: int, question: str) -> dict:
@@ -1412,7 +1514,7 @@ class Workflow:
                     "review_task then refuses — your verdict would die with your question."
                 )
             raise WorkflowError(msg)
-        self._require_mine(task)
+        self._require_mine(task, stage)
         self.api.add_comment(task_id, f"[нужен человек] {question.strip()}")
         self._move(task_id, "Your Call")
         result = {
@@ -1498,7 +1600,7 @@ class Workflow:
                 "(related_task_id=<this task>) for a human to triage — call_human refuses from "
                 "Done as well; a human can also move this card back themselves."
             )
-        self._require_mine(task)
+        self._require_mine(task, stage)
         self.api.add_comment(task_id, f"[blocked] {reason.strip()}")
         label = self.api.get_or_create_label(LABEL_BLOCKED)
         self.api.add_label(task_id, label["id"])
@@ -1576,7 +1678,7 @@ class Workflow:
                 "follow-ups (related_task_id=<this task>) for a human to triage — call_human "
                 "refuses from Done as well; a human can also move this card back themselves."
             )
-        self._require_mine(task)
+        self._require_mine(task, stage)
 
         created: list[dict] = []
         try:

@@ -4590,8 +4590,13 @@ def _sweep_card_movers(monkeypatch, tmp_path, assignee: bool = True,
     list describes. Other gates can take a branch away without removing it from the list, and the
     rulebook names the two measured ones as EDGES rather than as branches; each gets its own
     sweep here rather than muddying the main one, which would then measure the gate instead of
-    the enumeration. `assignee=False` is the card a human left unassigned in Review: nothing can
-    move it at all. `predecessor=True` gives it an unfinished `follows` head: that costs it the
+    the enumeration. `assignee=False` is the card a human left unassigned in Review: since #705 it
+    bounces to Queue rather than Build, so the only tool that moves it is `claim` — the rescue
+    path. That is also why `home` is MEASURED after the bounce instead of written down as
+    "Build": the destination is now a function of the card, and a hardcoded home reports every
+    tool that leaves an ownerless card alone as a mover. Where the bounce LANDS is pinned
+    separately by the caller, so making home measured here does not hide a change in it.
+    `predecessor=True` gives it an unfinished `follows` head: that costs it the
     defect branch specifically, since `advance(to='review')` latches until the predecessor
     reaches Review. Both edges apply to the bounced sweep; they are not swept from Review, where
     the single exit is the reviewer's own verdict and neither gate touches it."""
@@ -4606,7 +4611,6 @@ def _sweep_card_movers(monkeypatch, tmp_path, assignee: bool = True,
         f"on a one-form tool is a branch nothing here re-derives, and that blind spot is named "
         f"rather than implied away"
     )
-    home = "Build" if bounce else "Review"
     movers: dict[str, str] = {}
     for fn in server._DEFERRED_TOOLS:
         for label, form in forms[fn.__name__]:
@@ -4619,6 +4623,7 @@ def _sweep_card_movers(monkeypatch, tmp_path, assignee: bool = True,
                 api.add_relation(card["id"], head["id"], "follows")
             if bounce:
                 wf.review_task(card["id"], verdict="needs_work", report="отбой")
+            home = api.stage_of(card["id"])
             monkeypatch.setattr(server, "_wf", lambda wf=wf: wf)
             kwargs = dict(form)
             for key in ("task_id", "related_task_id"):
@@ -4684,17 +4689,36 @@ def test_the_needs_work_branch_list_is_MEASURED_not_a_number_somebody_wrote_down
         f"which is the exact failure this card was bounced for, twice"
     )
 
-    # The rulebook's caveat about a card bounced with NO assignee says every one of those routes
-    # refuses, identically. That is a closed universal in prose, so it is measured here rather
-    # than trusted: sweep the same tools with the assignee off and require that NOTHING moves the
-    # card. Written as "no movers" instead of a list of four refusals on purpose — it stays true,
-    # and stays the right assert, if a fifth branch is ever added above.
-    stranded = _sweep_card_movers(monkeypatch, tmp_path, assignee=False)
-    assert stranded == {}, (
-        f"a card bounced out of Review with NO assignee can now be moved by {stranded}. SKILL.md "
-        f"tells the implementer every route refuses and that the card cannot be rescued without "
-        f"a human — if that changed, the caveat now sends them to a human for nothing"
+    # The rulebook's caveat about a card bounced with NO assignee. Until #705 that caveat was
+    # "every one of those routes refuses, identically, and only a human can rescue it", and this
+    # assert measured the closed universal instead of trusting it — it read {} because the card
+    # landed in Build ownerless, where nothing could touch it and the reviewer's question died.
+    # It now reads the OTHER half of the same measurement: the bounce puts an ownerless card in
+    # Queue, so exactly one tool moves it, and it is `claim` — the card is rescuable by the
+    # ordinary pump, no human required. Still written as a full sweep rather than "claim works":
+    # a SECOND mover appearing here would mean an ownerless card can be walked somewhere else
+    # before anyone owns it, which is the shape of the bug this replaced.
+    first = _sweep_card_movers(monkeypatch, tmp_path, assignee=False)
+    assert first == {"claim": "Design"}, (
+        f"the tools that move an ownerless bounced card changed: {first}. Since #705 it lands in "
+        f"Queue and `claim` is its way back into the pipeline — an empty result means it is "
+        f"stranded again (the #705 bug), and an extra member means something moves a card that "
+        f"nobody owns"
     )
+    # ...which is only true because of WHERE it lands, so pin that separately — `home` inside the
+    # sweep is measured, so a regression in the destination alone would slip past the assert above
+    # (every tool would simply be compared against the new home). Both halves of the split, since
+    # the ASSIGNED destination is what must not move: that card has an implementer to go back to.
+    for assignee, expected in ((False, "Queue"), (True, "Build")):
+        api = FakeAPI(buckets=workflow.STAGES)
+        wf = workflow.Workflow(api, project_id=3)
+        card = api.add_task("починить дренаж", "Review",
+                            assignee=api.me_user if assignee else None)
+        result = wf.review_task(card["id"], verdict="needs_work", report="отбой")
+        assert (api.stage_of(card["id"]), result["moved_to"]) == (expected, expected), (
+            f"a needs_work bounce of a card with assignee={assignee} landed in "
+            f"{api.stage_of(card['id'])} (reported {result['moved_to']}), not {expected}"
+        )
 
     # The other measured edge, and the other closed universal in that caveat: an unfinished
     # predecessor costs the card the DEFECT branch and only that one. Pinned for the same reason
@@ -4726,3 +4750,58 @@ def test_the_needs_work_branch_list_is_MEASURED_not_a_number_somebody_wrote_down
         f"have to package everything as a needs_work report, and the branch list stops being the "
         f"right question to ask"
     )
+
+
+def test_both_texts_that_teach_the_ownerless_bounce_name_its_MEASURED_destination():
+    """#705 ships a behaviour change in TWO prose surfaces — SKILL.md's «После Review» caveat and
+    the `review_task` tool docstring — and this card's second pass showed both were unpinned:
+    rewriting either to say the ownerless bounce lands in Build (or Backlog) left the whole
+    860-test suite green. That is the exact drift this repo pins elsewhere (the skill contract
+    reads `_skill_text()`, and test_advance_report_arguments reads `server.advance.__doc__`);
+    it just had not been applied here.
+
+    So the destinations are MEASURED first and the texts are required to name what was measured
+    — not to contain a hardcoded word. Change the behaviour and the first assert fires; change
+    only a text and the ones after it do. The tool docstring matters as much as the rulebook:
+    it is what an agent whose session never loaded the skill reads."""
+    measured = {}
+    for assignee in (False, True):
+        api = FakeAPI(buckets=workflow.STAGES)
+        wf = workflow.Workflow(api, project_id=3)
+        card = api.add_task("карточка", "Review",
+                            assignee=api.me_user if assignee else None)
+        measured[assignee] = wf.review_task(
+            card["id"], verdict="needs_work", report="отбой")["moved_to"]
+    assert measured == {False: "Queue", True: "Build"}, (
+        f"the needs_work destinations changed to {measured}; both texts below teach the old ones"
+    )
+    ownerless, assigned = measured[False], measured[True]
+
+    doc = server.review_task.__doc__ or ""
+    assert ownerless.upper() in doc and assigned in doc, (
+        f"review_task's docstring must name BOTH measured destinations "
+        f"({ownerless} for an ownerless card, {assigned} for an assigned one): {doc}"
+    )
+
+    # Every place the rulebook cites this card must name the destination IN BOLD right at the
+    # citation. A ±8-line window was the first draft and it was a FICTITIOUS pin — measured:
+    # rewriting the caveat to «**Build** (#705), и она НЕ становится обычной свободной задачей»
+    # left the suite fully green, because the surrounding paragraph mentions Queue several times
+    # for other reasons (the ordinary Queue gates, the review-failed note) and the second
+    # citation still said Queue. The window asked "is the word nearby", which a paragraph about
+    # queues answers yes to no matter what it claims. So the assert is on the CLAIM's own shape:
+    # the bold destination adjacent to the card number, and — the half that actually kills the
+    # drift — the assigned destination must never appear there instead.
+    lines = _skill_text().splitlines()
+    cited = [i for i, ln in enumerate(lines) if "#705" in ln]
+    assert cited, "SKILL.md no longer cites #705 anywhere — the caveat it fixed is unexplained"
+    for i in cited:
+        near = "\n".join(lines[max(0, i - 1):i + 1])
+        assert f"**{ownerless}**" in near, (
+            f"SKILL.md cites #705 at line {i + 1} without naming the measured ownerless "
+            f"destination as **{ownerless}** at the citation:\n{near}"
+        )
+        assert f"**{assigned}**" not in near, (
+            f"SKILL.md line {i + 1} names **{assigned}** at the #705 citation — that is the "
+            f"ASSIGNED destination; an ownerless bounce measurably lands in {ownerless}:\n{near}"
+        )
