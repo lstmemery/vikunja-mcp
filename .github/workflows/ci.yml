@@ -40,7 +40,9 @@ jobs:
   # двигаем stable на него.
   # Инвариант: тег и stable указывают на version-only bump-коммит поверх только
   # что позеленевшего main. Коммит, запушенный GITHUB_TOKEN, GitHub намеренно НЕ
-  # триггерит новый workflow-run (рекурсии нет); [skip ci] — второй пояс.
+  # триггерит новый workflow-run (рекурсии нет); ci-skip-маркер в теме — второй пояс.
+  # Собственно коммит/тег/пуши живут в scripts/release.sh — там же гейт «релизится
+  # только текущая ВЕРШИНА main» и объяснение, почему он именно там (tracker #716).
   release:
     needs: [lint-and-unit, integration]        # только когда ОБА зелёные
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -48,7 +50,12 @@ jobs:
     permissions:
       contents: write                          # least-privilege: право на push только этому job'у
     concurrency:
-      group: release                           # сериализуем гонку двух пушей в main
+      # Сериализует ВЫПОЛНЕНИЕ релизных job'ов — и только его. На новую базу job она НЕ
+      # переносит: каждый остаётся на своём чекауте, поэтому два приземления подряд
+      # считали одинаковый следующий патч, и тот, чей релиз стартовал ПОЗЖЕ (а это не
+      # обязательно тот, чей прогон создан позже — измерено на 30754732335), умирал на
+      # `tag ... already exists`. Чинит это гейт в scripts/release.sh, а не группа.
+      group: release
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
@@ -67,11 +74,4 @@ jobs:
       - name: commit, tag, push, move stable
         env:
           VERSION: ${{ steps.bump.outputs.version }}
-        run: |
-          git add pyproject.toml src/vikunja_mcp/__init__.py uv.lock
-          git commit -m "chore: ${VERSION} [skip ci]"
-          git tag -a "${VERSION}" -m "${VERSION}"
-          git push origin HEAD:main                 # bump-коммит -> main
-          git push origin "${VERSION}"              # неизменяемый тег
-          git branch -f stable HEAD                 # stable -> тот же bump-коммит
-          git push -f origin stable                 # rollout канала stable
+        run: sh scripts/release.sh

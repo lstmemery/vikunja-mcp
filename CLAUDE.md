@@ -461,12 +461,78 @@ to `main` fires the `release` job in `.github/workflows/ci.yml`
 `src/vikunja_mcp/__init__.py` and `uv.lock`'s self-entry; the lock is easy to
 forget and it is a *dependency-resolution* file, so "version-only" does not mean
 "touches nothing that matters"), commits `chore: vX.Y.Z [skip ci]`, tags
-`vX.Y.Z`, and force-moves `stable` onto that bump commit. The job holds
+`vX.Y.Z`, and force-moves `stable` onto that bump commit — the commit/tag/push
+half lives in `scripts/release.sh`, in a FILE rather than a `run: |` block
+precisely so it can be RUN on a stand instead of reasoned about. The job holds
 `permissions: contents: write` (least-privilege, that job only) and a `release`
-concurrency group (serializes racing pushes); the bump commit is pushed with
-`GITHUB_TOKEN`, which by design does NOT re-trigger CI (plus `[skip ci]` as a
-second belt). So `stable` always tracks the latest green `main`, patch-bumped,
-hands-off.
+concurrency group, which serializes the release JOBS **and nothing else**: it
+does not move a queued job onto a newer base, so both jobs of two close landings
+still compute the same next patch (see the tip guard below). The bump commit is
+pushed with `GITHUB_TOKEN`, which by design does NOT re-trigger CI (plus
+`[skip ci]` as a second belt). So `stable` always tracks the latest green `main`,
+patch-bumped, hands-off.
+
+**The release belongs to the TIP of `main`; a superseded landing skips, green**
+(tracker #716). `actions/checkout@v4` holds each job at its OWN trigger sha, so
+two landings close enough together leave BOTH checkouts on the same version base
+and both compute the same next patch. Measured on 2026-08-02, all times UTC that
+day: run 30754732335 on `0664256f`
+died on `fatal: tag 'v0.2.171' already exists`, and the tag's actual owner was
+the run for `75a1e520` (`git rev-list -n1 v0.2.171` → `dff2def0`, whose parent is
+`75a1e520`) — a run created 3 m 13 s LATER, 15:39:41Z against 15:36:28Z, which
+released FIRST. Release order follows when each run's `needs` finish, not when
+the run was created: the loser's `integration` job sat unstarted for five minutes
+(started 15:41:31Z). And the concurrency group had nothing to serialize here —
+the two `release` jobs never overlapped at all, the winner's running
+15:40:34–15:40:44Z and the loser's 15:41:58–15:42:04Z, which is why the loser saw
+the tag already on the remote at checkout. So `scripts/release.sh` asks one question
+before `git tag` and again after a rejected `git push origin HEAD:main`: is
+`main`'s tip a DIFFERENT commit that CONTAINS `$GITHUB_SHA`? If yes, a newer
+landing is already on top and ITS release job carries this commit into `stable`,
+so the job prints a notice and exits 0. Everything else proceeds exactly as it
+did before the guard — with two qualifications that sentence must not be read to
+cover, both checked rather than assumed. A `main` force-pushed BACKWARDS is not
+superseded at all: the rollback tip is an ANCESTOR of `$GITHUB_SHA`, so the bump
+is a fast-forward and the job pushes straight over the rollback — measured on the
+stand, byte-for-byte the same outcome with the guard and without it, so this is
+pre-existing behaviour rather than anything this card introduced or fixed. And
+the guard's own new cost is two swallows, both constructed rather than argued.
+After a rejected main push the script asks only whether a newer landing containing
+us exists, never WHY git refused — so a non-race refusal (permissions, branch
+protection) that COINCIDES with a sibling landing now exits green where it used to
+be red; measured mitigation, and it is the stronger half: the TIP has no sibling by
+definition, so its job under the same denial still exits 1, and a permanently
+broken release path stays visible. And a job KILLED between the main push and the
+tag push leaves its own bump as the tip, so its re-run reads that as "superseded"
+— by its own orphan — and goes green without ever cutting the tag; before the guard
+that re-run was red, which fixed nothing but was visible. That half-state class is
+tracked as #723.
+
+What that does NOT change is what reaches consumers: the superseded job pushed
+NOTHING before the fix either. Measured on a bare-repo stand, the pre-fix job
+dies at `git tag` when the sibling already took the name and at
+`! [rejected] HEAD -> main (non-fast-forward)` when it did not — and `git tag`
+sits BEFORE all four pushes, so in both cases the remote's `main`, tags and
+`stable` are unchanged before and after. Only the job's CONCLUSION moves, from a
+false red to a green no-op. Two readings follow. N rapid landings can share ONE
+patch bump (already true before the fix), and a green `release` job therefore no
+longer implies a new tag exists — the log line `release skipped: …` is what tells
+the two apart. And the one landing that always DOES release is the LAST of a
+session: nothing lands after it, and an earlier job's bump can only be pushed
+onto ITS OWN sha, so absent a hand force-push of `main` the last landing is still
+the tip when its job runs.
+
+Two directions that look equivalent here and are not, both refuted by measurement
+rather than argument. Recomputing the VERSION — from `origin/main`, from a retry,
+or by treating a taken tag as "recompute" — fixes only the NAME: the bump still
+sits on top of a non-tip, so the job dies at the main push instead, which the
+stand reproduces as that same `non-fast-forward` rejection. And
+`git describe --tags --abbrev=0` does not even fix the name: from `0664256f` the
+nearest REACHABLE tag is `v0.2.170`, so it computes the same, taken `0.2.171`.
+The stand is `tests/unit/test_release_script.py` — a real bare repo, real clones,
+real pushes, and a `pre-receive` hook to land a sibling mid-push — because the
+failure it guards against is a race between two jobs, and neither a fake nor a
+reading of the diff can produce one.
 
 **That bump commit is also a racer, and sizing the drain's retry loop is its
 job.** Because it lands 37 s–2 m 55 s after the task commit that triggered it
