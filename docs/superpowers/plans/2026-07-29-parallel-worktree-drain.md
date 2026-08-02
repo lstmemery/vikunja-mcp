@@ -24,20 +24,55 @@
 > the `SUPERSEDED … DO NOT COPY` marker has nowhere to live in a sentence that is not in a
 > fence. A reader who lands on one paragraph out of context gets a general warning, not a
 > verdict on the sentence in front of them. Stale prose is therefore marked IN PLACE and in the
-> past tense: struck through, with the superseding card and date named beside it — the form the
-> struck-through `Ships inert` constraint below has carried since #524 — plus a pointer to the
-> LIVE SOURCE, which that constraint does not itself have (its pointer goes to another
-> historical document, the design record's Goals).
+> past tense. All five PROSE markers VMCP-79 left below — the five enumerated in the next
+> paragraph; a sixth mention of that card, in the `Ships inert` constraint, is #541 crediting
+> the FENCE sweep — carry the same four things: strike-through, a date, the card that did the
+> MARKING, and a pointer to the LIVE SOURCE that answers the statement today. A fifth thing —
+> the card that SUPERSEDED the statement — is named wherever there is one, and THAT part is not
+> universal: Task 6's `Expected: 2` names none because none is known (see the next paragraph).
+> The gap is in the subject, not in the discipline. The live-source pointer is meanwhile the
+> part the struck-through `Ships inert` constraint below does not carry. Its pointer goes to
+> the design record's Goals, and that is the RIGHT target for what it offers — a rationale
+> pointer aimed at a live rationale, not at a historical document. That file's own banner
+> heads itself "DESIGN RECORD — still the authority for WHY, no longer a description of WHAT",
+> says "**Most of it is still true and still binding**", and draws the
+> contrast explicitly: "that document is a dead record whose fences you must not copy, this one
+> is a live rationale whose *statements about the code* have aged". "That document" is THIS
+> one — and note that the design record does not claim to be current either, only live. So read
+> the Goals it points at: the bullet there that reverses this same inertness goal already states,
+> in the right TENSE, a fact this sweep re-derived from `ba771b8^` — «"No limit" is no longer
+> expressible at all (`wip_limit = 0` remains a `ConfigError`, NOT the unbounded spelling)»,
+> quoted verbatim, where "remains" is what does the dating. What its pointer does NOT do is name
+> the symbol that carries today's number.
 >
 > VMCP-79 (528) swept the prose on 2026-08-02 for ONE contract, the drain width (`wip_limit`,
-> `limit: null`, "inert", "no limit"), and marked five statements false: Task 1's preamble and
-> its `Produces:` line, Task 2's `Produces:` line, Task 5's preamble, and Task 6's
-> `Expected: 2`. **Five is the count of statements MARKED, not of hits that sweep produced** —
-> it surfaced more, and the rest were judged either still true (the Goal and Architecture
-> summaries, which merely speak as though the key were always set) or CONTINGENT rather than
-> false (Task 6's other numbers, which are true of the `wip_limit = 2` its own Step 1 tells you
-> to commit). Task 6's `Expected: 2` carried NONE of the swept tokens and turned up only by
-> reading around an already-marked fence — evidence FOR the caveat below, not against it. The
+> `limit: null`, "inert", "no limit"), and marked five statements. FOUR of them are false: Task
+> 1's preamble and its `Produces:` line, Task 2's `Produces:` line, and Task 5's preamble. The
+> fifth, Task 6's `Expected: 2`, is NOT false, and its own marker says so: that `2` is
+> contingent on the `wip_limit = 2` Task 6's Step 1 tells you to commit — as are this task's
+> other numbers, including Step 4's acceptance bullet about `next_task` stopping at two active
+> tasks, which are left as written. It carries a marker because the sweep's eye landed on it,
+> and that is the honest account of the boundary rather than a principle. There is no
+> instruction-versus-description line to draw here: Step 4's bullet sits under "Run the
+> orchestrator loop and watch for all of", so it is checked against a live run exactly as
+> `Expected:` is, and it misleads in this tree for exactly the same reason (`wip_limit = 3`, so
+> the loop stops at three, and Step 2 prints `3`). WITHIN TASK 6, then, marked and unmarked
+> differ in where a reader happened to be warned, not in what the statements are. The other
+> four markers are a different case: they are marked because they are FALSE. No card is named
+> as superseding this fifth one because none is known — the toml was widened to `wip_limit = 3`
+> by `a6fe1c4` (2026-07-30), whose message references no card.
+>
+> **Five is the count of statements MARKED, not of hits that sweep produced** — it surfaced more,
+> and what became of the rest is not a two-way split. Three dispositions occurred, and this is a
+> list of what was FOUND, not a partition of what can exist. STILL TRUE: the Goal and
+> Architecture summaries, which merely speak as though the key were always set. CONTINGENT
+> rather than false: Task 6's other numbers, above. FALSE BUT OUTSIDE THIS SLICE: the
+> Self-Review's "Type consistency" paragraph, which hits the swept token only inside
+> `_effective_wip_limit` and is wrong about which METHOD `claim` reads the limit through, not
+> about the width — a different contract, so it is FILED (#709) and deliberately left UNMARKED
+> here. Do not read that silence as a pass; an unmarked hit is not a cleared one. Task 6's
+> `Expected: 2` carried NONE of the swept tokens and turned up only by reading around an
+> already-marked fence — evidence FOR the caveat below, not against it. The
 > fence count was re-measured the same day and still comes to 48 with none unbalanced, though
 > 48 counts the `sh` fence NESTED inside Task 5's `markdown` one, which this document treats as
 > a fence in its own right and marks separately; a strict CommonMark reader sees 47 top-level
@@ -96,7 +131,11 @@
 inertness this task promised held for about sixteen hours** — Task 1 landed as `8206ee0`
 (2026-07-29 23:38), #524 replaced the property in `ba771b8` (2026-07-30 15:46). **An absent
 `wip_limit` has meant `config.DEFAULT_WIP_LIMIT` = 3 ever since, so this gate is live for every
-consumer, configured or not.** Live resolver: `workflow._effective_wip_limit`.
+consumer, configured or not.** Live resolver for THIS gate: `workflow._wip_limit_with_origin`,
+which is what `claim` reads and which owns the precedence; `workflow._effective_wip_limit` is a
+thin view over it and is what `next_task` reads, so the NUMBER is the same either way. (Naming
+`_effective_wip_limit` here would repeat the error this same sweep filed as #709 — see the
+banner's third disposition.)
 
 **Files:**
 - Modify: `src/vikunja_mcp/config.py:30` (Config field), `:112-117` (return)
@@ -1475,7 +1514,7 @@ git commit -m "feat(cli): workspace --gc — reap orphaned trees using tracker l
 
 ### Task 5: The rulebook — SKILL.md and CLAUDE.md
 
-~~Everything so far is inert machinery.~~ This task is what makes an agent use it — and it auto-propagates to every consumer on the next server start, so it is the highest-blast-radius change in the plan. **"Inert" meant only "no agent uses it yet", and even that stopped being true on 2026-07-30 (tracker #524, `ba771b8`): the `claim` gate now refuses a fourth task at the default of 3 whether or not the rulebook ever mentions it, so Tasks 1–4 are live for every consumer on their own. Marked by VMCP-79, 2026-08-02.**
+~~Everything so far is inert machinery.~~ This task is what makes an agent use it — and it auto-propagates to every consumer on the next server start, so it is the highest-blast-radius change in the plan. **"Inert" meant only "no agent uses it yet", and even that stopped being true on 2026-07-30 (tracker #524, `ba771b8`): the `claim` gate now refuses a fourth task at the default of 3 whether or not the rulebook ever mentions it, so Tasks 1–2 — Task 1's `wip_limit` key and claim gate, Task 2's `next_task` `exclude`/`wip` payload — are live for every consumer on their own. That is enough to strike the sentence: one live component falsifies "everything so far". Tasks 3–4 are NOT covered by that argument. They are the `workspace` CLI, and inside the package the only path into `run_workspace` is `server.main`'s argv dispatch — something has to TYPE the command — while the only agent-facing text the package SHIPS that tells an agent to type it is the rulebook of this very task (measured 2026-08-02: `skills/tracker/SKILL.md` names `workspace` 21 times, on 21 lines; `setup_cmd.py`, which renders the standing-context hook, not once; no MCP tool docstring names it either — `server.py`'s only mentions are the argv dispatch and two comments about it). So they ARE live for consumers today — but because Task 5 landed and put the command in that rulebook, which is not the same thing as being live ON THEIR OWN. Live resolver: `workflow._wip_limit_with_origin` (the `claim` gate). Marked by VMCP-79, 2026-08-02.**
 
 **Files:**
 - Modify: `src/vikunja_mcp/skills/tracker/SKILL.md`, `CLAUDE.md`
@@ -1710,7 +1749,7 @@ wip_limit = 2   # parallel drain: two per-task agents at a time, each in its own
 - [ ] **Step 2: Verify the config resolves**
 
 Run: `uv run python -c "from vikunja_mcp.config import load_config; print(load_config().wip_limit)"`
-~~Expected: `2`.~~ **SUPERSEDED — that command prints `3` in this repo today (run 2026-08-02), because the toml the fence above is marked against was replaced: `wip_limit = 3`. The `2` was never a property of the code, only of the value Task 6 committed that day — which is equally true of this task's remaining numbers, including Step 4's acceptance bullet about `next_task` stopping at two active tasks. They are contingent on Step 1, not false, so they are left as written. Marked by VMCP-79.**
+~~Expected: `2`.~~ **SUPERSEDED — that command prints `3` in this repo today (run 2026-08-02), because the toml the fence above is marked against was replaced: `wip_limit = 3`. The `2` was never a property of the code, only of the value Task 6 committed that day — which is equally true of this task's remaining numbers, including Step 4's acceptance bullet about `next_task` stopping at two active tasks. They are contingent on Step 1, not false, so they are left as written. This one carries a marker and they do not because the sweep read this line — a fact about the sweep, not a difference in kind. Do not read an instruction/description split into it: Step 4's bullet stands under "Run the orchestrator loop and watch for all of", so it is checked against a live run just as this line is, and it misleads here for the same reason. No superseding card is named because none is known — the toml was widened to 3 by `a6fe1c4` (2026-07-30), whose message references no card — unlike the other four markers of this sweep, which all name #524. (The fence above is marked SUPERSEDED for a different thing: what #524 changed is the ABSENT-key default, whereas this `2` came from the key being SET.) Live: `.vikunja-mcp.toml`. Marked by VMCP-79.**
 
 - [ ] **Step 3: Verify the loop's idle check is unchanged**
 
