@@ -192,12 +192,34 @@ def test_return_task_refuses_from_done_the_human_only_transition_run_backwards(e
     """#626: `return_task` was ONE OF SEVERAL agent tools that moved a card OUT of Done — never
     the only one, and this test does not pin that it is. Measured through the real `Workflow` over
     a FakeAPI board, on a card driven the NORMAL way (Queue -> claim -> Design -> Build ->
-    Review -> approve -> a human moves it to Done): it did not refuse, answered
-    {"moved_to": "Backlog", "labeled": "blocked"}, and left the card in Backlog with NO assignee
-    and BOTH labels — `reviewed` and `blocked` — the board claiming "approved" and "blocked" at
-    once. On that same card advance (build/review/done), call_human, claim and review_task (both
-    verdicts) all refuse — the transition CLAUDE.md calls human-only, run BACKWARDS, and an
-    invariant that holds in only one direction is not an invariant.
+    Review -> approve -> a human moves it to Done): it did not refuse, answered the success
+    payload of the ONE `return` this method has — three keys, `moved_to`, `task_id` and
+    `labeled`, in that order, reporting moved_to=Backlog and labeled=blocked — and left the card
+    in Backlog with NO assignee and BOTH labels — `reviewed` and `blocked` — the board claiming
+    "approved" and "blocked" at once. On that same card advance (build/review/done), call_human,
+    claim and review_task (both verdicts) all refuse — the transition CLAUDE.md calls human-only,
+    run BACKWARDS, and an invariant that holds in only one direction is not an invariant.
+
+    THAT PAYLOAD IS DESCRIBED, NOT TRANSCRIBED, and #674 made it so deliberately. It stood here
+    as a two-key dict literal that looked verbatim and was not — the real answer carries
+    `task_id` between the other two. Pasting the run's literal back would have cured THAT much
+    and was still the wrong repair, because the literal carries 107 as the value of `task_id`,
+    and 107 belongs to the fixture rather than to the contract. FakeAPI draws ids from ONE shared
+    `itertools.count(100)` that buckets, projects, views, labels, attachments and even comment
+    timestamps consume as well (its real per-task counter is the differently-named
+    `_task_index`), so a task is 107 only because the seven stage buckets took 100-106 ahead of
+    it: built with two buckets the same first task is 102, and one full claim/advance/return_task
+    cycle moves the NEXT task from 108 to 112 (measured, all three). What replaced the literal is
+    re-derivable instead: `grep -n '"labeled": LABEL_BLOCKED' src/vikunja_mcp/workflow.py` has
+    exactly one hit and it is that `return` — keep the file argument, because writing the pattern
+    into this docstring put a second copy in the tree, so a bare `git grep` now answers this file
+    too — and the key COUNT stated beside the key NAMES makes a dropped key self-inconsistent
+    rather than invisible. Neither property is enforced by anything that runs, and that was
+    measured rather than assumed: in an `rsync --exclude .venv` copy, with
+    `vikunja_mcp.workflow.__file__` printed each round, restoring the wrong two-key list gave
+    control 0 failed and mutant 0 failed over `tests/unit` — and again over the `.git`-dependent
+    pins a copied tree skips, re-run in a clone. So do not "helpfully" restore a literal here:
+    nothing goes red if you get it wrong again.
 
     Shutting this door does not shut them all: human-only Done is nowhere expressed as one rule,
     so any tool that moves a card without checking its stage reproduces the hole. `decompose`
@@ -213,9 +235,13 @@ def test_return_task_refuses_from_done_the_human_only_transition_run_backwards(e
     can move THIS card back.
 
     Not a regression, and that was RUN, not inherited from the card: the same probe against a
-    shadow copy of 51ab50d^ (the parent of the commit that gated Review) prints the same
-    {"moved_to": "Backlog"} and the same `['reviewed', 'blocked']` after-state — the hole predates
-    that card, which gated exactly Review.
+    shadow copy of 51ab50d^ (the parent of the commit that gated Review) prints the same three
+    keys and the same `['reviewed', 'blocked']` after-state — the hole predates that card, which
+    gated exactly Review. #674 re-ran both shadow trees rather than trusting this line: at
+    51ab50d^ and at 6ac1454^ (the parent of the commit that gated Done, i.e. the state the first
+    paragraph describes) the same probe still prints all three keys, `task_id` among them. So
+    what this docstring got wrong was the rendering, not the behaviour it describes — the
+    behaviour at those two shas did change, which is exactly what both commits were for.
 
     Four parts, all load-bearing, mirroring the sibling test above. The refusal must leave the
     BOARD untouched: a guard that raises after the comment/label/unassign already landed is not a
