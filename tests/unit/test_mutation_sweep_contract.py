@@ -51,10 +51,16 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 TESTS_DIR = REPO_ROOT / "tests"
 
 # SCOPE: sweep records live in the test suite's prose, and confining the scan there is MEASURED
-# rather than assumed. Run the same trigger over src/ and the repo's markdown and the only hit in
-# the whole package is the sentence in server.py describing the claimable check's EXIT CODES —
-# not a pytest tally at all, and the row for it below shows the trigger cannot tell the two apart.
-# A scanner whose sole finding outside tests/ is a false positive has no business reading there.
+# rather than assumed — but measured PER SCOPE, because the two scopes answer differently and a
+# single "only hit outside tests/" would be false. Ran the trigger over both on 2026-08-02.
+# src/: exactly ONE hit in the whole package, the sentence in server.py describing the claimable
+# check's EXIT CODES — not a pytest tally at all, and the row for it below shows the trigger
+# cannot tell the two apart. A scanner whose sole finding in the package is a false positive has
+# no business reading there. Repo markdown: five hits, every one of them inside the CLAUDE.md
+# paragraphs THIS commit added, each already quoting its own control count; before it, none. That
+# second number is self-referential by construction — the same trap `git log -S` has, where a
+# phrase written into a file changes the answer the file gives about it — so it is dated, and a
+# later reader should re-run it rather than trust it.
 
 # A ROUND COUNT: a number of failing tests. Two forms are excluded, both because they were
 # measured in this repo and both false positives. `(?<![:.\w])` drops a number that is part of an
