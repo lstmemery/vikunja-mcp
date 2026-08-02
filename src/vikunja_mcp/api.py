@@ -707,13 +707,14 @@ class VikunjaAPI:
     # truncation as such (the control in the VMCP-127 block above truncates the healthy read with no
     # over-serving at all). That divergence needed over-serving AND a later page SHORT of the
     # degraded bar with rows still behind it, in the SAME read — the longest served length was a
-    # per-call local, so one endpoint's long page never leaked into another read. The claim here was that the endpoints which over-serve are
-    # PRECISELY the ones that ignore `?page=`, so their next page is always a pure repeat that ends
-    # the read on `added_new`. That is false, and the counter-example is this client's own reconcile
-    # read. On a live 2.3.0 container (2026-07-31, stated size 5) with 34 projects, 2 saved filters
-    # and a favourite, the pseudo-projects (Favorites, plus one row per saved filter) are simply
-    # not counted against the page size — which is the OBSERVATION; where the server applies its
-    # limit relative to them is its own business and was not measured:
+    # per-call local, so one endpoint's long page never leaked into another read. The claim here was
+    # that the endpoints which over-serve are PRECISELY the ones that ignore `?page=`, so their next
+    # page is always a pure repeat that ends the read on `added_new`. That is false, and the
+    # counter-example is this client's own reconcile read. On a live 2.3.0 container (2026-07-31,
+    # stated size 5) with 34 projects, 2 saved filters and a favourite, the pseudo-projects
+    # (Favorites, plus one row per saved filter) are simply not counted against the page size —
+    # which is the OBSERVATION; where the server applies its limit relative to them is its own
+    # business and was not measured:
     #
     #     GET /projects?page=1..6  -> 8 rows each (5 real + a CONSTANT 3-row pseudo tail: -1
     #                                 Favorites, -2 and -3 the saved filters), the real ids

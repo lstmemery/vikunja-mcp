@@ -28,8 +28,54 @@ packages = ["src/vikunja_mcp"]
 dev = ["pytest>=8", "ruff>=0.6"]
 
 [tool.ruff]
+# TWO limits, deliberately different, because they answer different questions (tracker #669).
+# `line-length` is the WRAP TARGET: the formatter's limit, and what this repo wraps to by hand when
+# it remembers to (77 lines were over it the day the gate went in). On its own it checks NOTHING
+# here — ruff's default rule set is E4/E7/E9/F, so before #669 `ruff check .` was green on a
+# 140-character line and would have been green on a 400-character one. Careful with the usual next
+# thought, that the unrun formatter was a latent safety net: MEASURED, `ruff format` on the pre-fix
+# api.py reformats the file and leaves the 140-character line at 140, because it re-wraps CODE and
+# does not reflow comments or string content — which is 36 of the 77. So E501 below is not a second
+# opinion about long lines, it is the only one.
+#   ONE CAVEAT, so a later edit does not misread this: "drives no check" holds only while the
+#   pycodestyle table below exists. Delete that table and `line-length` becomes E501's limit
+#   directly — measured, 76 errors. That edit looks like a relaxation and lands as a tightening.
 line-length = 100
 target-version = "py311"
+
+[tool.ruff.lint]
+# E501 makes the limit mechanical, and it counts CHARACTERS, not bytes — measured, and that is
+# the reason to reach for it instead of the `awk length()` reflex: this repo's prose is full of
+# em-dashes (3 bytes) and Cyrillic (2 bytes each), so at 3db8ef9 there were 1015 lines at or under
+# 100 characters but over 100 BYTES, and 413 under 120 characters but over 120 bytes. A byte
+# counter calls every one of those a violation; ruff calls none of them, correctly. Those are two
+# separate sets, not one nested in the other, and the first counts em-dashes in PROSE — so it moves
+# with every landing (it is already 1020 on the commit that wrote this). Re-measure, do not quote.
+#   Selecting E501 is necessary and NOT sufficient: `ignore`, `per-file-ignores` and a `# noqa`
+#   each switch it back off with `select` untouched. tests/unit/test_line_length_gate.py reads the
+#   first two, because a pin that only checks `select` certifies a gate that may not be running.
+select = ["E4", "E7", "E9", "F", "E501"]
+
+[tool.ruff.lint.pycodestyle]
+# The HARD gate sits at 120, not at `line-length`, and the gap was measured rather than split
+# down the middle. On 2026-08-02 seventy-seven lines exceeded 100 characters across 18 files —
+# 41 of them CODE, 22 inside string literals (19 of those docstrings) and only 14 comments — and
+# SEVENTY-SIX of the 77 were 116 characters or shorter. The defect this rule was turned on for
+# was 140: a 24-character outlier above every other PYTHON line in the directories ruff reads,
+# which is what a reflow accident looks like and what one-to-sixteen characters of overshoot does
+# not. So a gate at 100 would have cost a 76-line cosmetic diff through 18 files — nine of which
+# took 3 to 14 commits in the preceding 48 hours — most of it in prose owned by other open cards,
+# to catch a class it is not needed for; a gate at 120 was red on exactly the one real defect and
+# green the moment it was reflowed. `per-file-ignores` was the third candidate and is worse than
+# either: its list would have had to name ALL EIGHTEEN files — api.py, workflow.py, server.py,
+# setup_cmd.py, workspace_cmd.py and thirteen test files holding 53 of the 77 lines — so the gate
+# would have been OFF in the very file where the defect happened.
+# TWO HONEST LIMITS, both measured. 101-120 is convention, not enforcement — wrap at 100 anyway.
+# And E501 does not fire on a line whose overlong part holds no whitespace (a long URL, a single
+# unbroken token): a 136-character comment ending in a URL passes at 120, because ruff will not
+# demand a break where none is possible. tests/unit/test_line_length_gate.py has no such
+# exemption and does flag that shape — the one place the two deliberately disagree.
+max-line-length = 120
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

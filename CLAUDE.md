@@ -24,7 +24,7 @@ guardrails for agents; the real security boundary is the scoped API token.
 ```bash
 uv sync                                   # env (Python 3.11+, uv)
 uv run pytest tests/unit -q               # 500+ unit tests (FakeAPI, MockTransport)
-uv run ruff check .                       # lint (line-length 100)
+uv run ruff check .                       # lint — wrap at 100, RED above 120 (see below)
 uv run vikunja-mcp --version              # smoke
 uv run vikunja-mcp claimable              # one JSON line: is there claimable work for this
                                           # token? (hgdev-acp hub's pre-launch idle check)
@@ -39,6 +39,41 @@ until curl -sf http://localhost:3456/api/v1/info >/dev/null; do sleep 1; done
 VIKUNJA_TEST_URL=http://localhost:3456 uv run pytest tests/integration -q
 docker rm -f vikunja-test
 ```
+
+**Line length is TWO numbers, and only one of them is a gate (tracker #669).** Wrap at **100** —
+that is `line-length`, the formatter's target and what this repo wraps to by hand — not perfectly,
+see the 76-line band below, but everywhere it matters. CI goes red at **121**: `E501` is selected
+with `[tool.ruff.lint.pycodestyle] max-line-length = 120`. The gap
+between them is honest slack, not an oversight; the reasoning with its counts lives in
+`pyproject.toml` beside the settings and is pinned in `tests/unit/test_line_length_gate.py`. Three
+things follow for anyone writing prose here, which is most tasks. **The band 101-120 is convention
+with nothing behind it** — a 103-character line ships green, so keep measuring your own additions
+rather than reading a green `ruff check` as "wrapped correctly". **Measure in CHARACTERS, never
+bytes**: ruff does, the shell reflex (`awk '{print length($0)}'`, `wc -c`) does not, and this prose
+is full of em-dashes (3 bytes) and Cyrillic (2 bytes each) — at `3db8ef9`, 1015 lines sat at or
+under 100 characters while a byte counter would call them violations, and a separate 413 did the
+same at 120 (separate, not a subset: a line over 100 characters cannot be in the first set). Both
+figures count prose, so they move with every landing — re-measure rather than quote them. VMCP-132
+(621)'s worklog records the mistake in those words — "an awk byte-count had falsely flagged one
+line because of the em-dash". In python it is `len(line)`, not `len(line.encode())`. And **"red at
+121" has one measured exception**: E501 does not fire on a line
+whose overlong part contains no whitespace — a long URL, one unbroken token — since ruff will not
+demand a break where none is possible (a 136-character comment ending in a URL passes at 120). The
+pin has no such exemption and flags that shape; that disagreement is deliberate.
+
+Before #669 there was no gate at all: `line-length` was set, `E501` was **not** selected (it is
+absent from ruff's default `E4,E7,E9,F`), so `line-length` drove only the formatter — which this
+repo does not run — and `ruff check .` was green on a 140-character comment. **And running the
+formatter would not have saved it:** measured, `ruff format` on the pre-fix `api.py` reformats the
+file and leaves the 140-character line at 140, because it re-wraps code and does not reflow comment
+or string content — 36 of the 77 overlong lines. That is how the defect #669 fixed got in: a hand
+re-wrap in which one line absorbed the start of the next sentence instead of breaking, invisible to
+every tool, to the card that shipped it and to that card's reviewer.
+**The 120 is a ratchet, not a preference** — it is the smallest round number above every line the
+repo still held once #669's own defect was reflowed (the longest is now 116, in `workflow.py`),
+chosen so the gate could go on that day rather than after a 76-line cosmetic diff through 18 files,
+nine of them under active concurrent edit. Lowering it is the intended direction, the remaining
+band is card #711, and the decision point is the `_HARD_LIMIT` assertion in that test.
 
 ## Architecture
 
