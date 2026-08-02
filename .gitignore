@@ -56,7 +56,12 @@ dist/
 # `browser_network_request`: with `part: "response-body"` it drops the RAW BODY of any request the
 # page made into the same root, in whatever format the server sent. Measured on a probe page — a
 # GIF (`47494638…`) and a ZIP (`504b0304…`) landed as `.bin` files, ignored by nothing and matched
-# by no signature here. So the byte scan is complete about the three formats it NAMES, and about
+# by no signature here. One MORE format sits a single capability away, and the durable way to say
+# so is to name the CAP rather than count tools: `browser_start_video` is absent from the default
+# set and present with `PLAYWRIGHT_MCP_CAPS=devtools`, where
+# `browser_start_video(filename="vmcp629-video.webm")` answered `- [Video](./vmcp629-video.webm)`
+# and left WebM (`1a45dfa3…`) in the server's cwd root — no rule and no signature here reaches it.
+# So the byte scan is complete about the three formats it NAMES, and about
 # NAMES; it is not complete about FORMATS, and no version of it could be.
 #
 # Neither half reaches the text writers either — `browser_snapshot`, `browser_console_messages`,
@@ -68,8 +73,11 @@ dist/
 # the spill hides the repo's own content, so the fix is a change to what SKILL.md asks agents to
 # pass. `*.pdf` is the one rule here that guards a NON-default tool:
 # `browser_pdf_save` appears only with `PLAYWRIGHT_MCP_CAPS=pdf` — measured absent from the
-# default 24 and present in the 53 with every capability on — so it is defence in depth, exactly
-# as the storage-state rules below are for their own capability-gated tool.
+# default 24 and present the moment that one cap is set — so it is defence in depth, exactly
+# as the storage-state rules below are for their own capability-gated tool. What that clause
+# deliberately does NOT quote is a tool total "with every capability on"; the measurement and
+# the reason are in test_repo_browser_isolation.py, in the docstring of
+# test_the_extension_rules_do_not_reach_a_screenshot_under_another_name.
 #
 # PRICE, which is why this is a decision and not a tidy-up: `git add -A` will no longer take a
 # legitimate image or PDF. Affordable because this repo has none — measured 2026-08-02,

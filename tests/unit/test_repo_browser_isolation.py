@@ -215,7 +215,10 @@ EXPLICIT_ARTIFACT_CASE_VARIANTS = (
 # pass caught. `browser_network_request(part="response-body", filename=…)` — present in the
 # DEFAULT capability set — writes the raw body of any request the page made, in whatever format
 # the server sent: constructed on a probe page, a GIF (`47494638…`) and a ZIP (`504b0304…`)
-# landed in the checkout root as `.bin` and matched nothing here. So the scan below is complete
+# landed in the checkout root as `.bin` and matched nothing here. One more is a cap away —
+# `browser_start_video`, absent from the default set and present with
+# `PLAYWRIGHT_MCP_CAPS=devtools`, wrote WebM (`1a45dfa3…`) into the root of the server's cwd under
+# the caller's own `filename`. So the scan below is complete
 # about NAMES and about these three FORMATS, and no more; widening it to "any binary" would mean
 # guessing which of a repo's own files are artifacts, which is not a question bytes can answer.
 BROWSER_BINARY_SIGNATURES = {
@@ -841,8 +844,30 @@ def test_the_extension_rules_do_not_reach_a_screenshot_under_another_name(path):
     The last four parameters are the part NEITHER layer reaches, which is why they are pinned
     here rather than quietly omitted. `tools/list` showed SEVEN tools with a `filename` property
     on the DEFAULT capability set — the one the shared session server runs, whose cwd IS the main
-    checkout — of which six write and one (`browser_run_code_unsafe`) reads. With every
-    capability on it is ten and eight. browser_snapshot, browser_console_messages,
+    checkout — of which six write and one (`browser_run_code_unsafe`) reads. Measured on 0.0.78
+    by spawning the server and reading `tools/list` over stdio. That the SHARED server is on that
+    set is checkable without this session: the plugin's own `.mcp.json` launches it as bare
+    `npx @playwright/mcp@latest`, with no `--caps`.
+
+    A tool total "with every capability on" is deliberately NOT the anchor used for the
+    non-default tools named around here, and that is the correction this round was bounced for.
+    The shipped text used the label once — `.gitignore` in 690d648, the single commit
+    `git log -S "with every capability on"` finds — where it called the 53-tool set "every
+    capability on". It is not that set, and 53 does not identify a set at all: measured,
+    `pdf,devtools,storage` gives 53 tools with 11 `filename` acceptors, while
+    `config,devtools,storage` and `pdf,storage,vision,testing` each give 53 with 10 — so which
+    run produced that sentence cannot be recovered from the number. Every capability on really is
+    69, i.e. all twelve members of the `ToolCapability` union in the package's own `config.d.ts`,
+    also with 11 acceptors. Two measured traps stand behind the muddle. Unknown cap names are
+    accepted SILENTLY: `PLAYWRIGHT_MCP_CAPS=bogus` starts cleanly, writes nothing to stderr and
+    serves the default 24, so a cap that does not exist reads exactly like a cap that adds
+    nothing. And "writers = acceptors − 1" stops holding once `storage` is on, because
+    `browser_set_storage_state` reads its file too ("Path to the storage state file to restore
+    from") — by the schemas that is 11 acceptors and NINE writers, not ten, though only the
+    default set's writers were ever exercised. Counts move with an external package pulled at a
+    floating `@latest`; a cap name does not. Reproducing either costs a server spawn plus the
+    `initialize` / `initialized` / `tools/list` handshake — 0.0.78's `--help` lists no tools, so
+    there is no one-command form. browser_snapshot, browser_console_messages,
     browser_network_requests and browser_evaluate all put their output in the checkout root too.
     Measured content: a marker planted in the probe page's text came back inside the snapshot,
     the extensionless snapshot and the evaluate result; a token placed in a request's query
@@ -852,9 +877,12 @@ def test_the_extension_rules_do_not_reach_a_screenshot_under_another_name(path):
     it means changing what SKILL.md asks agents to pass, not adding a rule). Widening is welcome;
     it has to turn this red first and move the sentence in .gitignore with it.
 
-    One writer is NOT claimed as measured: `browser_network_request` (singular) exposes the same
-    `filename` and was never exercised here, so it is counted among the six by its own schema
-    rather than by observation.
+    One clause of the round that shipped this docstring is RETRACTED here: it said
+    `browser_network_request` (singular) "was never exercised here" and counted it among the six
+    by its own schema rather than by observation. The same round's second pass then drove exactly
+    that tool with `part: "response-body"` plus a `filename` and landed a GIF and a ZIP in a probe
+    checkout's root — recorded above at `BROWSER_BINARY_SIGNATURES`, i.e. the file contradicted
+    itself as shipped. That writer is observed, not inferred.
 
     MUTATION-CHECKED in the direction that tests a negative — by ADDING what it forbids
     (`__pycache__` cleared, whole file selected, .gitignore restored from a COPY): control
@@ -953,6 +981,9 @@ def test_no_file_of_browser_artifact_shape_is_reachable_by_git():
     the default capability set: `browser_network_request(part="response-body", filename=…)`
     writes the raw body of any request the page made, in whatever format the server sent. A GIF
     and a ZIP were dropped into a probe checkout's root as `.bin` files and matched nothing here.
+    One more format needs only a capability: `browser_start_video` is absent from the default
+    set and present with `PLAYWRIGHT_MCP_CAPS=devtools`, and it put WebM (`1a45dfa3…`) in the
+    root of the server's cwd under the caller's `filename`.
     Extending to "any binary" is not the repair — it would mean deciding by bytes which of a
     repo's files are artifacts, which bytes cannot say.
 
