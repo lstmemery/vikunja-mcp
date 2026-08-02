@@ -218,6 +218,47 @@ that wrote it.** Touch the floor only if the suite ever shrinks below it, which
 is itself worth noticing. Where a figure genuinely needs precision, DATE it
 instead — as the release section does with its landings-per-day snapshot.
 
+**A mutation sweep opens with an UNMUTATED CONTROL round on the SAME selection,
+and every round count is a DELTA against it.** Sweeps here are hand-run — edit
+the source, `pytest`, read the summary line, restore — and that summary line is
+where the arithmetic goes wrong: `N failed` is a kill count only if the same
+selection failed ZERO times before a single mutation was applied, and nothing in
+a `-q` summary says whether it did. Not hypothetical: card 594 swept in a tree
+where 30 tests failed constantly for an unrelated reason, so every row of a
+six-row table came out inflated by exactly 30 and its headline was wrong by a
+factor of 16 (true kill count 2). Constant failures survive a before/after
+comparison intact and read as signal; a control round is the cheapest thing that
+tells them apart. So run it FIRST and WRITE ITS FAILED COUNT beside the round's:
+`control 0 failed; mutation 2 failed` still means something a month later,
+whereas `control PASS` is a sentence that can be true and useless at the same
+time. Record the FAILED count, never the pass total — the total moves with every
+test the repo adds (the floor above), the failed count does not.
+`tests/unit/test_mutation_sweep_contract.py` enforces that shape on every record
+written from here on, and names the pre-existing ones it cannot fix.
+
+**And inflation is the friendlier half.** That stand was rebuilt on 2026-08-02:
+the same pre-622 sha exported twice, once with `.git` and once without, one
+mutation (drop `.playwright-mcp/` from `.gitignore`), one selection
+(`tests/unit/test_repo_browser_isolation.py`). The healthy tree read `control 0
+failed` → `mutation 1 failed`; the corrupt one read `30 failed` BOTH times,
+because the very test that mutation kills was already one of the 30. Read as an
+absolute, that round overstates the kill 30×; read as a delta, it calls the
+mutation UNCAUGHT. The same round lies in both directions at once, and the
+control is what tells you so before you write either number down.
+
+**A clean control does not mean the round MEASURED anything.** It is the cheapest
+detector, not a complete one, and three forms met in one day bound it. CAUGHT: a
+constant background failure (594/622 above), and stale bytecode — rewriting a
+constant to the SAME LENGTH leaves the `.pyc` valid and the round silently
+replays the PREVIOUS budget (card 624), so sweep under
+`PYTHONDONTWRITEBYTECODE=1`. NOT caught: a mutation that never reached the
+interpreter — a tree copied with `cp -R` drags `.venv` along, which puts the
+ORIGINAL `src` earlier on `sys.path`, after which control and rounds are all
+green and four false greens in a row read as "nothing kills this mutation" (card
+646). Copy a tree with `git archive` or `rsync -a --exclude .venv`, and print
+`vikunja_mcp.__file__` in every round — that, and not the control, is what
+catches this one.
+
 ## Releases: the `stable` channel
 
 Consumers' `.mcp.json` subscribes to the moving `stable` branch with
