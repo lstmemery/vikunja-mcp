@@ -81,7 +81,7 @@ them up.
     rather than quoted as a pair: the pair moved at every one of the five steps between the six
     shas `_paragraphs` names. Writing a blank line between two sweeps is what buys the finer
     check, and nothing here can make an author do it.
-  * A clean control does not mean the round measured anything, and two other forms bound it.
+  * A clean control does not mean the round measured anything, and three other forms bound it.
     STALE BYTECODE (VMCP-135 (624)): re-measured here on CPython 3.12 with the `.pyc` header read
     directly, cache validity is the pair (source mtime in SECONDS, source size) — so a same-length
     rewrite replays the previous budget only when the mtime ALSO fails to advance a whole second,
@@ -93,7 +93,28 @@ them up.
     a tree copied with `cp -R` drags `.venv`, the ORIGINAL `src` lands earlier on `sys.path`, the
     mutation never reaches the interpreter, and control AND rounds come out green together — four
     false greens in a row. `vikunja_mcp.__file__` printed per round is what catches that; the
-    control round is not, and this file does not claim otherwise.
+    control round is not, and this file does not claim otherwise. Re-measured on VMCP-177 (702),
+    that one has a RUNNER-dependent edge worth knowing before reaching for the remedy: `cp -R`
+    copies the editable install's `.pth`, which holds an ABSOLUTE path to the original `src`, so a
+    bare `<copy>/.venv/bin/python` imports the original and the mutation is invisible — while
+    `uv run` in the same copy re-syncs, rewrites that path, and the mutation lands. So the failure
+    is intermittent by runner rather than constant, which is worse to diagnose and is the reason
+    the `__file__` print is per ROUND and not once per stand.
+    A CONCURRENT WRITER is the third member, and it is the one this list was missing when VMCP-160
+    (667) hit it: an author sweeping a tree while its own second-pass auditor sweeps the same two
+    files. Constructed on 702 (two processes, one tree, each mutating SKILL.md behind its own
+    one-test pin) against a solo baseline of `control 0 failed` / `mutation 1 failed` per writer,
+    it runs in BOTH directions and only one of them is a control's to catch. The foreign mutant
+    landing under YOUR round is: 667 found the whole problem this way, and here the author's
+    control round read `1 failed` while naming a clause the author never touched. YOUR restore
+    landing under the auditor's round is NOT: its mutant is silently reverted, the round reads
+    `0 failed` where solo it read `1 failed`, and the auditor records "this pin is blind to that
+    mutation" — a false NEGATIVE that looks exactly like an honest green. Neither direction shows
+    up in the usual guards: both scripts' own sha256 restore checks reported success and the
+    tree's `git status` stayed clean, because a per-script guard sees only its own writes and so
+    certifies a tree it did not solely own. The remedy is not a stronger control but a separate
+    tree — SKILL.md's «ГДЕ он работает» gives the auditor its own `git clone --no-hardlinks`, and
+    the same two scenarios split across two clones returned the solo numbers on both sides.
   * It is a RATCHET, not a retrofit. `LEGACY_RECORDS_WITHOUT_A_CONTROL_COUNT` names the PARAGRAPHS
     that already quote a count without one. They are deliberately NOT "fixed": the control that
     belongs beside a historical number is the one measured in THAT environment at THAT sha, and

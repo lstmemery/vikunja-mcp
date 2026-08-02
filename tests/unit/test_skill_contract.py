@@ -3629,6 +3629,138 @@ def test_only_the_review_tool_writes_a_comment_that_opens_with_its_verdict_line(
         "post-verdict note from a recorded verdict no longer separates them"
 
 
+def _second_pass_clone_recipe(text: str) -> str:
+    """The FENCED recipe that stands the second pass up in its OWN clone.
+
+    Scoped to the fence and matched RAW for `_integration_recipe`'s measured reason: inside a fence
+    a line break separates two COMMANDS, so flattening would let a pin match text that is no longer
+    a runnable step — and here that is the whole point, since the clone and the patch that carries
+    the working tree into it are two commands whose ORDER an agent copies. Exactly one such fence
+    must exist; two would mean the recipe was duplicated, which is drift rather than a state to
+    tolerate."""
+    blocks = [b for b in re.findall(r"```sh\n(.*?)```", text, re.S) if "--no-hardlinks" in b]
+    assert len(blocks) == 1, f"expected exactly 1 fenced second-pass clone recipe, got {len(blocks)}"
+    recipe = blocks[0]
+    assert 0 < len(recipe) < len(text), "the clone-recipe slice is not a proper subset of SKILL.md"
+    return recipe
+
+
+def test_the_second_pass_runs_in_its_own_clone_and_the_recipe_carries_the_working_tree():
+    """VMCP-177 (702): the second pass is MANDATORY when prose is the deliverable, and re-measuring
+    a claim of the form "X is what catches Y" means DELETING X and requiring the pin to go red — so
+    the auditor writes to the very sources its author is sweeping at the same moment. Until this
+    card the rulebook said nothing about WHERE it runs, and the only path an author has to hand is
+    its own worktree, so the natural dispatch put two WRITERS in one directory.
+
+    The collision is not hypothetical and it is not symmetric, which is why the rule names both
+    directions. Constructed on this card (two processes, one tree, each mutating SKILL.md behind
+    its own one-test pin), against a solo baseline of `control 0 failed` / `mutation 1 failed` for
+    each writer: the author's control round with the auditor's mutant on disk read `1 failed`,
+    naming a clause the author never touched — loud, therefore survivable; the auditor's mutation
+    round with the author's restore landing under it read `0 failed`, which the auditor records as
+    "this pin is blind to that mutation" — the exact false conclusion the audit exists to prevent,
+    and INDISTINGUISHABLE from an honest green. Both scripts' own sha256 restore checks reported
+    success in both directions and `git status` stayed clean throughout, because a per-script guard
+    sees only its OWN writes. Split across two clones, the same two scenarios returned the solo
+    numbers on both sides.
+
+    WHY THIS TEST DRIVES GIT rather than only reading prose. The recipe's first two commands make a
+    claim a reader ACTS on: `git clone` copies the REPOSITORY, so a dirty tree's uncommitted work —
+    which is exactly the text under audit — is absent from the clone, and `git diff HEAD` piped
+    through `git apply` is what carries it. Forget the patch and the auditor still finishes, and
+    reports "the rule you describe is not in the file": true for what it saw, false in fact, and
+    the same defect class the pass exists to catch. A substring pin over the fence cannot notice
+    that behaviour changing, so it is measured here on a throwaway repo (one file, no origin, no
+    network) the same way the ancestry commands above were.
+
+    The prose half stays thin — short substrings over the flattened section — because pinning
+    sentences is review's job; this only holds the rule open and checks it still promises the
+    property. The `.venv` half deliberately pins `cp -R` being NAMED as wrong rather than the
+    mechanism: measured on this card, whether it bites depends on the RUNNER (a bare
+    `<copy>/.venv/bin/python` reads the copied editable `.pth`, whose path is absolute, and imports
+    the ORIGINAL src — the mutation never reaches the interpreter, VMCP-148 (646)'s four false
+    greens; `uv run` in the same copy re-syncs and rewrites it, and the mutation lands), and a pin
+    on a runner-dependent mechanism would be pinning today's uv.
+
+    MUTATION-CHECKED (`__pycache__` deleted first, THEN PYTHONDONTWRITEBYTECODE=1 — the variable
+    stops Python writing bytecode, not reading a stale `.pyc`; each selection confirmed at exactly
+    1 test; `vikunja_mcp.__file__` printed every round and confirmed inside the tree under test).
+    On this test's selection: control 0 failed; delete the whole «ГДЕ он работает» bullet from
+    SKILL.md -> 1 failed; delete ONLY the `git apply` line from the fence -> 1 failed; neutralise
+    every `cp -R` mention (3, all inside the new bullet) -> 1 failed; drop the clause «НЕ
+    закреплена за ролью» -> 1 failed; drop «селекцию» -> 1 failed; re-wrap the prose paragraph
+    -> 0 failed, green BY DESIGN (`_flat`). The last two rounds are why those clauses are pinned
+    one by one rather than left to the whole-bullet round: deleting the bullet kills every
+    assertion at once and so cannot tell which of them is doing work. Re-wrapping inside the FENCE
+    is a different case and the opposite one: the fence is matched raw, so a break inserted inside
+    one of those commands turns this red on purpose — in a fence a line break separates two
+    commands.
+
+    On the NEXT test's selection, run as its own round with its own baseline: control 0 failed;
+    delete the `git apply` STEP from that test's body -> 1 failed. That round is the negative-pin
+    check this repo requires — an assertion about a step is worth nothing until removing the step
+    is shown to break it."""
+    section = _second_pass_section(_skill_text())
+    flat = _flat(section)
+
+    assert "ГДЕ он работает" in flat, \
+        "the second-pass rule no longer says WHERE the auditor works — the gap 702 closed is back"
+    assert "ШУМНО" in flat and "ТИХО" in flat, \
+        "the rule no longer names BOTH axes of the collision; the silent one is the reason it " \
+        "exists, and a rule that names only the loud one leaves the false green uncovered"
+    assert "НЕ закреплена за ролью" in flat, \
+        "the rule no longer says the victim is not fixed to a role — both writers restore, so " \
+        "the silent axis lands on the AUTHOR too, and those are the numbers that reach the commit"
+    assert "селекцию" in flat, \
+        "the rule no longer qualifies the loud axis with the selection overlap it depends on — " \
+        "measured, with disjoint one-test pins the control round is green and catches nothing"
+    assert "cp -R" in flat, \
+        "the rule no longer warns against `cp -R` — the copy that drags .venv and can leave the " \
+        "mutation never reaching the interpreter"
+    assert "vikunja_mcp.__file__" in flat, \
+        "the rule no longer tells the auditor to print which src it actually imports"
+    assert "PYTHONDONTWRITEBYTECODE" in flat and "__pycache__" in flat, \
+        "the rule no longer pairs the bytecode variable with deleting the caches first — the " \
+        "variable stops Python WRITING bytecode, not READING a stale .pyc"
+
+    recipe = _second_pass_clone_recipe(section)
+    assert "git clone --no-hardlinks" in recipe, "the recipe no longer clones the tree"
+    assert "diff HEAD" in recipe and "apply" in recipe, \
+        "the recipe no longer carries the WORKING tree into the clone; without it the auditor " \
+        "reads the committed text and honestly reports the new prose is missing"
+    assert "uv sync" in recipe, "the recipe no longer builds the clone's own venv"
+
+
+def test_a_clone_does_not_carry_uncommitted_work_but_the_recipes_patch_does(tmp_path):
+    """The behavioural half of 702's rule: the two git facts its recipe rests on, measured rather
+    than asserted in prose. Kept a separate test so a failure says WHICH half moved — the rulebook
+    saying the wrong thing, or git doing something else than the rulebook says."""
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    _git(tree, "init", "-b", "main")
+    _git(tree, "config", "user.email", "t@example.com")
+    _git(tree, "config", "user.name", "Tester")
+    ruleb = tree / "SKILL.md"
+    ruleb.write_text("старый текст\n", encoding="utf-8")
+    _git(tree, "add", "SKILL.md")
+    _git(tree, "commit", "-m", "init")
+
+    ruleb.write_text("старый текст\nГДЕ он работает — в СВОЁМ клоне\n", encoding="utf-8")   # the WIP
+
+    clone = tmp_path / "702-pass2"
+    _git(tmp_path, "clone", "--no-hardlinks", "-q", str(tree), str(clone))
+    assert "ГДЕ он работает" not in (clone / "SKILL.md").read_text(encoding="utf-8"), \
+        "a clone now carries uncommitted work — SKILL.md's recipe spends two commands on a patch " \
+        "step whose whole justification is that it does not"
+
+    patch = tmp_path / "702-wip.patch"
+    patch.write_text(_git(tree, "diff", "HEAD") + "\n", encoding="utf-8")
+    _git(clone, "apply", str(patch))
+    assert (clone / "SKILL.md").read_text(encoding="utf-8") == ruleb.read_text(encoding="utf-8"), \
+        "`git diff HEAD` + `git apply` no longer reproduces the working tree in the clone — the " \
+        "recipe's way of handing the auditor the text actually under audit"
+
+
 def _post_push_ci_bullet(text: str) -> str:
     """SKILL.md's bullet on what to check AFTER the push — existence and outcome, in that order.
 

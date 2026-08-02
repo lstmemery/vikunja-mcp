@@ -415,7 +415,7 @@ mutation UNCAUGHT. The same round lies in both directions at once, and the
 control is what tells you so before you write either number down.
 
 **A clean control does not mean the round MEASURED anything.** It is the cheapest
-detector, not a complete one, and three forms met in one day bound it. CAUGHT: a
+detector, not a complete one, and four forms bound it. CAUGHT: a
 constant background failure (594/622 above), and stale bytecode — though that one
 is narrower than card 624's summary of it, and its remedy weaker. Re-measured
 2026-08-02 by reading the `.pyc` header: cache validity is the pair (source mtime
@@ -431,7 +431,22 @@ ORIGINAL `src` earlier on `sys.path`, after which control and rounds are all
 green and four false greens in a row read as "nothing kills this mutation" (card
 646). Copy a tree with `git archive` or `rsync -a --exclude .venv`, and print
 `vikunja_mcp.__file__` in every round — that, and not the control, is what
-catches this one.
+catches this one. Re-measured 2026-08-02 on card 702, the `cp -R` failure is
+RUNNER-dependent rather than constant, which is worse: the copied editable
+`.pth` holds an ABSOLUTE path to the original `src`, so a bare
+`<copy>/.venv/bin/python` imports the original and the mutation is invisible,
+while `uv run` in that same copy re-syncs, rewrites the path, and the mutation
+lands. HALF-CAUGHT, the fourth: a CONCURRENT WRITER — the second independent
+pass mutating the same files in the same tree at the same time (card 667, rebuilt
+on 702). Its foreign mutant landing under YOUR round is caught, and loudly, which
+is how 667 found it; YOUR restore landing under ITS round is NOT — that one
+silently reverts the mutant, the round reads green, and the auditor concludes the
+pin is blind. Neither shows up in the per-script sha256 restore checks or in `git
+status`, both of which stayed clean, because a per-script guard sees only its own
+writes. The remedy is a separate tree, not a stronger control: SKILL.md's «ГДЕ он
+работает» gives the auditor its own `git clone --no-hardlinks` plus a `git diff
+HEAD`/`git apply` pair, since a clone carries only COMMITTED work and the text
+under audit is usually uncommitted.
 
 ## Releases: the `stable` channel
 
