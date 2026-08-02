@@ -303,7 +303,14 @@ whereas `control PASS` is a sentence that can be true and useless at the same
 time. Record the FAILED count, never the pass total — the total moves with every
 test the repo adds (the floor above), the failed count does not.
 `tests/unit/test_mutation_sweep_contract.py` enforces that shape on every record
-written from here on, and names the pre-existing ones it cannot fix.
+written from here on, and names the pre-existing ones it cannot fix. **"Beside"
+is enforced IN THE SAME PARAGRAPH** (card 688): the scanner's unit is the
+paragraph, not the whole docstring, so a control declared once at the top of a
+long section stops vouching for the rounds below the next blank line — repeat it
+there, or leave no blank line between the header and its rounds. It used to read
+whole records, and then one clause about an unrelated mutation immunised every
+other count in the docstring — which is not a hypothetical either: that is how
+the record card 668 was filed against passed.
 
 **And inflation is the friendlier half.** That stand was rebuilt on 2026-08-02:
 the same pre-622 sha exported twice, once with `.git` and once without, one
