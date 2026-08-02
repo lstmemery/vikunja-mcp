@@ -1976,3 +1976,328 @@ def test_needs_work_routes_on_a_FRESH_read_not_the_board_snapshot():
     res = wf.review_task(t["id"], verdict="needs_work", report="q")
     assert (res["moved_to"], api.stage_of(t["id"])) == ("Build", "Build"), res
     assert not wf.next_task().get("task")                   # not mine, not offered to me
+
+
+# --- #734: the same dead end in the OTHER stages claim refuses from -------------------------
+# #705 shipped its clause for Design/Build and said in the same breath that Backlog, Your Call
+# and Done were the identical dead end, left uncovered. These two tests are that half. They are
+# two because they check different KINDS of thing: the first pins the TEXT an agent reads, the
+# second pins the BOARD FACTS those texts assert — a message can be reworded without lying, but
+# it must never outlive the behaviour it describes.
+
+_BARE = "task {id} is not assigned to you — claim it first"
+# what the shared prefix must say wherever the clause fires at all
+_PREFIX_MARKS = ("UNFOLLOWABLE", "NO assignee at all", "claim() works only from Queue")
+
+
+def test_ownerless_card_gets_a_TRUE_exit_in_every_stage_claim_refuses_from():
+    """#734. Six stages refuse `claim`; #705 gave an actionable refusal in two of them. Measured
+    at 7121dcf (the tip this work forked from, #705 already in it) on the real Workflow over
+    FakeAPI, ownerless card, 7 stages x 5 ownership-gated forms: Backlog, Your Call and Done
+    answered the BARE "claim it first" — advice that cannot be followed, since claim works only
+    from Queue and (measured in the sibling test) no agent tool moves the card either. Review
+    answered it too.
+
+    The exit sentence is PER STAGE, and that is the whole point of the card rather than a style
+    choice — one text is measurably false in at least one stage, in THREE independent ways:
+
+      * #705's own parenthetical, "advance, call_human, return_task and decompose all refuse it
+        identically", is true ONLY in Design/Build. Elsewhere call_human refuses with its own
+        stage gate (and from Review/Done so do return_task and decompose), so copying it outward
+        would tell an agent four tools say one thing when three say another.
+      * "Only a human can move it back" is true in Backlog/Design/Build/Your Call/Done and FALSE
+        in Review, the one non-Queue stage an agent moves an ownerless card out of.
+      * "so no call of yours can make it yours" is true in those same five and FALSE in Review
+        for the same reason — measured, review_task(needs_work) then claim(), two of the agent's
+        own calls, leave the card in Design assigned to me. It began life in the SHARED prefix,
+        where the Review entry contradicted its own opening clause two lines later; this card's
+        own second independent pass caught that, which is why it is now a per-stage tail.
+
+    All three are asserted below as NEGATIVE pins, because a future "let's unify the wording" is
+    exactly how this regresses and it regresses silently — a wrong exit still reads like help. The
+    positive side is pinned too, and that was NOT true of the first draft: the second pass deleted
+    #705's parenthetical and the Review universal outright and the whole 865-test suite stayed
+    green, so a phrase can easily have its absence pinned and its presence pinned nowhere.
+
+    The two stages that must NOT change are asserted byte for byte: QUEUE, where "claim it first"
+    is simply correct, and SOMEBODY ELSE'S card in every stage, where "not assigned to you" is
+    the accurate diagnosis and "leave it alone" the unchanged right action.
+
+    MUTATION-CHECKED — see the record in the sibling test below; the rounds are shared."""
+    api = FakeAPI(buckets=STAGES)
+    wf = Workflow(api, project_id=3)
+
+    # the exit each stage must NAME. Design/Build's parenthetical and Review's universal are
+    # pinned POSITIVELY here because this card's second pass proved they were not: deleting
+    # either left the whole 865-test suite green, while workflow.py claimed Design/Build carry
+    # #705's wording "byte for byte". A phrase whose only test mention is a `not in` assert has
+    # its ABSENCE pinned elsewhere and its PRESENCE pinned nowhere.
+    expected = {
+        "Backlog": ("Backlog is the human's triage zone",
+                    "return_task parks a card here unassigned BY DESIGN",
+                    # ...and does NOT promise the card becomes claimable — measured, it may not
+                    "the ordinary queue's business"),
+        "Design": ("advance, call_human, return_task and decompose all refuse it identically",
+                   "Only a human can move it back into the pipeline"),
+        "Build": ("advance, call_human, return_task and decompose all refuse it identically",
+                  "Only a human can move it back into the pipeline"),
+        "Review": ("you do not need to OWN a card to review it", "review_task(task_id",
+                   "needs_work sends an ownerless card to Queue",
+                   "subject to the ordinary Queue gates",
+                   "Review is the only non-Queue stage an agent can move this card out of"),
+        "Your Call": ("Only a human moves a card out of Your Call",
+                      "call_human KEEPS the assignee", "next_task offers it to nobody"),
+        "Done": ("Done is human-only in BOTH directions", "file_task("),
+    }
+    for stage, must_say in expected.items():
+        orphan = api.add_task(f"ownerless in {stage}", stage)
+        with pytest.raises(WorkflowError) as exc:
+            wf.advance(orphan["id"], to="build", spec="s")
+        msg = str(exc.value)
+        for mark in _PREFIX_MARKS:
+            assert mark in msg, f"{stage}: the refusal no longer says the advice is dead: {msg}"
+        for phrase in must_say:
+            assert phrase in msg, f"{stage}: exit sentence lost its own wording ({phrase!r}): {msg}"
+
+    # NEGATIVE PIN 1 — the "all four refuse identically" enumeration is a Design/Build fact, and
+    # saying it anywhere else would be false: call_human answers about the STAGE in the other four
+    for stage in ("Backlog", "Review", "Your Call", "Done"):
+        orphan = api.add_task(f"ownerless in {stage}", stage)
+        with pytest.raises(WorkflowError) as exc:
+            wf.advance(orphan["id"], to="build", spec="s")
+        assert "refuse it identically" not in str(exc.value), \
+            f"{stage}: claims four tools answer alike, but call_human refuses by STAGE there"
+        # ...and the stage gate really is what call_human answers with, so the pin is about a
+        # real divergence and not about a phrase nobody would have written
+        with pytest.raises(WorkflowError) as ch:
+            wf.call_human(orphan["id"], "q")
+        assert "call_human works only from Design/Build" in str(ch.value), ch.value
+
+    # NEGATIVE PIN 2 — Review must NOT inherit "only a human", the one sentence that is a LIE
+    # there. The sibling test measures why: review_task(needs_work) walks it to Queue.
+    in_review = api.add_task("ownerless in Review", "Review")
+    with pytest.raises(WorkflowError) as rev:
+        wf.advance(in_review["id"], to="build", spec="s")
+    assert "Only a human can move it back" not in str(rev.value), \
+        f"Review now tells the agent only a human can move a card it can move itself: {rev.value}"
+
+    # NEGATIVE PIN 3 — nor may Review say "no call of yours can make it yours". That clause used
+    # to live in the SHARED prefix, where it contradicted the Review exit standing two lines
+    # below it; this card's own second pass caught that. It is a tail, not a prefix, for exactly
+    # this reason, so the pin is on the SPLIT and not merely on one stage's prose. The sibling
+    # test measures the counter-example: needs_work + claim leaves the card mine.
+    assert "no call of yours can make it yours" not in str(rev.value), \
+        f"Review contradicts itself: the clause is back in the shared prefix: {rev.value}"
+    for stage in ("Backlog", "Design", "Build", "Your Call", "Done"):
+        orphan = api.add_task(f"ownerless in {stage}", stage)
+        with pytest.raises(WorkflowError) as exc:
+            wf.advance(orphan["id"], to="build", spec="s")
+        assert "no call of yours can make it yours" in str(exc.value), \
+            f"{stage} lost the clause that IS true there: {exc.value}"
+
+    # UNCHANGED 1 — Queue keeps the bare message, byte for byte: there the advice is correct
+    queued = api.add_task("free work", "Queue")
+    with pytest.raises(WorkflowError) as queue_own:
+        wf.advance(queued["id"], to="build", spec="s")
+    assert str(queue_own.value) == _BARE.format(id=queued["id"]), queue_own.value
+
+    # UNCHANGED 2 — somebody ELSE'S card, byte for byte, in EVERY stage. The clause keys off "no
+    # assignee at all", never off "claim would refuse from here" — even though claim refuses from
+    # Backlog/Your Call/Done for an owned card just the same.
+    for stage in STAGES:
+        theirs = api.add_task(f"their work in {stage}", stage,
+                              assignee={"id": 99, "username": "someone-else"})
+        with pytest.raises(WorkflowError) as other:
+            wf.advance(theirs["id"], to="build", spec="s")
+        assert str(other.value) == _BARE.format(id=theirs["id"]), (stage, other.value)
+
+
+def test_the_per_stage_ownerless_exits_state_only_what_the_board_really_does():
+    """#734, the other half: every measurable claim those refusals make, re-measured against the
+    real Workflow. A refusal that outlives its behaviour is worse than a bare one — it reads like
+    help and sends the agent somewhere that no longer works.
+
+    Four claims, one per stage that got a new text:
+      * Backlog "return_task parks a card here unassigned BY DESIGN ... a human triages it into
+        Queue and only THEN does claim work" — driven through the REAL return_task, not asserted
+        about it. This is why Backlog is the REACHABLE half of this card: an agent produces the
+        state itself, daily, where Design/Build needs a human's hand.
+      * Your Call "call_human KEEPS the assignee, so a parked card is not supposed to be
+        ownerless" — driven through the real call_human; and "next_task offers it to nobody"
+        once the human moves it back to Design/Build.
+      * Review "needs_work sends an ownerless card to Queue, where claim does work" and "the only
+        non-Queue stage an agent can move this card out of" — the second is a universal, so it is
+        measured as one: all 8 card-moving calls, from all 6 non-Queue stages.
+      * Done, and Backlog and Your Call with it: nothing an agent calls moves the card, which is
+        what makes "only a human" true in those three.
+
+    MUTATION-CHECKED. Method, because the numbers mean nothing without it: `__pycache__` deleted
+    AND PYTHONDONTWRITEBYTECODE=1 in every round (the flag alone does not stop a stale .pyc being
+    READ), `vikunja_mcp.__file__` printed every round, source restored from a pristine copy and
+    verified by sha256 with `git status` clean after each, no `set -e` around pytest (it exits 1
+    on red and would abort before the restore). Selection = these two tests plus #705's two:
+    `collected 89 items / 85 deselected / 4 selected` in EVERY round, cross-checked against the
+    count of `^FAILED` lines. CONTROL ROUND FIRST and repeated between batches: `control 0 failed`
+    every time. The whole set below was RE-RUN against the code as it ships, after the second pass
+    forced four wording changes — a record measured against a draft describes the draft, not the
+    module. Every row below is a DELTA against that `control 0 failed`, and each
+    names the assertion actually read out of `--tb=line` rather than the one it seemed obvious it
+    would hit (no blank line before the rows: the control has to sit in the same paragraph as the
+    numbers it baselines — the contract test's unit is the paragraph, not the record):
+      * drop the "Backlog" entry from `_OWNERLESS_EXITS` -> 1 failed, in the SIBLING test's PREFIX
+        assert ("the refusal no longer says the advice is dead") — not its wording assert, which
+        is never reached. Same for "Your Call", "Done" and "Review": 1 failed each.
+      * give every stage `_ACTIVE_OWNERLESS_EXIT` — the "let's unify the wording" mutant this
+        card exists to prevent -> 1 failed, and it lands in a POSITIVE assert (Backlog's own
+        wording), NOT in the negative pins: the positive loop runs first, so on this mutant the
+        negative pins are never reached at all. Crediting them here would be false.
+      * copy Done's text into the Backlog entry (a plausible copy-paste rather than a deletion)
+        -> 1 failed, that same positive assert.
+      * so the two NEGATIVE pins were attacked at exactly their own width, since nothing above
+        exercises them: append the "refuse it identically" enumeration to Backlog's text, keeping
+        every phrase the positive asserts want -> 1 failed, and ONLY in negative pin 1. Append
+        "Only a human can move it back into the pipeline" to Review's text, likewise -> 1 failed,
+        ONLY in negative pin 2. Both pins hold on their own.
+      * put "so no call of yours can make it yours" back into the SHARED prefix, where the first
+        draft had it -> 1 failed, ONLY in negative pin 3. That draft shipped a message whose
+        Review entry contradicted its own opening clause; the round exists so the SPLIT is what
+        is pinned, not one stage's prose.
+      * make Backlog's text promise the card is claimable once triaged -> 1 failed, its positive
+        assert. The first draft said "only THEN does claim work" as a flat promise.
+      * add "Queue" to the map -> 2 failed: this card's byte-for-byte Queue assert AND #705's.
+      * drop the `not assignees` conjunct -> 2 failed: this card's byte-for-byte foreign-card
+        assert (it names the stage, "Backlog") AND #705's.
+      * make review_task(needs_work) leave an ownerless card in Review -> 2 failed: this test's
+        Review claim (`assert 'Review' == 'Queue'`) AND #705's own bounce test — the round that
+        shows the Review text is pinned to BEHAVIOUR and not only to itself.
+      * make call_human clear the assignee -> 1 failed: this test's Your Call anomaly claim.
+      * TWO rounds that were 0 failed until this card's second independent pass ran them, and are
+        1 failed now — recorded as the fake pins they were, since a round that changed verdict is
+        the only evidence the fix was real. Strip #705's "(advance, call_human, return_task and
+        decompose all refuse it identically…)" from `_ACTIVE_OWNERLESS_EXIT` -> was 0 failed on
+        BOTH this selection and the full suite, while workflow.py claimed Design/Build carry
+        #705's wording byte for byte; its only test mention was a `not in` assert, so its ABSENCE
+        elsewhere was pinned and its PRESENCE nowhere. Now 1 failed, the Design positive assert.
+        Delete the "Review is the only non-Queue stage…" sentence -> likewise 0 failed before
+        (the BEHAVIOUR was pinned by the mover sweep, the SENTENCE by nothing), 1 failed now.
+      * one NO-OP round, recorded because it is NOT a fake pin: `_OWNERLESS_EXITS.get(stage or "")`
+        -> `.get(stage)` -> 0 failed. `stage` is `str | None` and a dict lookup of None behaves
+        exactly like "" on a str-keyed map, so the `or ""` is defensive cosmetics with no
+        behaviour behind it — there is nothing there for a test to hold."""
+    # --- Backlog: the agent's own tool produces this state, and the exit really is Queue ---
+    api = FakeAPI(buckets=STAGES)
+    wf = Workflow(api, project_id=3)
+    mine = api.add_task("my work", "Design", assignee=api.me_user)
+    wf.return_task(mine["id"], reason="upstream is down")
+    assert api.stage_of(mine["id"]) == "Backlog"
+    assert not api.tasks[mine["id"]]["assignees"], "return_task no longer unassigns"
+    with pytest.raises(WorkflowError, match="you can only claim from Queue"):
+        wf.claim(mine["id"])                      # ...so the bare advice really is dead there
+    # and the text stops at "a human triages it into Queue" rather than promising the card is
+    # claimable from there — because measured, the SAME everyday card is not offered when it
+    # gets there: return_task also leaves the `blocked` label, which next_task filters out.
+    assert [lb["title"] for lb in api.tasks[mine["id"]]["labels"]] == ["blocked"]
+    api.move_task(3, api.view["id"], api.bucket_id("Queue"), mine["id"])   # the human's triage
+    assert not wf.next_task().get("task"), "a `blocked` Queue card is not supposed to be offered"
+    assert wf.claim(mine["id"])["claimed"] is True       # claim BY ID still works — offer != gate
+    assert api.stage_of(mine["id"]) == "Design"
+
+    # the Backlog text names three producers of this everyday state, not one; all three measured
+    for label, call in (
+        ("return_task", lambda w, tid: w.return_task(tid, reason="r")),
+        ("decompose", lambda w, tid: w.decompose(tid, [{"title": "a"}, {"title": "b"}])),
+    ):
+        api = FakeAPI(buckets=STAGES)
+        wf = Workflow(api, project_id=3)
+        card = api.add_task("mine", "Build", assignee=api.me_user)
+        call(wf, card["id"])
+        assert (api.stage_of(card["id"]), api.tasks[card["id"]]["assignees"]) == ("Backlog", []), \
+            f"{label} no longer parks an ownerless card in Backlog"
+    api = FakeAPI(buckets=STAGES)
+    wf = Workflow(api, project_id=3)
+    filed = wf.file_task("a finding")["filed"]["id"]
+    assert (api.stage_of(filed), api.tasks[filed]["assignees"]) == ("Backlog", [])
+
+    # --- Your Call: call_human KEEPS the assignee, so ownerless there is an anomaly ---
+    api = FakeAPI(buckets=STAGES)
+    wf = Workflow(api, project_id=3)
+    parked = api.add_task("parked work", "Design", assignee=api.me_user)
+    wf.call_human(parked["id"], "A or B?")
+    assert api.stage_of(parked["id"]) == "Your Call"
+    assert [a["id"] for a in api.tasks[parked["id"]]["assignees"]] == [api.me_user["id"]], \
+        "call_human no longer keeps the assignee — the Your Call text calls that the anomaly"
+    # and the consequence the text warns about: moved back ownerless, it is offered to nobody
+    orphan_yc = api.add_task("ownerless parked", "Your Call")
+    for back_to in ("Design", "Build"):
+        api.move_task(3, api.view["id"], api.bucket_id(back_to), orphan_yc["id"])
+        assert not wf.next_task().get("task"), f"an ownerless card in {back_to} was offered"
+
+    # --- Review: needs_work + claim really do make an OWNERLESS card MINE, in two calls ---
+    # This is the counter-example to "no call of yours can make it yours", which is why that
+    # clause is a per-stage tail and not part of the shared prefix.
+    api = FakeAPI(buckets=STAGES)
+    wf = Workflow(api, project_id=3)
+    in_review = api.add_task("ownerless under review", "Review")
+    assert wf.review_task(in_review["id"], verdict="needs_work", report="r")["moved_to"] == "Queue"
+    assert api.stage_of(in_review["id"]) == "Queue"
+    assert wf.claim(in_review["id"])["claimed"] is True
+    assert api.stage_of(in_review["id"]) == "Design"
+    assert [a["id"] for a in api.tasks[in_review["id"]]["assignees"]] == [api.me_user["id"]]
+
+    # ...and the QUALIFICATION the Review text carries is real, not defensive padding. The first
+    # draft of this card said "to Queue, where claim does work" full stop; the second pass broke
+    # it in three reachable ways, all re-measured here. #705's own comment already recorded the
+    # non-universality ("'Reopens the ordinary path' is measured … and it is not universal"), so
+    # the unqualified promise reproduced this card's own defect class one stage over.
+    api = FakeAPI(buckets=STAGES)
+    wf = Workflow(api, project_id=3)
+    epic = api.add_task("ownerless epic", "Review", labels=("epic",))
+    wf.review_task(epic["id"], verdict="needs_work", report="r")
+    with pytest.raises(WorkflowError, match="epic CONTAINER"):
+        wf.claim(epic["id"])                     # (1) an epic container: never claimable
+
+    api = FakeAPI(buckets=STAGES)
+    wf = Workflow(api, project_id=3)
+    head = api.add_task("head", "Build", assignee=api.me_user)
+    succ = api.add_task("ownerless successor", "Review")
+    api.add_relation(succ["id"], head["id"], "follows")
+    wf.review_task(succ["id"], verdict="needs_work", report="r")
+    with pytest.raises(WorkflowError, match="unfinished predecessor"):
+        wf.claim(succ["id"])                     # (2) the sequence gate
+
+    api = FakeAPI(buckets=STAGES)
+    wf = Workflow(api, project_id=3)
+    for i in range(3):                           # (3) the DEFAULT wip limit, so this is routine
+        api.add_task(f"mine {i}", "Build", assignee=api.me_user)
+    saturated = api.add_task("ownerless under review", "Review")
+    wf.review_task(saturated["id"], verdict="needs_work", report="r")
+    with pytest.raises(WorkflowError, match="WIP limit reached"):
+        wf.claim(saturated["id"])
+
+    # --- the universal: Review is the ONLY non-Queue stage an agent moves it out of ---
+    movers = (
+        ("review_task(needs_work)",
+         lambda w, tid: w.review_task(tid, verdict="needs_work", report="r")),
+        ("review_task(approve)", lambda w, tid: w.review_task(tid, verdict="approve", report="r")),
+        ("claim", lambda w, tid: w.claim(tid)),
+        ("advance(build)", lambda w, tid: w.advance(tid, to="build", spec="s")),
+        ("advance(review)", lambda w, tid: w.advance(tid, to="review", worklog="w", evidence="e")),
+        ("call_human", lambda w, tid: w.call_human(tid, "q")),
+        ("return_task", lambda w, tid: w.return_task(tid, reason="r")),
+        ("decompose", lambda w, tid: w.decompose(tid, [{"title": "a"}, {"title": "b"}])),
+    )
+    moved_from = {}
+    for stage in [s for s in STAGES if s != "Queue"]:
+        for label, call in movers:
+            api = FakeAPI(buckets=STAGES)
+            wf = Workflow(api, project_id=3)
+            card = api.add_task(f"ownerless in {stage}", stage)
+            try:
+                call(wf, card["id"])
+            except (WorkflowError, VikunjaError):
+                pass
+            if api.stage_of(card["id"]) != stage:
+                moved_from.setdefault(stage, []).append(f"{label}->{api.stage_of(card['id'])}")
+    assert moved_from == {"Review": ["review_task(needs_work)->Queue"]}, \
+        ("exactly one agent call moves an ownerless card out of a non-Queue stage, and the "
+         f"per-stage exits are written around that: {moved_from}")

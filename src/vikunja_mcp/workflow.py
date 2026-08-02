@@ -44,6 +44,74 @@ PREDECESSOR_RELATION_KINDS = ("follows", "blocked")
 # advance: to -> (откуда, куда)
 AGENT_ADVANCE = {"build": ("Design", "Build"), "review": ("Build", "Review")}
 
+# `_require_mine`'s ownerless-card clause (#705, widened by #734): the sentence that names the
+# REAL exit, keyed by stage. Per-stage and not one shared text, because ONE text is measurably
+# FALSE in at least one stage — see the sweep recorded in `_require_mine`. A stage absent from
+# this map keeps the bare "claim it first": that is QUEUE only, and it is absent BY DESIGN,
+# because there the advice is simply correct (measured: claim on an ownerless Queue card
+# succeeds and moves it to Design). Design/Build carry #705's wording byte for byte.
+#
+# Note where the split falls. The shared prefix stops at "claim() works only from Queue"; the
+# NEXT clause — "so no call of yours can make it yours" — lives in the tails, because it is FALSE
+# in Review and this card's own second pass caught it there. Measured: review_task(needs_work)
+# then claim(), two of the agent's own calls, leave an ownerless Review card in Design assigned to
+# me. Leaving that clause shared would have had the Review entry contradict its own first half.
+_ACTIVE_OWNERLESS_EXIT = (
+    ", so no call of yours can make it yours (advance, call_human, return_task and decompose all "
+    "refuse it identically — don't work down the list). Only a human can move it back into the "
+    "pipeline: say so in your report"
+)
+_OWNERLESS_EXITS: dict[str, str] = {
+    "Design": _ACTIVE_OWNERLESS_EXIT,
+    "Build": _ACTIVE_OWNERLESS_EXIT,
+    # Backlog is the REACHABLE one: return_task parks a card here AND clears the assignee, so an
+    # ownerless Backlog card is the everyday outcome of a tool an agent calls itself — not the
+    # rare hand-placement the Design/Build branch guards. So the exit says "this is normal",
+    # not "this is broken": there is nothing to report and nothing to fix.
+    "Backlog": (
+        ", so no call of yours can make it yours. That is not damage and not yours to fix: "
+        "Backlog is the human's triage zone, and return_task parks a card here unassigned BY "
+        "DESIGN (so do decompose on a parent and file_task) — an ownerless card in Backlog is the "
+        "everyday state, not a stranding. A human triages it into Queue; whether it is claimable "
+        "from THERE is the ordinary queue's business, not a promise this refusal can make. Leave "
+        "it and take the next task"
+    ),
+    # Review is the ONE non-Queue stage an agent can move this card out of (measured), so the
+    # shared "only a human can move it back" would be a LIE here — and the reviewer's own tool
+    # never needs ownership in the first place. Reached by `advance` only: call_human,
+    # return_task and decompose each refuse from Review with their own stage gate, first.
+    "Review": (
+        " — but you do not need to OWN a card to review it: review_task(task_id, "
+        "verdict='approve'|'needs_work', report=…) takes no ownership. And this is the one stage "
+        "where a call of yours CAN make the card yours, in two steps rather than one: needs_work "
+        "sends an ownerless card to Queue, and claim() takes it from there — subject to the "
+        "ordinary Queue gates, which still refuse an `epic` container, a card with an unfinished "
+        "predecessor, and any claim at a full WIP limit. Review is the only non-Queue stage an "
+        "agent can move this card out of, so don't report it as stuck"
+    ),
+    # Your Call is the ANOMALOUS one: call_human KEEPS the assignee, so a parked card is not
+    # supposed to be ownerless at all. Nothing for the agent to do — but unlike Backlog it is
+    # worth reporting, because the human's answer moves the card back to Design/Build, where an
+    # ownerless card is exactly the #705 dead end and next_task offers it to nobody (measured).
+    "Your Call": (
+        ", so no call of yours can make it yours. Only a human moves a card out of Your Call, so "
+        "there is nothing here for you to do — "
+        "but DO report it: call_human KEEPS the assignee, so a parked card is not supposed to be "
+        "ownerless, and when the human answers and moves this one back to Design/Build it will "
+        "still have no owner, where next_task offers it to nobody"
+    ),
+    # Done is terminal and human-only in BOTH directions — the same answer #626/#649 already
+    # give from return_task and decompose, which is why this text points at the same door they
+    # do. Reached by `advance` only, for the same reason as Review.
+    "Done": (
+        ", so no call of yours can make it yours. Done is human-only in BOTH directions, so this "
+        "card is not yours to move no matter "
+        "who owns it. Work that a Done card revealed is NEW work rather than this card: file_task(…, "
+        "related_task_id=<this task>) for a human to triage; a human can also move this card "
+        "back themselves"
+    ),
+}
+
 # --- вложения: временные файлы (download_attachment, #139) ---
 # Скачанные вложения кладём в один выделенный temp-каталог, КАЖДОЕ скачивание — в свой
 # mkdtemp-подкаталог, чтобы файл сохранял ТОЧНОЕ исходное имя (рендерер образов у агента
@@ -502,43 +570,74 @@ class Workflow:
         if self._me()["id"] in assignees:
             return
         msg = f"task {task['id']} is not assigned to you — claim it first"
-        # #705, residual half: "claim it first" is UNFOLLOWABLE for an OWNERLESS card already in
-        # Design/Build — claim only works from Queue, so the advice names the one call that is
-        # guaranteed to refuse. Narrow on purpose, and both conditions carry weight: with an
-        # assignee (someone else's card) "not assigned to you" is the accurate diagnosis and the
-        # right action — leave it alone — is unchanged, while in Queue "claim it first" is simply
-        # correct (measured: claim from Queue on such a card SUCCEEDS). Every other refusal stays
-        # byte for byte what it was — also measured. `stage` is optional so a caller without one
-        # in hand keeps the plain message rather than guessing.
+        # #705, residual half: "claim it first" is UNFOLLOWABLE for an OWNERLESS card outside
+        # Queue — claim only works from Queue, so the advice names the one call that is guaranteed
+        # to refuse. Both conditions carry weight: with an assignee (someone else's card) "not
+        # assigned to you" is the accurate diagnosis and the right action — leave it alone — is
+        # unchanged, while in Queue "claim it first" is simply correct (measured: claim from Queue
+        # on such a card SUCCEEDS). Those two are the refusals that stay byte for byte what they
+        # were, and both are pinned that way. `stage` is optional so a caller without one in hand
+        # keeps the plain message rather than guessing.
         #
-        # It is Design/Build and NOT "every stage claim refuses from", and that is a SCOPE
-        # decision, not a claim that the rest are fine. Measured over all 7 stages: an ownerless
-        # card in BACKLOG, YOUR CALL and DONE gets exactly the same unfollowable bare message
-        # from advance/return_task/decompose, claim refuses there too, and no agent tool moves it
-        # — the identical dead end, uncovered here because it is not what this card measured or
-        # tested, and widening a refusal is not free (Review would need its own wording: an
-        # ownerless card there IS movable, by review_task, so "only a human" would be a lie).
-        # Filed rather than silently left, as #734 — where the Backlog half is noted as the
-        # REACHABLE one: return_task parks a card there and unassigns it, so ownerless-in-Backlog
-        # is an everyday outcome, not the rare hand-placement this branch guards.
+        # #734 widened it from Design/Build to EVERY stage claim refuses from — that is all six
+        # non-Queue stages — but NOT with one shared text, because one text is measurably false.
+        # The table below is the BEFORE picture — measured at 7121dcf, the tip this work forked
+        # from, with #705 already in it — on the real Workflow over FakeAPI: ownerless card, all
+        # 7 stages x the 5 ownership-gated forms (advance x2, call_human, return_task, decompose),
+        # plus a control round on a card owned by SOMEBODY ELSE and a mover round over all 8
+        # card-moving calls. It is what MOTIVATES the map, not what the code does now, and saying
+        # so is this card's own second-pass finding: read undated under a "#734 widened it"
+        # heading, 12 of its 35 cells contradict the module they sit in. AFTER the change every
+        # `bare` below outside the Queue row reads `clause`; nothing else moves.
         #
-        # Reaching THIS branch takes a HUMAN hand-placing an unassigned card into Design/Build:
-        # review_task(needs_work) used to be the tool that produced it and now bounces such a
-        # card to Queue — routing on a re-read, so the mid-call window is closed too — and
-        # claim's vanish-window guard refuses before its own move. SWEPT rather than reasoned:
-        # all 12 registered tools (14 forms) run from each of the 7 stages with the card assigned
-        # and unassigned, and no landing leaves a card ownerless in Design/Build. That is a
-        # measurement of today's tool set, not a law: a future tool that moves a card into an
-        # active stage without checking assignees produces the state again, and nothing here
-        # would catch it (the same open-class caveat #649 records for human-only Done, #662).
-        if stage in ACTIVE_STAGES and not assignees:
+        #   Backlog    bare bare STAGE-GATE bare bare      claim REFUSED  movable-by-agent: none
+        #   Queue      bare bare STAGE-GATE bare bare      claim OK       claim -> Design
+        #   Design     clause x5                           claim REFUSED  none
+        #   Build      clause x5                           claim REFUSED  none
+        #   Review     bare bare STAGE-GATE x3             claim REFUSED  review_task(needs_work)
+        #                                                                  -> Queue
+        #   Your Call  bare bare STAGE-GATE bare bare      claim REFUSED  none
+        #   Done       bare bare STAGE-GATE x3             claim REFUSED  none
+        #
+        # Three things in that table decide the wording, and each kills a tempting shortcut:
+        # (1) #705's own clause CANNOT be copied outward — it says "advance, call_human,
+        # return_task and decompose all refuse it identically", which is true ONLY in
+        # Design/Build; elsewhere call_human (and in Review/Done also return_task and decompose)
+        # answers with its own stage gate instead. (2) "Only a human can move it back" is true in
+        # Backlog/Design/Build/Your Call/Done and FALSE in Review, the one non-Queue stage an
+        # agent moves an ownerless card out of. (3) The three stages this card is titled for are
+        # not one case: Backlog is NORMAL (return_task produces it every day), Your Call is
+        # ANOMALOUS (call_human keeps the assignee, so a parked card should have one) and Done is
+        # TERMINAL (human-only both ways, same door #626/#649 already point at). So the exit
+        # sentence is per stage — `_OWNERLESS_EXITS`, above.
+        #
+        # What is NOT claimed: that unfollowable advice is now impossible. The clause keys off
+        # "no assignee at all", so somebody ELSE's card keeps the bare message in every stage —
+        # deliberately, since "not assigned to you" is then the accurate diagnosis and "leave it
+        # alone" the unchanged right action, even though `claim` would refuse from Backlog/Your
+        # Call/Done just the same. And the table is today's tool set, not a law (#649/#662).
+        #
+        # REACHABILITY is not uniform across the six, which is why Backlog's exit reads "this is
+        # normal" and Design/Build's reads "tell a human". Reaching the DESIGN/BUILD branch takes
+        # a human hand-placing an unassigned card there: review_task(needs_work) used to be the
+        # tool that produced it and now bounces such a card to Queue — routing on a re-read, so
+        # the mid-call window is closed too — and claim's vanish-window guard refuses before its
+        # own move. SWEPT rather than reasoned (#705): all 12 registered tools (14 forms) run from
+        # each of the 7 stages with the card assigned and unassigned, and no landing leaves a card
+        # ownerless in Design/Build. BACKLOG is the opposite: `return_task` parks a card there and
+        # clears the assignee in the same call, so an agent produces that state itself, daily —
+        # driven through the real tool in the test, not argued from the source. Your Call and Done
+        # are hand-placements like Design/Build; Review takes the same human hand, and clearing
+        # the assignee on a card under review is the route #705's own race test already exercises.
+        # None of that was re-swept per stage here. All of it is a measurement of today's set, not a
+        # law: a future tool that moves a card without checking assignees produces the state
+        # again, and nothing here would catch it (the open-class caveat #649 records, #662).
+        exit_advice = _OWNERLESS_EXITS.get(stage or "")
+        if exit_advice and not assignees:
             msg += (
                 f" — except that is UNFOLLOWABLE here: this card has NO assignee at all and is "
-                f"already in {stage}, and claim() works only from Queue, so no call of yours can "
-                f"make it yours (advance, call_human, return_task and decompose all refuse it "
-                f"identically — don't work down the list). Only a human can move it back into "
-                f"the pipeline: say so in your report"
-            )
+                f"already in {stage}, and claim() works only from Queue"
+            ) + exit_advice
         raise WorkflowError(msg)
 
     @staticmethod
