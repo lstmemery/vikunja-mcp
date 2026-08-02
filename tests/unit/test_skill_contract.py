@@ -17,6 +17,7 @@ import ast
 import inspect
 import os
 import re
+import shutil
 import subprocess
 import textwrap
 import time
@@ -3689,15 +3690,32 @@ def _second_pass_clone_recipe(text: str) -> str:
 
     Scoped to the fence and matched RAW for `_integration_recipe`'s measured reason: inside a fence
     a line break separates two COMMANDS, so flattening would let a pin match text that is no longer
-    a runnable step — and here that is the whole point, since the clone and the patch that carries
-    the working tree into it are two commands whose ORDER an agent copies. Exactly one such fence
-    must exist; two would mean the recipe was duplicated, which is drift rather than a state to
-    tolerate."""
+    a runnable step. Exactly one such fence must exist; two would mean the recipe was duplicated,
+    which is drift rather than a state to tolerate."""
     blocks = [b for b in re.findall(r"```sh\n(.*?)```", text, re.S) if "--no-hardlinks" in b]
     assert len(blocks) == 1, f"expected exactly 1 fenced second-pass clone recipe, got {len(blocks)}"
     recipe = blocks[0]
     assert 0 < len(recipe) < len(text), "the clone-recipe slice is not a proper subset of SKILL.md"
     return recipe
+
+
+def _second_pass_prose(section: str) -> str:
+    """The second-pass section with every FENCED block removed, flattened for prose pinning.
+
+    Separated from `_flat(section)` because measured, on this card's own round-2 review: an assert
+    reading the flattened WHOLE section is satisfied by the fence, so a claim whose message says
+    "the rule no longer PAIRS the bytecode variable with deleting the caches first" was in fact
+    held by the two fence lines `find … __pycache__ …` and `export PYTHONDONTWRITEBYTECODE=1`.
+    Deleting the entire measured prose sub-bullet — the `.pyc`-header measurement, the ordering,
+    «Делай оба, в этом порядке» — left the suite GREEN (`control 0 failed; mutation 0 failed`).
+    The same held for the `vikunja_mcp.__file__` sub-bullet. A fenced command and the prose that
+    explains WHY it is there are different deliverables: the fence is pinned by
+    `_second_pass_clone_recipe`, the explanation by this slice, and neither stands in for the
+    other."""
+    prose = re.sub(r"```sh\n.*?```", " ", section, flags=re.S)
+    assert "```" not in prose, "the fence-stripping left a fence marker behind"
+    assert 0 < len(prose) < len(section), "the prose slice is not a proper subset of the section"
+    return _flat(prose)
 
 
 def test_the_second_pass_runs_in_its_own_clone_and_the_recipe_carries_the_working_tree():
@@ -3719,14 +3737,14 @@ def test_the_second_pass_runs_in_its_own_clone_and_the_recipe_carries_the_workin
     sees only its OWN writes. Split across two clones, the same two scenarios returned the solo
     numbers on both sides.
 
-    WHY THIS TEST DRIVES GIT rather than only reading prose. The recipe's first two commands make a
-    claim a reader ACTS on: `git clone` copies the REPOSITORY, so a dirty tree's uncommitted work —
-    which is exactly the text under audit — is absent from the clone, and `git diff HEAD` piped
-    through `git apply` is what carries it. Forget the patch and the auditor still finishes, and
-    reports "the rule you describe is not in the file": true for what it saw, false in fact, and
-    the same defect class the pass exists to catch. A substring pin over the fence cannot notice
-    that behaviour changing, so it is measured here on a throwaway repo (one file, no origin, no
-    network) the same way the ancestry commands above were.
+    WHY THIS TEST DRIVES GIT rather than only reading prose. The recipe's commands make claims a
+    reader ACTS on: `git clone` copies the REPOSITORY, so a dirty tree's uncommitted work — which
+    is exactly the text under audit — is absent from the clone, and it takes TWO steps to rebuild,
+    each measured in the next test. Forget them and the auditor still finishes, and reports "the
+    rule you describe is not in the file": true for what it saw, false in fact, and the same defect
+    class the pass exists to catch. A substring pin over the fence cannot notice that behaviour
+    changing, so it is measured on a throwaway repo (one file, no origin, no network) the same way
+    the ancestry commands above were.
 
     The prose half stays thin — short substrings over the flattened section — because pinning
     sentences is review's job; this only holds the rule open and checks it still promises the
@@ -3737,59 +3755,157 @@ def test_the_second_pass_runs_in_its_own_clone_and_the_recipe_carries_the_workin
     greens; `uv run` in the same copy re-syncs and rewrites it, and the mutation lands), and a pin
     on a runner-dependent mechanism would be pinning today's uv.
 
+    WHAT THIS TEST DOES NOT PIN, so nobody reads it as more than it is. The fence is matched raw,
+    which pins the TEXT of each step and its ORDER, not that the step runs. Measured: a bare
+    newline after `--no-hardlinks` severs the command — `git clone` then exits `fatal: You must
+    specify a repository to clone` and no clone appears — and this test stays GREEN, because the
+    pinned substring survives on the first physical line. An earlier draft claimed the opposite
+    ("a break inside one of those commands turns this red on purpose"); it was DERIVED, never run,
+    and it was false. Two neighbouring claims of that same draft are false in the OTHER direction
+    and are corrected here rather than deleted: the same break after `apply` DOES go red, and so
+    does re-ordering — not by the raw match but by the `_step` ordering assertions below, which
+    this round added. So the honest bound is narrow: what escapes is a break that leaves the
+    pinned prefix intact on its own line. Commenting a step out no longer escapes — `_step`
+    anchors every command to a line start.
+
     MUTATION-CHECKED (`__pycache__` deleted first, THEN PYTHONDONTWRITEBYTECODE=1 — the variable
     stops Python writing bytecode, not reading a stale `.pyc`; each selection confirmed at exactly
-    1 test; `vikunja_mcp.__file__` printed every round and confirmed inside the tree under test).
-    On this test's selection: control 0 failed; delete the whole «ГДЕ он работает» bullet from
-    SKILL.md -> 1 failed; delete ONLY the `git apply` line from the fence -> 1 failed; neutralise
-    every `cp -R` mention (3, all inside the new bullet) -> 1 failed; drop the clause «НЕ
-    закреплена за ролью» -> 1 failed; drop «селекцию» -> 1 failed; re-wrap the prose paragraph
-    -> 0 failed, green BY DESIGN (`_flat`). The last two rounds are why those clauses are pinned
-    one by one rather than left to the whole-bullet round: deleting the bullet kills every
-    assertion at once and so cannot tell which of them is doing work. Re-wrapping inside the FENCE
-    is a different case and the opposite one: the fence is matched raw, so a break inserted inside
-    one of those commands turns this red on purpose — in a fence a line break separates two
-    commands.
+    1 test; `vikunja_mcp.__file__` printed every round and confirmed inside the clone under test).
+    On this test's selection: control 0 failed; then ONE round per assertion, each deleting
+    exactly the text its own message names and nothing wider — the bullet title «ГДЕ он работает»,
+    «ШУМНО», «ТИХО», «НЕ закреплена за ролью», «селекцию», the `cp -R` WARNING, «exit 128»,
+    «НЕОТСЛЕЖИВАЕМЫЕ файлы», «ЦИРКУЛЯРНА», «Делай оба, в этом порядке», «ТЕМ ЖЕ раннером», and the
+    whole prose sub-bullet behind each of them with the FENCE left untouched -> 1 failed every
+    time. On the fence: drop the clone line, drop `--binary`, invert the guard to `[ -s "$P" ] &&
+    …`, drop the untracked listing, drop `uv sync`, delete the boundary marker, MOVE the marker to
+    the top so it divides nothing, move the clone below the apply, comment a step out while
+    leaving its text, and re-add a `rm -rf` cleanup line -> 1 failed each. Re-wrap the prose
+    paragraph -> 0 failed, green BY DESIGN (`_flat`).
+
+    Rounds that were GREEN first are the reason the assertions look the way they do, and they are
+    listed rather than counted because a count here would describe the very text it stands in —
+    the defect this card removed from SKILL.md. `cp -R`, `__pycache__`, `vikunja_mcp.__file__` and
+    `ls-files --others` each occur more than once in this section — one duplicate introduced by
+    this very card, as a cross-reference — so deleting the warning, the measurement or the claim
+    left a bare token pin satisfied. The marker pin held PRESENCE where its message promised a
+    SPLIT. And every command pin survived its step being commented out. Each now pins wording
+    unique to the sub-bullet it speaks for, or a position, or a line start. Rounds are per-clause
+    rather than per-bullet because deleting a bullet kills every assertion at once and so cannot
+    tell which is doing work.
 
     On the NEXT test's selection, run as its own round with its own baseline: control 0 failed;
-    delete the `git apply` STEP from that test's body -> 1 failed. That round is the negative-pin
-    check this repo requires — an assertion about a step is worth nothing until removing the step
-    is shown to break it."""
-    section = _second_pass_section(_skill_text())
-    flat = _flat(section)
+    delete the `git apply` STEP from its body -> 1 failed; dirty the tree before it measures the
+    "empty" patch -> 1 failed; never create the untracked module -> 1 failed; drop `.venv/` from
+    the fixture's `.gitignore` -> 1 failed. Those last three perturb the WORLD rather than delete
+    an assertion, deliberately: deleting a case from a test body is vacuously green (measured — 0
+    failed both times), so it proves nothing about whether the case was live.
 
-    assert "ГДЕ он работает" in flat, \
+    Two honest bounds on that test, both raised by this card's second pass. Its `.venv` assertion
+    is DOMINATED: the mutation that would trip it (dropping `--exclude-standard`) trips the list
+    assertion above it first, so it only ever speaks if that one is weakened too — kept as a named
+    backstop, not claimed as an independent round. And it copies with `shutil.copyfile` where the
+    recipe uses `mkdir -p … && cp` in a `while` loop: what is measured is WHICH FILES git names,
+    which is the part the recipe's correctness rests on, not the shell that moves them."""
+    section = _second_pass_section(_skill_text())
+    prose = _second_pass_prose(section)
+
+    assert "ГДЕ он работает" in prose, \
         "the second-pass rule no longer says WHERE the auditor works — the gap 702 closed is back"
-    assert "ШУМНО" in flat and "ТИХО" in flat, \
+    assert "ШУМНО" in prose and "ТИХО" in prose, \
         "the rule no longer names BOTH axes of the collision; the silent one is the reason it " \
         "exists, and a rule that names only the loud one leaves the false green uncovered"
-    assert "НЕ закреплена за ролью" in flat, \
+    assert "НЕ закреплена за ролью" in prose, \
         "the rule no longer says the victim is not fixed to a role — both writers restore, so " \
         "the silent axis lands on the AUTHOR too, and those are the numbers that reach the commit"
-    assert "селекцию" in flat, \
+    assert "селекцию" in prose, \
         "the rule no longer qualifies the loud axis with the selection overlap it depends on — " \
         "measured, with disjoint one-test pins the control round is green and catches nothing"
-    assert "cp -R" in flat, \
-        "the rule no longer warns against `cp -R` — the copy that drags .venv and can leave the " \
-        "mutation never reaching the interpreter"
-    assert "vikunja_mcp.__file__" in flat, \
-        "the rule no longer tells the auditor to print which src it actually imports"
-    assert "PYTHONDONTWRITEBYTECODE" in flat and "__pycache__" in flat, \
-        "the rule no longer pairs the bytecode variable with deleting the caches first — the " \
-        "variable stops Python WRITING bytecode, not READING a stale .pyc"
+    assert "а не `cp -R`" in prose and "не «всегда сломано»" in prose, \
+        "the rule no longer WARNS against `cp -R` — the copy that drags .venv and can leave the " \
+        "mutation never reaching the interpreter. Pinned by the warning's own wording, not by " \
+        "the token: this card added a CROSS-REFERENCE to `cp -R` elsewhere in the section, and " \
+        "measured, that reference alone kept a bare `\"cp -R\" in prose` green with the entire " \
+        "warning deleted"
+    assert "vikunja_mcp.__file__" in prose and "ТЕМ ЖЕ раннером" in prose, \
+        "the rule no longer EXPLAINS printing which src it actually imports — the fence line " \
+        "alone is a command with no reason attached, and the reason is runner-dependent. The " \
+        "runner clause is pinned SEPARATELY because the token alone is also spoken by the " \
+        "bullet's own heading: deleting the whole explanation left it satisfied, measured"
+    assert "PYTHONDONTWRITEBYTECODE" in prose and "Делай оба, в этом порядке" in prose, \
+        "the rule no longer PAIRS the bytecode variable with deleting the caches first — the " \
+        "variable stops Python WRITING bytecode, not READING a stale .pyc. The pairing is " \
+        "pinned by the sentence that states it, not by `__pycache__`: that token also appears " \
+        "in this section's ignore list and in its `find` bullet, and measured, either kept the " \
+        "old conjunct green with the whole measured sub-bullet deleted"
+    assert "exit 128" in prose and "НЕОТСЛЕЖИВАЕМЫЕ файлы" in prose, \
+        "the rule no longer states the two ways the clone comes up SHORT — an empty patch aborts " \
+        "`git apply` (exit 128, the reviewer's default case) and untracked files never travel. " \
+        "The untracked half is pinned by its CLAIM, not by `ls-files --others`, which the " \
+        "circularity bullet below also says: deleting the whole claim left that satisfied"
+    assert "ЦИРКУЛЯРНА" in prose, \
+        "the rule no longer warns that comparing `git diff` on both sides is circular — it " \
+        "agrees precisely when an untracked file was lost"
 
     recipe = _second_pass_clone_recipe(section)
-    assert "git clone --no-hardlinks" in recipe, "the recipe no longer clones the tree"
-    assert "diff HEAD" in recipe and "apply" in recipe, \
-        "the recipe no longer carries the WORKING tree into the clone; without it the auditor " \
-        "reads the committed text and honestly reports the new prose is missing"
-    assert "uv sync" in recipe, "the recipe no longer builds the clone's own venv"
+
+    def _step(fragment: str) -> int:
+        """Index of `fragment` where it starts a LINE — i.e. where it is a command the shell
+        would run, not text surviving inside a comment. Measured: commenting a whole step out
+        (`# [ ! -s "$P" ] || git …`) leaves every plain `in recipe` pin green, which is the
+        fictitious-pin shape this card exists to remove."""
+        m = re.search(rf"^\s*{re.escape(fragment)}", recipe, re.M)
+        assert m, f"the recipe no longer RUNS `{fragment}` — commented out, reworded or deleted"
+        return m.start()
+
+    clone_at = _step("git clone --no-hardlinks")
+    _step('git -C "$TREE" diff HEAD --binary')       # --binary: one staged binary else rejects all
+    apply_at = _step('[ ! -s "$P" ] || git -C "$CLONE" apply')
+    _step('git -C "$TREE" ls-files --others --exclude-standard')
+    sync_at = _step("cd \"$CLONE\" && uv sync")
+    marker_at = _step("# --- дальше в брифе аудитора")
+
+    assert clone_at < apply_at, \
+        "the recipe now patches before it clones — `git apply` would run against a clone that " \
+        "does not exist yet"
+    assert apply_at < marker_at < sync_at, (
+        "the marker line no longer SPLITS the author's commands from the auditor's — it must sit "
+        "below the steps needing $TREE and above the ones the auditor runs in $CLONE. Presence "
+        "alone is not the property: measured, moving the marker to the top of the fence (so it "
+        "divides nothing) left a `in recipe` pin green. This marker replaced a COUNT of the "
+        "author's lines, false on the very sha that wrote it — it said three, the marker sat "
+        "after five — so the boundary has to MOVE with the recipe, never be a number describing it"
+    )
+    assert 'rm -rf "$CLONE"' not in recipe, (
+        "the fence deletes the clone again. SKILL.md teaches chaining steps with `&&`, so a "
+        "cleanup line inside the fence removes the clone right after the first `__file__` print "
+        "— before a single round runs. Cleanup is the AUTHOR's, after handing the card in, and "
+        "the rule states it in prose for exactly that reason"
+    )
 
 
-def test_a_clone_does_not_carry_uncommitted_work_but_the_recipes_patch_does(tmp_path):
-    """The behavioural half of 702's rule: the two git facts its recipe rests on, measured rather
-    than asserted in prose. Kept a separate test so a failure says WHICH half moved — the rulebook
-    saying the wrong thing, or git doing something else than the rulebook says."""
+def test_a_clone_does_not_carry_uncommitted_work_and_the_patch_alone_does_not_finish_the_job(
+    tmp_path,
+):
+    """The behavioural half of 702's rule: the git facts its recipe rests on, measured rather than
+    asserted in prose. Kept a separate test so a failure says WHICH half moved — the rulebook
+    saying the wrong thing, or git doing something else than the rulebook says.
+
+    Round 1 measured only the happy path (dirty tree, one tracked file) and the round-2 review
+    disproved BOTH of the claims it had licensed:
+
+    * `git apply` on the EMPTY patch a clean tree produces is not a no-op — it exits 128
+      (`error: No valid patches in input`), and SKILL.md teaches chaining with `&&`, so the recipe
+      stopped at that step. That is the REVIEWER's default state, not an edge: a reviewer audits a
+      landed commit with nothing uncommitted. Round 1's prose called the step "harmless" and no
+      test touched an empty patch, so the sentence and the pin agreed with each other and both were
+      wrong. The guard also has an inverted form that fails the same way — `[ -s "$P" ] && …`
+      itself returns 1 on an empty patch — so the recipe's `[ ! -s "$P" ] || …` is pinned by shape
+      in the test above, and the exit code is measured here.
+    * `git diff HEAD` never sees UNTRACKED files, so the patch silently leaves them behind — a new
+      test module, the routine shape of a task in this repo. Worse, round 1's stated verification
+      ("the diffs of tree and clone matched") is CIRCULAR on exactly that axis: untracked files are
+      invisible to `git diff` on BOTH sides, so it reports success precisely when the file is lost.
+      This test therefore compares what is actually PRESENT in the clone, never two `git diff`s."""
     tree = tmp_path / "tree"
     tree.mkdir()
     _git(tree, "init", "-b", "main")
@@ -3797,23 +3913,63 @@ def test_a_clone_does_not_carry_uncommitted_work_but_the_recipes_patch_does(tmp_
     _git(tree, "config", "user.name", "Tester")
     ruleb = tree / "SKILL.md"
     ruleb.write_text("старый текст\n", encoding="utf-8")
-    _git(tree, "add", "SKILL.md")
+    (tree / ".gitignore").write_text(".venv/\n", encoding="utf-8")
+    _git(tree, "add", "SKILL.md", ".gitignore")
     _git(tree, "commit", "-m", "init")
 
-    ruleb.write_text("старый текст\nГДЕ он работает — в СВОЁМ клоне\n", encoding="utf-8")   # the WIP
+    # THE REVIEWER'S DEFAULT: a clean tree. The patch is empty and `git apply` REFUSES it.
+    empty_patch = tmp_path / "702-empty.patch"
+    empty_patch.write_text(_git(tree, "diff", "HEAD", "--binary"), encoding="utf-8")
+    assert empty_patch.stat().st_size == 0, "a clean tree no longer produces an EMPTY patch"
+    refused = subprocess.run(
+        ["git", "apply", str(empty_patch)], cwd=tree, capture_output=True, text=True
+    )
+    assert refused.returncode != 0, (
+        "`git apply` now accepts an empty patch, so SKILL.md's recipe no longer needs its guard — "
+        "but the guard is what keeps a clean-tree run (every reviewer's) from stopping mid-recipe"
+    )
 
-    clone = tmp_path / "702-pass2"
+    ruleb.write_text("старый текст\nГДЕ он работает — в СВОЁМ клоне\n", encoding="utf-8")  # the WIP
+    newpin = tree / "tests" / "unit" / "test_new_pin.py"                      # UNTRACKED, in a subdir
+    newpin.parent.mkdir(parents=True)
+    newpin.write_text("def test_new_pin():\n    assert True\n", encoding="utf-8")
+    (tree / ".venv").mkdir()
+    (tree / ".venv" / "marker").write_text("must not travel\n", encoding="utf-8")  # IGNORED
+
+    clone = tmp_path / "702-pass2-audit"
     _git(tmp_path, "clone", "--no-hardlinks", "-q", str(tree), str(clone))
     assert "ГДЕ он работает" not in (clone / "SKILL.md").read_text(encoding="utf-8"), \
-        "a clone now carries uncommitted work — SKILL.md's recipe spends two commands on a patch " \
-        "step whose whole justification is that it does not"
+        "a clone now carries uncommitted work — SKILL.md's recipe spends its patch step on a " \
+        "claim whose whole justification is that it does not"
 
     patch = tmp_path / "702-wip.patch"
-    patch.write_text(_git(tree, "diff", "HEAD") + "\n", encoding="utf-8")
+    patch.write_text(_git(tree, "diff", "HEAD", "--binary") + "\n", encoding="utf-8")
     _git(clone, "apply", str(patch))
     assert (clone / "SKILL.md").read_text(encoding="utf-8") == ruleb.read_text(encoding="utf-8"), \
-        "`git diff HEAD` + `git apply` no longer reproduces the working tree in the clone — the " \
-        "recipe's way of handing the auditor the text actually under audit"
+        "`git diff HEAD` + `git apply` no longer reproduces the TRACKED half of the working tree " \
+        "in the clone — the recipe's way of handing the auditor the text actually under audit"
+    assert not (clone / "tests" / "unit" / "test_new_pin.py").exists(), (
+        "the patch now carries UNTRACKED files too, so the recipe's separate copy step would be "
+        "redundant — re-measure before deleting it, because round 1 lost a whole test module here"
+    )
+
+    # ...which is why the recipe copies them, listed the way it lists them.
+    untracked = _git(tree, "ls-files", "--others", "--exclude-standard").splitlines()
+    assert untracked == ["tests/unit/test_new_pin.py"], (
+        "`ls-files --others --exclude-standard` no longer names exactly the untracked, "
+        f"NON-ignored files: {untracked}. The recipe copies what this prints, so an ignored "
+        ".venv appearing here is the `cp -R` hazard the rule warns about, arriving by the back door"
+    )
+    for rel in untracked:
+        (clone / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(tree / rel, clone / rel)
+    assert (clone / "tests" / "unit" / "test_new_pin.py").read_text(encoding="utf-8") == \
+        newpin.read_text(encoding="utf-8"), \
+        "copying what `ls-files --others --exclude-standard` names no longer reproduces the " \
+        "untracked half of the working tree in the clone"
+    assert not (clone / ".venv").exists(), \
+        "the copy step now drags an IGNORED .venv into the clone — that is `cp -R`'s failure " \
+        "mode, where the clone's own interpreter can import the ORIGINAL src"
 
 
 def _post_push_ci_bullet(text: str) -> str:
