@@ -35,19 +35,41 @@ at 15 tests: control 0 failed; the refusal stops naming the misspelling cause ->
 control after restore 0 failed. The three rounds have DIFFERENT selections and each carries
 its own control, which is why they are three paragraphs and not one table.
 
-The truncation round is the load-bearing one. Every other mutation here damages prose the
-tests read; that one plants the exact defect this card hypothesised — a real size threshold
-in serialisation — and the stdio test goes red on it. Without that round the stdio test
-would be pinning a property nothing had shown it could measure.
+The truncation round is the load-bearing one, and NOT because the others are all prose — an
+earlier version of this sentence said "every other mutation here damages prose the tests read",
+which its own list refutes: making review_task's `report` optional edits a SIGNATURE, and so do
+round 4's two below. What makes it load-bearing is that it alone, among the rounds recorded
+here, plants the exact defect this card hypothesised — a real size threshold in serialisation
+— and the stdio test goes red on it. Without that round the stdio test would be pinning a
+property nothing had shown it could measure.
 
 Said plainly, because a sweep that claims more than it did is the failure this repo keeps
-catching: two tests here were NOT killed by any round, and cannot be by mutating this repo.
-test_a_dropped_optional_argument_reaches_the_tool_body_as_none and
-test_a_misspelled_parameter_name_is_dropped_in_silence CHARACTERISE the SDK's schema
-boundary — extra keys ignored, absent optionals defaulted — which no edit to our source
-changes. What the truncation and required-argument rounds establish is that this harness CAN
-see a change at that boundary; the two characterisation tests trade killability for being the
-only record of behaviour we depend on and do not control.
+catching — and this paragraph WAS the instance. It used to say that two tests here were "NOT
+killed by any round, and cannot be by mutating this repo ... which no edit to our source
+changes". The first half holds; the second was FALSE, and review disproved it by construction.
+Round 4, selection = exactly test_a_dropped_optional_argument_reaches_the_tool_body_as_none
+and test_a_misspelled_parameter_name_is_dropped_in_silence: control 0 failed; `advance`'s
+signature in server.py written as `worklog: str = ""` -> 2 failed, BOTH of them; written as
+`worklog: object | None` -> 1 failed, the misspelled one; control after restore 0 failed. The
+surviving half was re-measured in that round rather than inherited: all EIGHT mutations of
+rounds 1-3, replayed against this same two-test selection, are 0 failed.
+
+Where each death LANDS is worth writing down, because two of the three are on-name and one is
+not — and "each died on its own assertion, not collaterally" is what this paragraph said first,
+which over-covers M3. M2 kills both on-name: `assert not (False or True)` once an explicit null
+stops being accepted, and `assert 0 == -1` once a dropped key defaults to "" rather than None.
+M3 kills the misspelling test on a DIFFERENT assertion — `assert "worklog" in str(...)`, the
+wrong-TYPE half — because `object | None` lets 12345 through to the stub, where `len()` raises
+a message naming nothing. Under M3 the misspelling property itself still holds. So M3 is not
+collateral either, but what it measures is pydantic's by-name type rejection, not the name in
+the test.
+
+So what they characterise is an SDK behaviour AT A SIGNATURE WE WRITE. The SDK is what
+discards an unknown key and defaults an absent optional; `advance`'s signature is what says
+`worklog` is an optional string in the first place, and the two edits above are what move it
+out of that shape. test_advance_keeps_worklog_optional_in_its_schema pins the shape and says
+why it is deliberate — it is also where the old claim contradicted itself, since it already
+stated that a REQUIRED `worklog` would change this very behaviour.
 """
 import asyncio
 import json
@@ -111,14 +133,21 @@ def test_review_refusal_lists_both_fields_when_both_are_unusable(env):
     assert "worklog" in unusable and "evidence" in unusable
 
 
-def test_review_refusal_offers_the_workaround_and_says_retrying_will_not_help(env):
-    """The old text sent agents to retry an identical call — the filing card did it 3x."""
+def test_review_refusal_offers_the_workaround_instead_of_an_identical_retry(env):
+    """The old text sent agents to retry an identical call — the filing card did it 3x.
+
+    Pinned as "NOT the fix" rather than "will not help", which is what this file said first and
+    is stronger than anything measured: the loss was never reproduced, and the filing card's own
+    evidence (three refusals, then a success) makes it look non-deterministic — under which a
+    retry may well pass. It still is not the fix, because it addresses no cause and the next
+    long report meets the same wire; that weaker claim is the one the measurements support."""
     api, wf, t = env
     wf.advance(t["id"], to="build", spec="s")
     with pytest.raises(WorkflowError) as exc:
         wf.advance(t["id"], to="review", evidence="a" * 40)
     msg = str(exc.value)
-    assert "retrying the identical call will not change that" in msg
+    assert "an identical retry is NOT the fix" in msg
+    assert "will not change that" not in msg, "the old over-claim must not creep back"
     assert "comment()" in msg and "[worklog]" in msg
 
 
@@ -191,8 +220,12 @@ def _drive_probe_server(cases):
 # for the multiline one and 516096 / 504 KiB for the single-line one — Cyrillic, because that
 # is what this repo's reports are actually made of and a char is not a byte in it. The card
 # reported failing at "~7 KB" without saying whether it counted characters or bytes, so no
-# multiple-of-the-failure is claimed here; these are simply two orders of magnitude above any
-# report an agent writes. BOTH shapes are present because stdio framing is newline-delimited:
+# multiple-of-the-failure is claimed here, and the ambiguity survives into the factor rather
+# than being quietly resolved: read "~7 KB" as 7168 bytes and these are 70.9x and 72.0x, read
+# it as 7000 and they are 72.6x and 73.7x (measured, all four). Written as a factor because
+# "two orders of magnitude", the phrase this comment carried first, rounds 1.85 up and was the
+# one number here nobody had run.
+# BOTH shapes are present because stdio framing is newline-delimited:
 # "8192 newlines" and "not one newline" are the two ways a framing bug would show, and JSON
 # escaping is what keeps a payload newline from ever becoming a frame boundary — that is the
 # property being pinned.
@@ -302,8 +335,11 @@ def test_docs_quote_the_state_phrase_the_tool_actually_emits(surface):
 
 
 def test_a_misspelled_parameter_name_is_dropped_in_silence():
-    """The cause the first investigation missed, and the only one of the three the AGENT can
-    fix: an unknown key is discarded without a word, so `wroklog=<7 KB>` produces the exact
+    """The cause the first investigation missed, and — of the ones still standing once an agent
+    is sure it DID pass a long value — the only one it can fix itself (the count used to be
+    written as "one of three", which went stale the moment an explicit null was named as a
+    fourth arrival that looks identical): an unknown key is discarded without a word, so
+    `wroklog=<7 KB>` produces the exact
     refusal a lost argument does. Unlike a wrong TYPE, which pydantic rejects loudly by name.
     That is why the refusal text tells agents to check the spelling FIRST."""
     typo, wrong_type = _drive_probe_server([
@@ -319,7 +355,8 @@ def test_a_misspelled_parameter_name_is_dropped_in_silence():
 
 
 def test_the_refusal_names_the_misspelling_cause(env):
-    """It is the one cause of the three that is actionable without leaving the session."""
+    """It is the one cause that is actionable without leaving the session — see the sibling test
+    for why this is not written as "one of three" any more."""
     api, wf, t = env
     wf.advance(t["id"], to="build", spec="s")
     with pytest.raises(WorkflowError) as exc:

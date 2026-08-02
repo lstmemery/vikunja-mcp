@@ -422,11 +422,13 @@ def advance(
     ordered-epic step) is still below Review: if a predecessor was bounced Review→Build,
     finish its rework back to Review before this successor may advance (the refusal names it).
     IF A REFUSAL SAYS YOUR REPORT IS MISSING WHEN YOU DID WRITE ONE, read which STATE it
-    names. 'arrived as null' means the argument never reached this tool, so an identical
-    retry cannot help: measured (#657) this server carries a 4 MiB argument byte-exact over
-    its own stdio transport, so a kilobyte report hits no limit here and the loss is above
-    it — and because a dropped optional key and an omitted one both arrive as null, the tool
-    can report the state but never the cause. Advance with a SHORT worklog and post the full
+    names. 'arrived as null' means no text reached this tool, and an identical retry is NOT
+    the fix: measured (#657) this server carries a 4 MiB argument byte-exact over its own
+    stdio transport, so a kilobyte report hits no limit here and the loss is above it, where it
+    was never reproduced — and the filing card's own success came from a SHORT worklog, not
+    from repeating the call, so nothing says a retry would work. And because an explicit null, a
+    dropped key, a misspelled parameter name and an omitted argument ALL arrive as null, the
+    tool can report the state but never the cause. Advance with a SHORT worklog and post the full
     text as separate comment() calls marked [worklog] (say so in the short one, so the
     journal does not read as a placeholder)."""
     return _wf().advance(

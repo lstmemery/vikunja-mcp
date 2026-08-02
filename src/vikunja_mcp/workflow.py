@@ -69,31 +69,54 @@ _MAX_ATTACHMENT_NAME_BYTES = 200
 # reading the old text made unavailable, and it is the one that changes what an agent does
 # next. The card that filed this retried the identical ~7 KB call THREE times against a
 # message that only ever said "you owe a report".
-_ARG_STATE_ABSENT = "not passed at all — arrived as null"
+# `_ARG_STATE_ABSENT` says only what this tool can SEE. An earlier spelling opened with "not
+# passed at all", which is literally false for the one client that sends `worklog: null`
+# EXPLICITLY: that key IS passed, and (measured) arrives indistinguishable from an omitted one.
+# The state is null; the CAUSE is what _LOST_ARGUMENT_HINT refuses to guess.
+_ARG_STATE_ABSENT = "arrived as null, not as a string"
 _ARG_STATE_BLANK = "passed, but empty or whitespace-only"
 # Measured 2026-08-02 on #657, at this repo's mcp 2.0.0 / Python 3.12.13, on ONE machine over
 # stdio: Workflow.advance itself carries a 1 MiB worklog byte-exact through FakeAPI, and the
 # real MCPServer over the real stdio transport delivers a 4 MiB argument byte-exact — an
 # independent re-measure using a raw JSON-RPC client and the REAL Workflow got the same result
-# to 8 MiB, and found no content that fails either (Cyrillic, NUL, CRLF, one 8 MiB line with
-# no newline at all). So a kilobyte-sized report is nowhere near anything measured to fail
+# to 8 MiB; the contents tried in THAT re-measure all cross intact (Cyrillic, NUL, CRLF, one
+# 8 MiB line with no newline at all), and one that does NOT is named in the fourth limit
+# below — so read this as a list, never as "no content fails". A kilobyte-sized report is
+# nowhere near anything measured to fail
 # below this line, and an identical retry does not address a report that arrived as null.
-# THREE limits on that, all of which an earlier draft of this comment overstated:
+# FOUR limits on that, the first three of which an earlier draft of this comment overstated:
 #  * These are ceilings that were TESTED on one transport, not proof that none exists above.
 #  * "advance behaves like review_task" holds only for a PRESENT, non-empty argument. For a
 #    MISSING one they are opposite, and that opposition is the whole point below.
-#  * The threshold in the ORIGINAL report was never reproduced, so nothing here locates one.
-#    Successes cannot bound a non-deterministic failure — and that one is known to be
-#    non-deterministic (three refusals, then a success).
+#  * The threshold in the ORIGINAL report was never reproduced, so nothing here locates one —
+#    and WHICH KIND of failure it is was never established either. "Known to be
+#    non-deterministic (three refusals, then a success)" is what this bullet claimed first, and
+#    it MISREADS the card: the success came from replacing the ~7 KB worklog with
+#    `worklog="probe"`, not from repeating the identical call. Three failures at ~7 KB then a
+#    success at 5 characters is what a SIZE-DEPENDENT, deterministic loss looks like. So the
+#    successes bound nothing in either direction, which is the honest form of this limit.
+#  * "No content fails" is the one an earlier draft actually got WRONG rather than merely
+#    overstated. Constructed on this probe server, controls in the SAME run: Cyrillic, NUL and
+#    CRLF cross byte-exact, and a LONE SURROGATE (a truncated astral pair) does not — the call
+#    raises client-side and never arrives. Precisely: what refuses it is pydantic-core's JSON
+#    serializer, not UTF-8 as such — stdlib `json.dumps` escapes the surrogate and encodes
+#    fine, measured — and it is loud at SESSION scope: `call_tool` itself surfaces a bare
+#    CancelledError and the real cause appears on teardown, taking the stdio session with it.
+#    Loud either way, so it is NOT this card's silent symptom — but it is a content that
+#    fails, which is what the sentence above had denied.
 _LOST_ARGUMENT_HINT = (
-    "If you DID pass a long value and still read this, it did not reach this tool, and "
-    "retrying the identical call will not change that. CHECK THE PARAMETER NAME FIRST — a "
+    "If you DID pass a long value and still read this, it did not reach this tool, and an "
+    "identical retry is NOT the fix — what dropped it was never reproduced (#657), and the "
+    "filing card never retried the identical call either: its success came from a SHORT "
+    "worklog. So nobody knows whether a retry is futile or merely lucky, and either way it "
+    "addresses no cause. CHECK THE PARAMETER NAME FIRST — a "
     "misspelling ('wroklog') is dropped in silence and lands here identically (measured), and "
     "that one is yours to fix. Otherwise: measured (#657), this server takes a 4 MiB argument "
     "byte-exact over its own stdio transport, so a kilobyte-sized report is nowhere near any "
     "limit here, and a value you did pass that arrives as null was dropped ABOVE this server "
-    "where this tool cannot see it. (Null does not by itself prove any of the three: a "
-    "misspelled, a dropped and a never-passed argument are indistinguishable here.) "
+    "where this tool cannot see it. (Null does not by itself name a cause: a misspelled name, "
+    "a key dropped in transit, an argument you never passed and an EXPLICIT null you did pass "
+    "all arrive here as null — measured; the middle two are one and the same on the wire.) "
     "Workaround that is known to work: advance with a SHORT value, then post the full text as "
     "separate comment() calls marked [worklog]."
 )
@@ -101,7 +124,15 @@ _LOST_ARGUMENT_HINT = (
 
 def _unusable_report_fields(*fields: tuple[str, str | None]) -> list[tuple[str, str]]:
     """For each (name, value) that cannot serve as a report field, return (name, state) where
-    state says HOW it is unusable — see _ARG_STATE_*. Empty list means every field is usable."""
+    state says HOW it is unusable — see _ARG_STATE_*.
+
+    An empty list means no field is BLANK BY THIS TEST, which is narrower than "usable" (the
+    word this docstring used first). The test is `str.strip()`, i.e. zero NON-whitespace
+    characters: measured, 100 NBSP are refused because `\\xa0` is whitespace, while 50 ZWSP —
+    or a word joiner, or a BOM — are NOT whitespace, so they pass here and advance a card whose
+    report is empty to every reader. Deliberate rather than missed: widening the test to
+    "visible characters" is a guess about an open set of code points, and the states this card
+    is about (null vs blank) do not depend on it."""
     return [
         (name, _ARG_STATE_ABSENT if value is None else _ARG_STATE_BLANK)
         for name, value in fields
