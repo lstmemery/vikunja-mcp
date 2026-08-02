@@ -2275,11 +2275,28 @@ def test_the_rulebook_routes_a_stuck_REVIEWER_to_the_only_door_that_is_open_to_i
     нерабочие" cannot keep shipping to every consumer as truth. (The reverse drift — code gates
     that the prose stops mentioning — is what the sliced substring half catches.)
 
+    #672 added `decompose` to the same bullet. Attribution measured with `git log -S`, not
+    assumed: the gate landed in `efa4b60` (#663) while the bullet's «оба выхода выше нерабочие»
+    has not been touched since `51ab50d` (#590). So the bullet went on listing two tools — a
+    sentence that stayed TRUE, since «оба выхода выше» names the two bullets above it and
+    `decompose` is not one of them, while the reader it is written for lost a route.
+
     MUTATION-CHECKED (`__pycache__` cleared between rounds, selection confirmed at exactly 1 test):
     control PASS; delete the reviewer bullet from the section while LEAVING `review_task` /
     `needs_work` / `file_task` everywhere else in the file -> FAIL (and the whole-file substring
     this slice replaces was measured GREEN on that same mutation); drop return_task's Review gate
-    -> FAIL; drop call_human's Review pointer -> FAIL; rename the heading -> FAIL loudly."""
+    -> FAIL; drop call_human's Review pointer -> FAIL; rename the heading -> FAIL loudly.
+
+    Rounds added by #672, same procedure but restored from FILE COPIES rather than `git checkout`
+    — the SKILL.md edit under test was uncommitted, and a checkout-based restore silently ate it
+    once mid-sweep. Control PASS before AND after. Each round names the assertion read out of
+    `--tb=line`: revert the reviewer bullet to its pre-#672 wording, `decompose` left everywhere
+    else in the file and in this SECTION -> FAIL at the bullet-slice assert, while the section-wide
+    substring that slice replaces was measured GREEN on that same mutation; drop decompose's Review
+    gate -> FAIL at `DID NOT RAISE`; append a FOURTH top-level bullet naming `decompose` to the
+    section, on top of the reverted wording -> FAIL, and the SAME file measured PASS against a
+    one-edge `_reviewer_bullet` — which is what shows that helper's second edge is load-bearing
+    and not decoration."""
     text = _skill_text()
     section = _stuck_section(text)
 
@@ -2290,8 +2307,10 @@ def test_the_rulebook_routes_a_stuck_REVIEWER_to_the_only_door_that_is_open_to_i
         "the stuck section no longer routes an out-of-slice finding to file_task"
     assert "return_task" in section and "call_human" in section, \
         "the stuck section no longer contrasts the reviewer's door with the implementer's two"
+    assert "decompose" in _reviewer_bullet(text), \
+        "the reviewer's own bullet no longer names decompose among what is shut from Review (#663)"
 
-    # the code: both doors really are shut from Review, which is what the prose asserts
+    # the code: all three doors really are shut from Review, which is what the prose asserts
     api = FakeAPI(buckets=workflow.STAGES)
     wf = workflow.Workflow(api, project_id=3)
     card = api.add_task("under review", "Review", assignee=api.me_user)
@@ -2307,10 +2326,182 @@ def test_the_rulebook_routes_a_stuck_REVIEWER_to_the_only_door_that_is_open_to_i
     assert "review_task" in str(called.value), \
         "SKILL.md says call_human refuses from Review and points at review_task; it no longer does"
 
+    with pytest.raises(workflow.WorkflowError) as split:
+        wf.decompose(card["id"], [{"title": "часть A"}, {"title": "часть B"}])
+    assert "review_task" in str(split.value), \
+        "SKILL.md says decompose refuses from Review and points at review_task; it no longer does"
+    assert api.stage_of(card["id"]) == "Review", "the refused decompose moved the card anyway"
+
     # ...and the door the prose sends them to is genuinely open
     assert wf.review_task(
         card["id"], verdict="needs_work", report="вопрос человеку: какой из двух вариантов?"
     )["moved_to"] == "Build"
+
+
+def _reviewer_bullet(text: str) -> str:
+    """The reviewer's bullet inside the stuck section — the only bullet in THAT section written
+    for a reviewer, sub-bullets included (it runs to the end of the section). Not the only place
+    in the rulebook that addresses the role, and the prose no longer says so: grep finds the
+    «Независимое ревью изменений» section and the worktree-release bullet too.
+
+    Sliced to the BULLET, not the section, for the same MEASURED reason as `_return_task_bullet`:
+    `decompose` already occurs in this section's `return_task` bullet (the Done sub-bullet naming
+    #649's gate), so a SECTION-wide `"decompose" in section` stays green with this bullet reverted
+    to its pre-#672 wording. Verified by running exactly that mutation both ways.
+
+    BOTH edges are guarded, like `_return_task_bullet` and unlike this helper's first version:
+    ending the slice at the section heading alone assumes this stays the LAST top-level bullet,
+    and appending a fourth would make the slice swallow it — after which `"decompose" in
+    _reviewer_bullet(text)` could pass on text that is not the reviewer's bullet at all. So the
+    end is whichever comes first, the next top-level bullet or the next heading (sub-bullets are
+    indented and do not match), and the guard below still names the bullet above."""
+    start = text.find("\n- **У РЕВЬЮЕРА оба выхода выше нерабочие")
+    assert start != -1, "SKILL.md no longer has the bullet written for a stuck REVIEWER"
+    end = text.find("\n## ", start + 1)
+    assert end != -1, "the reviewer bullet no longer ends where the next section begins"
+    following = text.find("\n- **", start + 1)
+    if following != -1:
+        end = min(end, following)
+    bullet = text[start:end]
+    assert 0 < len(bullet) < len(text), "the reviewer slice is not a proper subset of SKILL.md"
+    assert "внешняя блокировка" not in bullet, "the slice swallowed the return_task bullet above it"
+    return bullet
+
+
+def _review_sweep(tmp_path, *, mine: bool = True) -> tuple[dict, dict]:
+    """Run every agent tool against a card standing in Review, one on a FRESH board each, and
+    report {label: refusal-or-None} plus {label: stage the card ended in}.
+
+    `advance` is swept in all THREE forms and `review_task` in BOTH verdicts, because a per-TOOL
+    sweep would hide the split that matters here: `review_task` is at once the only tool that
+    walks the card out and — on its approve branch — one that leaves it exactly where it was.
+
+    `mine=False` builds the MULTI-IDENTITY card — in Review and owned by its implementer, which
+    is the state a reviewer is actually looking at. Worth sweeping separately because ownership
+    and stage are checked in different orders by different tools, so the refusal REASONS differ
+    even where the refusal itself does not."""
+    def board():
+        api = FakeAPI(buckets=workflow.STAGES)
+        wf = workflow.Workflow(api, project_id=3)
+        card = api.add_task("under review", "Review", assignee=api.me_user if mine else None)
+        if not mine:
+            api.tasks[card["id"]]["assignees"] = [{"id": 77, "username": "agent-impl"}]
+        return api, wf, card
+
+    probe = tmp_path / "shot-672.txt"
+    probe.write_text("evidence")
+
+    calls = {
+        "next_task": lambda wf, c: wf.next_task(),
+        "claim": lambda wf, c: wf.claim(c["id"]),
+        "get_task": lambda wf, c: wf.get_task(c["id"]),
+        "comment": lambda wf, c: wf.comment(c["id"], "заметка ревьюера"),
+        "advance(to='build')": lambda wf, c: wf.advance(c["id"], to="build", spec="s"),
+        "advance(to='review')": lambda wf, c: wf.advance(
+            c["id"], to="review", worklog="w", evidence="abc123"),
+        "advance(to='done')": lambda wf, c: wf.advance(c["id"], to="done"),
+        "call_human": lambda wf, c: wf.call_human(c["id"], question="какой из двух вариантов?"),
+        "return_task": lambda wf, c: wf.return_task(c["id"], reason="не понимаю задачу"),
+        "decompose": lambda wf, c: wf.decompose(c["id"], [{"title": "A"}, {"title": "B"}]),
+        "review_task(approve)": lambda wf, c: wf.review_task(
+            c["id"], verdict="approve", report="ок"),
+        "review_task(needs_work)": lambda wf, c: wf.review_task(
+            c["id"], verdict="needs_work", report="вопрос человеку"),
+        "file_task": lambda wf, c: wf.file_task("находка", related_task_id=c["id"]),
+        "attach_file": lambda wf, c: wf.attach_file(c["id"], str(probe), note="скрин"),
+        # an attachment must EXIST first, or the refusal is "no such attachment" — nothing to do
+        # with the stage, and counting it as one would inflate the refusal set by a tool
+        "download_attachment": None,
+    }
+    refusals, ended_in = {}, {}
+    for label, call in calls.items():
+        api, wf, card = board()
+        if label == "download_attachment":
+            att = wf.attach_file(card["id"], str(probe), note="скрин")["attachment_id"]
+            call = lambda wf, c, a=att: wf.download_attachment(c["id"], a)   # noqa: E731
+        try:
+            call(wf, card)
+            refusals[label] = None
+        except workflow.WorkflowError as exc:
+            refusals[label] = str(exc)
+        ended_in[label] = api.stage_of(card["id"])
+    return refusals, ended_in
+
+
+def test_exactly_ONE_agent_tool_walks_a_card_out_of_Review(tmp_path):
+    """#672: the reviewer's bullet enumerated what is shut from Review, and #663's `decompose`
+    gate made the enumeration stale without making one word of it false. A COUNT is what aged, so
+    the bullet now leans on an invariant a new gate cannot age — out of Review a card is walked by
+    exactly ONE agent tool, `review_task(verdict='needs_work')` — and this test is that sweep,
+    made permanent. It also pins the one number the bullet still quotes (FIVE tools refuse), on
+    purpose: a number that a test reddens goes stale LOUDLY, which is the only way it may be
+    written down here at all.
+
+    Driven off `server._DEFERRED_TOOLS` rather than a hand-written list, so a 13th agent tool
+    cannot join the surface and quietly go unswept. Said in the right ORDER, because the first
+    version of this sentence had it backwards: the sweep runs FIRST (it is the opening statement
+    of the body — all 15 calls complete), and only then does the coverage block compare the
+    exposed set against the swept labels. The SIZE assert is what an added tool trips; the
+    `unswept` assert catches the other direction, a tool present in both places but missing a
+    sweep entry. That coverage check is the half a hand-written sweep cannot have.
+
+    Note what the sweep deliberately does NOT claim: `review_task(approve)` is a tool call that
+    SUCCEEDS from Review and leaves the card exactly where it stood, so "one tool walks it out" is
+    a statement about MOVEMENT, never about which calls are permitted. The refusal set and the
+    mover set are asserted separately for that reason.
+
+    MUTATION-CHECKED (`__pycache__` cleared between rounds, restored from file copies rather than
+    `git checkout` — the tree's SKILL.md edit was uncommitted, and a checkout-based restore ate it
+    once; control PASS before AND after the sweep; selection confirmed at exactly 1 test for this
+    name). Each round names the assertion read out of `--tb=line`, not the one it seemed obvious it
+    would hit: drop decompose's Review gate -> FAIL in the REFUSAL-SET assert (measured separately:
+    the ungated tool returns `parent.moved_to == 'Backlog'` with two children created, so the mover
+    assert would have fired too — the refusal set is simply reached first); drop return_task's
+    Review gate -> FAIL the same way; make `review_task`'s needs_work branch leave the card in
+    Review -> FAIL in the MOVER assert, measured `{}`; add a 13th tool to `server._DEFERRED_TOOLS`
+    -> FAIL in the coverage block's SIZE assert (`13 == 12`), which names the intruder — the
+    `unswept` assert below it is never reached on that mutant, and saying otherwise would
+    miscredit it; move `advance`'s `_require_mine` to AFTER its stage check -> FAIL in the
+    multi-identity REASONS assert, which is the round that shows that block measures the foreign
+    card and not a second copy of the first."""
+    swept, ended_in = _review_sweep(tmp_path)
+
+    # COVERAGE: every tool the server really exposes is in the table above
+    exposed = {fn.__name__ for fn in server._DEFERRED_TOOLS}
+    assert len(exposed) == 12, f"the agent tool surface changed size: {sorted(exposed)}"
+    unswept = exposed - {label.split("(")[0] for label in swept}
+    assert not unswept, f"agent tools added to the server but not swept from Review: {unswept}"
+
+    # THE REFUSAL SET — the number the rulebook quotes, spelled as the tools themselves
+    refused = {label.split("(")[0] for label, err in swept.items() if err is not None}
+    assert refused == {"claim", "advance", "call_human", "return_task", "decompose"}, \
+        f"SKILL.md's reviewer bullet quotes exactly these five as refusing from Review: {refused}"
+    assert all(swept[form] is not None
+               for form in ("advance(to='build')", "advance(to='review')", "advance(to='done')")), \
+        "SKILL.md says advance refuses from Review in ALL THREE forms; one of them now passes"
+
+    # THE INVARIANT — one mover, and it is the door the reviewer is sent to
+    movers = {label: stage for label, stage in ended_in.items() if stage != "Review"}
+    assert movers == {"review_task(needs_work)": "Build"}, \
+        f"SKILL.md says exactly one agent tool walks a card out of Review; measured: {movers}"
+
+    # MULTI-IDENTITY: the card a reviewer really looks at is the IMPLEMENTER's. The bullet claims
+    # the same five refuse there, only for different reasons — so sweep it rather than assume it.
+    theirs, theirs_ended = _review_sweep(tmp_path, mine=False)
+    assert {label.split("(")[0] for label, err in theirs.items() if err is not None} == refused, \
+        "SKILL.md says the five refusals hold for a card owned by its implementer too"
+    assert {lb: st for lb, st in theirs_ended.items() if st != "Review"} == \
+        {"review_task(needs_work)": "Build"}, \
+        "the one-mover invariant does not survive the card being someone else's"
+    assert "claim it first" in theirs["advance(to='build')"], \
+        "the reasons were supposed to be what differs: advance no longer answers on OWNERSHIP first"
+    assert "claim it first" not in swept["advance(to='build')"], \
+        "the two sweeps stopped differing at all — one of them is not building the state it claims"
+
+    # the prose that rests on it
+    bullet = _reviewer_bullet(_skill_text())
+    assert "РОВНО ОДИН" in bullet, \
+        "the reviewer's bullet no longer states the one-mover invariant it was rewritten around"
 
 
 def _return_task_bullet(text: str) -> str:
