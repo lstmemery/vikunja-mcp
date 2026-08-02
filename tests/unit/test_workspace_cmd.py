@@ -39,9 +39,182 @@ def _git(cwd, *args):
     ).stdout.strip()
 
 
+# --- VMCP-76 (525): a stand-in this file parks must never outlive the test that parked it ---
+#
+# Two tests need a git child that HANGS, so that the module's own timeout SIGKILLs the git process
+# sitting on top of it: a smudge filter parks `worktree add`'s checkout (`_half_created_tree`) and
+# an ssh stand-in parks `git fetch` (`test_the_fetch_under_the_lock_...`). `subprocess.run`'s kill
+# reaches the DIRECT child ONLY, so whatever is parked UNDER it is reparented onto PID 1 and keeps
+# running long after the test that built it has ended.
+#
+# MEASURED before this fix — `ps` around a run given its own `--basetemp`, so that a sibling agent
+# running this same suite could not have its identically named processes counted as ours. ONE
+# half-created test left THREE processes behind, all with their cwd inside the tmp worktree:
+# `git reset --hard --no-recurse-submodules` at PPID 1, its `/bin/sh …/slow-smudge.sh`, and that
+# shell's own `sleep 30` child — the third is easy to miss, because grepping `ps` for the two NAMES
+# you expect does not match a bare `sleep`. They were still alive at t+56s and gone by t+61s past
+# a 2.70s test (the test's own duration is a sample, 2.65–2.93s across runs, not a constant). The
+# open fd on `<tmp>/work/.git/worktrees/task-<id>/index.lock` belongs to the CHECKOUT alone, not to
+# all three: `lsof` on the shell lists its cwd, its pipes and the script, and no lock.
+#
+# Counted rather than derived, by polling `ps` through one pre-fix run of this FILE and unioning
+# distinct pids: THIRTY-TWO processes — 6 orphaned checkouts, one per `_half_created_tree` call
+# site as the file then stood; the 12 filter shells those spawn, TWO per site because the filter
+# runs once per tracked file; those shells' 12 `sleep 30` children; and the fetch test's own
+# stand-in plus its sleep. An arithmetic guess of "two per call site" is exactly half of that.
+#
+# What the leak was OBSERVED not to touch — inferred from where it wrote, not from a constraint
+# that forbids it: every cwd and every open fd sat inside that run's own basetemp, so nothing
+# reached the real checkout or a concurrent run under another basetemp. The cost is background
+# processes holding a tmp dir pytest owns and may be deleting.
+#
+# So the stand-ins PARK ON A FILE instead of sleeping a flat 30s, and the fixture unlinks it. The
+# reap is COOPERATIVE on purpose. `pgrep`-by-name is out: this suite runs beside sibling agents
+# spawning processes with the very same argv, and killing one of those is a far worse failure than
+# the leak. A blind SIGKILL of a pid recorded seconds ago is out for the same class of reason — a
+# pid can be recycled. The pids are recorded for the WAIT: teardown PROVES the processes are gone
+# rather than assuming the unlink worked.
+_PARK_HOLD = "park-hold"      # while this file exists, a parked stand-in keeps parking
+_PARK_PIDS = "park-pids"      # each stand-in appends its own pid here
+_PARK_CEILING = 300           # x 0.1s, the backstop for a pytest that is ITSELF killed: teardown
+                              # never runs then, and an UNBOUNDED park would leak worse than the
+                              # bug being fixed. MEASURED at 33.2s PER PARK with the hold file
+                              # never removed (30s of sleeping plus the loop's own fork/exec
+                              # overhead) — and a half-created tree parks once per tracked file,
+                              # so the survival bound a killed pytest actually leaves behind is
+                              # TWO of those, measured at 66.0s. That is the flat `sleep 30` this
+                              # replaced plus ~10%, i.e. no regression, but it is not below it
+
+
+def _parking_script(tmp_path: Path, name: str, tail: str = "") -> Path:
+    """An executable stand-in that parks until the fixture releases it, and says it is there.
+
+    Hand it to something GIT will spawn (a filter, `GIT_SSH_COMMAND`), which is the whole point:
+    the process that leaks is the git one in between. Launching it straight from a test body would
+    make the test runner itself the parent the reaper derives — see `_live_parent`, which refuses
+    that rather than waiting for pytest to exit.
+    """
+    script = tmp_path / name
+    script.write_text(
+        "#!/bin/sh\n"
+        f'echo "$$" >> "{tmp_path / _PARK_PIDS}"\n'
+        "i=0\n"
+        f'while [ -e "{tmp_path / _PARK_HOLD}" ] && [ "$i" -lt {_PARK_CEILING} ]; do\n'
+        "  sleep 0.1\n"
+        "  i=$((i + 1))\n"
+        "done\n"
+        f"{tail}"
+    )
+    script.chmod(0o755)
+    (tmp_path / _PARK_HOLD).write_text("")
+    return script
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:      # alive, and no longer ours — i.e. the pid was recycled
+        return True
+    return True
+
+
+def _ps_field(pid: int, field: str) -> str:
+    return subprocess.run(
+        ["ps", "-o", f"{field}=", "-p", str(pid)], capture_output=True, text=True
+    ).stdout.strip()
+
+
+def _live_parent(pid: int) -> set[int]:
+    """The pid's parent, when that parent is something the reaper may legitimately wait out.
+
+    Two parents it may not. PID 1 (or a blank answer, i.e. the child has just exited) means there
+    is nothing left to wait for. THIS process means the stand-in was launched by the test runner
+    rather than by git, and waiting on it would hang out the whole deadline and then fail on
+    pytest's own pid. Not reachable with today's two stand-ins — both are spawned by git — but it
+    costs one comparison to keep it unreachable rather than merely undocumented.
+    """
+    ppid = _ps_field(pid, "ppid")
+    if not ppid.isdigit() or int(ppid) <= 1 or int(ppid) == os.getpid():
+        return set()
+    return {int(ppid)}
+
+
+def _process_command(pid: int) -> str:
+    return _ps_field(pid, "command")
+
+
+def _parked_pids(tmp_path: Path) -> set[int]:
+    """The stand-ins that recorded themselves, PLUS the live parent of any still running.
+
+    The parent is what actually leaks in the smudge case — it is the orphaned
+    `git reset --hard --no-recurse-submodules` (verified live: `sh …/slow-smudge.sh` at pid 1991
+    had ppid 1990, which `ps` showed as exactly that git process) — so it has to be waited on.
+    But it is DERIVED HERE rather than recorded by the script, because a parent is only ever
+    safe to wait on while it is alive: the fetch stand-in's parent is the git that was SIGKILLed,
+    and a pid recorded a second ago and since dead may already have been recycled onto something
+    unrelated, which the reaper would then wait out the full deadline for and fail on. `ppid > 1`
+    is the same rule in its other form — a stand-in already reparented onto PID 1 has no parent
+    left to wait for.
+    """
+    pidfile = tmp_path / _PARK_PIDS
+    if not pidfile.exists():
+        return set()
+    recorded = {int(token) for token in pidfile.read_text().split()}
+    live = [child for child in recorded if _pid_alive(child)]
+    return recorded | {pid for child in live for pid in _live_parent(child)}
+
+
+def _reap_parked_children(tmp_path: Path, deadline: float = 30.0) -> None:
+    """Release every parked stand-in and WAIT until nothing it left behind is still running."""
+    # BEFORE the unlink: while everything is still parked, the orphaned checkout is reliably
+    # visible as a live parent. That holds only WHILE something is parked — with the ceiling
+    # forced to 0.1s and a repo big enough to keep the checkout churning, a live checkout was
+    # measured missing from 8 of 20 samples — so it rests on every test body here finishing well
+    # inside `_PARK_CEILING`, which at 33s they all do by two orders of magnitude.
+    watched = _parked_pids(tmp_path)
+    (tmp_path / _PARK_HOLD).unlink(missing_ok=True)
+    alive = {pid for pid in watched if _pid_alive(pid)}
+    end = time.monotonic() + deadline
+    while alive and time.monotonic() < end:
+        time.sleep(0.05)
+        # UNION, not re-read: releasing the hold lets the orphaned checkout resume and spawn the
+        # NEXT stand-in (one per tracked file), which records itself only now — while the parent
+        # derived above drops back out of the file's view as soon as its child exits. Either half
+        # alone returns with something still running.
+        watched |= _parked_pids(tmp_path)
+        alive = {pid for pid in watched if _pid_alive(pid)}
+    assert not alive, (
+        f"{sorted(alive)} outlived the test by {deadline:.0f}s after {tmp_path / _PARK_HOLD} was "
+        f"removed: a stand-in stopped honouring the hold file, or something else is parking here"
+    )
+
+
+def _reaping_parked_children(tmp_path: Path):
+    """The `repo` fixture's teardown half, as a plain generator SO THAT A TEST CAN DRIVE IT.
+
+    The whole point of putting the reap after a `yield` is that pytest runs it whatever the test's
+    outcome — and a test that passes cannot demonstrate that. Driving this generator by hand runs
+    the very code the fixture runs, against real processes, in one round.
+    """
+    yield
+    _reap_parked_children(tmp_path)
+
+
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
-    """A work repo on `main` with a local bare origin it has already pushed to."""
+def _parked_children_reaped(tmp_path):
+    yield from _reaping_parked_children(tmp_path)
+
+
+@pytest.fixture
+def repo(tmp_path, monkeypatch, _parked_children_reaped):
+    """A work repo on `main` with a local bare origin it has already pushed to.
+
+    It requests `_parked_children_reaped` so that EVERY test built on this fixture is covered
+    without having to know the leak exists — set up first, so torn down last, i.e. after
+    everything else in the test has finished writing.
+    """
     # A REAL review finding: once the pump exports VIKUNJA_WORKTREE_ROOT machine-wide (the
     # exact point of this feature), an agent running this suite inside its own worktree would
     # otherwise get every test here steered at the AMBIENT root instead of tmp_path — and the
@@ -896,10 +1069,10 @@ def test_the_fetch_under_the_lock_times_out_instead_of_wedging_it_forever(
     black-holed TCP connection. It must END, as the WorkspaceError the CLI and gc's per-tree
     handler already report. Driven through the REAL entry point, so it also pins that the fetch
     call site takes the tight NETWORK bound and not the 600s local ceiling: a stand-in for ssh
-    sleeps 30s, so a call site on the wrong constant fails this on the elapsed time."""
-    slow_ssh = tmp_path / "slow-ssh.sh"
-    slow_ssh.write_text("#!/bin/sh\nsleep 30\n")
-    slow_ssh.chmod(0o755)
+    parks for up to 30s, so a call site on the wrong constant fails this on the elapsed time.
+    The stand-in is a `_parking_script` and not a flat `sleep 30` because the SIGKILL that ends
+    the fetch does not reach it — see VMCP-76 above."""
+    slow_ssh = _parking_script(tmp_path, "slow-ssh.sh")
     monkeypatch.setenv("GIT_SSH_COMMAND", str(slow_ssh))
     monkeypatch.setattr(workspace_cmd, "_GIT_NET_TIMEOUT", 2.0)
     _git(repo, "remote", "set-url", "origin", "ssh://git@127.0.0.1/nowhere.git")
@@ -1051,26 +1224,30 @@ def _half_created_tree(repo, monkeypatch, task_id=42):
 
     Driven through the REAL entry point with the module's own timeout, because that is the point
     of the finding — since `_GIT_TIMEOUT` landed, `ensure_workspace` can manufacture this state
-    BY ITSELF, with no external killer. A `* filter=slow` smudge filter that sleeps parks the
-    checkout after git has already written `.git/worktrees/task-<id>/locked` = "initializing" and
-    before it has written any file, and `subprocess.run(timeout=...)` SIGKILLs it there.
+    BY ITSELF, with no external killer. A `* filter=slow` smudge filter parks the checkout after
+    git has already written `.git/worktrees/task-<id>/locked` = "initializing" and before it has
+    written any file, and `subprocess.run(timeout=...)` SIGKILLs it there.
 
     Measured on git 2.50.1: the entry stays listed as `locked initializing`, `git worktree prune`
     exits 0 and keeps it, and the directory holds nothing but `.git`. Returns its path.
 
     ONE property to know before touching the assertions below: the half-populated directory is a
     TRANSIENT phase, not the state. `worktree add` checks out in a CHILD (`git reset --hard`), and
-    SIGKILLing the parent orphans that child onto PID 1, where it keeps smudging — measured filling
-    the tree in one file per sleep until COMPLETE, while the lock marker (cleared only by the dead
-    parent) stays forever. So the "only .git landed" assertion holds at construction time and is
-    checked there; nothing afterwards may depend on a file being absent, and nothing may key off
+    SIGKILLing the parent orphans that child onto PID 1, from where it will finish the checkout
+    file by file the moment its filter stops parking — while the lock marker (cleared only by the
+    dead parent) stays forever. So the "only .git landed" assertion holds at construction time and
+    is checked there; nothing afterwards may depend on a file being absent, and nothing may key off
     file contents to recognise the state. `test_ensure_refuses_any_locked_worktree_...` is the
     complementary case — a FULLY checked-out tree that is merely locked must be refused too, which
     is precisely phase two of this one.
+
+    WHEN it resumes is what VMCP-76 (525) pinned down. It used to be a flat `sleep 30`, so the
+    orphan resumed on its own clock, minutes into whatever ran next; now it parks on a hold file
+    that `repo`'s teardown removes, so it resumes when THIS test is over and is waited out there.
+    Either way nothing moves while the test body runs — the state this hands back is unchanged,
+    and the `_quiesce`-LAST ordering below still means what it meant.
     """
-    slow_smudge = repo.parent / "slow-smudge.sh"
-    slow_smudge.write_text("#!/bin/sh\nsleep 30\ncat\n")
-    slow_smudge.chmod(0o755)
+    slow_smudge = _parking_script(repo.parent, "slow-smudge.sh", tail="cat\n")
     (repo / ".gitattributes").write_text("* filter=slow\n")
     _git(repo, "add", ".gitattributes")
     _git(repo, "commit", "-m", "slow smudge filter")
@@ -1169,7 +1346,7 @@ def test_gc_reports_a_half_created_tree_and_keeps_sweeping(repo, tracker, monkey
     api, wf = tracker
     half = _half_created_tree(repo, monkeypatch)
     other = Path(ensure_workspace(43, cwd=repo)["path"])          # dead, clean, pushed
-    _quiesce(half)          # the orphaned smudge child keeps writing — quiesce LAST, then sweep
+    _quiesce(half)          # the checkout is PARKED, not finished — quiesce LAST, then sweep
     _quiesce(other)
 
     res = gc_workspaces(cwd=repo, workflow=wf)
@@ -1179,6 +1356,103 @@ def test_gc_reports_a_half_created_tree_and_keeps_sweeping(repo, tracker, monkey
     assert [k["task_id"] for k in res["kept"]] == [42]
     assert "half-created" in res["kept"][0]["reason"]
     assert half.is_dir()
+
+
+# --- VMCP-76 (525): nothing this file parks may outlive the test that parked it ---
+
+def test_a_parked_stand_in_does_not_outlive_the_test_that_parked_it(
+    repo, monkeypatch, tmp_path, request
+):
+    """The leak itself, pinned by RUNNING the teardown against the real processes it must reap.
+
+    FOUR separate things have to hold, and each is asserted against a runtime fact rather than
+    against the source:
+
+    1. `repo` pulls the reaper into the fixture closure — `request.fixturenames` is pytest's own
+       resolved list, so dropping the dependency from `repo` fails here and not silently in
+       whichever other test happens to park something next.
+    2. The state really did leave processes running. Without this the test would pass just as
+       happily against a `_parking_script` that quietly exits at once, i.e. it would stop pinning
+       anything at all.
+    3. What is waited on includes the orphaned CHECKOUT and not just the stand-in git spawned.
+       This is the one the other three cannot cover: drop the parent derivation and every stand-in
+       still gets reaped, but the reaper is free to return during the window between the last one
+       exiting and git finishing — a race, so a test that only counted processes afterwards would
+       pass most of the time.
+    4. Driving `_reaping_parked_children` — the generator `repo` yields from, not a copy of it —
+       runs the exact teardown pytest runs, and after it nothing is alive. The final check is the
+       UNION of the set from step 2 and a fresh read, because neither alone covers it: releasing
+       the hold lets the orphaned checkout resume and spawn one more stand-in that only a fresh
+       read knows about, while the checkout itself is only visible in the earlier set (a parent is
+       derived from a LIVE child, and by then its child has exited).
+
+    Why the teardown and not a `finally` at the end of `_half_created_tree`: a test that FAILS
+    mid-body never reaches the helper's tail, and a leak that depends on the assertions passing is
+    the leak. Verified by forcing a failure — an `assert False` planted right after the helper in
+    `test_ensure_refuses_a_half_created_worktree_instead_of_reusing_it`: the run went red and `ps`
+    immediately after showed nothing of it left, neither stand-in nor checkout.
+
+    MUTATION-CHECKED with a non-mutated CONTROL round first and another last. `__pycache__` was
+    cleared between rounds, and every round selected exactly two tests — this one plus
+    `test_the_reaper_never_waits_on_the_test_runner_itself`, which stays green in all of them
+    except its own. Control 0 failed (2 passed); drop `_reap_parked_children(tmp_path)` from
+    `_reaping_parked_children` -> 1 failed here, on step 4; drop `_parked_children_reaped` from
+    `repo`'s parameters -> 1 failed here, on step 1; make `_reap_parked_children` skip the
+    `unlink` -> 1 failed here on the 30s deadline AND 1 error, because the fixture's own teardown
+    then hits the same deadline a second time (63s for that round, so it is not the `1 failed`
+    shape the others are); make `_parked_pids` return only what the scripts recorded, deriving no
+    live parent -> 1 failed here, on step 3; drop `_live_parent`'s own-pid guard -> 1 failed, in
+    the OTHER test and not this one; closing control 0 failed.
+    """
+    assert "_parked_children_reaped" in request.fixturenames, (
+        "`repo` stopped requesting the reaper, so nothing reaps the stand-ins of a test that "
+        "never mentions it — which is every test in this file"
+    )
+
+    _half_created_tree(repo, monkeypatch)
+
+    parked = {pid: _process_command(pid) for pid in _parked_pids(tmp_path)}
+    assert parked, "the stand-in recorded no pid, so the reaper has nothing to wait on"
+    assert [pid for pid in parked if _pid_alive(pid)], (
+        "nothing was left running at all — this test cannot show a reap that had no work to do"
+    )
+    assert any("reset --hard" in command for command in parked.values()), (
+        f"the watched set is {parked} — it does not include the orphaned CHECKOUT, only the "
+        f"stand-in that git spawned. Waiting on the checkout is what keeps the reaper from "
+        f"returning in the window between the last stand-in exiting and git finishing"
+    )
+
+    teardown = _reaping_parked_children(tmp_path)     # what `repo` runs after a test, pass OR fail
+    next(teardown)
+    with pytest.raises(StopIteration):
+        next(teardown)
+
+    assert not [pid for pid in set(parked) | _parked_pids(tmp_path) if _pid_alive(pid)]
+
+
+def test_the_reaper_never_waits_on_the_test_runner_itself(tmp_path):
+    """`_live_parent`'s own-pid guard, which the test above cannot reach: both stand-ins there are
+    spawned BY GIT, so the parent it derives is a git process every time.
+
+    A stand-in launched straight from a test body has pytest for a parent, and without the guard
+    the reaper waits for the test runner to exit — i.e. burns the full 30s deadline and then fails
+    naming pytest's own pid. Measured as exactly that before the guard existed (30.0s, two pids
+    reported as outliving the test, one of them the runner). The child here is killed through the
+    `Popen` handle we own, never by pid, and reaped in a `finally`.
+
+    MUTATION-CHECKED in the same series as the test above, same two-test selection: control
+    0 failed; drop `int(ppid) == os.getpid()` from `_live_parent` -> 1 failed, and here rather
+    than in the other test, which stays green because git is what spawns its stand-ins.
+    """
+    proc = subprocess.Popen(["sleep", "30"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        assert _ps_field(proc.pid, "ppid").strip() == str(os.getpid()), (
+            "this test is not exercising what it claims — the child's parent is not this process"
+        )
+        assert _live_parent(proc.pid) == set()
+    finally:
+        proc.kill()
+        proc.wait()
 
 
 # --- VMCP-110 (580): the two refusal CHANNELS are different shapes, and both ends need a net ---
@@ -1841,7 +2115,7 @@ def test_a_parked_card_never_launders_a_half_created_tree_into_expected(repo, tr
     api, wf = tracker
     task = _parked(api, wf)
     half = _half_created_tree(repo, monkeypatch, task_id=task["id"])
-    _quiesce(half)          # the orphaned smudge child keeps writing — quiesce LAST, then sweep
+    _quiesce(half)          # the checkout is PARKED, not finished — quiesce LAST, then sweep
 
     res = gc_workspaces(cwd=repo, workflow=wf)
 
