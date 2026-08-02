@@ -408,7 +408,13 @@ class Workflow:
         цепляется за свежесть коммента [worklog]/[review], а НЕ за эту метку, так что стале-
         `reviewed` не подавлял бы re-ревью — но ложный бейдж всё равно не должен оставаться.
         Идемпотентно по каждой метке — _remove_label шлёт DELETE только по реально висящей на
-        снапшоте связи, поэтому на задаче без вердикт-меток (свежий клейм) это no-op."""
+        снапшоте связи, поэтому на задаче без вердикт-меток (свежий клейм) это no-op.
+        #673 добавил ТРЕТИЙ вызов, и он про обратное направление: `decompose` зовёт это не на
+        входе в пайплайн, а на ВЫХОДЕ из него — карточка перестаёт быть работой и становится
+        эпиком-контейнером, чья работа переезжает в детей. Общее у всех трёх — не стадия, а то,
+        что прошлая оценка перестала описывать карточку; у эпика она вдобавок НЕПРИМЕНИМА —
+        обе точки, где карточку предлагают на независимое ревью (push-нудж в advance и pull-ветка
+        в next_task), эпик пропускают, так что штатный поток к этому вердикту уже не вернётся."""
         self._remove_label(task, LABEL_REVIEW_FAILED)
         self._remove_label(task, LABEL_REVIEWED)
 
@@ -1525,6 +1531,28 @@ class Workflow:
         if ordered:
             comment += " (упорядочено: цепочка precedes — клеймабельна только голова)"
         self.api.add_comment(task_id, comment)
+        # #673: a card that BECOMES A CONTAINER carries no verdict. `advance` already clears both
+        # mutually-exclusive verdict labels on both of its forms — "resuming work invalidates the
+        # old assessment" (#119) — and decompose is the same kind of resumption, the work simply
+        # moves into the children; it just cleared nothing, so the parent kept whatever label it
+        # arrived with. Measured through the real Workflow over a FakeAPI board, along the exact
+        # route #663's refusal recommends (a reviewer is refused from Review -> review_task(
+        # verdict='needs_work') -> the owner decomposes from Build): the parent landed in Backlog
+        # carrying `epic` AND `review-failed` at once. The other verdict reaches it too — an
+        # APPROVED card a human hand-pulled back to Build gave `epic` AND `reviewed` — which is why
+        # both go, via the SAME helper `advance` uses rather than a second spelling of the rule.
+        # And the label here is not merely stale, it is INAPPLICABLE. A card is offered for
+        # independent review in exactly two places — the push nudge at the end of `advance` and
+        # `next_task`'s pull path — and LABEL_EPIC is skipped by BOTH, so nothing in the pipeline
+        # ever routes a reviewer to a container and the normal flow can never refresh that
+        # verdict. (Not "can never be refreshed at all": `review_task` gates on stage alone, so a
+        # reviewer handed the id by hand still lands a verdict on an epic. Measured, not assumed.)
+        # PARENT only — the children are created by create_task just above, which is the only
+        # child-touching call here besides the `ordered` relations, so no decompose path puts a
+        # label on them and there is nothing on them to clear. Placed with the
+        # other PARENT mutations instead of before the children: they are grouped here, and
+        # clearing earlier would invent a half-applied state (verdict gone, never became an epic).
+        self._clear_verdict_labels(task)
         label = self.api.get_or_create_label(LABEL_EPIC)
         self.api.add_label(task_id, label["id"])
         self.api.remove_assignee(task_id, self._me()["id"])

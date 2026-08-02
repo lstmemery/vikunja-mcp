@@ -625,6 +625,141 @@ def test_decompose_creates_children_in_queue_parent_epic(env):
     assert any(c.startswith("[decompose]") for c in api.comments_text(t["id"]))
 
 
+def test_decompose_clears_the_stale_verdict_off_the_card_it_turns_into_an_epic(env):
+    """#673: `decompose` turns a card into an epic CONTAINER, but left the verdict label it
+    arrived with hanging on it. Measured through the real `Workflow` over a FakeAPI board (not a
+    live tracker), along the exact route #663's own refusal recommends — a reviewer is turned away
+    from Review, sends the card back with review_task(verdict='needs_work'), and its owner
+    decomposes from Build: the parent landed in Backlog carrying `epic` AND `review-failed` at
+    once. That is the shape #626 (`reviewed` + `blocked`, in its own words the board claiming
+    'approved' and 'blocked' at once) and #663 (`reviewed` + `epic`) each closed elsewhere — the
+    board asserting two things at once — arriving here by the route those very cards recommend as
+    the correct one. #590 is the stage-gate ANCESTOR of the shape, not another instance of it: it
+    measured `blocked` landing on a card under review, with no verdict label on the board at all
+    (checked by rebuilding its repro card — the 'approved and blocked' phrasing is #626's, and
+    this docstring previously mis-credited it to #590).
+
+    Not merely STALE. `advance` clears both mutually-exclusive verdict labels on both of its forms
+    because resuming work invalidates the old assessment (#119); on an epic the label is
+    INAPPLICABLE on top of that. A card is offered for independent review in exactly two places —
+    `advance`'s push nudge and `next_task`'s pull path — and LABEL_EPIC is skipped by both, so the
+    normal flow can never refresh that verdict. Measured rather than assumed, in both directions:
+    `advance(to='review')` DOES move an epic into Review (it only withholds `review_needed`), and
+    `review_task` gates on stage alone, so a reviewer handed the id by hand can still land a
+    verdict on a container. 'Nothing routes a reviewer there', not 'nothing can ever supersede it'.
+
+    Four parts. Route A is the reported one, and its `bug` label is load-bearing rather than
+    decoration: without a NON-verdict label in the picture every card here carries at most one
+    label, and a decompose that stripped labels WHOLESALE would be indistinguishable from one that
+    clears the two verdicts — measured, that mutant passed this whole test before the `bug`
+    assertion existed. Route B carries the OTHER verdict to the same place (an APPROVED card a
+    human hand-pulls back to Build — no tool fires there, so `reviewed` survives the move) and is
+    what keeps the fix from being one-sided. The CHILDREN assertions run in all three routes
+    because the claim is about every child: create_task is the only child-touching call in
+    decompose besides the `ordered` relations, so the right answer is 'nothing to clear', and this
+    holds it that way. The CONTROL card never carried a verdict, and its exact `== ['epic']` pins
+    that the clear takes NOTHING extra and adds nothing — it does not catch a wholesale strip
+    (it has nothing to strip); the `bug` assertion in route A is what does.
+
+    MUTATION-CHECKED IN BOTH DIRECTIONS, each round naming the assertion it actually reddens as
+    read out of pytest's raw output rather than guessed. Selection: test_workflow_gates.py +
+    test_skill_contract.py. Every round deleted `__pycache__` first (PYTHONDONTWRITEBYTECODE stops
+    Python WRITING bytecode, not READING a stale .pyc) and printed `vikunja_mcp.__file__` resolved
+    in the same environment — that is #646's check that no stray `src` shadows this tree, and it
+    evidences the import path only; what shows a mutant actually ran is its distinct failure.
+    Unmutated control round, fix in place: 0 failed. Delete the `_clear_verdict_labels` call —
+    leaving the comment, so decompose behaves exactly as it shipped before this card -> 1 failed,
+    this test, at route A's `review-failed not in titles`, and it was the ONLY failure in either
+    file: every other test in both, which is where the five #590/#626/#627/#649/#663 gate pins
+    live, stayed GREEN on that same mutant. That is what shows this hole was SEPARATE and not a
+    regression of theirs. Clear only `review-failed` -> 1 failed, now at route B (`['reviewed',
+    'epic']`). Clear only `reviewed` -> 1 failed, back at route A. Strip the snapshot's labels
+    WHOLESALE and add `epic` as usual -> 1 failed, at route A's `bug` assertion; this round is the
+    reason that assertion exists — with the assertion removed, the same mutant passes the whole
+    selection (0 failed), a control this sweep had NAMED and not RUN. The second independent pass
+    found that; the number above was then re-measured here rather than inherited.
+    Add a stray `blocked` label alongside the clear -> 1 failed, at the CONTROL card's `==
+    ['epic']`. Restored by text substitution, never `git checkout --`, because the tree carried
+    uncommitted work.
+
+    Out of this card's slice, measured on the same run and FILED rather than fixed here: the same
+    hanging verdict rides `return_task` (an approved card a human hand-pulled back to Build then
+    hit an external block lands in Backlog as `['reviewed', 'blocked']` — #590's own 'approved and
+    blocked' sentence) and `claim` (a hand-parked verdict rides into Design, where the next
+    `advance(to='build')` clears it)."""
+    api, wf, _t = env
+
+    def _reviewer():
+        r = type(wf)(api, project_id=3)
+        r._me_cache = {"id": 77, "username": "agent-reviewer"}
+        return r
+
+    # A. the route #663's own refusal recommends: a reviewer is turned away from Review, sends the
+    #    card back with review_task(verdict='needs_work'), and its owner decomposes it from Build.
+    bounced = api.add_task("работа, отбитая ревью", "Queue")
+    wf.claim(bounced["id"])
+    wf.advance(bounced["id"], to="build", spec="сделаю X")
+    wf.advance(bounced["id"], to="review", worklog="сделано", evidence="abc123")
+    _reviewer().review_task(bounced["id"], verdict="needs_work", report="надо дробить")
+    # a NON-verdict label riding along, and it is the load-bearing part of this cell rather than
+    # decoration: without it every card here carries at most one label, so a decompose that
+    # stripped labels WHOLESALE would be indistinguishable from one that clears the two verdicts
+    api.add_label(bounced["id"], api.get_or_create_label("bug")["id"])
+    assert api.stage_of(bounced["id"]) == "Build"
+    assert "review-failed" in _label_titles(api, bounced["id"])   # the state the fix must clear
+
+    res = wf.decompose(bounced["id"], [{"title": "часть A"}, {"title": "часть B"}])
+    titles = _label_titles(api, bounced["id"])
+    assert "review-failed" not in titles, (
+        f"the card became a container, so the verdict it arrived with does not apply to it any "
+        f"more — an epic is skipped by both places that offer a card for review: {titles}"
+    )
+    assert "bug" in titles, (
+        f"only the VERDICT labels go: `bug` is not a verdict, it is what tells a reviewer the "
+        f"rubric, and a wholesale strip would take it too: {titles}"
+    )
+    assert "epic" in titles and api.stage_of(bounced["id"]) == "Backlog", \
+        f"clearing the verdict must not disturb what decompose actually does: {titles}"
+    # the children never carried a verdict (create_task makes them bare) and the parent's clear
+    # must not invent one on them
+    for child in res["created"]:
+        assert _label_titles(api, child["id"]) == [], \
+            f"a fresh subtask carries no labels at all: {_label_titles(api, child['id'])}"
+
+    # B. the OTHER verdict reaches the same place: an APPROVED card a human hand-pulls back to
+    #    Build (no tool fires, so `reviewed` survives the move) and then decomposes.
+    approved = api.add_task("одобренная работа", "Queue")
+    wf.claim(approved["id"])
+    wf.advance(approved["id"], to="build", spec="сделаю Y")
+    wf.advance(approved["id"], to="review", worklog="сделано", evidence="def456")
+    _reviewer().review_task(approved["id"], verdict="approve", report="воспроизвёл, причина ясна")
+    api.task_bucket[approved["id"]] = api.bucket_id("Build")   # человек руками, мимо тулов
+    assert "reviewed" in _label_titles(api, approved["id"])
+
+    res_b = wf.decompose(approved["id"], [{"title": "часть C"}, {"title": "часть D"}])
+    titles = _label_titles(api, approved["id"])
+    assert "reviewed" not in titles, (
+        f"an approved card that a human sent back and an agent then split is not an approved "
+        f"container: {titles}"
+    )
+    assert "epic" in titles, f"the epic label is still the point of decompose: {titles}"
+    for child in res_b["created"]:
+        assert _label_titles(api, child["id"]) == []
+
+    # CONTROL: a card that never carried a verdict. The clear has to stay an exact no-op here —
+    # this is what stops the whole test passing for a decompose that strips labels wholesale, and
+    # what pins that `epic` is added even so.
+    clean = api.add_task("чистая работа", "Queue")
+    wf.claim(clean["id"])
+    assert _label_titles(api, clean["id"]) == []
+    res_c = wf.decompose(clean["id"], [{"title": "часть E"}, {"title": "часть F"}])
+    assert _label_titles(api, clean["id"]) == ["epic"], \
+        f"never-reviewed card: exactly the epic label, nothing removed and nothing extra: " \
+        f"{_label_titles(api, clean['id'])}"
+    for child in res_c["created"]:
+        assert _label_titles(api, child["id"]) == []
+
+
 def test_decompose_partial_failure_reports_created_children(env):
     # A failure on the 2nd create_task (network/429) must not drop a bare VikunjaError:
     # the child created by the 1st call is already on the board, and a blind retry would
