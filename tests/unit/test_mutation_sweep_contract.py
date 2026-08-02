@@ -127,7 +127,7 @@ them up.
     historical number whose environment is gone; or, where the record already states a control the
     pattern cannot reach, moving that sentence into the paragraph that needs it — no new
     measurement, nothing fabricated. That route reaches the THREE QUANTIFIER rows the list's own
-    comment names as able to leave TODAY — a fifth of sixteen — and not all five of the entries
+    comment names as able to leave TODAY — and not all five of the entries
     whose records state something unreadable, because the other two would need a REWORDING rather
     than a move. Saying only the first route exists would misdescribe those three.
     It GREW once, when 688 changed the unit under it — a rekey rather than a loosening, and the
@@ -276,15 +276,62 @@ _KEY_HEAD = 48
 # starving base's rounds under its own control, so the `DELIBERATELY NOT PINNED` entry left. No new
 # total is written here on purpose — a size stated beside the list it counts goes stale the next
 # time the list does its job, which is the self-reference the scope comment above flags. What that
-# landing DID do is leave every SIXTEEN elsewhere in this file one too high, and there are four of
-# them, not one: the module docstring's «a fifth of sixteen» (the fraction survives, only the total
-# moved), the «16-key offender set» in the `_CONTROL_COUNT` block, `_paragraphs`'s «16 in 8», and
-# the ratchet test's weakening row. The last three are ROUNDS, each true of the tree it ran on;
-# tense does not sort them, since two of those are written in the present. Nothing here moves what
-# any of them CONCLUDED: no entry leaves under the weakened pattern, and three of the entries below
-# can still go without any new measurement. The sentences about what 688's rekey PRODUCED — seven
-# record keys becoming sixteen paragraph keys — are history, and stay true whatever the list's size
-# does afterwards.
+# landing falsified ELSEWHERE in this file was ONE sentence, and it is FIXED here rather than
+# pointed at: the module docstring's «a fifth of sixteen» now names no total at all, which is this
+# paragraph's own rule applied one line up instead of quoted at it. The size itself carries a SHA
+# and no assert, for the reason two lines up rather than a fresh one: it moves when an ENTRY LEAVES,
+# which is the list doing its job. NOT by being written about — measured, none of the entries quotes
+# prose from this file. At `52d6085` it held 15 keys, against 16 at `9489de3`. That shrink
+# reached NO other sixteen here, none of the rest being this list's SIZE — at `52d6085` they were
+# 688's rekey (seven record keys becoming sixteen paragraph keys, a fact about that landing),
+# `_paragraphs`'s «16 in 8» pinned at `6dd2803` and counting offending CHUNKS, 594's «factor of
+# 16», and a grep's match count. That is a claim about the SHRINK, so it stays true however many
+# sixteens land here afterwards; for the file as it stands in YOUR checkout, run
+# `grep -niE 'sixteen|(^|[^0-9:.])16([^0-9:%]|$)'` over it rather than trusting the sentence you
+# are reading — its first spelling trusted a list, and the list was wrong.
+#
+# HOW it was wrong outlives the correction, because nothing in the suite holds it. MEASURED on a
+# clone of `62a8fe2` carrying this commit's edits, whole `tests/unit`, control 0 failed: putting
+# the stale total back is -> 0 failed. That is why the close is a FIX and not a guard; what a guard
+# here could and could not reach is the NEXT paragraph. The first spelling of this note
+# named FOUR addresses and TWO of them were not in this file at all: «16-key offender set» in the
+# `_CONTROL_COUNT` block, and a sixteen in the ratchet's weakening row. VMCP-167 (688) deleted both
+# at `e77b0cf`, the landing immediately before this card's — only the release bot's bump `9489de3`
+# sits between them — so they were carried over from a tree that still had them, and the grep was
+# never re-run in the tree the note shipped in. SKILL.md calls that the INHERITED class. Be exact
+# about the universal in front of that list, because it was not a plain overclaim: «every SIXTEEN …
+# one too high» held of exactly ONE of the four, the docstring's, and was false of the other address
+# that really exists, `_paragraphs`'s «16 in 8» — a SHA-pinned round does not go stale when a list
+# it never counted shrinks. The note's own NEXT sentence said so («the last three are ROUNDS, each
+# true of the tree it ran on»), so what shipped was a paragraph disagreeing with itself one clause
+# later, which is a thing a reader can believe half of.
+#
+# THAT is why the paragraph above spends a COMMAND where this repo's rule asks for an ASSERT when a
+# reader acts on a count — but NOT because no check is constructible. An independent pass built one
+# and it is recorded rather than waved away: require every «…»-quoted phrase to occur MORE THAN
+# ONCE in this file. Re-measured here, it is GREEN at `75a1e52`, `e77b0cf` and `9489de3` and RED at
+# `52d6085`, naming «16-key offender set» as the phantom — the exact defect, caught lexically. It is
+# PARTIAL twice over: it misses the other phantom of that note, which was plain prose and never
+# quoted, and it fires on legitimate quotes too — a phrase quoted BECAUSE it was just deleted is
+# lexically identical to a phantom, and this very paragraph writes several. (No count of them here:
+# it would be a tally of the file stating it, moved by the next word typed.) So shipping it needs a
+# retraction set of its own, the idiom this file already runs on. Filed as VMCP-181 (732), not
+# folded in here. What stays genuinely unassertable is the SIZE question: «is this sixteen the
+# list's SIZE?» is semantic, not lexical — the same token spells an inflation factor, a grep's match
+# count and a chunk tally in this very file — so a regex could only pin HOW MANY `16`s exist, which
+# says nothing about staleness and which any neighbouring landing moves. Line numbers are worse:
+# this note sat at line 258 at `52d6085` and at 279 by `62a8fe2`. And either would be a counter
+# counting the file it is written in, the self-reference this file refuses by name in several places
+# already. Fixing the one stale sentence leaves a reader nothing to ACT on, so the branch of the
+# rule that applies is the other one — history, with a sha — and the command is there for the reader
+# who wants to check rather than to act.
+#
+# Nothing here moves what any of those rounds CONCLUDED: no entry leaves under the weakened
+# pattern, and the entries this list's own comment names can still go without any new measurement —
+# deliberately not re-counted here, since that count is the comment's to state and to move. The
+# sentences
+# about what 688's rekey PRODUCED are history, and stay true whatever the list's size does
+# afterwards.
 LEGACY_RECORDS_WITHOUT_A_CONTROL_COUNT = frozenset({
     "tests/unit/test_api_kanban.py::_serving_lengths"
     "::¶sweep 2's own page draw widened to -> 1 failed /",
