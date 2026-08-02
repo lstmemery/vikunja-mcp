@@ -583,6 +583,83 @@ def test_the_standing_gc_record_is_reported_under_the_conditions_the_rulebook_na
     the parked build tree's record is CLOSED by the human's answer, while the reviewer's is closed
     by nothing this pipeline does.
 
+    ROUND 2 added the pair below, because the first draft of that note offered TWO commands for
+    the one exit it names and called them "тот же эффект" without running the second. Measured on
+    two identical dead review trees, sweeping IMMEDIATELY after each command — quiescing between
+    the command and the sweep would age away the very marker the command just wrote, which is the
+    review's standing HYPOTHESIS for how the claim survived writing (not measured, and it cannot
+    be: how the earlier round ran is not a property of anything here):
+
+      * `git branch <имя> <sha>` moves NEITHER marker (byte-identical mtimes before and after,
+        from the main repo and from inside the tree alike), so the NEXT sweep reaps: `released`,
+        directory gone. That is the exit, and it is the only one of the two that is;
+      * `git reset --hard HEAD~1` writes the INDEX, i.e. it renews the very window it was
+        supposed to end — four consecutive sweeps after it did nothing at all, and the tree went
+        only once the window had expired AGAIN. The index is the half that always moves and the
+        half that suffices: measured both shapes, a notes commit touching a file in the tree's
+        ROOT moves the directory marker too, one touching only a SUBDIRECTORY moves the index
+        alone, and the window is renewed identically. ("BOTH markers" was this docstring's own
+        first draft, inherited from the review comment rather than run — the subdirectory case
+        disproves it while leaving the conclusion standing.) Reset also does not make the notes
+        commit reachable in the first place: `git branch --contains` comes back empty and
+        `git fsck --unreachable --no-reflogs` lists it. The flag is load-bearing — PLAIN
+        `git fsck --unreachable` does NOT list the commit while the worktree directory still
+        stands, because its per-worktree reflog anchors it. Reset moves HEAD onto the parent and
+        orphans the notes; it passes the guard only because the guard inspects HEAD.
+
+    The two are pinned as a CONTRAST — same sweep, same tree shape, different command — so the
+    mutation that matters is an INPUT swap rather than a code edit, and both directions were run
+    (control PASS before and after each, `__pycache__` cleared, exactly 1 test selected):
+
+      * put `reset --hard` where the branch route runs -> FAIL, "the NEAREST sweep after
+        `git branch` did not reap" (`assert 109 in []`);
+      * put `git branch` where the reset route runs -> FAIL, "the nearest sweep reaped after
+        reset --hard" (`assert 108 not in [108]`). That assertion checks the released IDS FIRST
+        and deliberately: routed through `_codes_for` it died as a `KeyError: 'code'` three frames
+        away — a released entry carries no code — which is a red test that never states the claim;
+      * restore the old prose ("тот же эффект") -> FAIL on the note's warning; delete the
+        `git branch` command name from the note -> FAIL on the other;
+      * downcase the bullet's `ПОДКАТАЛОГЕ` warning after this round rewrote that sentence ->
+        still FAIL, so the widened признак did not cost the pin that was already there;
+      * grace window off (`if False and …`) -> FAIL, but at the YOUNG-sweep assertion far above
+        rather than at either of these: the run stops there, so what the two routes do under that
+        mutation was NOT observed and is not claimed here. Recorded because it is the obvious
+        code-level mutation to reach for and it does NOT isolate this contrast — the input swap
+        above is what guards it.
+
+    THE SECOND INDEPENDENT PASS then found that the fixed sentence had grown TWO new overclaims
+    of its own, both re-measured here before being accepted, and both about the promise a reader
+    acts on — that after `git branch` the NEAREST sweep reaps:
+
+      * not if the window has not expired yet. A tree whose card died moments ago is skipped as
+        young no matter what you do to its refs (measured: nothing on two sweeps, reaped only
+        after the window);
+      * not if anything was left in the tree. A forgotten untracked file is `dirty`, and `dirty`
+        keeps the tree with `git branch` having no bearing on it at all — which the SAME note
+        already says ten lines further down, so the unconditional contradicted its own paragraph;
+      * and the trap in between: the `git status` a human types to LOOK at the tree before
+        deciding writes the index itself, so the window restarts and the next sweep does nothing.
+
+    The stated MECHANISM was wrong too, in the safe direction but still wrong as a rule to reason
+    from: "появление или исчезновение записи" does not cover a rename OVER an existing name.
+    Measured with the temp file in a SUBDIRECTORY — the top-level name set is byte-identical
+    before and after, and the directory marker moves anyway.
+
+    Four sentences of this round were then found to be INVERTIBLE with the whole suite green, so
+    each got a positive pin and each inversion was re-run (control PASS before and after):
+    strip `--no-reflogs` -> FAIL; drop the "окно УЖЕ истекло" condition -> FAIL; drop "ДОЛЬШЕ
+    окна" -> FAIL; flip the ignored-files claim -> FAIL. Before the pins all four were green,
+    which is this card's own defect reproduced inside its own fix.
+
+    The bullet's own reach widened with it. "Правка файла в ПОДКАТАЛОГЕ не двигает метки" is
+    true but reads as though editing in the ROOT would hold the window; measured, editing an
+    EXISTING top-level file moves neither marker either (edit, append and chmod all checked), and
+    what moves one is the SET of entries changing — create, remove, or an atomic save over an
+    existing file (tmp + `os.replace`), which is how many editors save. And the sentence promising
+    that no work is lost was measured to be wider than its guard: `dirty` is `git status
+    --porcelain`, which does not show IGNORED files, so a clean and fully pushed tree was reaped
+    with `secrets.env` and `scratch/notes.txt` still inside it.
+
     MUTATION-CHECKED both ways (`__pycache__` cleared between rounds, every run confirmed to
     select exactly 1 test — "1 passed/failed, 45 deselected" — and both files restored from copies
     kept aside, never `git checkout --`), control PASS before and after each:
@@ -676,6 +753,47 @@ def test_the_standing_gc_record_is_reported_under_the_conditions_the_rulebook_na
     assert _codes_for(sweep(), reviewed) == {"kept": [], "expected": [], "released": []}, \
         "the record survived the card returning to Review — then it really would be unconditional"
 
+    # --- the note offers ONE reachability route, and the two candidates are NOT interchangeable.
+    # Review round 2 measured what the first draft asserted from the armchair: `git reset --hard
+    # HEAD~1` writes the INDEX, so it renews the window it was supposed to end, and it does not
+    # make the notes commit reachable at all. Pinned by running, because that is exactly the shape
+    # of claim ("X — тот же эффект") a reader acts on and cannot re-derive.
+    api.task_bucket[reviewed] = api.bucket_id("Build")          # the card leaves Review again
+    notes_sha = _git(rtree, "rev-parse", "HEAD")
+    _git(rtree, "reset", "--hard", "HEAD~1")
+    # the released-id check goes FIRST and by id: `_codes_for` reads a `code` off every entry, and
+    # a `released` one carries none — so the reap this pins against would surface as a KeyError
+    # three frames away instead of as this sentence.
+    after_reset = sweep()
+    assert reviewed not in [e["task_id"] for e in after_reset["released"]], \
+        "the nearest sweep reaped after reset --hard — the note says reset renews the window"
+    assert _codes_for(after_reset, reviewed) == {"kept": [], "expected": [], "released": []}, \
+        "reset --hard no longer renews the window — the note tells agents that it does"
+    assert rtree.exists(), "the nearest sweep reaped after reset --hard; the note says it does not"
+    assert _git(git_repo, "branch", "--all", "--contains", notes_sha) == "", \
+        "reset --hard now leaves the notes commit on a branch — the note says it orphans it"
+    _quiesce_for_gc(rtree)                                      # …only a LATER sweep reaps it
+    assert reviewed in [e["task_id"] for e in sweep()["released"]], \
+        "reset --hard never gets the tree reaped at all — the note says a later sweep does"
+
+    # …while `git branch <имя> <sha>` touches no marker, so the NEXT sweep reaps: the route the
+    # note actually tells a human to take.
+    branched = api.add_task("also under review", "Review")["id"]
+    btree = Path(workspace_cmd.ensure_workspace(
+        branched, role="review", at=head, cwd=git_repo)["path"])
+    (btree / "notes.md").write_text("verdict draft\n")
+    _git(btree, "add", "notes.md")
+    _git(btree, "commit", "-m", "reviewer notes")
+    bnotes = _git(btree, "rev-parse", "HEAD")
+    _quiesce_for_gc(btree)
+    api.task_bucket[branched] = api.bucket_id("Build")
+    assert _codes_for(sweep(), branched)["expected"] == [workspace_cmd.CODE_UNREACHABLE_HEAD], \
+        "the second review tree is not in the state whose two exits this pins"
+    _git(git_repo, "branch", f"keep-{branched}", bnotes)
+    assert branched in [e["task_id"] for e in sweep()["released"]], \
+        "the NEAREST sweep after `git branch` did not reap — the note promises that it does"
+    assert not btree.exists(), "the tree survived a sweep that reported it released"
+
     # --- and the prose states those conditions rather than a bare frequency
     # `_flat` for every prose pin: these phrases are long enough that a re-wrap lands inside one
     # (the first draft of this test pinned "НЕ продлевает" raw and went red on a line break alone).
@@ -693,6 +811,25 @@ def test_the_standing_gc_record_is_reported_under_the_conditions_the_rulebook_na
         "the unreachable-head note lost one of the two conditions its record actually has"
     assert "в пайплайне нет шага" in note, \
         "the note no longer says what IS permanent here — that nothing in the pipeline clears it"
+    assert "`git branch <имя> <sha заметок>`" in note, \
+        "the note stopped naming the one command that actually makes the notes commit reachable"
+    assert "этим выходом НЕ является" in note, \
+        "the note dropped its warning that reset --hard is not the same exit — it measurably is not"
+    # Three more positive pins, added because the second pass INVERTED each of these sentences and
+    # the whole suite stayed green — the exact drift this card exists to stop. Each guards a claim
+    # whose negation is what a reader would otherwise act on.
+    assert "--no-reflogs" in note, \
+        "the note dropped the fsck flag — bare `git fsck --unreachable` stays SILENT while the " \
+        "worktree stands, so without it the command shown proves the opposite of what is claimed"
+    assert "окно УЖЕ истекло" in note, \
+        "the note went back to promising that the NEAREST sweep reaps after `git branch` — " \
+        "measured false for a young tree and for one holding a forgotten file"
+    assert "ДОЛЬШЕ окна" in bullet, \
+        "the bullet dropped the condition again: a tree written to just before its card died is " \
+        "NOT reported on the first sweep, which is what the unconditional version promised"
+    assert "ИГНОРИРУЕМОЕ" in bullet, \
+        "the bullet stopped saying `dirty` cannot see ignored files — the one measured way a " \
+        "sweep destroys something the 'no work is lost' promise sounds like it covers"
 
 
 def test_the_released_entrys_branch_leak_is_documented_where_agents_will_read_it():
