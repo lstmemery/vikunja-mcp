@@ -940,10 +940,13 @@ def test_next_task_offers_free_task_despite_off_board_gated_candidate(env):
 # returned head. So only the narrowing that manifests solely at 1 AND solely in the message was
 # ever slipping through; the flag half of the same boundary never stopped being covered.
 # Two NEIGHBOURING boundaries of this same class, measured GREEN on this tree and deliberately left
-# out of this slice, are recorded on VMCP-158 (664) so the next reader does not re-measure them: the
-# headline count at exactly ONE waiting task (632's parametrize spans 2 and 3, and the differential
-# below cannot see the base at all), and `any` -> `all` over a tail's blockers, which no env can
-# tell apart because every gated tail in the suite has exactly one blocker.
+# out of THIS slice, are now CLOSED by VMCP-158 (664) — recorded here so the next reader follows
+# them instead of re-measuring them. The headline count at exactly ONE waiting task (632's
+# parametrize spanned 2 and 3, and the differential below cannot see the base at all): closed by
+# widening that parametrize to 1, in 632's section. And `any` -> `all` over a tail's blockers,
+# which no env could tell apart because no gated tail carried blockers at two DIFFERENT stages (the
+# one two-blocker tail in the suite has both in Queue, where the quantifiers agree): closed by the
+# quantifier section at the END of this file, which builds the mixed pair.
 
 _IN_BUILD = "in 'Build'"
 _IN_BACKLOG = "in 'Backlog'"
@@ -1188,11 +1191,12 @@ def test_the_cycle_message_pins_the_closed_loop_every_ref_beside_its_own_stage_a
 
 
 @pytest.mark.parametrize("n_tails, headline", [
+    (1, "1 queued task(s) can't be claimed"),
     (2, "2 queued task(s) can't be claimed"),
     (3, "3 queued task(s) can't be claimed"),
 ])
 def test_the_starving_waiting_line_reads_blocked_task_then_blocker_and_the_headline_counts_them(
-    env, n_tails, headline
+    request, env, n_tails, headline
 ):
     """The waiting line states WHICH task waits on WHICH blocker, and the headline says how many.
     606's differential cannot see either: it changes one attribute between two calls, so a
@@ -1200,7 +1204,19 @@ def test_the_starving_waiting_line_reads_blocked_task_then_blocker_and_the_headl
     measured green at 716 without this test — the line's LEFT side replaced by the blocker's own
     ref, so the line reads `X ← X in 'Build'` and the task that actually waits vanishes from it
     (nothing is transposed, hence not an inversion), and the headline count corrupted
-    state-independently."""
+    state-independently.
+
+    The FIRST row, one tail (VMCP-158 / #664), is the boundary: a FLOOR under the headline count
+    (`max(2, len(waiting))`) renders truthfully at every other count this test spans, so it changes
+    a byte only here. Note the scope: "this test spans", not "the suite builds". The one-tail state
+    was reached all along — instrumenting `_starving_tail` over the whole suite on c0da162 records
+    eight calls at one waiting tail, from seven distinct nodes — but none of them asserts the
+    message, so the floor's wrong numeral was UNOBSERVED rather than unreachable. Same distinction
+    the boundary note below draws at the other end of the span. 606's differential cannot supply
+    that row either, even though 635 made it
+    build exactly this state — the differential reads the base prose out of the plain message and
+    rewrites it in place, so a corruption that is identical in both states cancels out of the
+    equality regardless of how many tails the env holds."""
     api, wf = env
     heads = [api.add_task(f"chain head {i}", "Build") for i in range(n_tails)]
     tails = [api.add_task(f"tail {i}", "Queue") for i in range(n_tails)]
@@ -1225,8 +1241,288 @@ def test_the_starving_waiting_line_reads_blocked_task_then_blocker_and_the_headl
         (_spelled_ref(t), _spelled_ref(h)) for t, h in zip(tails, heads)
     ], res["waiting"]
 
+    # The two properties of the PARAM SET, read off the RUNNING node rather than off
+    # `[(2, …), (3, …)]` as a module constant — 635's idiom, and it is there because slicing only
+    # the decorator leaves an assert over the constant green while one row runs (measured by an
+    # independent pass on 635's own set). The first: some row must sit at ONE tail, the boundary
+    # this card restores (VMCP-158 / #664) and the only count at which a floor like
+    # `max(2, len(waiting))` changes a byte: measured on c0da162, this commit's parent, that floor
+    # is **0 failed — GREEN** without this row (pristine workflow.py `a29f65f0d11f…`, mutant
+    # `03eae4d34575…`) and **1 failed** with it, the one failure being this test's own
+    # `[1-…]` row. Every round quoted in this note ran the whole unit suite against an unmutated
+    # control of 0 failed on the same selection, and is quoted as a FAILURE count rather than as
+    # `N of <total>` on purpose: the total moves with every test a sibling lands, and it moved twice
+    # under this very card. Both halves of that pair were run here, on the SAME parent, rather than
+    # one half
+    # being inherited — the earlier spelling of this note quoted 727/731 off 589190c, a base three
+    # bumps older whose workflow.py differs, so those denominators went stale the moment the branch
+    # was rebased. The second is 632's own property, now STATED
+    # instead of merely being true: the set must span at least two distinct counts, which is what
+    # kills a hard-coded numeral and what no single state can do — re-measured here, since the row
+    # strengthens it: a headline hard-coded to `2` is **2 failed**, dying at `[1-…]` AND
+    # `[3-…]`, where the section note above records 632 measuring the same mutant at one failure,
+    # the 3-tail row alone (its own tree, its own baseline — quoted, not re-measured, since the
+    # 2/3 set no longer exists to measure). No single row carries both properties (a set
+    # holding only the 1-row spans a single count; a set without it spans several but misses the
+    # boundary), so a collapsed set fails HERE by name instead of silently re-blinding the headline
+    # pin below — measured, not asserted: delete the 1-row from the decorator alone and both
+    # surviving rows fail on `any(n == 1 …)` with the collapsed set printed, no code mutation.
+    # HONEST BOUNDARY, in 635's spirit and not oversold: spanning 1/2/3 kills degenerate CONSTANTS,
+    # not arithmetic that renders correctly at every spanned value — `min(3, len(waiting))` is
+    # **0 failed — GREEN** after this pin, and that one IS killable HERE: add a 4-tail row and the
+    # same mutant is **1 failed**, dying at `[4-…]` (measured, code otherwise pristine; the
+    # row alone, without the mutant, is 733 passed).
+    # WHY it survives without that row is NOT "no env builds a bigger tail" — that was this note's
+    # first answer and it is FALSE, refuted by instrumenting `_starving_tail` and running the whole
+    # suite on c0da162: fifteen calls, and one of them carries **1100** waiting tails. It is
+    # `test_deep_acyclic_chain_not_flagged_as_cycle`, ~600 lines above IN THIS FILE, whose chain is
+    # deliberately longer than Python's recursion limit; it asserts `task is None`, no `cycle`, and
+    # `starving is True`, and never touches `message`, so it cannot see a corrupted headline at any
+    # count. So the boundary on THIS axis is the span of counts this test PINS (1..3), not the span
+    # the file BUILDS — a distinction the quantifier section at the end of the file does not have to
+    # draw, because there the largest set anything builds and the largest set anything pins are the
+    # same number.
+    # `max(1, len(waiting))` is green too and is NOT that boundary — it is an equivalent mutant on
+    # input unreachable THROUGH `next_task`, so its greenness is evidence about nothing:
+    # `_starving_tail` has exactly one call site, in the `if gated:` branch, and builds `waiting`
+    # from `gated`, so `len(waiting) >= 1` holds on every input that arrives that way and the floor
+    # is byte-identical to the original there. That scope is load-bearing rather than pedantic: a
+    # test may call the method DIRECTLY, as this file already does with `_unfinished_predecessors`
+    # and `_move`, and one that does kills the mutant — constructed and measured,
+    # `wf._starving_tail([])["message"]` reads `0 queued task(s) …` pristine and `1 queued task(s)
+    # …` under the floor. So "no test set could kill it" (the earlier spelling) is false; the true
+    # claim is that no test reaching it through `next_task` can. (635's section frames its own
+    # `max(1, len(retriage))` as green "under any finite set of STATES", which is the narrower and
+    # correct shape; that value is likewise >= 1 inside `if retriage:`. Noted here so the pattern is
+    # not reached for a third time as if it measured something — and so the escalation from states
+    # to test sets is not made again.)
+    marker = request.node.get_closest_marker("parametrize")
+    assert marker.args[0] == "n_tails, headline", marker.args
+    rows = marker.args[1]
+    assert (n_tails, headline) in rows, rows
+    assert any(n == 1 for n, _h in rows), rows
+    assert len({n for n, _h in rows}) >= 2, rows
+
     msg = res["message"]
     assert msg.startswith(headline), msg
     assert msg.endswith(" | ".join(
         f"{_spelled_ref(t)} ← {_spelled_ref(h)} {_IN_BUILD}" for t, h in zip(tails, heads)
     )), msg
+
+
+# --- the QUANTIFIER over a tail's blockers (VMCP-158 / #664) ---
+#
+# `_starving_tail` decides a tail's retriage flag with
+# `any(b["stage"] == "Backlog" for b in blockers)`. Swapping that `any` for `all` is measured
+# GREEN — **0 failed** on c0da162, this commit's parent, mutant sha a99d30fac406… — i.e.
+# genuinely unobservable: the mutated run failed exactly as often as its control, 0 failed, on the
+# same whole-suite selection. Every round quoted in this section is a FAILURE count against that
+# same control of 0 failed; pass totals are left out on purpose, because they move with every test
+# a sibling lands and this card watched them move twice. The
+# reason is NARROWER than "no env ever gives a tail two blockers", which is what the first draft of
+# this note asserted: `test_converging_dag_not_flagged_as_cycle` (~600 lines above, the diamond
+# guard) already builds a two-blocker gated tail — its A follows BOTH B and C — and it asserts
+# `starving is True`, so it does reach this predicate. What no env builds is a tail whose blockers
+# sit at DIFFERENT stages. That is NECESSARY for the two quantifiers to differ but not sufficient,
+# and the loose spelling of this sentence used to claim it was both: they differ exactly when the
+# set holds a Backlog member AND a non-Backlog one, so `("Build", "Design")` differs in stage while
+# both quantifiers still agree (False). The test's own assert uses the exact condition, not this
+# sentence's. A's blockers are both in Queue, where `any` and `all` agree (both False).
+#
+# MEASURED, not read — and re-measured HERE rather than inherited: `_starving_tail` instrumented on
+# a pristine c0da162 and the whole suite run. Every blocker set it saw, by size and stages:
+#     1099 x n=1 ['Queue'] | 16 x n=1 ['Build'] | 6 x n=1 ['Backlog'] | 1 x n=1 ['Your Call']
+#        1 x n=1 ['Design'] | 1 x n=2 ['Queue', 'Queue']
+# One set of size two, both members at one stage. So the honest statement is NOT "no assertion
+# anywhere could have caught it": had that one pre-existing two-blocker env paired a Backlog
+# blocker with a non-Backlog one, an ordinary `needs_retriage` assert would have gone red. The
+# state that separates the quantifiers is the stage MIX, not the blocker COUNT, and it had never
+# been built.
+#
+# NOT A REGRESSION. Unlike 635's boundary — which was covered on bce31d7 and lost on 7e97b2b, a
+# before/after pair the section above can quote — this one has been unreachable for as long as the
+# predicate has existed. There is no commit to name, and nothing was traded away to get here.
+#
+# WHY `all` IS THE WRONG RULE, in product terms. A tail blocked by one head returned to Backlog AND
+# one ordinary Build predecessor is exactly the board that most needs a human: the Build
+# predecessor will finish on its own, the returned head will not, and only re-triage moves it. Under
+# `all` that tail's `needs_retriage` goes False, so it drops out of `retriage` — the escalation
+# sentence loses it from its count, or disappears entirely when it was the only such tail — and the
+# stalled chain stops reporting itself. Nor is a multi-blocker tail an exotic shape — it is what
+# `_unfinished_predecessors` was written for: it walks BOTH relation kinds
+# (`PREDECESSOR_RELATION_KINDS = ("follows", "blocked")`) and returns every unfinished one, deduped
+# by id, so a card that follows an ordered-epic step AND is hand-marked blocked-by something else
+# in the web UI lands here with two. That mixed-KIND path is REALISM, not something these rows pin:
+# the env below links BOTH blockers with "follows", and the predicate reads the blocker's STAGE and
+# never its relation kind, so nothing here would notice if one of those edges changed kind.
+# Nor was the SHAPE ever the exotic part — the diamond guard above already gives one tail two heads
+# (A follows B and C) and one head two tails (B and C both follow D). What no env gives a tail is
+# two blockers at DIFFERENT stages.
+# (Attribution, and this is the THIRD correction in this one block — recorded rather than quietly
+# rewritten, because the repeat is the finding. Draft 1 credited 606's section with recording a
+# one-head-to-many-tails fan-out; grepped, it does not. Draft 2 replaced that with "and no env in
+# this file builds one", equally false — the diamond guard's D fans out to B and C. And draft 2's
+# headline claim, that every gated tail in every env carries exactly one blocker, was false for
+# that same env. Three claims about what this file contains, each written from reading it and none
+# from measuring it; the histogram above is the first one that was measured.
+# Draft 3 then made the SAME mistake twice more, and both were caught by a second independent pass
+# rather than by the author, which is the reason that pass is a rule and not a nicety: "no env in
+# this file builds" a four-tail state — refuted by a 1100-tail env ~600 lines above (see the
+# headline test's boundary note) — and "these rows reach blocker-set sizes ONE and TWO", true of the
+# file and false of the rows it names. FIVE claims about this file's contents, all five wrong, none
+# of them measured before it was written. The standing lesson: about what a suite CONTAINS, do not
+# write from reading — instrument and run.)
+#
+# WITH THE ENV, the same `all` mutant is **2 failed**, and the two failures are the two MIXED
+# rows — the all-Build row stays green, which is the point: it is the row that cannot tell the
+# quantifiers apart and it is there for the OTHER property below.
+#
+# WHAT THE ENV BUYS BEYOND THE QUANTIFIER, as a bonus rather than as this card's thesis: the two
+# MIXED rows are the same pair of stages in both orders, so a degenerate read of the FIRST blocker
+# only (`blockers[0]["stage"] == "Backlog"`) satisfies one row and fails the other — measured,
+# **1 failed**, dying exactly at `[blocker_stages1-…]`, the reversed row. That both-orders
+# property is what the measurement rests on, so it is asserted of the row set inside the test:
+# dropping the reversed row alone re-blinds this exact mutant, and did so in silence. Both halves of
+# THAT are measured too, and separately, because a green suite never says which assert did the work:
+# drop the reversed row with the mirror assert PRESENT and the run is **2 failed** (both
+# surviving rows, on that assert); drop the row AND delete that one assert and the run is
+# **0 failed — GREEN**; do that and add the first-blocker mutant and it is **0 failed** again —
+# the silence, reproduced.
+#
+# AND WHAT THESE ROWS ARE NOT EXCLUSIVE ABOUT, stated so nobody reads a red here as "the quantifier
+# moved". Both mixed rows anchor the escalation at count 1, so they also inherit 635's boundary:
+# `if retriage:` narrowed to `if len(retriage) > 1:` is **3 failed** — 635's own `[1-1-…]`
+# row plus these two. That is extra coverage of a NEIGHBOUR, not evidence about `any`/`all`; the
+# mutation that isolates this section is the `all` swap above, and it touches no other test.
+#
+# WHAT WAS NEVER AT RISK, so the pin is not over-read. The per-blocker ANNOTATION inside the waiting
+# line carries no quantifier at all — it is decided per blocker, inside the join — so it renders
+# beside every Backlog blocker and beside no other whatever this predicate does. Only the payload
+# flag (`waiting[].needs_retriage`, and the top-level `needs_retriage` derived from it) and the
+# escalation's presence/count ever read through it. The test asserts the annotation half anyway,
+# as the control that keeps the other two honest.
+#
+# HONEST BOUNDARY, and it is the SIZE of the blocker set, not the set of stages — which is worth
+# spelling out, because the stage answer is the one that looks right and was measured FALSE. Every
+# row here builds ONE tail carrying exactly TWO blockers, so what these rows reach is size TWO and
+# only that (an earlier spelling said "sizes ONE and TWO", which is true of the file and false of
+# these rows). Size two was already reached before this section — the diamond guard's tail, per the
+# histogram above — so what they add AT that size is the mixed stage pair, not the size itself.
+# What nothing reaches is THREE: the largest set in the histogram
+# is two, and these rows do not widen it. So a rule that degrades only from three blockers up stays
+# invisible: `len(blockers) <= 2 and any(…)` is **0 failed — GREEN** after this pin — and that IS
+# the boundary rather than a guess about one, measured from the other side too: add a fourth row
+# with THREE blockers (Backlog, Build, Build) and the same mutant is **1 failed**, dying at
+# that new row alone — against that row's OWN control, the row added with the code pristine,
+# which is 0 failed. Same shape as
+# 635's admission — the fix buys STATES, not a technique that generalises past them.
+# NOT the remainder, though it reads like one: "these envs use only Backlog and Build, so any
+# predicate agreeing with `== "Backlog"` on that pair survives". Constructed and refuted —
+# `any(b["stage"] != "Build" for b in blockers)` is **2 failed**, killed by
+# test_next_task_all_gated_returns_starving_signal_not_empty and
+# test_next_task_your_call_predecessor_off_light_board_gates, which gate SINGLE-blocker tails at
+# other stages and assert the flag is False there. The stage half of this predicate was already
+# covered elsewhere; only its quantifier was not.
+
+# The envs the pin spans: (the blockers' stages, in the order the test links them; the tail's
+# expected retriage flag; that env's escalation literal, or None where no escalation may appear).
+# THREE properties, one assert each inside the test, because no single row carries them all: the
+# two MIXED rows are the only shape on which `any` and `all` disagree (mixed meaning a Backlog
+# member beside a non-Backlog one — merely differing stages is not enough); they are the SAME pair
+# in BOTH orders, which is what keeps a first-blocker-only read observable; and the all-Build row is
+# what stops a hard-coded True from satisfying the flag.
+_MIXED_BLOCKER_ENVS = [
+    (("Backlog", "Build"), True, _RETRIAGE_ESCALATION_1),
+    (("Build", "Backlog"), True, _RETRIAGE_ESCALATION_1),
+    (("Build", "Build"), False, None),
+]
+
+# Test-owned and deliberately COUNT-AGNOSTIC: the negative row asserts the escalation is ABSENT, so
+# needling a fragment that carries no numeral keeps that assertion from passing merely because the
+# count changed. The positive rows anchor the full literal above.
+_ESCALATION_NEEDLE = "stalled behind a chain HEAD"
+
+
+@pytest.mark.parametrize("blocker_stages, needs_retriage, escalation", _MIXED_BLOCKER_ENVS)
+def test_a_tail_needs_retriage_when_ANY_of_its_blockers_sits_in_backlog_not_when_all_do(
+    request, env, blocker_stages, needs_retriage, escalation
+):
+    """ONE waiting tail carrying TWO blockers — two of the three rows put them at DIFFERENT stages,
+    which is the state no other env in this suite builds (a two-blocker tail does exist, in the
+    diamond guard above, but with both blockers in Queue) and the only one on which `any(...)` and
+    `all(...)` can disagree; the third row is the all-Build mirror, deliberately a state on which
+    they AGREE, so a hard-coded True cannot satisfy the flag. (This sentence is printed for all
+    three rows, so it must not claim mixed stages of the mirror — an earlier spelling did.) The
+    mixed rows are the board a human is most needed on (a returned chain head beside an ordinary
+    predecessor that will finish by itself); under `all` that tail stops reporting itself."""
+    api, wf = env
+    tail = api.add_task("tail", "Queue")
+    # The `blocked` label is what return_task leaves on a head it sends back; carried here for
+    # fidelity only — the retriage predicate reads the blocker's STAGE and nothing else.
+    heads = [
+        api.add_task(f"head {i}", stage, labels=("blocked",) if stage == "Backlog" else ())
+        for i, stage in enumerate(blocker_stages)
+    ]
+    for head in heads:
+        api.add_relation(tail["id"], head["id"], "follows")
+
+    res = wf.next_task()
+    assert res["starving"] is True
+    # THE env property this whole test exists for, asserted rather than assumed:
+    # ONE waiting tail carrying TWO blockers, in the order this test built them.
+    assert res["waiting_count"] == 1, res["waiting"]
+    w = res["waiting"][0]
+    assert w["task"]["id"] == tail["id"]
+    assert [b["id"] for b in w["blocked_by"]] == [h["id"] for h in heads], w["blocked_by"]
+    assert [b["stage"] for b in w["blocked_by"]] == list(blocker_stages), w["blocked_by"]
+
+    # The rows that ACTUALLY RAN, read off the running node rather than off `_MIXED_BLOCKER_ENVS`
+    # — 635's idiom, and for its measured reason: slicing only the decorator leaves an assert over
+    # the module constant green while a single row runs. THREE properties, one assert each. Two
+    # collapses were CONSTRUCTED here with the code left pristine, and each fails by the name of the
+    # property it drops: `_MIXED_BLOCKER_ENVS[:2]` (keep the mixed rows, drop the mirror) is
+    # **2 failed** on the no-Backlog assert, `_MIXED_BLOCKER_ENVS[2:]` (keep only the mirror)
+    # is **1 failed** on the MIXED assert,
+    # and both print the collapsed set. The THIRD assert exists because a review pass constructed
+    # the collapse those two miss, against the version of this test that carried only them:
+    # `[_MIXED_BLOCKER_ENVS[0], _MIXED_BLOCKER_ENVS[2]]` — drop the reversed row — ran GREEN, and
+    # the FIRST-blocker mutant the section above measures ran green under it too, in silence. That
+    # third assert's own bite is measured, not assumed, in three runs rather than one, because a
+    # green suite never names the assert that did the work: the same collapse WITH the assert is
+    # **2 failed**; the same collapse with that ONE assert deleted is **0 failed — GREEN**;
+    # and that plus the first-blocker mutant is **0 failed** — the silence it prevents, rebuilt.
+    # Each round here is quoted as a FAILURE count against an unmutated control of 0 failed on
+    # the same selection; totals are deliberately absent, since they move with every sibling.
+    marker = request.node.get_closest_marker("parametrize")
+    assert marker.args[0] == "blocker_stages, needs_retriage, escalation", marker.args
+    rows = marker.args[1]
+    assert (blocker_stages, needs_retriage, escalation) in rows, rows
+    # MIXED (a Backlog member beside a non-Backlog one) is the ONLY shape on which the quantifiers
+    # disagree — differing STAGES is necessary but not sufficient, so this reads the exact
+    # condition, not the section note's shorthand …
+    assert any(
+        "Backlog" in s and any(b != "Backlog" for b in s) for s, _n, _e in rows
+    ), rows
+    # … and a row with NO Backlog at all is what stops a hard-coded True from satisfying it.
+    assert any("Backlog" not in s for s, _n, _e in rows), rows
+    # … and some pair of rows must be the same stages in the OTHER order, or the FIRST-blocker
+    # degenerate above stops being observable. Constructed: drop the reversed row and both the
+    # collapsed set AND `blockers[0]["stage"] == "Backlog"` run green, in silence.
+    assert any(
+        a != b and sorted(a) == sorted(b) for a, _n, _e in rows for b, _m, _f in rows
+    ), rows
+
+    assert w["needs_retriage"] is needs_retriage
+    assert res["needs_retriage"] is needs_retriage
+
+    msg = res["message"]
+    if escalation is None:
+        assert _ESCALATION_NEEDLE not in msg, msg
+    else:
+        assert msg.endswith(escalation), msg
+    # The ANNOTATION half is per-blocker and carries no quantifier, so it renders beside every
+    # Backlog blocker and beside no other, whatever the flag above does.
+    for head, stage in zip(heads, blocker_stages):
+        rendered = f"{_spelled_ref(head)} in '{stage}'"
+        assert rendered in msg, msg
+        assert (rendered + _RETRIAGE_ANNOTATION in msg) is (stage == "Backlog"), msg
