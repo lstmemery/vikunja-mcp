@@ -84,7 +84,10 @@ them up.
     are TWO routes, not one: re-MEASURING a sweep and its control, which is the only route for a
     historical number whose environment is gone; or, where the record already states a control the
     pattern cannot reach, moving that sentence into the paragraph that needs it — no new
-    measurement, nothing fabricated. Saying only the first would misdescribe a fifth of the list.
+    measurement, nothing fabricated. That route reaches the THREE QUANTIFIER rows the list's own
+    comment names as able to leave TODAY — a fifth of sixteen — and not all five of the entries
+    whose records state something unreadable, because the other two would need a REWORDING rather
+    than a move. Saying only the first route exists would misdescribe those three.
     It GREW once, when 688 changed the unit under it — a rekey rather than a loosening, and the
     same prose is covered either way.
 """
@@ -99,10 +102,18 @@ TESTS_DIR = REPO_ROOT / "tests"
 # SCOPE: sweep records live in the test suite's prose, and confining the scan there is MEASURED
 # rather than assumed — but measured PER SCOPE, because the two scopes answer differently and a
 # single "only hit outside tests/" would be false. Ran the trigger over both on 2026-08-02.
-# src/: exactly ONE hit in the whole package, the sentence in server.py describing the claimable
-# check's EXIT CODES — not a pytest tally at all, and the row for it below shows the trigger
-# cannot tell the two apart. A scanner whose sole finding in the package is a false positive has
-# no business reading there. Repo markdown: five hits, every one of them inside the CLAUDE.md
+# src/: ONE hit when that run was taken at 09:22 that day — the sentence in server.py describing
+# the claimable check's EXIT CODES, not a pytest tally at all, and the row for it below shows the
+# trigger cannot tell the two apart — and the argument built on it was that a scanner whose sole
+# finding in the package is a false positive has no business reading there. RE-RUN for VMCP-167
+# (688) at 16:36 the SAME DAY it is TWO, and the second is REAL: `claimable_cmd`'s `_Trail._emit`
+# docstring quotes a round as a failure count with no control in its paragraph (not reproduced
+# here — it is a number with no baseline), so it WOULD be an offender if src/ were in scope. It
+# landed at 16:08 (VMCP-91 / 536), between the two runs. The scope is left where it stands,
+# because widening it is a behaviour change rather than a prose fix, and VMCP-172 (712) carries
+# that decision — but the sole-false-positive argument no longer supports it, and note WHY nobody
+# caught this: the count carries a DATE, and it rotted inside its own date.
+# Repo markdown: five hits, every one of them inside the CLAUDE.md
 # paragraphs THIS commit added, each already quoting its own control count; before it, none. That
 # second number is self-referential by construction — the same trap `git log -S` has, where a
 # phrase written into a file changes the answer the file gives about it — so it is dated, and a
@@ -121,9 +132,11 @@ _ROUND_COUNT = re.compile(r"(?<![:.\w])(?<!of )\d+\s+failed\b", re.IGNORECASE)
 # against is THIS pattern with the tally requirement replaced by a bare digit —
 #     r"control\b[^.;]{0,60}?\d|\d[^.;]{0,60}?\bcontrol\b"
 # — which prose using the word in a non-sweep sense can satisfy. Spell the weak form exactly that
-# way before re-running any number below: the ratchet round further down measures four OTHER
-# readings of "a digit near `control`", and every one of them answers differently. Measurements
-# below are from 2026-08-02, `__pycache__` cleared and PYTHONDONTWRITEBYTECODE=1.
+# way before re-running any number below, and read `WHAT THE WEAKENING COSTS` BEFORE you conclude
+# anything from the result: what the weakening costs is not what this comment used to say, because
+# VMCP-167 (688) moved the unit under it. Measurements below are from 2026-08-02, `__pycache__`
+# cleared and PYTHONDONTWRITEBYTECODE=1, and the two whose answer DEPENDS on the record unit each
+# name the unit they were taken under, rather than leaving a reader to infer it.
 #
 # On the two "other sense" rows of the pattern test further down, that weak form accepts BOTH and
 # this one refuses BOTH — that is what requiring a tally buys. Those two rows are ADAPTATIONS of
@@ -138,10 +151,27 @@ _ROUND_COUNT = re.compile(r"(?<![:.\w])(?<!of )\d+\s+failed\b", re.IGNORECASE)
 # control 0 failed; a false repo-content quotation planted in this comment -> 0 failed; another
 # planted in a docstring under tests/ -> 0 failed. VMCP-171 (695) carries that class.
 #
-# That weak form also vouches for 22 records under tests/ which this one refuses, and exactly ONE
-# of them quotes a round count — test_api_kanban's honest-server-paginates, a LEGACY entry, which
-# would therefore leave the list with nobody re-measuring it. One is the number that matters
-# here: the ratchet's business is the list, not the tally of near-misses.
+# WHAT THE WEAKENING COSTS, said flatly because this is the paragraph a later agent calibrates
+# on: under the shipped unit, NOTHING THE RATCHET CAN SEE. The weak form vouches for 30 chunks
+# under tests/ that this one refuses, and NOT ONE of them quotes a round count, so both patterns
+# yield the SAME 16-key offender set and no entry leaves the list. That is not a property of the
+# one spelling above — five readings of "a digit near `control`" were run (clause-bounded window
+# or any characters, one direction or both, and the loosest "the word anywhere plus any digit
+# anywhere") and all five give those same 16 keys. So an agent who re-runs this and sees the
+# weakening MOVE something has changed something else, and should find out what. The 30 is dated
+# with the rest of this comment and THREE of the thirty are paragraphs of this same file (the
+# module docstring's opening, `_paragraphs`'s `THE UNIT OF THE WHOLE SCANNER`, and the pattern
+# test's second), so an edit anywhere in this file can move it — re-run it rather than trust it,
+# exactly as with the bullet-split pair below.
+#
+# UNDER THE RECORD UNIT it cost something, and this paragraph asserted that in the PRESENT tense
+# until 688's follow-up round corrected it: there the weak form vouched for 22 records, exactly
+# ONE of which quoted a round count — test_api_kanban's honest-server-paginates, a LEGACY entry,
+# which therefore left the list with nobody re-measuring it — while the loosest of the five
+# readings released three. Kept as dated history rather than deleted, because the ratchet round
+# below states the same fact in the past tense, and this block still stating it in the present is
+# what made the correction necessary: two blocks of one file answered a measurable question
+# differently, and the one calling itself the calibration point held the stale answer.
 #
 # `[^.;]` NARROWS the window; it does not bound it to a clause, and saying so would oversell it.
 # Constructed and measured, all five accepted by the pattern below: "control PASS! ... says 0
@@ -277,7 +307,11 @@ def _comment_runs(source: str):
     most likely to grow another banner. `_docstrings` above calls a collision worse than a miss;
     this is what that looks like when it happens. With the opening line in the key both
     constructions give 1 failed, and reverting the key to the definition alone turns the ratchet
-    red — so the second half is load-bearing, not belt-and-braces.
+    red — so the second half is load-bearing, not belt-and-braces. The 961 / 790 / 72 above belong
+    to a SHA rather than to a date: re-run on 688's follow-up tree the SAME day, the same three
+    came out 1098 / 870 / 83, because a count over all of tests/ moves with every landing and this
+    file's own records are inside it. The SIX did not move, and neither did the conclusion resting
+    on it, which is the half that was load-bearing.
 
     EVERY NUMBER ABOVE IS UNDER THE RECORD UNIT, which VMCP-167 (688) replaced with the paragraph,
     so the conclusion survives and its REASON does not. Re-measured against a control of 0 failed,
@@ -287,8 +321,11 @@ def _comment_runs(source: str):
     "1 passed" above is history rather than current behaviour. Dropping the opening line is still
     1 failed, but because ten legacy entries change key at once, not because a regression is
     swallowed. What the opening line alone still separates is narrower than the round above
-    measured: two runs over ONE definition whose corresponding PARAGRAPHS agree. Kept for that,
-    and because re-keying the list a second time in one commit buys nothing.
+    measured: two runs over ONE definition whose corresponding PARAGRAPHS agree. And that shape has
+    NO instance on this tree — dropping the opening line and keying by definition plus paragraph
+    head leaves 1761 distinct keys and ZERO collisions — so what it separates today is nothing,
+    which is the honest price of keeping it. Kept anyway, because it costs one string and re-keying
+    the list a second time in one commit buys less than it risks.
     """
     lines = source.splitlines()
     defs = [
@@ -340,10 +377,13 @@ def _paragraphs(prose: str):
     A BARE `#` LINE IS BLANK, and that conjunct is what makes this work on comment runs, which are
     half of this repo's biggest sweep records (test_workflow_sequence_gate, test_workflow_wip). A
     run has no blank lines at all — `#` alone is its paragraph separator, and this file's own
-    comment above `_CONTROL_COUNT` is written that way, in four paragraphs. Without the conjunct
-    every banner keeps the broken granularity: measured on this tree, splitting docstrings only
-    gives 9 offending chunks in 7 records, and counting `#` too gives 16 in 8, the extra record
-    being one that was green outright.
+    comment above `_CONTROL_COUNT` is written that way, its paragraphs divided by nothing else.
+    That sentence used to carry the COUNT of them, and the count is gone for the reason the module
+    docstring's AUTHOR-CONTROLLED bullet gives: it described text in this same file, so the very
+    edit that corrected that comment falsified it — four became five in the commit that noticed.
+    Without the conjunct every banner keeps the broken granularity: measured on this tree,
+    splitting docstrings only gives 9 offending chunks in 7 records, and counting `#` too gives
+    16 in 8, the extra record being one that was green outright.
 
     THE CONJUNCT IS NOT SCOPED TO COMMENT RUNS, though it is only USEFUL there, and the difference
     is a false-positive channel rather than a tidy detail. This function does not know which
@@ -359,9 +399,13 @@ def _paragraphs(prose: str):
     because the canonical shape this file asks authors for is a control header with its rounds
     listed under it — `Control round: 0 failed, 1 passed.` then `* drop the guard -> 1 failed` —
     and a bullet split severs every one of those from its baseline. That pair is DATED 2026-08-02
-    and is self-referential in the way the scope comment below warns about: this file's own
-    bulleted MUTATION-CHECKED blocks are counted by it, so writing the sentence moved it (it read
-    20/11 before this card, 40/27 mid-card, 49/36 as shipped, all on the same reasoning). Re-run
+    and is self-referential in the way the scope comment above warns about: this file's own
+    bulleted MUTATION-CHECKED blocks are counted by it, so writing the sentence moved it — on the
+    one marker reading throughout, it was 25/12 at 656's second commit, 27/14 at its third, and
+    40/27 on the tree this card started from. The 20/11 this sentence used to label "before this
+    card" was the FILING agent's figure, taken at another sha and, by that agent's own worklog,
+    probably under another marker definition; it reproduces at none of the three, so it is dropped
+    rather than re-dated — a trajectory is only a trajectory if every point is on one ruler. Re-run
     it rather than trust it; what does NOT rot is the decision, which is pinned in the paragraph
     test below by the canonical-shape assert, and which the direction of the number makes
     regardless of the marker definition — four readings of "list marker" give 49 offenders, and
@@ -478,10 +522,16 @@ def test_a_sweep_record_that_quotes_a_failure_count_states_its_control_count():
         honest-server-paginates) stopped being an offender under the looser regex. Re-measured at
         paragraph granularity, same selection of one test: the weak and the strong pattern give
         the IDENTICAL 16-key offender set, so the ratchet cannot see the weakening at all. It
-        still vouches for 29 paragraphs this pattern refuses — none of which quote a round count,
-        which is exactly why none of them reach the list. So the tally requirement is now held by
-        ONE test instead of two, the pattern test below, which is its proper owner: the same
-        weakening is 1 failed there, on the two rows that use the word in another sense. Written
+        still vouches for paragraphs this pattern refuses, none of which quote a round count,
+        which is exactly why none of them reach the list. Their COUNT is deliberately NOT repeated
+        here — it lives in the `_CONTROL_COUNT` comment, dated, because it counts paragraphs of
+        this file. This row shipped with a stale one, 29 against a measured 30, beside a comment
+        that still described the RECORD unit in the present tense — one measurable question
+        answered two ways in one file, which is the drift a single owner removes. So the tally
+        requirement is now held by ONE test instead of two, the pattern test below, which is its
+        proper owner: re-measured for this correction against a control of 0 failed, 1 passed on
+        each selection alone, the same weakening is 0 failed on the ratchet and 1 failed there, on
+        the two rows that use the word in another sense. Written
         down rather than dropped, because a redundancy that vanishes quietly is how a guard turns
         into decoration
       * key a comment run by its definition ALONE, dropping the opening line -> 1 failed, ten
