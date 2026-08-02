@@ -1469,15 +1469,38 @@ def test_a_list_that_never_finishes_paging_raises_instead_of_truncating():
     the ONE runaway-read test in this file built on a bare `make_api`, and a server with no last
     page is exactly the fixture that cannot survive losing the guard it pins: MEASURED on the tree
     before this card, ceiling -> `if False:`, __pycache__ cleared — this test produced NO RESULT AT
-    ALL, killed by SIGALRM at 60 s, while the identical mutation of the nested twin went RED — the
-    two halves of that sentence are different scopes, so both re-measured here: 5 failed / 102
-    passed for the whole file in 4.5 s, and 0.15 s for the twin on its own (the first sweep that hit
-    the hang blew a ten-minute tool timeout and left api.py mutated on disk).
+    ALL, killed by SIGALRM at 60 s, while the identical mutation of the nested twin went RED (the
+    first sweep that hit the hang blew a ten-minute tool timeout and left api.py mutated on disk).
     A guard whose deletion HANGS is pinned in no way a reviewer or CI can use — a hang is
     indistinguishable from a slow suite, and nothing in this repo bounds a pytest run. With the cap
     the same mutation now FAILS, its own test call taking 0.04 s (pytest --durations, re-measured on
     this tree), on `RuntimeError: the read issued more than 360 requests` at
     `GET /projects?page=361`.
+
+    THE TWO HALVES OF THAT HISTORICAL SWEEP MUTATE DIFFERENT SITES — this test's ceiling is the one
+    in `_paged_list`, the twin's is the one in `view_tasks` — SO A RED COUNT HERE MUST CARRY ITS
+    SITE: a bare one does not say which column produced it. That expression has exactly TWO literal
+    sites in api.py, one per reader, and the red sets they produce are DISJOINT — checked as SETS,
+    not as counts. Re-measured here as a DELTA against an unmutated control round of 0 failed, ON
+    THIS FILE: `_paged_list`'s site is +2, this test and
+    test_a_flat_list_that_dribbles_new_rows_forever_RAISES_instead_of_a_partial_list; the twin's
+    site is +5, the twin and three other board reads (five ids from four functions); both sites
+    together give the union, +7. SELECTION is a SECOND axis: run `tests/unit` rather than this file
+    and the three become +2, +6 and +8. `_paged_list`'s column is the one that does NOT move — the
+    single extra test appears in every column containing the TWIN's site, and it is
+    test_workspace_cmd.py::test_gc_keeps_every_tree_when_the_degraded_board_read_hits_its_ceiling,
+    which pins that site from outside this file. THIS PARAGRAPH REPLACES a clause that reported
+    "5 failed / 102 passed for the whole file" with no site named, and VMCP-161 (668) was filed on
+    it: that card measured the `_paged_list` column and the both-sites column, got 2 and 7, and
+    read the 5 as drift — but the FAILURE half of that pair is what the twin's own file column
+    gives today, so the figure was unattributed rather than stale. Hence no count here without its
+    site AND its selection, and no pass total at all — not even that one, which is why only its
+    failure half is quoted back (totals rot for the reason the parenthetical below gives). The
+    wall times went for a different reason: they measure the MACHINE, not the code. The twin alone
+    ran 0.23 s to 1.39 s across ten rounds of ONE mutation, the slow ones clustering at the start
+    of a batch, so a wall time copied out of a sweep records how warm that machine was. CALL time
+    is the half that does reproduce — 0.04 s, as recorded for THIS test in the paragraph above.
+    Run it yourself, control round FIRST.
 
     THE CAP IS `_flat`'S OWN DEFAULT, 3 * MAX_UNPROVEN_PAGES = 360, deliberately NOT tuned down: the
     correct read spends 120 requests here, so the cap sits at 3x what passing costs. A cap near the
