@@ -11,24 +11,48 @@ that comment.
 
 THE FIRST DRAFT OF THAT SENTENCE MISQUOTED IT, and the slip is left recorded rather than quietly
 fixed, because it prices the whole exercise. It read `titled "corrects six measured claims"` — one
-letter, written from memory, describing a string this repository does not contain. Nothing here
-would have caught it either: a commit SUBJECT is not carried by `git ls-files`, so the corpus this
-scanner searches has never held it. Two things at once, then — that the class is easy to commit
-even while writing the guard against it, and that this guard's reach ends at the working tree.
+letter, written from memory, describing a string no commit of this repository has ever carried.
+Nothing here would have caught it either: a commit SUBJECT is not carried by `git ls-files`, so
+the corpus this scanner searches has never held it. Two things at once, then — that the class is
+easy to commit even while writing the guard against it, and that this guard's reach ends at the
+working tree. (Note the tense. That misquotation is now in the tree exactly once, in THIS file,
+put there by the sentence retracting it — so "a string this repo does not contain", which is what
+this paragraph used to say, stopped being true the moment it was written down. The scanner cannot
+see it, because its own source is out of the corpus for every claimant. A retraction reproduces
+what it retracts: that is the second grandfathered entry's whole reason, met here in the prose.)
 
-AND IT SHIPS GREEN, which is the card. Re-measured before this file existed, in a clone of
-`d1af833` with `__pycache__` deleted and then `PYTHONDONTWRITEBYTECODE=1`, selection `tests/unit`,
+AND IT SHIPS GREEN, which is the card. Re-measured before this file existed, in a clone taken at
+`d1af833` — a release bump on the main line, so it is re-checkoutable rather than a deleted wip
+commit — with `__pycache__` deleted and then `PYTHONDONTWRITEBYTECODE=1`, selection `tests/unit`,
 `collected 890 items` every round: control 0 failed; a fabricated repo-content quotation planted
 in a COMMENT run 0 failed; the same planted in a DOCSTRING 0 failed; both at once 0 failed. Four
-greens, one of them the control.
+greens, one of them the control. This card's independent reviewer read that anchor as unreachable
+and reproduced at `cb57cd3` instead, with different phrases, `collected 894 items` and the same
+four greens. Both collection lines were re-run here rather than copied — 890 and 894, on clones of
+the two commits — because the whole subject of this file is a figure nobody re-ran; the line moves
+with every sibling landing and the result does not.
 
 WHY THE OBVIOUS RULE IS NOT THE RULE. "Every quoted string in prose must be found in the tree" was
-measured before it was rejected — through THIS file's own extraction and oracle, with the trigger
-and the two floors switched off, so it is re-runnable rather than remembered: on the tree this
-commit shipped from, 2,975 violations out of 11,299 quotations, against the 15 the shipped rule
-asks about. Those digits perish — a rebase onto two sibling landings moved them once and widening
-the scan moved them again — so what a reader acts on is asserted instead, in
-`test_the_claim_keyed_rule_still_looks_at_a_tiny_fraction_of_the_quotations`. Red on
+measured before it was rejected — through THIS file's own extraction and oracle, with the trigger,
+BOTH floors and the elision exemption switched off. That last one is named because leaving it on
+gives a different pair, and only this spelling is checkable against shipped code: the quotation
+total it produces is the same `all_quotations` that
+`test_the_claim_keyed_rule_still_looks_at_a_tiny_fraction_of_the_quotations` counts, so the ruler
+is a line you can run rather than a description you have to trust. It gives 2,993 violations out
+of 11,352 quotations at `3937b45`, the commit that first landed this file, and 3,068 out of 11,596
+at `4c61283`, three card landings later — both anchors name the tree the figure
+was taken on, which for a figure that counts this file's own prose can only ever be a COMMITTED
+one, never the tree being written. Against those, the shipped rule asks about 14 on both. Only
+CARD landings move these: re-measured at the release bump sitting directly on `4c61283`, every
+figure in this docstring is unchanged, which is why the counting below is in landings and not in
+commits.
+The first round of this card published 2,975 / 11,299 / 15 for the
+first of those two shas and none of the three was right there — that is the bounce this paragraph
+is the fix for, and it is left recorded because a file about false quotations shipping false
+figures is the cheapest possible demonstration that measuring and RE-measuring are different acts.
+Those digits perish on a schedule: THREE card landings and three release bumps separate the two
+shas above, and every landing moved both columns,
+which is why what a reader acts on is the RATIO and is asserted rather than written down. Red on
 arrival and mostly wrong, because this repo's prose quotes things that are deliberately NOT repo
 strings — constructed mutants pinned at a regex's edges, hypothetical banners, error text from
 docker and git, quotations of OTHER repositories and of card descriptions, and wordings quoted
@@ -45,9 +69,16 @@ a line break at its site in test_api_kanban.py, and unbridged it reads as a fabr
 neighbouring rounds say WHICH half does that work, and both are 0 failed against the same control:
 making `_flat` a no-op, and dropping the inner `.split()` from both flatteners. The bridging comes
 from joining STRIPPED LINES with a single space, not from collapsing runs of spaces — a
-distinction worth having before anyone simplifies either function. (An earlier draft of this
-paragraph carried an inherited raw-0/flattened-1 pair, taken from the card and never re-run; it
-described an upper-case spelling of that same phrase, which on this tree is raw 1.) The corpus is
+distinction worth having before anyone simplifies either function. (The history of that pair is
+worth two sentences, because the CORRECTION was the error. A first draft carried a
+raw-0/flattened-1 pair inherited from the card and never re-ran it; measured through this file's
+own oracle, which subtracts the claiming file, that pair is RIGHT — raw 0, flattened 1. A second
+draft "corrected" it by switching to an UPPER-CASE spelling and reporting raw 1, which is what a
+whole-corpus grep says while counting the claim's own copy, the one thing `_occurs_elsewhere`
+exists to discount. And the upper-case spelling does not exist: `git log -S --all` finds it in no
+commit on any ref. So an un-re-run figure that happened to be true was replaced by a re-run one
+that was false, on the wrong spelling and with the wrong oracle. Re-measuring is not enough; the
+ruler has to be the one the claim is about.) The corpus is
 what `git ls-files` carries, so a stray untracked file in somebody's checkout cannot vouch for a
 fabrication — the same hole VMCP-194 (724) closed on the markdown side of the sibling scanner,
 where any `.md` in any checkout silenced an assert.
@@ -59,25 +90,37 @@ in that one file, at line 88 in the sentence asserting it and at line 336 as a c
 a test, so the phantom vouched for itself and the check on the founding defect was a false green.
 A file arguing about a phrase quotes the phrase — that is what arguing about it consists of — so
 the file discussing a phantom is the likeliest place on earth to hold a second copy. Measured
-on this commit's tree, moving the unit from paragraph to file costs exactly ONE extra ratchet
+at `4c61283`, moving the unit from paragraph to file costs exactly ONE extra ratchet
 entry, and that entry is that same phantom. `_occurs_elsewhere` carries the argument; the
 two-copies row of `test_a_claim_is_never_evidence_for_itself` carries the pin.
 
-WHERE THE TRIGGER LIST STOPS, and it is a measurement rather than taste. Taken on this commit's
-tree by driving this file's own predicate with nothing swapped but `_CLAIM_TRIGGERS` — ten lines,
-so RE-RUN it rather than trusting the table, which moves with every landing:
-  * the containment family alone ..................... 5 sentences fire, 2 unverifiable
+WHERE THE TRIGGER LIST STOPS, and it is a measurement rather than taste. Taken by driving this
+file's own predicate with nothing swapped but `_CLAIM_TRIGGERS` — ten lines, so RE-RUN it rather
+than trusting the table:
+  * the containment family alone ..................... 4 sentences fire, 2 unverifiable
   * plus `verbatim in` and `word for word` .......... 19 sentences fire, 3 unverifiable
-  * plus `occurs in` / `appears in` ................. 38 sentences fire, 7 unverifiable
-  * plus `the exact string/phrase/wording` .......... 40 sentences fire, 8 unverifiable
+  * plus `occurs in` / `appears in` ................. 35 sentences fire, 7 unverifiable
+  * plus `the exact string/phrase/wording` .......... 37 sentences fire, 8 unverifiable
+This table is steadier than the naive pair above it: every one of its eight figures is IDENTICAL
+at `3937b45` and at `4c61283`, three card landings apart, while the naive violation count moved
+in both columns over the same span. An earlier version read 5 / 19 / 38 / 40, and where those
+three came from is worth naming precisely, because the obvious answer is wrong: run with the scan
+restricted the way the `SELF` bug restricted it (see `_tracked_names`) the same ladder is
+2 / 7 / 20 / 21, so they are not pre-fix values either. They match no state this repository ever
+committed. So re-run it, but expect the SHAPE to hold. And read it knowing WHAT it counts: this
+file is inside its own scan, so the table partly measures itself. Two of row 1's four firing
+sentences are this file's own mutation-round bullets; row 4's single extra unverifiable IS the
+name of row 4. That is not a flaw to remove — a gate that could not see its own documentation is
+the `SELF` bug — but a reader should not take these as facts about the rest of the repo.
 The four extra false reds the third row buys are all one defect — the trigger is incidental
 English, not an assertion: a hypothetical assert written as `"decompose" in section`, a paraphrase
-of a pin that was rejected, and TWO of this file's own examples of the spelling it deliberately
-does NOT read. Those two are the sharpest argument against widening, because they are
-self-inflicted: adding `appears in` would redden the very paragraphs explaining why `appears in`
-is excluded. So the list stops at the second row, and the three survivors there are grandfathered
-by name in `UNVERIFIABLE_QUOTATION_CLAIMS` with a reason each. Widening it later is a decision
-with a price, and the price is written down.
+of a pin that was rejected, and TWO sentences of this gate's own documentation naming the spelling
+it deliberately does NOT read — one in the bullets below, one in CLAUDE.md. Those two are the
+sharpest argument against widening, because they are self-inflicted: adding `appears in` would
+redden the very paragraphs explaining why `appears in` is excluded. So the list stops at the
+second row, and the three survivors there are grandfathered by name in
+`UNVERIFIABLE_QUOTATION_CLAIMS` with a reason each. Widening it later is a decision with a price,
+and the price is written down.
 
 WHAT WIDENING DID NOT COST is measured the same way, because "we widened it" is worthless without
 a number beside it. The independent second pass constructed sixteen fabrications this gate shipped
@@ -87,8 +130,8 @@ hyphenated spelling of the word-for-word one; the scan grew to every tracked `.p
 itself; the delimiters grew a curly pair. All of it at a measured cost of ZERO false reds — the
 offender set stood at the same three entries before and after every step. SIX of the sixteen are
 still green and each is named in the bullets below: a single-quoted fabrication, one written after
-code on a line, one longer than the quotation cap, and two more verbs, which no list of spellings
-ever ends. That is why those were taken and single quotes were not.
+code on a line, one longer than the quotation cap, and THREE further spellings of the idiom, which
+is where no list of spellings ever ends. That is why those were taken and single quotes were not.
 
 AND THIS PARAGRAPH IS WHY THE LIST IS NAMED DESCRIPTIVELY RATHER THAN QUOTED. Its first draft put
 the new idioms in backticks; the gate went red on itself, because a sentence that both carries a
@@ -101,7 +144,12 @@ oversells is worse than none.
   * IT IS KEYED ON A PHRASE LIST, SO IT REPORTS ON THE PHRASE LIST. VMCP-155 (660) put that
     exactly: a sweep bounded by a regex reports on the regex, not on the class. A fabrication
     written "the phrase X appears in test_api_kanban.py" is invisible here, and that spelling is
-    OUT on purpose — including it costs three false reds on today's prose, measured above. This
+    OUT on purpose — including THAT SPELLING costs TWO false reds at `4c61283`, and this
+    sentence is one of the two: the other is CLAUDE.md saying the same thing. Do not read the
+    table's row-3 figure of four here; that row adds `occurs in` as well, which brings two more
+    of its own. An earlier draft of this bullet said three, and the round-2 correction of it
+    first said four — one figure describing the row, borrowed for a sentence about one spelling
+    of it. This
     is the whole reason CLAUDE.md now names the checked idioms: the gate is only as wide as the
     author's vocabulary overlaps it, so the vocabulary is written down where authors read. The
     independent second pass built eight further spellings that ship green, and the trigger was
@@ -110,19 +158,25 @@ oversells is worse than none.
     open needs no list to describe: any verb that is not `contain`, and any sentence that asserts
     the location without asserting containment.
   * THE DELIMITER SET IS FOUR, NOT ALL OF THEM, and straight single quotes are the named miss.
-    Measured, reading `'…'` costs 2 false reds on the spot, because an English possessive opens a
-    span that closes at the next apostrophe, and the scanned prose holds 761 multi-word spans of
-    that shape to draw more from. So a fabrication in single quotes is invisible. Constructed and
-    confirmed by the second pass, along with the shape below.
+    Measured, reading `'…'` costs ONE false red on the spot, because an English possessive opens a
+    span that closes at the next apostrophe, and the scanned prose holds 773 multi-word spans of
+    that shape to draw more from — that population is what makes one-today a bad bet, and it moved
+    from 767 at `3937b45`, three card landings ago. So a fabrication in single quotes is
+    invisible. Constructed and confirmed by the second pass, along with the shape below. (An
+    earlier draft of this bullet said TWO false reds, which OVERSTATED the cost of the option
+    being rejected — the one direction an argument must never lean.)
   * A QUOTATION LONGER THAN `_QUOTATION`'s 300-CHARACTER CAP IS INVISIBLE. The cap keeps a span
     from running the length of a flattened paragraph; a 343-character fabrication was constructed
     against it and shipped green. Nothing here bounds how long a quoted phrase may be, so this is
     a hole with a number rather than a judgement.
   * IT READS COMMENT RUNS, NOT TRAILING COMMENTS. `_comment_runs` collects lines that BEGIN with
     `#`; a claim written after code on the same line is never extracted, and the scanned scope
-    holds 730 such lines across 40 files. Reading them needs `tokenize` rather than a line test,
-    since a `#` inside a string literal is not a comment — deliberately not done here, and named
-    because the number is large enough that "comments are covered" would be false.
+    holds 731 such lines across 40 files — counted with `tokenize`, which is also what reading
+    them would need, since a `#` inside a string literal is not a comment and the naive line test
+    answers 1313 in 46 files instead. The line count moves (723 at `3937b45`); the file count 40
+    has not.
+    Deliberately not done here, and named because the number is large enough that "comments are
+    covered" would be false.
   * IT CHECKS PRESENCE, NEVER MEANING. VMCP-194 (724)'s defect passes it untouched: a string that
     IS in CLAUDE.md, quoted accurately, and glossed as agreeing with a conclusion the sentence it
     comes from contradicts. Every character verified, the claim still false.
@@ -138,15 +192,25 @@ oversells is worse than none.
   * THE CORPUS IS THE WORKING TREE AND NOTHING ELSE. Commit messages, card descriptions, review
     comments, another repository — a claim quoting any of them is unanswerable here, and one of
     the three grandfathered entries is exactly that (a heading out of a Vikunja card). The
-    misquotation recorded at the top of this docstring is the same boundary met from inside.
-  * THREE SHAPES ARE SKIPPED BY CONSTRUCTION, and they are NOT equally evidenced — the honest
-    split matters more than the list. A quotation carrying an ellipsis or an `<angle placeholder>`
-    cannot be looked up verbatim, and that exemption is held by a round: removing it is 2 failed,
-    one of them a true elided claim in test_skill_contract.py it spares. The `_MIN_CHARS` floor is
-    held by a round too, at 2 failed. The `_MIN_WORDS` floor is held by NOTHING: lowering it to 1
-    is 0 failed everywhere, and it is kept for a shape this tree does not currently hold. All
-    three are holes an author could hide a fabrication in, and the third is a hole whose removal
-    nothing would notice.
+    misquotation recorded at the top of this docstring is the same boundary met from inside, and
+    so is the wrong triple: `3937b45`'s own message states it in prose, that message is on the
+    main line and released, and NOTHING can correct it in place — not this scanner, which never
+    reads it, and not an edit, which would rewrite published history. A figure written into a
+    commit message is write-once. Prefer the file.
+  * THREE SHAPES ARE SKIPPED BY CONSTRUCTION, and all three ARE held by a round — which this
+    bullet denied until now, in the file's fifth and last stale-figure defect. A quotation
+    carrying an ellipsis or an `<angle placeholder>` cannot be looked up verbatim, and removing
+    that exemption is 2 failed, one of them a true elided claim in test_skill_contract.py it
+    spares. Dropping `_MIN_CHARS` to 4 is 2 failed. Dropping `_MIN_WORDS` to 1 is 1 failed
+    against a control of 0 failed, re-run for this correction on the file alone, `collected 14
+    items`, restored to a byte-identical sha256 and back to the control: it pulls one single-word
+    backticked identifier into a claim sentence of this file's own screen
+    docstring, so the ratchet gains an entry. This bullet said "held by NOTHING ... 0 failed
+    everywhere" while TWO sibling docstrings in this same file recorded the 1 failed and even
+    explained WHY it changed — the scan widened. Under the scan as the `SELF` bug left it the
+    round really is 0 failed, so this was one more figure taken before the fix and never re-run,
+    and the one that survived longest because it agreed with an earlier true statement. All three
+    are still holes an author could hide a fabrication in; none of them is unheld.
   * A CLAIM SPLIT FROM ITS QUOTATION BY A SENTENCE BOUNDARY IS MISSED. The scope is one sentence,
     split on a terminator followed by an opening character, which is what keeps `0.0.0.0:3456`
     and `test_api_kanban.py.` from splitting. Write the trigger in one sentence and the
@@ -182,7 +246,7 @@ oversells is worse than none.
     discuss a phrase and a copy that IS the phrase are the same bytes.
   * THE FILE UNIT COSTS A REAL CASE, not only a theoretical one: a claim about a string that
     genuinely lives elsewhere in its OWN file cannot verify and must either point at another file
-    or be named in the ratchet. Measured on this commit's tree — the paragraph unit and the file
+    or be named in the ratchet. Measured at `4c61283` — the paragraph unit and the file
     unit differ by exactly one entry, and that entry is the phantom — this repo holds no such
     claim, so the cost today is zero. "Zero today" is a fact about this tree, not a property.
   * THE `git ls-files` CORPUS IS NOT PINNED BY A ROUND. Against a control of 0 failed on this
@@ -222,10 +286,25 @@ requires_git_checkout = pytest.mark.skipif(
 # THE ASSERTIVE IDIOMS. A sentence containing one of these is read as claiming that the strings it
 # quotes are in this checkout. Each is here because it is an ASSERTION about content rather than
 # ordinary English about location — see the measurement in the module docstring for what the next
-# two candidates cost. `verbatim in` is deliberately the two-word form: on the tree this commit
-# shipped from the bare word matches 45 sentences against this form's 3, and nearly all of the
-# difference is prose about bytes being passed through unchanged. Both figures move with every
-# landing; the RATIO is the argument, and it is an order of magnitude.
+# two candidates cost. `verbatim in` is deliberately the two-word form, and the reason is now
+# priced in the SAME unit as every other row of that table instead of in a ratio: dropping to the
+# bare word costs FOUR false reds, measured at `4c61283` by widening this pattern and re-running
+# the predicate. They are a markdown blockquote whose `>` markers make it unfindable, a git
+# command fragment, a wording quoted because it was REJECTED, and — self-inflicted again — a
+# scare-quoted phrase in `_tracked_text_files` right below. Four is the same price the
+# `occurs in` / `appears in` row carries, which is what makes the two decisions consistent rather
+# than a matter of taste.
+# THE SENTENCE COUNTS ARE A DESCRIPTION, NOT THE ARGUMENT, and this is where an earlier version of
+# this comment went wrong twice over. It read "45 sentences against this form's 3 ... the RATIO is
+# the argument, and it is an order of magnitude". Measured, the pair is 57 against 10 at `4c61283`
+# and 56 against 10 at `3937b45` — 5.7x, not an order of magnitude — while 45-against-3 is the
+# EXACT output of the scan before it could read this file (see `_tracked_names`), i.e. a figure
+# taken before a fix and never re-run after it. Note which half of the pair moves: the bare word
+# drifts with every landing, the two-word form has not moved at all.
+# Both halves were wrong, and the ratio was never the right quantity anyway: of the 45 sentences
+# the bare word adds that nothing else here matches, only FIVE carry a quotation both floors keep.
+# A sentence with no quotation in it costs nothing either way, so counting sentences counts the
+# wrong things — the four reds above are what a widening would actually adjudicate.
 _CLAIM_TRIGGERS = re.compile(
     r"(?:this|the)\s+(?:repo(?:sitory)?|tree|checkout)\s+(?:\w+\s+){0,2}contains"
     r"|\bis contained in\b"
@@ -250,9 +329,12 @@ _SENTENCE_BREAK = re.compile(r"(?<=[.;!?])\s+(?=[A-Z(«`\"—*\-]|\d)")
 # fabrication in them: measured over the whole scan it costs ZERO false reds, and the repo holds
 # two such phrases. STRAIGHT SINGLE QUOTES ARE DELIBERATELY NOT READ, and the reason is
 # apostrophes: an English possessive opens a span that closes at the next one, so `'s own first
-# probe DID re-see 10 and 11 independently — recorded verbatim in the DESCRIPTION of` is what the
-# delimiter actually captures. Measured, adding it is 2 false reds immediately and the scanned
-# prose holds 761 multi-word single-quoted spans to draw more from. So a fabrication written in
+# probe DID re-see 10 and 11 independently — recorded verbatim in the DESCRIPTION of` is where
+# such a span STARTS. It is shown truncated for width and the real capture runs further, to the
+# next apostrophe two clauses later inside a card reference — an earlier draft presented the
+# short form as the whole span. Measured, adding it is ONE false red immediately — that span, at
+# `4c61283` — and the scanned prose holds 773 multi-word single-quoted spans to draw more from,
+# which is the number that decides it rather than the one. So a fabrication written in
 # single quotes is invisible here — a real hole, taken knowingly, and named in the module
 # docstring rather than left for the next audit to find.
 _QUOTATION = re.compile(
@@ -260,7 +342,7 @@ _QUOTATION = re.compile(
 )
 
 # NOT LOOKABLE UP VERBATIM, so not asked about: an elision, or an `<angle placeholder>` standing in
-# for a value. Measured on this tree, this exemption spares exactly one true claim —
+# for a value. Measured at `4c61283`, this exemption spares exactly one true claim —
 # test_skill_contract.py quoting a SKILL.md sentence with its middle elided — and it is a hole, in
 # that a fabrication written with `…` in it is invisible.
 _UNVERIFIABLE_BY_CONSTRUCTION = re.compile(r"…|\.\.\.|<[^>]{1,40}>")
@@ -415,7 +497,7 @@ def _occurs_elsewhere(needle: str, own_file: str, corpus) -> int:
     independent check met the same mode from the other side and called it going SILENT on a
     phantom quoted more than once.
 
-    WHAT THE FILE UNIT COSTS, measured on this commit's tree rather than estimated: exactly ONE
+    WHAT THE FILE UNIT COSTS, measured at `4c61283` rather than estimated: exactly ONE
     additional entry against the paragraph unit — and it is that same `the control at the same call site`,
     now correctly named as a string this checkout does not carry outside the file discussing it.
     A claim about a phrase that genuinely lives elsewhere in its OWN file can no longer verify;
@@ -512,17 +594,19 @@ def _prose_paragraphs():
     """(site, paragraph) over python prose in tests/ and src/, plus every tracked markdown file.
 
     The scan is WIDER than the sibling scanner's tests/-only scope, and that is affordable rather
-    than brave: on this commit's tree src/ and markdown contribute ZERO unverifiable claims under
+    than brave: at `4c61283` src/ and markdown contribute ZERO unverifiable claims under
     this trigger list — every entry of the ratchet is under tests/ — so the width costs nothing
     today and covers the two places a repo-content claim is most likely to be written next, a tool
     docstring and CLAUDE.md. It is not free of teeth either: planting a fabrication in CLAUDE.md is
     1 failed against a control of 0 failed, which the sibling scanner's tests/-only scope misses.
 
     ONE COST OF THE WIDTH IS NOT PAID TODAY BUT IS REAL. `docs/superpowers/` is VENDORED prose — it
-    talks about other repositories — and it is the largest markdown scope here. On this commit's
-    tree the trigger fires in exactly four files, none of them under `docs/`, so the vendored text
-    costs nothing now; a future vendor update could land a sentence that fires, and the answer then
-    is a ratchet entry naming it, not a narrowing. Said here so that red is not a surprise.
+    talks about other repositories — and it is the largest markdown scope here. The trigger fires
+    in five files, none of them under `docs/`, so the vendored text costs nothing now; a future
+    vendor update could land a sentence that fires, and the answer then is a ratchet entry naming
+    it, not a narrowing. Said here so that red is not a surprise. (An earlier version of this
+    sentence said FOUR, which is exactly what the count was while the scan could not read
+    `tests/unit/test_repo_quotation_claims.py` — the fifth file is this one.)
     """
     for name in sorted(_tracked_names()):
         path = REPO_ROOT / name
@@ -720,16 +804,24 @@ def test_the_screen_reads_an_assertion_and_not_merely_a_quotation(sentence, flag
     A scan over the tree passes trivially when nothing in the tree fires, so on its own it cannot
     tell a working screen from a broken one. These rows are the screen's behaviour stated
     independently of what the repo happens to contain today: three fabrications it must flag,
-    including the exact two plants that shipped green before this file, and six pieces of ordinary
-    prose it must not. The negative rows are not decoration — the naive rule measured 2,160
-    violations on this repo's real prose, and every one of these six shapes is drawn from that set.
+    including the exact two plants that shipped green before this file, and SEVEN pieces of
+    ordinary prose it must not. The negative rows are not decoration: run each of their quotations
+    through the oracle and THREE of the seven come back at zero occurrences, which is to say the
+    naive rule — 3,068 violations on this repo's real prose — would redden them, and the screen
+    must not. The other four are found in the tree and hold the opposite half: prose the naive rule
+    also passes, kept so a broken trigger cannot go unnoticed just because every negative row
+    happened to be a phantom. (Three figures in this paragraph were wrong until this commit. SIX
+    for the seven rows a reader can count in the source below. 2,160 for the violation count — a
+    PROBE number taken under the paragraph unit this design went on to REJECT, corrected twice in
+    the module docstring while this sentence, quoting the same quantity, was corrected neither
+    time. And "every one of these shapes is drawn from that set", which is true of three of them.)
 
     The corpus here is the REAL one and the claiming file is a name no tracked file has, so a row
     asserting `flagged` is asserting the quotation is absent from the whole checkout as well. That
     is deliberate: a row that only exercised a regex would go stale the moment the tree gained the
     phrase, and would say nothing about the oracle it is paired with.
 
-    MUTATION-CHECKED, same discipline and stand as the ratchet, this file alone, `collected 13
+    MUTATION-CHECKED, same discipline and stand as the ratchet, this file alone, `collected 14
     items` every round, control 0 failed. Rows are numbered as listed above.
       * drop `this repo contains` from `_CLAIM_TRIGGERS` -> 2 failed, ONE of them here: row 3
         only. Row 1 survives because it carries `verbatim in` as well, which is why the round is
@@ -830,15 +922,24 @@ def test_the_claim_keyed_rule_still_looks_at_a_tiny_fraction_of_the_quotations()
     """The design's central figure, as a PROPERTY — because as a number it rots every landing.
 
     The module docstring rejects "every quoted string must be in the tree" on a violation count,
-    and that count is honest but perishable: re-measured across a single rebase onto two sibling
-    landings it moved from 2,879 of 10,928 to 2,891 of 11,095. What a reader ACTS on is not the
-    digit, it is the RATIO — the claim-keyed rule adjudicates a tiny fraction of what the naive
-    one would — so that is asserted here and the digits stay in the prose as history.
+    and that count is honest but perishable — 2,993 of 11,352 at `3937b45`, 3,068 of 11,596 at
+    `4c61283`, three card landings apart, both taken with the ruler that docstring names. What a
+    reader ACTS on is not the digit, it is the RATIO — the claim-keyed rule adjudicates a tiny
+    fraction of what the naive one would — so that is asserted here and the digits stay in the
+    prose as history, each against a sha you can check out. An earlier version of this sentence
+    quoted a pair with no sha at all, which is the shape VMCP-167 (688) rules out: history gets an
+    anchor, a working figure gets an assert, and neither gets a date.
 
-    The violation count itself is deliberately NOT asserted: computing it costs 26 s against 0.7 s
-    for this, both timed here, and `lint-and-unit` is what sets a run's length — 38-46 s, a figure
-    this file takes from CLAUDE.md's release section rather than re-measuring — so a 26-second
-    assert would be paid on every landing to restate what the ratio already says.
+    The violation count itself is deliberately NOT asserted, on a cost measured rather than
+    guessed at — and measured three times, because the first run was the reminder that a
+    wall-clock second is the one figure no sha can pin. Timing both back to back: 28 s, 43 s and
+    48 s for the count against 0.15 s, 0.15 s and 0.17 s for this, as the machine's load varied
+    from idle to three concurrent agents. The absolute nearly doubles; the ratio stays between
+    190x and 290x, so the ratio is what this paragraph carries and the seconds are only its
+    scale. `lint-and-unit` is what sets a run's length — 38-46 s, a figure this file
+    takes from CLAUDE.md's release section rather than re-measuring — so even the quiet-machine
+    figure is the same order as the entire job, paid on every landing to restate what the ratio
+    already says. (An earlier version quoted 26 s and 0.7 s as though they were properties.)
 
     MUTATION-CHECKED, this file alone, `collected 14 items`, control 0 failed:
       * `_CLAIM_TRIGGERS` matches every sentence -> 3 failed: here, on the ratchet (whose offender

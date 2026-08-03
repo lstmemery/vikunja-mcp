@@ -538,15 +538,21 @@ file arguing about a phrase quotes the phrase. Two consequences for whoever
 writes such a sentence. **Use one of those idioms when you mean it**: the gate
 is exactly as wide as the vocabulary it names, so a fabrication phrased "the
 phrase X appears in Y.py" is invisible, and that spelling is outside the list
-because including it cost three false reds on this repo's real prose. **And when the quotation is NOT meant to be a repo string** —
+because including that spelling costs TWO false reds on this repo's real prose,
+and BOTH are self-inflicted — this sentence and the one in the file saying the
+same thing. **And when the quotation is NOT meant to be a repo string** —
 another repository, a card description, a tool's output, a wording quoted
 BECAUSE it was retracted — expect to name it in that file's ratchet with your
 reason beside it; three entries are there already, one per class. The naive rule
 was measured before it was rejected, not argued away: "every quoted string in
-prose must be found in the tree" is 2,975 violations out of 11,299 quotations
-against the 15 the shipped rule asks about, and every one of those figures moves
-with every landing — so the file asserts the RATIO and says how to re-run the
-digits. An independent adversarial pass then built sixteen fabrications the gate
+prose must be found in the tree" is 3,068 violations out of 11,596 quotations
+against the 14 the shipped rule asks about (2,993 of 11,352 three card
+landings earlier, at `3937b45`), and the first two of those move with every landing — so
+the file asserts the RATIO and says how to re-run the digits.
+This paragraph shipped that triple wrong once, which is the point of the rule
+above and not a footnote to it: the digits were read off a working tree while
+the code was still moving, and NO committed tree in this repository reproduces
+them. Measure last, after the last change, or write an assert instead. An independent adversarial pass then built sixteen fabrications the gate
 shipped green; the trigger, the scan and the delimiter set were widened to close
 TEN of them at a measured cost of ZERO false reds, and the six still open are
 named in the file rather than left for the next audit to find.
