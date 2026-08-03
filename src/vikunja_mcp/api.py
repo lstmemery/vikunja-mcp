@@ -119,32 +119,57 @@ def _fold_host(host: str) -> str:
     This exists because `host` is not homogeneous, which is the one thing canonical_base_url's
     shape (`scheme.lower()` + userinfo verbatim + host + path verbatim) could not say. RFC 3986
     6.2.2.1 makes the host case-insensitive; RFC 6874 then grafts an IPv6 ZONE ID into that same
-    production (`IPv6addrz = IPv6address "%25" ZoneID`) WITHOUT saying it inherits that property —
-    measured, the RFC is silent on the zone's case altogether. And it does not inherit it: a zone
-    id is an operating-system INTERFACE NAME, and interface names are case-SENSITIVE. That is a
-    measurement, not a reading of the RFC — `socket.if_nametoindex` on 2026-08-03 answered `eth0`
-    -> 426 and `ETH0` -> OSError("no interface with this name") on Linux (python:3.12-alpine, the
-    platform CI runs), and `lo0` -> 1 / `LO0` -> OSError on this darwin box, 11 of 11 and 6 of 6
-    interfaces respectively. Python's own stdlib models it the same way: `IPv6Address('fe80::1%
-    ETH0').scope_id` keeps `ETH0` and compares UNEQUAL to `...%eth0` (different hashes), while
-    `IPv6Address('FE80::1') == IPv6Address('fe80::1')` is True and str()s to `fe80::1`.
+    production (`IPv6addrz = IPv6address "%25" ZoneID`) WITHOUT saying it inherits that property.
+    Read off the document rather than measured: RFC 6874 says nothing about the zone's case at all
+    (its only nearby line is "A <zone_id> SHOULD contain only ASCII characters classified as
+    unreserved"). The semantics therefore come from MEASUREMENT, and the two must not be blurred:
+    a zone id is an operating-system INTERFACE NAME, and interface names are case-SENSITIVE. On
+    2026-08-03 `socket.if_nametoindex` rejected the upper-cased spelling of every interface that
+    has a lower-case letter — 11 of 11 on Linux (python:3.12-alpine, the platform CI runs, `ETH0`
+    -> OSError("no interface with this name")) and 26 of 26 on this darwin box. Stronger, because
+    it is the path a URL actually takes: `socket.getaddrinfo` returns a DIFFERENT sockaddr —
+    `::1%lo0` -> `('::1', 443, 0, 1)` against `::1%LO0` -> `('::1', 443, 0, 0)`, i.e. the zone is
+    silently DROPPED rather than matched case-insensitively. (The interface INDEX itself is not a
+    stable figure — a container's veth index moves between runs — so the signal is the OSError and
+    the differing scope, never the number.) Python's stdlib models it the same way:
+    `IPv6Address('fe80::1%ETH0').scope_id` keeps `ETH0` and compares UNEQUAL to `...%eth0`
+    (different hashes), while `IPv6Address('FE80::1') == IPv6Address('fe80::1')` is True and
+    str()s to `fe80::1`.
 
     So the hex folds and the zone does not. Folding the zone collapsed two DIFFERENT interfaces
     onto one string — the permissive direction #148 exists to close and #164 removed from
     userinfo, for a shape nobody had named. Not reachable from a real config (a Vikunja base url
     is `https://tracker.zz.hgdev.com`), so this fixes an unclosed part of an accepted decision
-    rather than a live harm; it also makes this function AGREE with httpx here, which was measured
-    to pass `[fe80::1%25ETH0]` through verbatim.
+    rather than a live harm; on the zone specifically it also brings this function into agreement
+    with httpx, measured to pass `[fe80::1%25ETH0]` through verbatim. Only on the zone: httpx does
+    not fold the ADDRESS's hex either (`[FE80::1]` comes back unchanged) and this function still
+    does, so the two agree here and still diverge one component over.
 
     The two cuts are ABNF boundaries, not guesses. The literal ends at `]` (`IP-literal = "[" (
     IPv6address / IPv6addrz / IPvFuture ) "]"`), so a port — and, until #706, a query or fragment
     that landed in this slice — keeps folding exactly as before. Inside the brackets the zone
-    starts at the FIRST `%`, because inside brackets a `%` cannot be anything else: `IPv6address`
-    has no `%`, and `IPvFuture = "v" 1*HEXDIG "." 1*( unreserved / sub-delims / ":" )` admits none
-    either (`%` is in neither set; measured besides that httpx refuses IPvFuture outright —
-    `httpx.URL('https://[v1.aB:c]/api/v1')` raises InvalidURL). Cutting at the first `%` therefore
-    also protects the sloppy bare-`%` spelling `[fe80::1%ETH0]`, which httpx accepts and preserves;
-    that makes this function fold LESS, never more, which is the only safe direction here.
+    starts at the FIRST `%`, and it is the FIRST one specifically that cannot be anything else:
+    `IPv6address` has no `%`, and `IPvFuture = "v" 1*HEXDIG "." 1*( unreserved / sub-delims / ":" )`
+    admits none either (`%` is in neither set; httpx refuses IPvFuture outright besides —
+    `httpx.URL('https://[v1.aB:c]/api/v1')` raises InvalidURL). A LATER `%` inside the brackets very
+    much can be something else: `ZoneID = 1*( unreserved / pct-encoded )` and `pct-encoded = "%"
+    HEXDIG HEXDIG`, so `[fe80::1%25ETH%2D0]` is a legal zone containing a second `%`. That is why
+    the cut is `partition`, not `rpartition` — pinned, `rpartition` reddens 5 tests.
+
+    Cutting at the first `%` also protects the sloppy bare-`%` spelling `[fe80::1%ETH0]`, which
+    httpx accepts and preserves. All of this makes the function fold LESS — verified by exhaustion,
+    not by argument: over a 430,332-url grid and a 2.3M-url case fuzz, ZERO pairs the old body
+    distinguished are collapsed by this one. Folding less is the RIGHT trade here but it is not a
+    free one, and calling it "the only safe direction" would be false: less folding buys fewer
+    silent repoints at the cost of possible false REFUSALS, and one is measured. RFC 3986 2.1 makes
+    percent-encoding hex digits case-INSENSITIVE ("If two URIs differ only in the case of
+    hexadecimal digits used in percent-encoded octets, they are equivalent"), so `[fe80::1%25ETH%2D0]`
+    and `[fe80::1%25ETH%2d0]` are one endpoint — and the guard, which ACCEPTED that rotation before
+    #707, now REFUSES it. It is unreachable rather than harmless: httpx rejects that url outright
+    (`InvalidURL: Invalid IPv6 address`), so the client cannot be built on either spelling and the
+    failure is fail-closed. Normalizing pct-encoding case is deliberately NOT done — this function
+    normalizes no percent-encoding anywhere (it does not upcase `%2f` in a path either), and adding
+    it for one component would be a wider change than this card.
 
     NOT this function's business, deliberately: the query/fragment that reaches it inside `host`
     when it appears before the first `/`. That is a slicing bug one line up (`rest.partition("/")`
@@ -182,12 +207,16 @@ def canonical_base_url(base_url: str) -> str:
         FILED rather than fixed here. All three predate this card — they come from folding the
         scheme and host, which is #154's. The point is that "identical" was wider than its
         measurement; the second test in tests/unit/test_api.py now pins the rule AND all three.
-        A FOURTH was hiding inside the second, and #707 fixed it: the host was folded whole, so an
-        IPv6 ZONE ID went down with the hex (`[fe80::1%25ETH0]` -> `[fe80::1%25eth0]`). That one is
-        not the same endpoint — a zone id is an OS interface name and interface names are
-        case-sensitive (measured, both platforms) — so it was the userinfo defect again in a shape
-        the word "IPv6 literal" hid. The host's case rule now lives in `_fold_host` above, which
-        is where the hex-vs-zone split is argued and measured;
+        A FOURTH went unnamed until #707: the host was folded whole, so an IPv6 ZONE ID went down
+        with the hex (`[fe80::1%25ETH0]` -> `[fe80::1%25eth0]`). That one is not the same endpoint —
+        a zone id is an OS interface name and interface names are case-sensitive (measured, both
+        platforms) — so it was the userinfo defect again in a shape the words "IPv6 literal" hid.
+        It OVERLAPS class 2 without either containing the other, and saying it "hid inside" class 2
+        would be false: measured, `[fe80::1%25ETH0]` carries no uppercase hex digit at all yet
+        diverged before #707, so class 2 as written never covered it; `[FE80::1%25ETH0]` is in both;
+        and `[::FFFF:1]` is in class 2 only and still diverges. Class 2 is therefore unchanged by
+        #707, not shrunk. The host's case rule now lives in `_fold_host` above, which is where the
+        hex-vs-zone split is argued and measured;
       * ensures the `/api/v1` suffix.
     It deliberately does NOT touch the scheme VALUE (http vs https — a plaintext downgrade is REAL),
     the host, the port, or the path (all case-sensitive): a rotation moving any of those is a genuine

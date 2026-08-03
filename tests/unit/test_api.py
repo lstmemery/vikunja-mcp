@@ -386,12 +386,18 @@ def test_canonical_base_url_folds_the_case_insensitive_parts_and_nothing_else(ra
     The `ipv6-*` rows are #707's, and they exist because "IPv6 literal" named a thing that is not
     homogeneous. The ADDRESS folds (`ipv6-hex-still-folds-without-a-zone`) and the ZONE ID does not
     (`ipv6-zone-id-case-KEPT`), because a zone id is an OS interface name — measured, not read off
-    an RFC: `socket.if_nametoindex('eth0')` -> 426 while `'ETH0'` raises OSError on Linux, and
+    an RFC: `socket.if_nametoindex` rejects the upper-cased spelling of every interface here (11 of
+    11 on Linux, 26 of 26 on darwin), `socket.getaddrinfo('::1%lo0')` and `('::1%LO0')` return
+    DIFFERENT sockaddrs (scope 1 against scope 0 — the zone is dropped, not matched loosely), and
     `IPv6Address('fe80::1%ETH0') != IPv6Address('fe80::1%eth0')` while `FE80::1 == fe80::1`.
-    `ipv6-hex-folds-WHILE-zone-KEPT` is the row that pins both halves of one literal going separate
-    ways, and it is the only row R1 and R2 below BOTH kill. `ipv6-empty-zone-unchanged` and
-    `reg-name-with-pct-encoding-still-folds` pin what #707 must NOT have changed: a `%25` outside
-    brackets is an ordinary reg-name octet and stays case-insensitive.
+    `ipv6-hex-folds-WHILE-zone-KEPT` pins both halves of one literal going separate ways. It is one
+    of exactly TWO rows killed by BOTH the pre-#707 body and the fold-nothing-in-brackets
+    over-correction — the other is `userinfo-AND-zone-both-KEPT-while-hex-folds`; an earlier draft
+    of this line said "the only row", which the two mutation bullets below already contradict.
+    `ipv6-empty-zone-unchanged` and `reg-name-with-pct-encoding-still-folds` pin what #707 must NOT
+    have changed, for two DIFFERENT reasons: the first is a `%25` INSIDE brackets with no zone after
+    it (nothing to preserve, so the output must not move), the second a `%25` OUTSIDE them, which is
+    an ordinary reg-name octet and stays case-insensitive.
 
     MUTATION-CHECKED over the whole `tests/unit` selection, `__pycache__` DELETED (not just
     `PYTHONDONTWRITEBYTECODE=1` — that stops writing, not reading), every round restored with
@@ -426,6 +432,15 @@ def test_canonical_base_url_folds_the_case_insensitive_parts_and_nothing_else(ra
         `zone-id-with-its-own-pct-encoding-KEPT` as aimed AND `ipv6-hex-still-folds-without-a-zone`,
         which was not: on a literal with no `%` at all, `rpartition` returns `("", "", literal)`, so
         the address lands in the zone half and stops folding entirely
+      * (#707) SURVIVOR, recorded because a silent one is worse than a known one:
+        `host.partition("]")` -> `rpartition("]")` -> 0 failed. It is an EQUIVALENT mutation for any
+        reachable input (a valid authority holds exactly one `]`), not a coverage hole, but the `]`
+        cut is unpinned in a way the `%` cut is not
+    Reachability caveat on `zone-id-with-its-own-pct-encoding-KEPT`: httpx REFUSES that url
+    (`InvalidURL: Invalid IPv6 address`), so no client can be built on it. The row earns its place
+    by being the only thing that kills the `rpartition("%")` mutation, not by describing traffic —
+    and per RFC 3986 2.1 the two case spellings of its `%2D` are EQUIVALENT, so what it pins is this
+    function declining to normalize percent-encoding case, which it declines to do everywhere.
     The three legacy counts above were RE-MEASURED for #707 rather than copied: adding these rows
     moved two of them (6 -> 13, 4 -> 10) and the identity round (7 -> 14). Only the `path.lower()`
     round was unchanged at 4. A count recorded next to a growing table is stale by construction.
@@ -465,13 +480,15 @@ def test_the_canonicalizer_changes_the_client_url_only_in_these_measured_classes
     and 3 are precisely shapes that grid could not contain — which is how they were found, and why
     "these measured classes" in the name is not "all classes".
 
-    #707 SHRANK class 2 rather than adding a fourth. The zone id used to ride down with the hex,
-    so `https://[fe80::1%25ETH0]` belonged in the divergence list; it now sits in the EQUAL set
-    above, because httpx passes a zone id through verbatim (measured, 0.28.1: `httpx.URL` returns
-    `[fe80::1%25ETH0]` unchanged and reads `.host` as `fe80::1%25ETH0`). Class 2 is now precisely
-    the ADDRESS's hex, and the assert that the two halves of one literal go separate ways is what
-    holds that line. Class 3 is untouched and still open — see the SEAM assert at the end, a url
-    carrying both cards at once.
+    #707 removed a divergence that OVERLAPPED class 2 without being inside it, and class 2 itself
+    is unchanged. The zone id used to ride down with the hex, so `https://[fe80::1%25ETH0]`
+    diverged; it now sits in the EQUAL set above, because httpx passes a zone id through verbatim
+    (measured, 0.28.1: `httpx.URL` returns `[fe80::1%25ETH0]` unchanged and reads `.host` as
+    `fe80::1%25ETH0`). Do NOT read that as "class 2 shrank": measured, that url carries no
+    uppercase hex digit at all, so class 2 as defined never covered it, while `[::FFFF:1]` is class
+    2 only and still diverges and `[FE80::1%25ETH0]` is in both. What the assert below pins is the
+    OVERLAP — the two halves of one literal going separate ways. Class 3 is untouched and still
+    open; see the SEAM assert at the end, a url carrying both cards at once.
 
     MUTATION-CHECKED, same selection and hygiene as the table above, two sweeps on 2026-08-03, each
     opening with an unmutated control on the same selection. Control round: 0 failed.

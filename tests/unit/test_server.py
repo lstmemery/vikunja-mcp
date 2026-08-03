@@ -538,9 +538,13 @@ def test_reload_still_refuses_a_rotation_that_changes_only_a_CASE_SENSITIVE_part
     The `ipv6-zone-id-case` rows are #707's, and they are the same argument a third time. An IPv6
     zone id (`%25` + the id, RFC 6874) is an OS INTERFACE NAME grafted into the syntactic host, and
     interface names are case-sensitive — measured on 2026-08-03 rather than read off the RFC, which
-    is silent on the question: `socket.if_nametoindex('eth0')` -> 426 and `'ETH0'` -> OSError("no
-    interface with this name") on Linux (python:3.12-alpine, 11 of 11 interfaces), `'lo0'` -> 1 and
-    `'LO0'` -> OSError on darwin (6 of 6). So `[fe80::1%25ETH0]` and `[fe80::1%25eth0]` are two
+    is silent on the question: `socket.if_nametoindex` raised OSError("no interface with this name")
+    for the upper-cased spelling of every interface carrying a lower-case letter, 11 of 11 on Linux
+    (python:3.12-alpine) and 26 of 26 on darwin, and `socket.getaddrinfo('::1%lo0')` vs `('::1%LO0')`
+    returns scope 1 vs scope 0 — the resolver DROPS an unmatched zone rather than folding its case.
+    (No interface index is quoted: a container's veth index moves between runs, so the reproducible
+    signal is the OSError and the scope difference, not a number.)
+    So `[fe80::1%25ETH0]` and `[fe80::1%25eth0]` are two
     different interfaces, and before #707 this guard ACCEPTED a rotation between them. The ADDRESS's
     hex is the opposite case and has its own test right below — the two must not be pinned together.
 
