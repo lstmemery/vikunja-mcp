@@ -371,19 +371,19 @@ def test_env_overrides_worktree_root(tmp_path):
 # --- VMCP-225 (768): a base url carrying a query or fragment can never reach the API ----------
 
 @pytest.mark.parametrize(
-    "url",
+    "url,expected_word",
     [
-        "https://tracker.example?Token=Ab",
-        "https://tracker.example#Frag",
-        "https://tracker.example?a=1#f",
-        "https://tracker.example:3456?a=1",
-        "https://tracker.example/vikunja?a=1",
-        "https://tracker.example/api/v1?x=1",
+        ("https://tracker.example?Token=Ab", "query"),
+        ("https://tracker.example#Frag", "fragment"),
+        ("https://tracker.example?a=1#f", "query"),
+        ("https://tracker.example:3456?a=1", "query"),
+        ("https://tracker.example/vikunja?a=1", "query"),
+        ("https://tracker.example/api/v1?x=1", "query"),
     ],
     ids=["query", "fragment", "both", "query-behind-a-port", "query-after-a-path",
          "query-after-the-suffix-itself"],
 )
-def test_a_url_with_a_query_or_fragment_is_refused_at_config_time(tmp_path, url):
+def test_a_url_with_a_query_or_fragment_is_refused_at_config_time(tmp_path, url, expected_word):
     """MEASURED before the fix, through the real client: `canonical_base_url` appends `/api/v1`
     to the END OF THE STRING, so
 
@@ -409,14 +409,25 @@ def test_a_url_with_a_query_or_fragment_is_refused_at_config_time(tmp_path, url)
       * remove the guard entirely -> 6 failed, i.e. every row here and nothing else
       * keep only `?` (drop the fragment half) -> 1 failed, the `fragment` row alone
       * keep only `#` (drop the query half) -> 4 failed, the four query-bearing rows
-    The last two are what say the two terminators are pinned SEPARATELY rather than by one row
-    that happens to carry both — the failure sets are disjoint and together they are the first
-    round's six.
+      * pin the message's noun to the constant "query" -> 1 failed, the `fragment` row, which
+        is what makes the WORD real rather than only the refusal
+      * INVERT the noun picker (`"fragment" if "#" in url else "query"`) -> 1 failed, and that
+        row is `both` ALONE — the round that gives that row a job, see below
+    The two half-rounds are what say the terminators are pinned SEPARATELY rather than by one
+    row that happens to carry both, and what carries that is NOT disjointness on its own — two
+    disjoint sets, one of them empty, would say nothing — but that both are NON-EMPTY and
+    disjoint: `{fragment}` against the four query-bearing rows. They do not sum to the first
+    round, and the arithmetic is worth stating because an earlier draft of this docstring got
+    it wrong: 1 + 4 is FIVE of the six. The row left out is `both`, which carries BOTH
+    terminators and so is still refused by either half of the guard. That makes it silent about
+    SEPARATENESS — but not idle, and the difference is one round: inverting the picker reddens
+    `both` and nothing else, so it is the one row pinning WHICH noun a url carrying both
+    terminators is told about. It earned that only here, from the `expected_word` assertion.
     """
     _write_toml(tmp_path)
     with pytest.raises(ConfigError) as exc:
         load_config(cwd=tmp_path, environ={"VIKUNJA_TOKEN": "tk", "VIKUNJA_URL": url})
-    assert "must not carry a" in str(exc.value)
+    assert f"must not carry a {expected_word}" in str(exc.value)
     assert url in str(exc.value), "the refusal must quote the offending url back"
 
 
@@ -443,11 +454,16 @@ def test_the_normalizer_itself_stays_total(tmp_path):
 
     `canonical_base_url` still raises nothing on these shapes and still produces the broken
     string — the refusal lives at the config layer, not in the normalizer. That is deliberate:
-    the normalizer raising NOTHING is the property its own docstring rests the argument against
-    `urllib.parse.urlsplit` on. So a caller who bypasses the config and constructs
-    `VikunjaAPI("https://h?x=1", tok)` by hand still gets an unusable client. The class is
-    closed at the product's ENTRANCE, not everywhere, and saying otherwise would be the kind of
-    claim wider than its evidence this repo keeps filing cards about.
+    the normalizer raising NOTHING is the property that ONE of the four counts in its own
+    docstring's argument against `urllib.parse.urlsplit` rests on. So a caller who bypasses the
+    config and constructs `VikunjaAPI("https://h?x=1", tok)` by hand still gets an unusable
+    client — and so does `setup --url`, which is not a hand-written constructor call at all but
+    a second real CLI entry point, building its client straight from the argument without
+    calling `load_config`. So what the config layer closes is narrower than "the product's
+    ENTRANCE", which is how an earlier draft of this docstring put it: it closes the
+    SILENT-CLIENT class on every path that READS config, while being LOUD on only three of the
+    five such paths (the call-site list in `config.py` has the measurements) — `workspace`
+    create and release still exit 0 on such a url, and `setup --url` never reads config at all.
     """
     from vikunja_mcp.api import canonical_base_url
 

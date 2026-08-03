@@ -145,14 +145,50 @@ def load_config(cwd: Path | None = None, environ: Mapping[str, str] | None = Non
     # to say so at the moment the config is read.
     #
     # HERE and not in `canonical_base_url`, deliberately: that function raises NOTHING today,
-    # its docstring says so, and the argument against rewriting it onto `urllib.parse.urlsplit`
-    # rests on exactly that (urlsplit raises ValueError on an unclosed IPv6 authority — "a new
-    # crash class in a path that raises nothing"). Breaking its totality to fix this would
-    # cost that argument. Both consumers come through here anyway: the client is built from
-    # `cfg.url`, and the repoint guard calls `load_config()` and already raises ConfigError in
-    # that same path. BOUNDARY, stated rather than glossed: `VikunjaAPI("https://h?x=1", tok)`
-    # constructed directly still builds an unusable client. That is the price of keeping the
-    # normalizer total — the product entry point is the config, not the constructor.
+    # its docstring says so, and ONE of the four counts in its argument against rewriting it
+    # onto `urllib.parse.urlsplit` rests on exactly that (urlsplit raises ValueError on an
+    # unclosed IPv6 authority — a new crash class in a path that raises nothing). Breaking its
+    # totality would cost that count, not the argument: the other three are about
+    # PERMISSIVENESS and do not depend on totality at all.
+    #
+    # WHAT THE FIVE `load_config` CALL SITES DO WITH THIS REFUSAL, measured before and after,
+    # because an earlier draft of this comment said both consumers come through here anyway —
+    # true of the error's SHAPE, and it hid what the two SWALLOWING sites do with it. THREE ARE
+    # LOUD, which is the point of the card. The refusal fires INSIDE this function, before any
+    # client exists, so what makes those three loud is the caller: `server._wf` lets it out to
+    # `_tool`, which renders it as `{"error": ...}`; `claimable_cmd` prints it as its one JSON
+    # line and exits 1; `workspace_cmd._build_workflow` (the `--gc` board fetch) propagates it
+    # the same way. THE OTHER TWO SWALLOW IT — and the two swallows are NOT the same event: one
+    # got quieter, the other merely answers differently. Neither is repaired here:
+    #   * `server._reload_workflow_from_disk` wraps `load_config()` in `except Exception:
+    #     return False`, so this ConfigError reaches nobody. Measured on a token rotation that
+    #     ALSO mistypes the url: before this guard that input raised the loud #148 repoint
+    #     refusal NAMING BOTH URLS; now the reload returns False and `_tool` falls through to
+    #     the original 401, handing the caller the auth guidance — a confidently WRONG cause,
+    #     since the fault is the url. The diagnosis is REPLACED, not merely quietened. Safety is
+    #     untouched: no repoint happens, the cached Workflow is the SAME OBJECT afterwards, and
+    #     the controls did not move (a genuine host change still raises, a cosmetic-only one
+    #     still returns True).
+    #   * `workspace_cmd.worktree_root` catches ConfigError and falls back to the default
+    #     sibling. NOTHING got quieter here — that path printed nothing before and prints
+    #     nothing now; what changed is the ANSWER. Measured against a toml carrying
+    #     `worktree_root = "../CUSTOM"`: `workspace <id>` and `--release` still exit 0 on a url
+    #     with a query, but the tree now lands in `<repo>.worktrees` instead of `../CUSTOM`.
+    #     The handler's own comment (INSIDE the `except`, not above it) declares ConfigError to
+    #     mean only "this repo has no tracker config", the expected and fine case — and #768
+    #     puts a genuinely-broken-config case into that same class, so it falsifies that
+    #     premise rather than merely adding an instance. Not repaired here: splitting
+    #     ConfigError into subtypes so one can be caught without the other is its own slice.
+    #
+    # BOUNDARY, stated rather than glossed, because CLOSED and LOUD are not the same word.
+    # Closed everywhere is the SILENT-CLIENT class this card was filed for: no path that reads
+    # config can now build a client on such a url. Loud is three of the five sites above — so
+    # `workspace` is not "closed" as a COMMAND: `--gc` refuses, while create and release run to
+    # exit 0, building no client and paying the swallow instead. Outside config nothing is
+    # closed at all: `VikunjaAPI("https://h?x=1", tok)` constructed directly still builds an
+    # unusable client, and so does `setup --url`, a second real CLI entry point that builds its
+    # client straight from the argument without calling `load_config`. That is the price of
+    # keeping the normalizer total.
     if "?" in url or "#" in url:
         bad = "query" if "?" in url else "fragment"
         raise ConfigError(
