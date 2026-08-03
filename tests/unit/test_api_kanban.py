@@ -1,5 +1,7 @@
+import inspect
 import json
 import random
+import textwrap
 
 import httpx
 import pytest
@@ -2394,3 +2396,121 @@ def test_a_flat_list_that_dribbles_new_rows_forever_RAISES_instead_of_a_partial_
     assert exc.value.status == 508
     assert "NOTHING is returned" in exc.value.message
     assert len(seen) == MAX_UNPROVEN_PAGES + 1
+
+
+# --- VMCP-144 (633): the stop rule's first disjunct is REDUNDANT, and the pin is on WHY -------
+
+def _board_pages(pages, required, *, page_size=50):
+    """Drive the real `view_tasks` over MockTransport and return the pages it asked for."""
+    seen = []
+
+    def handler(request):
+        if request.url.path.endswith("/info"):
+            return httpx.Response(200, json={"max_items_per_page": page_size})
+        page = int(dict(request.url.params).get("page", 1))
+        seen.append(page)
+        return httpx.Response(200, json=pages.get(page, []))
+
+    board = make_api(handler).view_tasks(10, 40, require_titles=required)
+    return seen, board
+
+
+def test_the_stop_rules_first_disjunct_cannot_decide_it():
+    """`added_new_required` IMPLIES `required_had_tasks and added_new`, so `A or B` is just `B`.
+
+    WHY THIS AND NOT "the first disjunct is dead". That sentence is a claim about TODAY's source
+    and would go stale in silence the moment someone moved where a flag is set. The implication is
+    the thing that MAKES it dead, so pinning the implication is what turns a comment into a
+    checkable statement — and api.py's `keep_going` note now says the term is redundancy kept on
+    purpose, which is a lie the moment this test goes red.
+
+    Read straight off the loop rather than argued: `added_new_required` is set only inside
+    `if task["id"] not in ids:` for a bucket whose `required` is true; such a bucket already
+    passed `if required and tasks` (so `required_had_tasks`) and sets `added_new` on the next
+    line; all four flags reset per page. This test asserts the OBSERVABLE consequence — the pages
+    requested are identical with the first disjunct present and with it removed — over boards
+    built to exercise every combination of the two, rather than re-stating the argument.
+
+    MUTATION-CHECKED, selection `tests/unit/test_api_kanban.py`, `__pycache__` deleted and then
+    PYTHONDONTWRITEBYTECODE=1, each round restored from a byte copy and the file confirmed
+    sha256-identical; the mutation script refuses unless its target matches exactly once.
+    Control round: 0 failed.
+      * make the first disjunct actually DECIDE (`added_new_required = True` for any bucket) ->
+        32 failed over the file, and on the two-test selection it is THIS test alone. That is
+        the round that matters: it is the shape a future edit would take, and only the
+        implication pin distinguishes it
+      * break the implication the other way (`required_had_tasks` set only on a FULL page, so
+        `added_new_required` can be true while it is false) -> 26 failed over the file, and both
+        new tests on the narrow selection
+    The wide counts are reported as wide counts, not as this pin's kill: the loop is read by most
+    of the file, so almost any change to it reddens dozens. What says these two rows do their own
+    work is the NARROW selection, where the first round kills exactly one of them.
+    """
+    import vikunja_mcp.api as api_mod
+
+    boards = {
+        "new in a required bucket": {
+            1: [{"id": 1, "title": "Queue", "tasks": [{"id": 1}]}],
+            2: [{"id": 1, "title": "Queue", "tasks": [{"id": 1}, {"id": 2}]}],
+            3: [{"id": 1, "title": "Queue", "tasks": [{"id": 1}, {"id": 2}]}],
+        },
+        "required repeats, another bucket adds": {
+            1: [{"id": 1, "title": "Queue", "tasks": [{"id": 1}]},
+                {"id": 2, "title": "Done", "tasks": [{"id": 101}]}],
+            2: [{"id": 1, "title": "Queue", "tasks": [{"id": 1}]},
+                {"id": 2, "title": "Done", "tasks": [{"id": 102}]}],
+            3: [{"id": 1, "title": "Queue", "tasks": [{"id": 1}]},
+                {"id": 2, "title": "Done", "tasks": [{"id": 102}]}],
+        },
+        "required bucket empty throughout": {
+            1: [{"id": 1, "title": "Queue", "tasks": []},
+                {"id": 2, "title": "Done", "tasks": [{"id": 101}]}],
+            2: [{"id": 1, "title": "Queue", "tasks": []},
+                {"id": 2, "title": "Done", "tasks": [{"id": 102}]}],
+        },
+    }
+    src = inspect.getsource(api_mod.VikunjaAPI.view_tasks)
+    assert "keep_going = added_new_required or (required_had_tasks and added_new)" in src, (
+        "the stop rule was rewritten — re-derive whether the first disjunct is still redundant "
+        "before trusting the note in api.py that says it is"
+    )
+
+    for name, pages in boards.items():
+        with_first, _ = _board_pages(pages, {"Queue"})
+        # the same loop with the first disjunct removed, patched in as source
+        patched = src.replace(
+            "keep_going = added_new_required or (required_had_tasks and added_new)",
+            "keep_going = (required_had_tasks and added_new)",
+        )
+        ns = dict(vars(api_mod))
+        exec(compile(textwrap.dedent(patched), "<patched view_tasks>", "exec"), ns)
+        original = api_mod.VikunjaAPI.view_tasks
+        api_mod.VikunjaAPI.view_tasks = ns["view_tasks"]
+        try:
+            without_first, _ = _board_pages(pages, {"Queue"})
+        finally:
+            api_mod.VikunjaAPI.view_tasks = original
+        assert with_first == without_first, (
+            f"board '{name}': the first disjunct CHANGED the read ({with_first} vs "
+            f"{without_first}). It is no longer redundant, so api.py's `keep_going` note — which "
+            "calls it redundancy kept on purpose — is now false and must be rewritten"
+        )
+
+
+def test_the_board_reader_keeps_going_on_a_page_that_added_nothing_REQUIRED():
+    """The SECOND disjunct is the one that decides, and it is wider than "new in a required
+    bucket" — which is what the module-level summary above `_page_size` used to claim outright
+    ("Nothing else"). Measured: page 2 repeats the required bucket's only task and adds a new one
+    to Done; the loop asks for page 3. This is VMCP-92's repeat-window edge, and it is the reason
+    the second disjunct exists rather than an accident."""
+    pages = {
+        1: [{"id": 1, "title": "Queue", "tasks": [{"id": 1}]},
+            {"id": 2, "title": "Done", "tasks": [{"id": 101}]}],
+        2: [{"id": 1, "title": "Queue", "tasks": [{"id": 1}]},
+            {"id": 2, "title": "Done", "tasks": [{"id": 102}]}],
+        3: [{"id": 1, "title": "Queue", "tasks": [{"id": 1}]},
+            {"id": 2, "title": "Done", "tasks": [{"id": 102}]}],
+    }
+    seen, board = _board_pages(pages, {"Queue"})
+    assert seen == [1, 2, 3], f"expected the repeat window to buy one more page, got {seen}"
+    assert [t["id"] for b in board if b["title"] == "Queue" for t in b["tasks"]] == [1]

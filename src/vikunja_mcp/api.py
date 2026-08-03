@@ -59,8 +59,17 @@ _MAX_UNPROVEN_PAGES = 120
 # loses the same rows on the HEALTHY read for every w < 5. The trigger is a short non-final REPEAT
 # window; an over-serving server only widens the DEGRADED band.
 #
-# THE RULE NOW, in both readers: keep reading while the page brought something NEW (in a REQUIRED
-# bucket, for the board). Nothing else. That is a strict SUPERSET of what shipped before on EVERY
+# THE RULE NOW, in both readers: keep reading while the page brought something NEW — and for the
+# BOARD reader that is wider than "new in a required bucket", which is what this sentence used to
+# say before VMCP-144 (633) measured it. The board's rule is
+# `added_new_required or (required_had_tasks and added_new)`, and the second disjunct fires on a
+# page where a required bucket merely came back with tasks it had already served while some OTHER
+# bucket added something. Constructed and measured through the real `view_tasks` over a
+# MockTransport: page 2 repeated the required bucket's only task and added a NEW task to Done, and
+# the loop asked for page 3. So "nothing else" was false, and — worse — the clause it described is
+# the FIRST disjunct, the one that cannot decide anything (see the note at `keep_going` for why).
+# The flat reader's rule really is just "something new".
+# Either way it is a strict SUPERSET of what shipped before on EVERY
 # server — not by an argument about page sizes this time (that is the argument 603 measured false)
 # but by monotonicity: the old rules were `added_new AND (maybe_full OR header_more)` and
 # `added_new_required OR (maybe_full_required AND added_new)`, and dropping a conjunct / weakening
@@ -1071,6 +1080,20 @@ class VikunjaAPI:
             # added something somewhere (VMCP-92's repeat-window edge, which "nothing new in a
             # required bucket" alone misses). No branch on /info any more: the same expression runs
             # whether the page size is known or not — see the long note above `_page_size`.
+            #
+            # WHICH OF THE TWO DISJUNCTS DECIDES: only the SECOND, and the first is kept as
+            # redundancy that is NAMED rather than mistaken for load-bearing (VMCP-144, 633).
+            # `added_new_required` is set only inside `if task["id"] not in ids:` for a bucket
+            # whose `required` is true — and such a bucket has already passed `if required and
+            # tasks` (so `required_had_tasks`) and sets `added_new` on the very next line. All
+            # four flags reset per page, so within a page `added_new_required` IMPLIES
+            # `required_had_tasks and added_new`, and `A or B` with `A ⇒ B` is just `B`. Deleting
+            # it would therefore be behaviour-preserving TODAY; it stays because this is the loop
+            # whose truncated answer once let `--gc` reap a live worktree (#543), and a spare term
+            # is cheaper here than the edit that would re-derive it. What must not happen is the
+            # comment claiming it does work — that is what 633 was filed about. The implication is
+            # PINNED (tests/unit/test_api_kanban.py), so an edit that breaks it reddens rather
+            # than quietly turning this paragraph into a lie.
             keep_going = added_new_required or (required_had_tasks and added_new)
             if not stated_full_required:
                 unproven_pages += 1         # this page was not justified by max_items_per_page
