@@ -110,8 +110,10 @@ no tabs and no wide characters. A tab or a CJK character would break that equiva
 useful contrast is with BYTES. The shell reflex — `awk '{ if (length($0) > 100) ... }'`, `wc -c`
 — counts BYTES, and
 this repo's prose is full of em-dashes (3 bytes) and Cyrillic (2 bytes each). Measured at
-`d857280`: 1626 lines sit at or under 100 characters while exceeding 100 bytes, and 1004 do
-so at 110. A byte counter calls every one of them a violation. Those two are DIFFERENT sets
+`d857280`: 1626 `.py` lines sit at or under 100 characters while exceeding 100 bytes, and 1004
+do so at 110 — `.py` because that is all ruff reads, and the scope carries the figures: over
+every file in the tree the same two scans give 3824 and 3072 instead. A byte counter calls
+every one of them a violation. Those two are DIFFERENT sets
 and neither
 is nested in the other, which is measured here rather than argued from the definition: 989 lines
 are in both, 637 only in the first and 15 only in the second. And both are dated to a sha on

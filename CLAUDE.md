@@ -51,18 +51,21 @@ things follow for anyone writing prose here, which is most tasks. **The band 101
 with nothing behind it** — a 103-character line ships green, so keep measuring your own additions
 rather than reading a green `ruff check` as "wrapped correctly". **Measure in CHARACTERS, never
 bytes**: ruff does, the shell reflex (`awk '{print length($0)}'`, `wc -c`) does not, and this prose
-is full of em-dashes (3 bytes) and Cyrillic (2 bytes each) — at `d857280`, 1626 lines sat at or
-under 100 characters while a byte counter would call them violations, and 1004 lines did the
-same at the 110 ceiling. Those are two SEPARATE sets and neither contains the other, which is
-measured rather than argued: 989 lines are in both, 637 in the first only and 15 in the second
-only. Both figures count prose, so they move with every landing — re-measure rather than quote
-them: those same two limits replayed at `3db8ef9` give 1015 and 569. **The 413 this paragraph
-used to print beside the 1015 was the 120 ruler and retired with the ceiling** — it is not the
-same measurement taken earlier, and reading it as one would understate the second set by 156 at
-that very sha. VMCP-132 (621)'s worklog records the mistake in those words — "an awk byte-count
-had falsely flagged one line because of the em-dash". In python it is `len(line)`, not
-`len(line.encode())`. And **"red at 111" has exactly TWO measured exemptions that ruff
-applies ON ITS OWN — a `# noqa` silences it
+is full of em-dashes (3 bytes) and Cyrillic (2 bytes each) — at `d857280`, 1626 `.py` lines sat
+at or under 100 characters while a byte counter would call them violations, and 1004 `.py` lines
+did the same at the 110 ceiling. Those are two SEPARATE sets and neither contains the other,
+which is measured rather than argued: 989 lines are in both, 637 in the first only and 15 in the
+second only. Both figures count prose, so they move with every landing — re-measure rather than
+quote them: those same two limits replayed at `3db8ef9` give 1015 and 569. **And re-measure over
+`.py` alone**, which is the whole of what ruff reads here: every line-count in this paragraph is
+`.py`-only except one contrast pair — run those same two scans over EVERY file in the tree and
+they give 3824 and 3072 instead, more than twice as many, which is what the scope is worth.
+**The 413 this paragraph used to print beside the 1015 was the 120 ruler and retired with the
+ceiling** — it is not the same measurement taken earlier, and reading it as one would understate
+the second set by 156 at that very sha. VMCP-132 (621)'s worklog records the mistake in those
+words — "an awk byte-count had falsely flagged one line because of the em-dash". In python it
+is `len(line)`, not `len(line.encode())`. And **"red at 111" has exactly TWO measured
+exemptions that ruff applies ON ITS OWN — a `# noqa` silences it
 too, but that is an opt-out someone writes, not a decision the rule makes — and the one an earlier
 draft of this paragraph named, "the overlong part contains no whitespace", is NOT among them.**
 Measured at `d857280` on ruff 0.15.20: `# ` followed by 109 `x` is 111 characters with no
@@ -78,7 +81,8 @@ SUBSTRING test, not URL recognition — `foo://…` is exempt and `www.example.c
 pin has no exemption at all and flags both shapes; that disagreement is deliberate. One honest
 bound on this whole paragraph: ruff measures DISPLAY WIDTH, not `len(line)`, so a tab or a CJK
 character makes it red below 111 — measured, zero lines in `src`/`tests`/`scripts` differ between
-the two at any of the four shas named here, so the distinction is real but currently theoretical.
+the two at any of the four shas named in `tests/unit/test_line_length_gate.py` (this paragraph
+names two of them), so the distinction is real but currently theoretical.
 
 Before #669 there was no gate at all: `line-length` was set, `E501` was **not** selected (it is
 absent from ruff's default `E4,E7,E9,F`), so `line-length` drove only the formatter — which this

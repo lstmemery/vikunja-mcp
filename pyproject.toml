@@ -39,10 +39,17 @@ dev = ["pytest>=8", "ruff>=0.6"]
 # opinion about long lines, it is the only one.
 #   ONE CAVEAT, so a later edit does not misread this: "drives no check" holds only while the
 #   pycodestyle table below exists. Delete that table and `line-length` becomes E501's limit
-#   directly — measured at `d857280`, 94 errors (it was 76 at #669's own landing `1ac64ca`; the
-#   band has grown WITH the tree, and the rate is flat rather than rising — 2.70 such lines per
-#   1000 then against 2.55 now — so do not read the growth as evidence of anything). Looks like
-#   a relaxation, lands as a tightening.
+#   directly — measured at `d857280`, 94 errors, against 76 at #669's own landing `1ac64ca`.
+#   Do NOT read that pair as a rate holding steady. Per 1000 `.py` lines it went 2.71
+#   (76/28,077) at `1ac64ca` to 2.72 (101/37,092) at `34ba644`, so it ROSE across the one
+#   interval that is purely the tree's own growth, and what brought it to 2.53 (94/37,137) was
+#   #711's own seven hand re-wraps. Two endpoints either side of a cleanup are not a trend.
+#   EVERY figure here is RUFF's count, not the character scan's — the two agree at `1ac64ca`
+#   (76 either way) and differ at `d857280` (95 scanned against ruff's 94, the one difference
+#   being an IPv6 URL; see the exemption note below). An earlier draft printed 2.70 and 2.55,
+#   wrong in TWO ways at once, which is why a rate needs a channel AND a rounding rule beside
+#   it: 2.55 takes the scan's 95 instead of ruff's 94 and then truncates, where that same 95
+#   rounds to 2.56. Looks like a relaxation, lands as a tightening.
 line-length = 100
 target-version = "py311"
 
@@ -51,14 +58,17 @@ target-version = "py311"
 # `len(line)` for everything this repo contains, since it holds no tabs and no wide characters
 # (measured at all four shas named in tests/unit/test_line_length_gate.py). That is the reason to
 # reach for it instead of the `awk length()` reflex: this repo's prose is full of
-# em-dashes (3 bytes) and Cyrillic (2 bytes each), so at `d857280` there were 1626 lines at or
-# under 100 characters but over 100 BYTES, and 1004 at or under 110 characters but over 110 bytes.
-# A byte counter calls every one of those a violation; ruff calls none of them, correctly. Those
-# are two separate sets and neither is nested in the other — measured at the same sha, 989 lines
-# are in both, 637 only in the first and 15 only in the second. Both count em-dashes in PROSE, so
-# both move with every landing: those same two limits at `3db8ef9` give 1015 and 569. The 413 that
-# used to stand beside the 1015 here was the 120 ruler and retired with the ceiling — it is NOT
-# the same measurement taken earlier. Re-measure, do not quote.
+# em-dashes (3 bytes) and Cyrillic (2 bytes each), so at `d857280` there were 1626 .py lines at
+# or under 100 characters but over 100 BYTES, and 1004 at or under 110 characters but over 110
+# bytes. A byte counter calls every one of those a violation; ruff calls none of them, correctly.
+# Those are two separate sets and neither is nested in the other — measured at the same sha, 989
+# lines are in both, 637 only in the first and 15 only in the second. Both count em-dashes in
+# PROSE, so both move with every landing: those same two limits at `3db8ef9` give 1015 and 569.
+# The 413 that used to stand beside the 1015 here was the 120 ruler and retired with the ceiling
+# — it is NOT the same measurement taken earlier. Re-measure, do not quote — and re-measure over
+# `.py` alone, which is the whole of what ruff reads here. Every line-count in this comment is
+# `.py`-only except one contrast pair: run those same two scans over EVERY file in the tree and
+# they give 3824 and 3072 instead, more than twice as many, which is what the scope is worth.
 #   Selecting E501 is necessary and NOT sufficient: `ignore`, `per-file-ignores` and a `# noqa`
 #   each switch it back off with `select` untouched. tests/unit/test_line_length_gate.py reads the
 #   first two, because a pin that only checks `select` certifies a gate that may not be running.
@@ -66,12 +76,16 @@ select = ["E4", "E7", "E9", "F", "E501"]
 
 [tool.ruff.lint.pycodestyle]
 # The HARD gate sits at 110, not at `line-length`, and the gap was measured rather than split
-# — #711 ratcheted it down from #669's 120, which cost SIX hand re-wraps because only six
-# lines in the whole tree were above 110. It was NOT taken to 100: measured then, 59 of the
-# 102 lines in the band were exactly 101 characters and 18 more were 102, so the population
-# is a one-or-two-character tail past the wrap target, and the composition below still holds.
-# The history #669 recorded is kept as history:
-# down the middle. On 2026-08-02 seventy-seven lines exceeded 100 characters across 18 files —
+# down the middle. #711 ratcheted it down from #669's 120 at a cost of SEVEN hand re-wraps: at
+# its pre-image `34ba644` six `.py` lines in FIVE files sat above 110, and one neighbour came
+# along with them. Every count in this comment is `.py`-only except one contrast, and that
+# contrast is why the scope is stated — the WHOLE tree held 592 lines over 110 that same day,
+# nearly all of them in `uv.lock` and docs. It was NOT taken to 100: of the 102 lines then in
+# the 101-120 band, 59 were exactly 101 characters and 18 more were 102, a one-or-two-character
+# tail past the wrap target rather than long lines. The record #669 left is kept as history and
+# is NOT to be carried over to today's population, which tests/unit/test_line_length_gate.py
+# re-derives separately. The record itself: on 2026-08-02 seventy-seven lines exceeded 100
+# characters across 18 files —
 # 41 of them CODE, 22 inside string literals (19 of those docstrings) and only 14 comments — and
 # SEVENTY-SIX of the 77 were 116 characters or shorter. The defect this rule was turned on for
 # was 140: a 24-character outlier above every other PYTHON line in the directories ruff reads,
