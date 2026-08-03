@@ -116,8 +116,16 @@ dist/
 # to put to git.
 #
 # `*.pdf` is the one rule here that guards a NON-default tool:
-# `browser_pdf_save` appears only with `PLAYWRIGHT_MCP_CAPS=pdf` — measured absent from the
-# default 24 and present the moment that one cap is set — so it is defence in depth, exactly
+# `browser_pdf_save` appears only with the `pdf` capability — measured absent from the
+# default 24 and present the moment that one cap is set. "Only" is measured rather than
+# assumed, and it is about the CAP, not the channel (#704): each of the OTHER ELEVEN members
+# of the `ToolCapability` union was set on its own and none of them brings the tool, while
+# `--caps=pdf` and `PLAYWRIGHT_MCP_CAPS=pdf` serve the identical 25-tool roster — so the env
+# spelling here is an example, not the requirement. Do NOT generalise that last part into
+# "the two channels agree": measured, they do so for all twelve DECLARED caps and diverge on
+# the undeclared alias `tracing`, which the CLI rewrites to `devtools` (+11 tools) and the env
+# path silently drops — the asymmetry is recorded with the rest of the measurement below.
+# So it is defence in depth, exactly
 # as the storage-state rules below are for their own capability-gated tool. What that clause
 # deliberately does NOT quote is a tool total "with every capability on"; the measurement and
 # the reason are in test_repo_browser_isolation.py, in the docstring of

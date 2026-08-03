@@ -2232,6 +2232,91 @@ _SCOPE_WINDOW_EXAMPLES = (
 )
 
 
+# --- VMCP-179 (704): a rulebook count of an EXTERNAL package must carry that package's version --
+
+# Any "<number> тул(ов)" claim. The number may be digits or a Russian numeral, because the
+# rulebook writes small counts as words ("семь тулов") and larger ones as digits.
+_TOOL_COUNT_CLAIM = re.compile(
+    r"(?:\d+|одному|одном|один|одна|одну|две|два|три|четыре|пять|шесть|семь|восемь|девять|"
+    r"десять|одиннадцать|двенадцать)\s+тул(?:ов|а|ы|зы|з)?\b",
+    re.IGNORECASE,
+)
+# A released version of the npm package, e.g. `0.0.78`. `@latest` deliberately does NOT match:
+# a floating tag is the PROBLEM this pin exists for, not a stamp that answers it.
+_PACKAGE_VERSION = re.compile(r"\b\d+\.\d+\.\d+\b")
+
+# How far from the count the version may sit. Wide enough to survive re-wrapping the sentence,
+# narrow enough that the stamp has to be IN the claim's own clause rather than anywhere in a
+# 190-line section. Measured BOTH WAYS on purpose: the first version of this pin looked only
+# FORWARD, which would have rejected the equally correct "измерено на 0.0.78: ... принимают
+# семь тулов" — a mutation round meant to isolate the window is what surfaced it.
+_VERSION_WINDOW = 220
+
+
+def _browser_section(text: str) -> str:
+    """The `### Браузер (playwright)` section: from its heading to the next level-2 heading."""
+    start = text.index("### Браузер (playwright)")
+    rest = text.index("\n## ", start)
+    return text[start:rest]
+
+
+def test_a_playwright_tool_count_in_the_rulebook_names_the_version_it_was_measured_on():
+    """VMCP-179 (704): the rulebook may quote a tool count of `@playwright/mcp`, but not a
+    BARE one — the number has to carry the package version it was measured on.
+
+    Why this file and not a number check. The count is a property of an external npm package,
+    so no unit test can assert the VALUE without spawning `npx` (measured: reproducing it costs
+    a server spawn plus the `initialize` / `initialized` / `tools/list` handshake, and 0.0.78's
+    `--help` prints no tool list, so there is no one-command form either). What a test CAN
+    assert is the SHAPE — that the figure is stamped — which is the repo's standing rule for a
+    measured number a reader acts on: an assert where one is possible, a version where the
+    number is history, never a date.
+
+    And here it is the version specifically, because the same section PRESCRIBES the floating
+    tag: `npx -y @playwright/mcp@latest --isolated --headless`. So the rulebook tells the agent
+    to install whatever ships today and then quotes a count taken on 0.0.78 — the two drift
+    apart silently, in the one file that self-rolls-out to every consumer and outlives the
+    measurement by design. Measured on 0.0.78 while writing this card: default 24 tools, 7 of
+    them taking `filename`; all twelve declared `ToolCapability` members 69 and 11. The
+    seven is the load-bearing one, because the rule around it argues from EXHAUSTIVENESS
+    ("голое имя закрыть нечем ... `filename` принимают семь тулов") — an eighth text writer in
+    a later release does not make the sentence merely stale, it makes its reasoning wrong,
+    while the prefix rule it supports is about the DIRECTORY and survives any count.
+
+    The floor matters as much as the stamp check: without it a rulebook that dropped the
+    sentence, or a regex that stopped matching it, would leave this test scanning nothing and
+    passing — the "no tests ran looks like a pass" shape. Scoped to the browser section so the
+    tracker's own "один тул" claims (`exactly ONE agent tool walks a card out of Review`) are
+    not swept in; the section is the unit because that is where a playwright count can appear.
+
+    MUTATION-CHECKED with an UNMUTATED CONTROL round on the same selection, `__pycache__`
+    deleted before each round and `PYTHONDONTWRITEBYTECODE=1` set, every round's `collected`
+    read and every failure read by its MESSAGE. Rounds are recorded in the card's `[worklog]`.
+    """
+    section = _browser_section(_skill_text())
+
+    claims = list(_TOOL_COUNT_CLAIM.finditer(section))
+    assert claims, (
+        "no '<number> тулов' claim found in the browser section of SKILL.md — either the "
+        "rulebook stopped making one (then delete this pin) or the pattern stopped matching "
+        "it (then fix the pattern). A pin that scans nothing passes for the wrong reason."
+    )
+
+    unstamped = []
+    for m in claims:
+        window = section[max(0, m.start() - _VERSION_WINDOW): m.end() + _VERSION_WINDOW]
+        if not _PACKAGE_VERSION.search(window):
+            unstamped.append(m.group(0).strip())
+
+    assert not unstamped, (
+        f"SKILL.md quotes a playwright tool count without naming the package version it was "
+        f"measured on: {unstamped}. The same section prescribes `@playwright/mcp@latest`, so "
+        f"an unstamped count silently becomes false on the next release of a package this "
+        f"repo does not control — and the rulebook self-rolls-out to consumers. Name the "
+        f"version beside the number (e.g. '`@playwright/mcp` 0.0.78')."
+    )
+
+
 def test_the_code_universal_scope_window_agrees_with_its_worked_examples():
     """VMCP-110 (580): the scope window of `_unscoped_code_universal`, pinned on fixed prose.
 

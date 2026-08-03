@@ -1015,10 +1015,24 @@ def test_the_extension_rules_do_not_reach_a_screenshot_under_another_name(path):
     `config,devtools,storage` and `pdf,storage,vision,testing` each give 53 with 10 — so which
     run produced that sentence cannot be recovered from the number. Every capability on really is
     69, i.e. all twelve members of the `ToolCapability` union in the package's own `config.d.ts`,
-    also with 11 acceptors. Two measured traps stand behind the muddle. Unknown cap names are
+    also with 11 acceptors. Three measured traps stand behind the muddle. Unknown cap names are
     accepted SILENTLY: `PLAYWRIGHT_MCP_CAPS=bogus` starts cleanly, writes nothing to stderr and
     serves the default 24, so a cap that does not exist reads exactly like a cap that adds
-    nothing. And "writers = acceptors − 1" stops holding once `storage` is on, because
+    nothing.
+    And "a cap that adds nothing" is itself CHANNEL-DEPENDENT, which is the trap that put
+    `tracing` and `verify` into these cap lists in the first place (#704). The two channels agree
+    on all twelve DECLARED caps — `--caps=<all 12>` and `PLAYWRIGHT_MCP_CAPS=<all 12>` both serve
+    69 with the same 11 acceptors — so it is tempting to call them equivalent; they are not.
+    Measured: `--caps=tracing` serves 35 and `PLAYWRIGHT_MCP_CAPS=tracing` serves 24, and
+    `--caps=pdf,tracing` serves 36 against the env form's 25. The cause is in the bundled
+    `playwright-core/lib/coreBundle.js`, in the CLI's own `.action()` handler —
+    `if (options.caps?.includes("tracing")) options.caps.push("devtools")` — an undeclared
+    back-compat alias that the env path (`configFromEnv`) never runs, so `tracing` is a live
+    +11 on the flag and inert as a variable. `verify` serves 24 on BOTH and is simply not a
+    capability, despite `browser_verify_*` tools existing under `testing`. So a cap sweep is
+    comparable only against sweeps taken through the SAME channel, and "measured +0" means
+    nothing without saying which one carried it.
+    And "writers = acceptors − 1" stops holding once `storage` is on, because
     `browser_set_storage_state` reads its file too ("Path to the storage state file to restore
     from") — by the schemas that is 11 acceptors and NINE writers, not ten. Those two numbers are
     read off the schemas; the writing is not, and it is not confined to the default set either.
