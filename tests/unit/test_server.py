@@ -461,6 +461,58 @@ def test_reload_self_heals_a_rotation_whose_url_differs_only_cosmetically(
 
 
 @pytest.mark.parametrize(
+    ("baseline_url", "rotated_url"),
+    [
+        ("https://tracker.zz.hgdev.com?Token=A", "https://TRACKER.zz.hgdev.com?Token=A"),
+        ("https://tracker.zz.hgdev.com?Token=A", "HTTPS://tracker.zz.hgdev.com?Token=A"),
+        ("https://tracker.zz.hgdev.com#Frag", "https://TRACKER.zz.hgdev.com#Frag"),
+        ("https://tracker.zz.hgdev.com:3456?Token=A", "https://TRACKER.zz.hgdev.com:3456?Token=A"),
+    ],
+    ids=[
+        "host-case-folds-with-a-query-present", "scheme-case-folds-with-a-query-present",
+        "host-case-folds-with-a-fragment-present", "host-case-folds-behind-a-port-and-a-query",
+    ],
+)
+def test_reload_still_self_heals_a_cosmetic_rotation_when_the_url_carries_a_query(
+    monkeypatch, capsys, baseline_url, rotated_url
+):
+    """The PAIRED half of tracker #706, and the reason the refusal rows above are not enough on
+    their own. #706 narrowed what counts as authority; the failure mode of narrowing it is
+    narrowing it too far, and a body that folded NOTHING would satisfy every refusal row in this
+    file while re-inverting #148 exactly as #154 had to fix once already.
+
+    So these rows go the other way: the query or fragment is IDENTICAL on both sides and only a
+    genuinely case-INSENSITIVE part moves, which must still self-heal.
+
+    What that buys, measured rather than predicted. The mutation `cut = 0` (authority always empty,
+    so nothing folds at all) leaves EVERY refusal row in this file green — a guard that refuses
+    everything refuses those correctly too — while three of the four rows here go red (the
+    `scheme-case` row correctly stays green: the scheme is folded outside the authority slice). So
+    the refusal rows alone cannot see an over-narrowed authority, which is the direction this test
+    exists for. The honest limit on the other side: this test is not the ONLY thing that sees it —
+    the pre-existing `test_reload_self_heals_a_rotation_whose_url_differs_only_cosmetically`
+    `host-case` row reddens under the same mutation, as do fifteen rows of the api table and the
+    httpx test beside it (20 failed in all, against a control of 0 failed). These
+    rows are the ones that see it WITH a query or fragment present, which is the shape #706
+    touched, and no pre-existing row carries one."""
+    rebuilt = object()
+    monkeypatch.setattr(server, "_workflow", None, raising=False)
+    monkeypatch.setattr(server, "_build_workflow", lambda cfg: rebuilt)
+    _set_session_baseline(monkeypatch, token="OLD", url=baseline_url, project_id=10)
+    monkeypatch.setattr(
+        server, "load_config",
+        lambda: Config(url=rotated_url, token="ROTATED", project_id=10),
+    )
+    try:
+        assert server._reload_workflow_from_disk() is True   # rebuilt, NOT refused as a repoint
+        assert server._workflow is rebuilt
+        assert server._workflow_token == "ROTATED"
+        assert capsys.readouterr().out == ""
+    finally:
+        server._reset_workflow_cache()
+
+
+@pytest.mark.parametrize(
     "rotated_url",
     [
         "http://tracker.zz.hgdev.com",           # scheme VALUE downgrade to plaintext — REAL
@@ -510,10 +562,16 @@ def test_reload_still_refuses_a_rotation_to_a_genuinely_different_endpoint(
         # tracker #707 — an IPv6 zone id is an OS INTERFACE NAME, not part of the address.
         ("https://[fe80::1%25ETH0]", "https://[fe80::1%25eth0]"),
         ("https://[fe80::1%25ETH0]:3456", "https://[fe80::1%25eth0]:3456"),
+        # tracker #706 — a query or fragment written BEFORE any `/` is not authority either.
+        ("https://tracker.zz.hgdev.com?Token=A", "https://tracker.zz.hgdev.com?token=a"),
+        ("https://tracker.zz.hgdev.com#Frag", "https://tracker.zz.hgdev.com#frag"),
+        ("https://tracker.zz.hgdev.com:3456?Token=A", "https://tracker.zz.hgdev.com:3456?token=a"),
+        ("https://tracker.zz.hgdev.com?Foo=BAR#Frag", "https://tracker.zz.hgdev.com?foo=bar#frag"),
     ],
     ids=[
         "path-case", "userinfo-user-case", "userinfo-password-case",
         "ipv6-zone-id-case", "ipv6-zone-id-case-with-port",
+        "query-case", "fragment-case", "query-case-behind-a-port", "query-and-fragment-case",
     ],
 )
 def test_reload_still_refuses_a_rotation_that_changes_only_a_CASE_SENSITIVE_part(
@@ -535,6 +593,19 @@ def test_reload_still_refuses_a_rotation_that_changes_only_a_CASE_SENSITIVE_part
     Measured — under the `path.lower()` mutation the `different-path` row stays GREEN and only this
     row goes red.
 
+    HOW TO READ THE TWO ROUND TABLES BELOW, because they disagree and the disagreement is not a
+    contradiction. #707's rounds were run on a tree that did NOT yet carry #706's four rows, and
+    #706's were run on a branch that did not yet carry #707's two — this commit is the rebase that
+    first put both in one tree, and neither table has been re-measured on it. So every ABSOLUTE
+    count below is true of the tree its own table names and of neither the other's nor this one's;
+    where the two name the same #164 round they name it at different trees, which is why the
+    numbers differ. What DOES survive the merge is each table's qualitative half — which rows are
+    red-first, and which mutations kill disjoint sets — because each of those was measured directly
+    on the rows it names rather than derived from a total. The one round that WAS re-measured on
+    the merged tree is written out in tests/unit/test_api.py's matching paragraph and covers the
+    rows here too: same two-file selection, control round 0 failed, the pre-#706 body 15 failed,
+    restored 0 failed, with all four `query-*`/`fragment-*` rows of this table among the dead.
+
     The `ipv6-zone-id-case` rows are #707's, and they are the same argument a third time. An IPv6
     zone id (`%25` + the id, RFC 6874) is an OS INTERFACE NAME grafted into the syntactic host, and
     interface names are case-sensitive — measured on 2026-08-03 rather than read off the RFC, which
@@ -548,7 +619,7 @@ def test_reload_still_refuses_a_rotation_that_changes_only_a_CASE_SENSITIVE_part
     different interfaces, and before #707 this guard ACCEPTED a rotation between them. The ADDRESS's
     hex is the opposite case and has its own test right below — the two must not be pinned together.
 
-    MUTATION-CHECKED over the whole `tests/unit` selection, `__pycache__` DELETED and then
+    MUTATION-CHECKED for #707 over the whole `tests/unit` selection, `__pycache__` DELETED and
     `PYTHONDONTWRITEBYTECODE=1`, restores verified by sha256 against the pristine file. Two sweeps
     on 2026-08-03, each opening with an unmutated control on the same selection; 921 collected every
     round. Control round: 0 failed.
@@ -566,6 +637,49 @@ def test_reload_still_refuses_a_rotation_that_changes_only_a_CASE_SENSITIVE_part
         8 failed, identical set — these rows pin behaviour, not one spelling
     The 6 above was re-measured for #707 and is now 13; it moved because #707 added rows to
     tests/unit/test_api.py, not because anything regressed.
+
+    The `query-*` / `fragment-*` rows are tracker #706 at the level that matters. They are
+    RED-FIRST: measured on the pre-#706 tree through this very function, the guard ACCEPTED the
+    rotation `https://tracker.zz.hgdev.com?Token=A` -> `?token=a` and rebuilt the workflow onto it,
+    because the authority slice ended at the first `/` alone and a query written before any `/`
+    was therefore folded with the host. RFC 3986 3.2 ends the authority at the first `/`, `?` or
+    `#`. A query string is where a Vikunja url would carry a token if it carried one at all, so
+    reading two of them as one endpoint is the same permissive fold as the userinfo rows, not a
+    typographic one.
+
+    What the two extra rows do is narrower than it looks, and both were overstated in this
+    docstring's first draft before the sweep contradicted it. `query-case-behind-a-port` covers the
+    port sitting between the host and the terminator — but measured, it lives and dies with
+    `query-case` in every round run for #706, so it is coverage, not an independent pin.
+    `query-and-fragment-case` does NOT pin "both terminators are live at once": measured, it stays
+    GREEN under both single-terminator mutations, because in the REFUSAL direction any surviving
+    case difference keeps the guard refusing, and a url carrying both always keeps one. What pins
+    the two halves is the PAIR `query-case` (dies when `?` leaves the terminator set) and
+    `fragment-case` (dies when `#` does) — neither alone, and neither is the row that looks like it
+    covers both.
+
+    MUTATION-CHECKED for #706 over the whole `tests/unit` selection, `__pycache__` cleared and
+    `PYTHONDONTWRITEBYTECODE=1`, restores confirmed by re-running to the control. #164's rounds,
+    re-measured for #706 (which renamed the mutated variable and added four rows here, moving both
+    counts). Control round: 0 failed.
+      * `{tail}` -> `{tail.lower()}` in canonical_base_url — #164's `{path}` round on the renamed
+        slice -> 18 failed, FIVE of them rows of this test, `path-case` among them. On the PRE-#164
+        tree, control 0 failed, that mutation was 0 failed
+      * fold the authority WHOLE again (`authority.lower()`, the pre-#164 body) -> 7 failed, BOTH
+        `userinfo-*` rows here among them, each as `DID NOT RAISE ConfigError` — i.e. that body
+        had the guard accepting a CHANGED CREDENTIAL as the same endpoint, which is why those two
+        rows were red-first rather than pins of behaviour that was already correct
+
+    #706's rounds, same selection and hygiene. Control round: 0 failed.
+      * the pre-#706 body (authority ends at `/` alone) -> 14 failed, FOUR of them rows of this
+        test and no other row in this file: `query-case`, `fragment-case`,
+        `query-case-behind-a-port` and `query-and-fragment-case`, each as `DID NOT RAISE
+        ConfigError`. That is the red-first evidence for all four
+      * drop `?` from the terminator set -> 9 failed, `query-case` and `query-case-behind-a-port`
+        here; drop `#` -> 5 failed, `fragment-case` here. `query-and-fragment-case` survives BOTH,
+        which is the measurement behind the paragraph above
+      * `cut = len(rest)` (everything is authority, so the path folds too) -> 18 failed, all FIVE
+        `#164`+`#706` case rows here at once
     """
     sentinel = object()
     monkeypatch.setattr(server, "_workflow", sentinel, raising=False)

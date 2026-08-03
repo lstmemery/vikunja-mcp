@@ -193,30 +193,39 @@ def canonical_base_url(base_url: str) -> str:
 
     Folds ONLY what is the same endpoint by definition, and keeps every genuine change:
       * strips a trailing slash — cosmetic;
-      * lowercases the scheme and the HOST[:port] — the RFC-3986 case-insensitive parts;
-        httpx folds these the same way when it builds a request, so routing the client through this
-        leaves the request it builds unchanged for every url a Vikunja base url can be (the existing
-        api tests pass untouched). NOT for every url, though — #154 said "identical" flat, and #164
-        measured THREE divergences on httpx 0.28.1, none reachable from a real config: an uppercase
-        scheme with an explicit DEFAULT port (`HTTPS://h:443` keeps `:443` on the wire, the
-        canonicalized `https://h:443` drops it, because that drop is case-sensitive about the
-        scheme); an IPv6 literal written with UPPERCASE HEX (`[::FFFF:1]` folds to `[::ffff:1]`,
-        changing the Host header); and a query or fragment BEFORE the first `/`, which lands in the
-        authority slice and gets lowercased. The first two are the same endpoint either way; the
-        third is a genuine over-fold of the shape this card removed from userinfo, left open and
-        FILED rather than fixed here. All three predate this card — they come from folding the
-        scheme and host, which is #154's. The point is that "identical" was wider than its
-        measurement; the second test in tests/unit/test_api.py now pins the rule AND all three.
-        A FOURTH went unnamed until #707: the host was folded whole, so an IPv6 ZONE ID went down
-        with the hex (`[fe80::1%25ETH0]` -> `[fe80::1%25eth0]`). That one is not the same endpoint —
-        a zone id is an OS interface name and interface names are case-sensitive (measured, both
-        platforms) — so it was the userinfo defect again in a shape the words "IPv6 literal" hid.
-        It OVERLAPS class 2 without either containing the other, and saying it "hid inside" class 2
-        would be false: measured, `[fe80::1%25ETH0]` carries no uppercase hex digit at all yet
-        diverged before #707, so class 2 as written never covered it; `[FE80::1%25ETH0]` is in both;
-        and `[::FFFF:1]` is in class 2 only and still diverges. Class 2 is therefore unchanged by
-        #707, not shrunk. The host's case rule now lives in `_fold_host` above, which is where the
-        hex-vs-zone split is argued and measured;
+      * lowercases the scheme and the HOST[:port] — the RFC-3986 case-insensitive parts — and only
+        as far as the AUTHORITY actually reaches. RFC 3986 3.2 ends the authority at the first `/`,
+        `?` or `#`, or at the end of the URI; the slice below implemented one of those three
+        terminators until #706, so a query or fragment written before any `/` fell INSIDE the
+        authority and was lowercased along with the host (`https://h?Q=A` -> `https://h?q=a`,
+        `https://h#Frag` -> `https://h#frag`). Measured through the real repoint guard, that made
+        `server._reload_workflow_from_disk` ACCEPT a rotation differing only in the case of a
+        query — the same permissive over-fold #164 removed from userinfo, in a shape #164's own
+        grid could not contain. Using all three terminators is what fixes it, and it is one rule
+        rather than a case each for `?` and `#`. httpx folds scheme and host the same way when it
+        builds a request, so routing the client through this leaves the request it builds unchanged
+        for every url a Vikunja base url can be (the existing api tests pass untouched). NOT for
+        every url, though — #154 said "identical" flat, and #164 measured THREE divergences on
+        httpx 0.28.1, none reachable from a real config; #706 closed the third, and two of THAT
+        LIST remain: an uppercase scheme with an explicit DEFAULT port (`HTTPS://h:443` keeps
+        `:443` on the wire, the canonicalized `https://h:443` drops it, because that drop is
+        case-sensitive about the scheme), and an IPv6 literal written with UPPERCASE HEX
+        (`[::FFFF:1]` folds to `[::ffff:1]`, changing the Host header). Both are the same endpoint
+        either way, and both predate #164 — they come from folding the scheme and host, which is
+        #154's. The point is that "identical" was wider than its measurement; the second test in
+        tests/unit/test_api.py pins the rule AND both, and pins the closed shape from the other
+        side. A FOURTH went unnamed until #707: the host was folded whole, so an IPv6 ZONE ID went
+        down with the hex (`[fe80::1%25ETH0]` -> `[fe80::1%25eth0]`). That one is not the same
+        endpoint — a zone id is an OS interface name and interface names are case-sensitive
+        (measured, both platforms) — so it was the userinfo defect again in a shape the words "IPv6
+        literal" hid. It OVERLAPS class 2 without either containing the other, and saying it "hid
+        inside" class 2 would be false: measured, `[fe80::1%25ETH0]` carries no uppercase hex digit
+        at all yet diverged before #707, so class 2 as written never covered it;
+        `[FE80::1%25ETH0]` is in both; and `[::FFFF:1]` is in class 2 only and still diverges.
+        Class 2 is therefore unchanged by #707, not shrunk. Read #706 and #707 together and the
+        lesson is one: "#164 measured three" counted a LIST, and a list is not the world — one of
+        the three was fixable and a fourth was never on it. The host's case rule now lives in
+        `_fold_host` above, which is where the hex-vs-zone split is argued and measured;
       * ensures the `/api/v1` suffix.
     It deliberately does NOT touch the scheme VALUE (http vs https — a plaintext downgrade is REAL),
     the host, the port, or the path (all case-sensitive): a rotation moving any of those is a genuine
@@ -233,22 +242,21 @@ def canonical_base_url(base_url: str) -> str:
     agrees: measured, `httpx.URL('https://User:PassWord@HOST/api/v1')` reads host `host` and
     userinfo `b'User:PassWord'`. Folding it was the only class where this function changed a
     CREDENTIAL the client then sent — NOT the only class where it changed the request at all; the
-    three named above are the ones MEASURED, which is not the same as all there are. Swept over 540
+    classes named above are the ones MEASURED, which is not the same as all there are. Swept over 540
     constructed urls (3 schemes x 6 userinfo shapes x 5 hosts x 6 paths), comparing each body
     against the pre-#154 raw path through `httpx.URL`: the old one differed on 288, this one on 36,
     and all 36 of those are the uppercase-scheme + default-port class — userinfo has stopped being a
     difference at all. That grid is a GRID, though, and the IPv6-hex and query-before-slash classes
     are precisely shapes it cannot contain; they were found by looking outside it, which is the
-    standing reason not to read 36 as a total. The zone-id class (#707) is the same lesson told
-    twice, and its provenance is worth stating exactly rather than atmospherically: it surfaced in
-    the HOST bucket of #164's REVIEWER's own sweep — 16,320 urls, 5 schemes x 8 userinfo shapes x
-    24 hosts x 17 paths, per that reviewer's second pass, which corrected the factors it had first
-    written while confirming the total. What made it visible is not that the grid was "outside"
-    this one but that it varied 24 hosts where this one varies 5. Both are grids; neither total
-    could have named the class it does not contain.
-    The split is on the LAST `@`, which is httpx's too
-    (`https://a@b:PW@HOST` → host `host`, userinfo `a%40b:PW`) — an un-encoded `@` in the userinfo
-    is illegal per RFC anyway, and this way it makes the function fold LESS, never more.
+    standing reason not to read 36 as a total. TWO classes were found outside it, and they were
+    found in two different ways — worth stating exactly rather than atmospherically. The query
+    class (#706) came out of #164's own second independent pass, i.e. from reading the text against
+    its evidence, not from any sweep at all. The zone-id class (#707) surfaced in the HOST bucket of
+    #164's REVIEWER's own sweep — 16,320 urls, 5 schemes x 8 userinfo shapes x 24 hosts x 17 paths,
+    per that reviewer's second pass, which corrected the factors it had first written while
+    confirming the total. What made that one visible is not that the grid was "outside" this one
+    but that it varied 24 hosts where this one varies 5. Both are grids; neither total could have
+    named the class it does not contain. The split is on the LAST `@`, which is httpx's too
     Read "CREDENTIAL" above operationally: the one the request AUTHENTICATES with, i.e. the
     `Authorization` header. httpx derives BasicAuth from a url's userinfo, and because this
     constructor passes no `auth=`, that derivation REPLACES the `Authorization: Bearer` it sets —
@@ -256,13 +264,28 @@ def canonical_base_url(base_url: str) -> str:
     `Basic` over `user:password` under the pre-#164 body and over `User:PassWord` under this one,
     one Authorization header on the wire either way. (A bare `@` with neither user nor password
     derives nothing and the Bearer stands; an explicit `auth=` would beat the url.) Folding a
-    query-before-slash does NOT move that header: with no userinfo present it stays `Bearer …`
-    byte-identical across both bodies. Do not read that as "the query class is harmless" — it is
-    the same permissive over-fold, still open, which is what #706 is filed about; and a url
-    carrying BOTH is moved by its userinfo, not by its query
-    (`https://User:PassWord@t.example?apiToken=SeCrEt` diverges, and its query folds either way).
-    Pinning the word down is not decoration: #164 lost a review round to a reader who took
-    CREDENTIAL to include a secret carried in the query string.
+    query-before-slash never moved that header: with no userinfo present it stayed `Bearer …`
+    byte-identical across the pre-#164, pre-#706 and current bodies. That was never why the query
+    class mattered — it was the same permissive over-fold, and #706 closed it because the guard
+    read two urls as one endpoint, not because a header moved; a url carrying BOTH is moved by its
+    userinfo, not by its query (`https://User:PassWord@t.example?apiToken=SeCrEt` diverges, and its
+    query folded under BOTH earlier bodies and is kept verbatim only by this one). Pinning the word
+    down is not decoration: #164 lost a review round to a reader who took CREDENTIAL to include a
+    secret carried in the query string.
+
+    WHY NOT `urllib.parse.urlsplit`. #706 weighed replacing the hand slicing with the stdlib parser
+    — "fold exactly the case-insensitive components and let a parser find them" — and MEASURED it
+    against this body over one grid instead of arguing it. The parser route loses on four counts,
+    THREE of them in the PERMISSIVE direction this function exists to avoid and the fourth a new
+    crash class: `urlunsplit` DROPS an empty `?` or `#` (`https://h?` -> `https://h`, which RFC
+    3986 6.2.3 declines to license and names as its own example), `urlsplit` silently DELETES
+    tab/CR/LF from anywhere in the url (a host written `h<TAB>x.example` reads back as netloc
+    `hx.example` — a different HOST, in silence), and `urlsplit` reads a scheme where there is none
+    (`Example.COM:3456` -> scheme `example.com`, folding a url this body leaves verbatim for want
+    of a `://`). The fourth: `urlsplit` RAISES `ValueError` on an unclosed IPv6 literal in an
+    AUTHORITY (`https://[fe80::1`; the same text in a path or query parses fine) where this body
+    raises nothing ever and is called from `VikunjaAPI.__init__` and the stdio server's guard.
+    Keep the slicing.
 
     The PATH's case is likewise kept, and #164 pins it: `https://h/vikunja` and `https://h/Vikunja`
     are different endpoints on a case-sensitive server. That was already true when #154 wrote it —
@@ -272,9 +295,12 @@ def canonical_base_url(base_url: str) -> str:
     named in tests/unit/test_api.py's MUTATION-CHECKED record."""
     prefix, sep, rest = base_url.partition("://")
     if sep:
-        authority, slash, path = rest.partition("/")
+        # RFC 3986 3.2: the authority ends at the FIRST "/", "?" or "#", or at the end of the URI.
+        # All three terminators, not just the slash — #706; `tail` is kept verbatim, like the path.
+        cut = min((i for i in map(rest.find, "/?#") if i >= 0), default=len(rest))
+        authority, tail = rest[:cut], rest[cut:]
         userinfo, at, host = authority.rpartition("@")     # ("", "", authority) when there is no @
-        base = f"{prefix.lower()}{sep}{userinfo}{at}{_fold_host(host)}{slash}{path}"
+        base = f"{prefix.lower()}{sep}{userinfo}{at}{_fold_host(host)}{tail}"
     else:
         base = base_url
     base = base.rstrip("/")

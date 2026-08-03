@@ -328,9 +328,13 @@ def test_connection_drop_retried_for_get_not_for_put(no_sleep):
 # ('https://u:PassWord@h' -> 'https://u:password@h'), which is this function disagreeing with the
 # very httpx behaviour its own docstring appeals to. Far from the only such disagreement, as writing
 # the second test below turned up: an uppercase scheme with a default port, an IPv6 literal with
-# uppercase hex, and a query or fragment before the first `/` all diverge too — all three from
+# uppercase hex, and (until #706) a query or fragment before the first `/` diverged too — all from
 # #154's scheme/host folding rather than from this row, and all three now asserted there rather
-# than described. The third of them is a live permissive fold and is filed as its own card.
+# than described. The third of them was a live permissive fold, filed as its own card and FIXED by
+# it (#706): the authority slice ended at `/` alone, so a query or fragment written before any `/`
+# was inside it. Measured on the pre-#706 tree through the real guard, not reasoned:
+# `_reload_workflow_from_disk` ACCEPTED a rotation from `https://tr.hgdev.com?Token=A` to
+# `?token=a` — two urls read as one endpoint, which is #148's hole in a shape #164 did not reach.
 
 
 @pytest.mark.parametrize(
@@ -355,6 +359,22 @@ def test_connection_drop_retried_for_get_not_for_put(no_sleep):
         ("https://User:PassWord@[FE80::1%25ETH0]", "https://User:PassWord@[fe80::1%25ETH0]/api/v1"),
         ("https://h%25ST.example", "https://h%25st.example/api/v1"),
         ("https://[fe80::1%25ETH%2D0]", "https://[fe80::1%25ETH%2D0]/api/v1"),
+        # --- tracker #706: the authority ends at the FIRST of `/?#`, so a query or fragment
+        # written before any `/` is TAIL, not authority, and its case is kept like the path's.
+        ("https://T.EXAMPLE?Q=A", "https://t.example?Q=A/api/v1"),
+        ("https://T.EXAMPLE#Frag", "https://t.example#Frag/api/v1"),
+        ("https://T.EXAMPLE?Q=A#Frag", "https://t.example?Q=A#Frag/api/v1"),
+        ("https://T.EXAMPLE#Frag?Q=A", "https://t.example#Frag?Q=A/api/v1"),
+        ("https://T.EXAMPLE?P=/X", "https://t.example?P=/X/api/v1"),
+        ("https://T.EXAMPLE#A/B", "https://t.example#A/B/api/v1"),
+        ("https://T.EXAMPLE:3456?Q=A", "https://t.example:3456?Q=A/api/v1"),
+        ("https://User:PassWord@T.EXAMPLE?Q=A", "https://User:PassWord@t.example?Q=A/api/v1"),
+        ("https://T.EXAMPLE?x=A@B", "https://t.example?x=A@B/api/v1"),
+        ("https://T.EXAMPLE?", "https://t.example?/api/v1"),
+        ("https://T.EXAMPLE#", "https://t.example#/api/v1"),
+        ("https://T.EXAMPLE/x?Q=A", "https://t.example/x?Q=A/api/v1"),
+        # tracker #706 + #707 in ONE row: the zone survives AND the query survives.
+        ("https://[FE80::1%25ETH0]:3456?Q=A", "https://[fe80::1%25ETH0]:3456?Q=A/api/v1"),
     ],
     ids=[
         "trailing-slash-stripped", "scheme-case-folded", "host-case-folded",
@@ -365,6 +385,13 @@ def test_connection_drop_retried_for_get_not_for_put(no_sleep):
         "ipv6-hex-still-folds-without-a-zone", "ipv6-empty-zone-unchanged",
         "userinfo-AND-zone-both-KEPT-while-hex-folds", "reg-name-with-pct-encoding-still-folds",
         "zone-id-with-its-own-pct-encoding-KEPT",
+        "query-case-KEPT-while-host-folds", "fragment-case-KEPT-while-host-folds",
+        "query-AND-fragment-case-KEPT", "fragment-first-then-query-KEPT",
+        "slash-INSIDE-the-query-does-not-re-open-it", "slash-INSIDE-the-fragment-likewise",
+        "port-then-query-KEPT", "userinfo-AND-query-KEPT-while-host-folds",
+        "at-INSIDE-the-query-is-not-userinfo", "empty-query-delimiter-KEPT",
+        "empty-fragment-delimiter-KEPT", "query-after-a-slash-KEPT-as-before",
+        "zone-AND-query-both-KEPT-while-hex-folds",
     ],
 )
 def test_canonical_base_url_folds_the_case_insensitive_parts_and_nothing_else(raw, expected):
@@ -383,6 +410,29 @@ def test_canonical_base_url_folds_the_case_insensitive_parts_and_nothing_else(ra
     mutation at all; the case question for IPv6 is answered by the uppercase-hex assert in the test
     below, which is where it diverges from httpx.
 
+    HOW TO READ THE TWO ROUND TABLES BELOW, because they disagree and the disagreement is not a
+    contradiction. #707's rounds were run on a tree that did NOT yet carry #706's twelve rows, and
+    #706's were run on a branch that did not yet carry #707's five — this commit is the rebase that
+    first put both in one tree, and neither table has been re-measured on it. So every ABSOLUTE
+    count below is true of the tree its own table names and of neither the other's nor this one's;
+    where the two name the same #164 round they name it at different trees, which is why the
+    numbers differ. What DOES survive the merge is each table's qualitative half — which rows are
+    red-first, and which mutations kill disjoint sets — because each of those was measured directly
+    on the rows it names rather than derived from a total. The tables say so about themselves
+    already ("A count recorded next to a growing table is stale by construction"); this paragraph
+    is that sentence made specific about which growth.
+
+    ONE round WAS re-measured on the merged tree, chosen because it is the round the merge itself
+    could have broken. Selection `tests/unit/test_api.py tests/unit/test_server.py`, `__pycache__`
+    deleted and then PYTHONDONTWRITEBYTECODE=1, restored from a COPY and the restore confirmed by
+    returning to the control AND by `git diff` being empty. Control round: 0 failed; the pre-#706
+    body (authority ends at `/` alone) -> 15 failed; restored -> 0 failed. Twelve of the fifteen
+    are named rows of this table and of the guard table in test_server.py — including
+    `at-INSIDE-the-query-is-not-userinfo` and both `slash-INSIDE-*` rows — so the boundary is
+    red-first on the tree that actually SHIPS, not only on the branch it was written on. That
+    round says nothing about the other counts below, which is why they are labelled rather than
+    quietly kept.
+
     The `ipv6-*` rows are #707's, and they exist because "IPv6 literal" named a thing that is not
     homogeneous. The ADDRESS folds (`ipv6-hex-still-folds-without-a-zone`) and the ZONE ID does not
     (`ipv6-zone-id-case-KEPT`), because a zone id is an OS interface name — measured, not read off
@@ -399,7 +449,7 @@ def test_canonical_base_url_folds_the_case_insensitive_parts_and_nothing_else(ra
     it (nothing to preserve, so the output must not move), the second a `%25` OUTSIDE them, which is
     an ordinary reg-name octet and stays case-insensitive.
 
-    MUTATION-CHECKED over the whole `tests/unit` selection, `__pycache__` DELETED (not just
+    MUTATION-CHECKED for #707 over the whole `tests/unit` selection, `__pycache__` DELETED (not
     `PYTHONDONTWRITEBYTECODE=1` — that stops writing, not reading), every round restored with
     `git checkout --` and the restore verified by sha256 against the pristine file. Two sweeps run
     on 2026-08-03, each opening with an UNMUTATED CONTROL round on the same selection; all rounds
@@ -444,6 +494,69 @@ def test_canonical_base_url_folds_the_case_insensitive_parts_and_nothing_else(ra
     The three legacy counts above were RE-MEASURED for #707 rather than copied: adding these rows
     moved two of them (6 -> 13, 4 -> 10) and the identity round (7 -> 14). Only the `path.lower()`
     round was unchanged at 4. A count recorded next to a growing table is stale by construction.
+
+    The `#706` rows below are the authority BOUNDARY. NINE of the twelve are red-first — measured
+    on the pre-#706 body, which ended the authority at `/` alone, so `https://T.EXAMPLE?Q=A` came
+    back `https://t.example?q=a/api/v1` with the query folded into the host. RFC 3986 3.2 ends the
+    authority at the first `/`, `?` or `#`, and using all three is one rule, not a case each; the
+    rows exist so that the rule cannot quietly shrink back to one terminator, in either the `?` or
+    the `#` half — measured, dropping `?` from the set reddens six of them and dropping `#` reddens
+    three, disjointly.
+
+    The other THREE were green before #706 and are here for a different job, which is why they are
+    named rather than folded into the count. `query-after-a-slash-KEPT-as-before` is the control:
+    that shape was already correct, so the row would notice a "fix" that merely MOVED the bug.
+    `empty-query-delimiter-KEPT` and `empty-fragment-delimiter-KEPT` cannot detect a shrinking
+    terminator set at all — a bare `?` has no case to fold — and pin the other tempting rewrite
+    instead: `urlsplit`/`urlunsplit` DROPS an empty delimiter (`https://h?` -> `https://h`), which
+    RFC 3986 6.2.3 declines to license and names as its own example. They are the two rows that
+    would redden if this function were ever "tidied up" onto the stdlib parser.
+
+    Two of the nine are boundaries rather than restatements: `slash-INSIDE-the-query-*` pins that
+    the FIRST terminator wins and a later `/` does not hand the tail back to the authority; and
+    `at-INSIDE-the-query-is-not-userinfo` is the row the old body got wrong in the OTHER direction
+    (`rpartition("@")` split on the query's `@`, so `https://T.EXAMPLE?x=A@B` folded the query tail
+    and left the HOST unfolded at `T.EXAMPLE` — measured).
+
+    MUTATION-CHECKED for #706 over the whole `tests/unit` selection, `__pycache__` cleared and
+    `PYTHONDONTWRITEBYTECODE=1`, every round restored with `git checkout --` and the restore
+    confirmed by re-running to the control. #164's rounds, RE-MEASURED in full for #706 — which
+    renamed the variable one of them names and added twelve rows here, so every count below moved
+    and the old ones are gone rather than annotated. Control round: 0 failed.
+      * `{tail}` -> `{tail.lower()}` in canonical_base_url -> 18 failed, TWELVE of them rows of
+        this table (both `path-case-KEPT` rows and ten #706 rows), the rest being the httpx test
+        below and five guard rows in test_server.py. This is #164's `{path}` -> `{path.lower()}`
+        round: the slice it mutates is the same, the name is not. On the PRE-#164 tree, control
+        0 failed and that mutation was 0 failed — the gap #164 was filed for
+      * fold the authority WHOLE again (`authority.lower()`, the pre-#164 body) -> 7 failed, FOUR
+        of them this table's `userinfo-case-KEPT`, `userinfo-KEPT-while-host-folds`,
+        `split-on-the-LAST-at` and `userinfo-AND-query-KEPT-while-host-folds` rows
+      * `rpartition("@")` -> `partition("@")` -> 18 failed: `split-on-the-LAST-at` as intended,
+        thirteen rows here in all, the test below, and four self-heal rows in test_server.py —
+        because with no `@` present `partition` puts the WHOLE authority in the userinfo half and
+        then folds nothing at all, so it breaks far more than the `@` split it was aimed at
+      * identity canonicalizer (suffix only, fold nothing) -> 23 failed, SIXTEEN of them rows here,
+        so this table pins the FOLDING side. The test below is among the other seven, but only via
+        its divergence asserts; its equal set alone would not notice
+
+    #706's own rounds, same selection and hygiene. Control round: 0 failed.
+      * the pre-#706 body (authority ends at `/` alone) -> 14 failed: NINE #706 rows here, the test
+        below, and four guard rows. The three #706 rows it leaves green are the ones named above as
+        doing a different job — this round is where that count comes from
+      * drop `?` from the terminator set (`"/#"`) -> 9 failed, six rows here; drop `#` (`"/?"`) ->
+        5 failed, three rows here. The two sets are DISJOINT, which is what says each terminator is
+        pinned on its own rather than by one row that appears to cover both
+      * `min` -> `max` over the terminators, so the LAST one wins -> 5 failed, four rows here: only
+        a url carrying more than one terminator can see it, which is why those rows exist
+      * `cut = 0` (authority always empty, nothing folds at all) -> 20 failed; `cut = len(rest)`
+        (everything is authority, so the path folds too) -> 18 failed
+      * the two-site PAIR — pre-#706 slice AND `{host.lower()}` -> `{host}` -> 20 failed, the SAME
+        failure set as `cut = 0`. Checked because a pair can hide what each site shows alone; here
+        it hides nothing, the two sites being two spellings of "fold no authority"
+      * rewrite the body onto `urllib.parse.urlsplit`/`urlunsplit` — the refactor the docstring of
+        canonical_base_url argues against -> 2 failed, and they are EXACTLY
+        `empty-query-delimiter-KEPT` and `empty-fragment-delimiter-KEPT`. Nothing else in the 937
+        tests notices it. That is the entire reason those two rows are in this table
     """
     assert canonical_base_url(raw) == expected
 
@@ -451,8 +564,9 @@ def test_canonical_base_url_folds_the_case_insensitive_parts_and_nothing_else(ra
 def test_the_canonicalizer_changes_the_client_url_only_in_these_measured_classes():
     """The behavioural half: routing the client through canonical_base_url leaves the request it
     builds byte-identical to the pre-#154 raw `rstrip('/') + /api/v1` path for the urls this
-    project's config actually holds — and diverges in three measured classes, each asserted here
-    rather than hedged around.
+    project's config actually holds — and diverges in the measured classes below, each asserted
+    here rather than hedged around. #164 found three; #706 closed one, so two of that list are
+    live and the third is kept written down as history.
 
     This is the function's own docstring claim, made checkable instead of asserted, and checking it
     is what found the claim overstated. #154 wrote "httpx folds these the same way ... leaves its
@@ -462,23 +576,29 @@ def test_the_canonicalizer_changes_the_client_url_only_in_these_measured_classes
          loses it. Same endpoint, so nothing broke.
       2. IPv6 LITERAL WITH UPPERCASE HEX — `[::FFFF:1]` is folded to `[::ffff:1]`, changing the Host
          header. Same address (hex digits are case-insensitive; RFC 5952 prefers lowercase anyway).
-      3. QUERY OR FRAGMENT BEFORE THE FIRST `/` — `?Q=A` / `#Frag` land in the authority slice and
-         get lowercased. NOT harmless in principle and NOT endorsed: this is the same permissive
-         fold #164 removed from userinfo, still open for this shape, filed as its own card. The
-         assert below CHARACTERIZES today's behaviour so a fix has to come past it deliberately.
-    All three are PRE-EXISTING — they come from #154's scheme/host folding, not from this card,
-    which only stopped userinfo being a fourth. None is reachable from a Vikunja base url. They are
-    asserted because a sentence wider than its measurement is the defect class this card exists for,
+      3. QUERY OR FRAGMENT BEFORE THE FIRST `/` — `?Q=A` / `#Frag` used to land in the authority
+         slice and get lowercased. #164 characterized it as a known-open permissive fold and filed
+         it; #706 CLOSED it by ending the authority at the first of `/?#` (RFC 3986 3.2) instead of
+         at `/` alone, and its asserts below moved from this divergence list to the equal set. The
+         class is kept written down, struck through rather than deleted, because the equal-set row
+         alone would not say WHICH way the shape used to go — and #164's reviewer found the next
+         class of this family (an IPv6 zone id) by reading exactly this list.
+    Classes 1 and 2 are PRE-EXISTING — they come from #154's scheme/host folding, not from #164,
+    which only stopped userinfo being a fourth. Neither is reachable from a Vikunja base url. They
+    are asserted because a sentence wider than its measurement is the defect class #164 exists for,
     and because each must neither spread nor quietly vanish under a future edit or an httpx bump.
 
     Userinfo is the row that was a real defect rather than an overstatement: the pre-#164 body
     folded the case of a CREDENTIAL, so `https://User:PassWord@h` went out as
     `https://user:password@h`. That row is red-first evidence.
 
-    NOT a proof for all urls. The equal set says these ten inputs are unchanged and nothing about an
-    eleventh; the 540-url sweep recorded in canonical_base_url's docstring is a grid, and classes 2
-    and 3 are precisely shapes that grid could not contain — which is how they were found, and why
-    "these measured classes" in the name is not "all classes".
+    NOT a proof for all urls. The equal set says these THIRTEEN inputs are unchanged and nothing
+    about a fourteenth; the 540-url sweep recorded in canonical_base_url's docstring is a grid, and
+    classes 2 and 3 are precisely shapes that grid could not contain — which is how they were
+    found, and why "these measured classes" in the name is not "all classes". #706's own second
+    independent pass makes the same point from the other end: sweeping 3,265,920 constructed urls
+    outside this file's grid found no url that #706 wrongly stopped folding, and still turned up a
+    class this list does not name (an IPv6 zone id, #707).
 
     #707 removed a divergence that OVERLAPPED class 2 without being inside it, and class 2 itself
     is unchanged. The zone id used to ride down with the hex, so `https://[fe80::1%25ETH0]`
@@ -487,16 +607,28 @@ def test_the_canonicalizer_changes_the_client_url_only_in_these_measured_classes
     `fe80::1%25ETH0`). Do NOT read that as "class 2 shrank": measured, that url carries no
     uppercase hex digit at all, so class 2 as defined never covered it, while `[::FFFF:1]` is class
     2 only and still diverges and `[FE80::1%25ETH0]` is in both. What the assert below pins is the
-    OVERLAP — the two halves of one literal going separate ways. Class 3 is untouched and still
-    open; see the SEAM assert at the end, a url carrying both cards at once.
+    OVERLAP — the two halves of one literal going separate ways. Class 3 was untouched by #707 and
+    is CLOSED by this commit; the SEAM assert at the end is the url that carries both cards at
+    once, and it now reads the post-#706 way (zone kept, and the query kept too).
 
-    MUTATION-CHECKED, same selection and hygiene as the table above, two sweeps on 2026-08-03, each
-    opening with an unmutated control on the same selection. Control round: 0 failed.
+    #707's own rounds for this test, run before #706's rows existed — read them under the
+    two-trees paragraph in the table above. Control round: 0 failed.
       * `{path}` -> `{path.lower()}` -> 4 failed, this test among them
       * fold the authority WHOLE again (the pre-#164 body) -> 13 failed, this test among them, on
         the `https://User:PassWord@t.example` row — which is what made #164's fix a fix and not a
         preference
-      * identity canonicalizer (fold nothing) -> 14 failed, this test among them. It is caught by
+      * identity canonicalizer (fold nothing) -> 14 failed, this test among them
+
+    MUTATION-CHECKED, same selection and hygiene as the table above; re-measured for #706 along
+    with every other count in this file. Control round: 0 failed.
+      * `{tail}` -> `{tail.lower()}` (#164's `{path}` round, renamed slice) -> 18 failed, this test
+        among them
+      * fold the authority WHOLE again (the pre-#164 body) -> 7 failed, this test among them, on
+        the `https://User:PassWord@t.example` row — which is what made #164's fix a fix and
+        not a preference
+      * the pre-#706 body (authority ends at `/` alone) -> 14 failed, this test among them, on the
+        Class 3 block below: those three urls are asserted EQUAL to the pre-154 path and were not
+      * identity canonicalizer (fold nothing) -> 23 failed, this test among them. It is caught by
         the divergence asserts, NOT by the equal set — an identity body satisfies every row of the
         equal set, since httpx folds scheme and host by itself. That is measured per-assert, and it
         corrects this record's first version, which said 6 failed and "this test is NOT among them":
@@ -506,7 +638,10 @@ def test_the_canonicalizer_changes_the_client_url_only_in_these_measured_classes
       * (#707) `tail.lower()` -> `tail` -> 1 failed, and it is THIS test, via the SEAM assert
         alone. Worth saying plainly rather than rounding up: the whole boundary with #706 rests on
         that single assert. It is a real pin (the mutation reddens it), but there is no redundancy
-        behind it
+        behind it. That bullet is #707's, and it names a slice #707's own tree did not have —
+        `tail` is the variable THIS commit introduces, so on the pre-#706 tree it described an edit
+        that could not be made. The redundancy it reports missing is what #706's twelve rows now
+        supply, and the count has not been re-measured on the merged tree
       * of the divergence asserts, only the CANONICAL side of each pair can fail from a change to
         this function; the `pre_154` sides never call it and are httpx-bump tripwires only
     The 6 and 7 in the first version of this record were re-measured for #707 and became 13 and 14;
@@ -546,14 +681,33 @@ def test_the_canonicalizer_changes_the_client_url_only_in_these_measured_classes
     # ... and the two halves of one literal go SEPARATE ways: hex down, zone untouched.
     assert wire(canonical_base_url("https://[FE80::1%25ETH0]")) == "https://[fe80::1%25ETH0]/api/v1"
 
-    # Class 3 — query/fragment BEFORE the first `/`, so it lands in the authority slice and folds.
-    # Characterization of a KNOWN-OPEN permissive fold, not an endorsement (see the docstring).
-    assert canonical_base_url("https://t.example?Q=A") == "https://t.example?q=a/api/v1"
-    assert canonical_base_url("https://t.example#Frag") == "https://t.example#frag/api/v1"
-    # ... and the same query AFTER a `/` is in the path slice, so it is correctly left alone.
+    # Class 3 — CLOSED by #706. A query or fragment before the first `/` used to land in the
+    # authority slice and fold; the authority now ends at the first of `/?#` (RFC 3986 3.2), so the
+    # tail is kept verbatim and these asserts moved from the divergence side to the EQUAL side.
+    # READ THE EQUALITY NARROWLY: it says the canonicalizer no longer CHANGES what the client
+    # builds for this shape, and NOT that the result is a working base url. It is not, and neither
+    # side of the comparison is — `pre_154` appends `/api/v1` just as blindly. Measured on both:
+    # `https://h?Token=Ab` yields raw_path `/?Token=Ab/api/v1`, i.e. the suffix lands INSIDE the
+    # query and the client never reaches the API; with a fragment (`https://h#Frag`) raw_path is
+    # bare `/` and the suffix is never sent at all. #706 neither caused that nor fixes it — it is
+    # the `/api/v1` suffix step, identical before and after, and it is filed separately.
+    for raw in ["https://t.example?Q=A", "https://t.example#Frag", "https://t.example?Q=A#Frag"]:
+        assert wire(canonical_base_url(raw)) == wire(pre_154(raw)), \
+            f"#706: canonicalizing {raw!r} must no longer change the url the client builds"
+    assert canonical_base_url("https://t.example?Q=A") == "https://t.example?Q=A/api/v1"
+    assert canonical_base_url("https://t.example#Frag") == "https://t.example#Frag/api/v1"
+    # ... the same query AFTER a `/` was already in the path slice and is unchanged by #706 ...
     assert canonical_base_url("https://t.example/x?Q=A") == "https://t.example/x?Q=A/api/v1"
-    # The SEAM between #707 (fixed) and #706 (open), in one url that carries both. #707 cuts the
-    # zone at the literal's closing `]`, so everything after it — a port, and until #706 a query or
-    # fragment — keeps folding exactly as before. Characterization again, not endorsement: when #706
-    # lands, THIS assert is the one it has to come past, and the zone half must survive it intact.
-    assert canonical_base_url("https://[fe80::1%25ETH0]?Q=A") == "https://[fe80::1%25ETH0]?q=a/api/v1"
+    # ... and the host still folds while its query does not, so the fix removed the over-fold
+    # rather than the fold: both halves of one url, going different ways, in one assert.
+    assert canonical_base_url("https://T.EXAMPLE?Q=A") == "https://t.example?Q=A/api/v1"
+    # The SEAM between #707 and #706, in one url that carries both cards. #707 cuts the zone at the
+    # literal's closing `]`, so until #706 everything after it — a port, a query, a fragment — kept
+    # folding exactly as before, and this assert stood in the tree as a CHARACTERIZATION with a
+    # prediction attached: "when #706 lands, THIS assert is the one it has to come past, and the
+    # zone half must survive it intact." This commit is that landing, and the assert is flipped
+    # here rather than deleted so the prediction is visibly settled: the query half stopped
+    # folding (`?Q=A`, was `?q=a`) and the zone half is untouched (`%25ETH0`), which is exactly
+    # what "must survive it intact" asked for. It is the only row in this file where the two
+    # cards' slices meet, so it is also the one that would notice either fix eating the other.
+    assert canonical_base_url("https://[fe80::1%25ETH0]?Q=A") == "https://[fe80::1%25ETH0]?Q=A/api/v1"
