@@ -1275,24 +1275,59 @@ def _repo_markdown():
 # sibling ALONE, because the sha half keeps this one green; rewriting the paragraph's opening and
 # body while keeping what both pins ask for -> 0 failed.
 #
-# WHAT IT DOES NOT CATCH, priced rather than rounded up, and two of these came from the independent
-# second pass rather than from the author.
-#   * It holds the material's SHAPE — a round count with no control beside it — never its content:
-#     a rewrite keeping a fingerprint and any `N failed` satisfies it.
-#   * A DELIBERATE decoy carrying a fingerprint would satisfy it while the real material is clean.
-#     The measured plant does not (it carries neither mark), and that is the difference between
-#     this and the form it replaced; a decoy written to carry one is a different, adversarial thing.
+# WHAT IT DOES NOT CATCH, priced rather than rounded up. VMCP-194 (724)'s SECOND round REWROTE
+# three of these four bullets — each true about its number and wrong about the noun, the figure it
+# identified, or the source it credited — so read the diff of this block rather than trusting that
+# a limitation here was ever measured the way it is worded. Every round below is over the whole
+# scanner file unless it names its own selection, `__pycache__` deleted and then
+# `PYTHONDONTWRITEBYTECODE=1`, control 0 failed; every count OF THE TREE was taken at `c1c2619`.
+# Those rounds are vouched for by the one control in this header, so keep this block ONE paragraph:
+# put a bare `#` between the header and the bullets and it becomes an offender of its own ratchet
+# -> 2 failed. A provenance line stood here too — "two of these came from the independent second
+# pass" — and it is DROPPED, not corrected, because nothing in the tree records which finding came
+# from where: it was the one sentence in this block a reader could not check, in the block whose
+# whole job is to be checkable.
+#   * It holds the material's SHAPE — a round count THIS pattern reads, no control beside it — and
+#     nothing of what the material SAYS beyond the two marks that find it: replacing the named
+#     paragraph's 46 lines with 8 of wholly different prose, carrying the sha, one round count and
+#     all FOUR literals the sibling test pins -> 0 failed. Four, not one: keep only the anchor of
+#     them and it is 1 failed THERE, with this assert still green. And NOT "any `N failed`", which
+#     is the tempting way to write it and is false — the same rewrite carrying `Bind for
+#     0.0.0.0:3456 failed` as its only tally -> 1 failed, and carrying `containers: 5 of 9 failed`
+#     -> 1 failed, both on the first assert below. `_ROUND_COUNT`'s two exclusions are the
+#     difference, and the first of them sits INSIDE the paragraph this block is describing.
+#   * A DELIBERATE decoy carrying a fingerprint satisfies it while the real material is clean, and
+#     that is measured now rather than predicted: give the named paragraph a control AND plant a
+#     paragraph carrying `e86b2c9` and a round count -> 0 failed. The unmarked plant does not
+#     satisfy it (it carries neither mark) -> 1 failed, and that gap is the difference between this
+#     and the form it replaced — same tree, byte-identical CLAUDE.md, only the pre-fix
+#     `any(key.startswith("CLAUDE.md::"))` assert restored -> 0 failed. A decoy written to carry a
+#     mark is a different, adversarial thing from that plant.
 #   * It certifies that the trigger FIRES on that material, not that the hit is a real sweep round.
-#     Measured, the two matches there are a verbatim QUOTATION of the wrapped tally the sweep hunts
-#     at `test_api_kanban.py:1473` and an ILLUSTRATIVE tally naming this scanner — and the same
-#     CLAUDE.md sentence calls both of them false positives. The scope comment says markdown is in
-#     the SAME position as src/, whose own hit was DISMISSED on exactly that ground; that half is
-#     VMCP-210 (753) rather than something this assert settles.
+#     Measured with `_ROUND_COUNT` itself, the paragraph holds exactly two matches, and both are
+#     QUOTATIONS of figures it discusses rather than rounds it ran: `5 failed`, copied out of
+#     `e86b2c9^:test_api_kanban.py:1473`, where it is the un-wrapped NEIGHBOUR of the wrapped
+#     `102 passed` that paragraph is actually about — a figure this pattern could never match,
+#     reading only `N failed` — and `-> 7 failed`, quoted there as an illustrative hit in this
+#     scanner. Do not cite the CLAUDE.md sentence they sit in as agreeing, which an earlier version
+#     of this bullet did: it grades a DIFFERENT ruler (spanning-only hits of
+#     `\d+ (?:passed|failed)` at `e86b2c9^`), it calls :1473 GENUINE in that word, and one of the
+#     two it does call false — the docker port `Bind for 0.0.0.0:3456 failed` — is not a
+#     `_ROUND_COUNT` match at all: `(?<![:.\w])` cuts it, and dropping that lookbehind alone
+#     -> 2 failed here, one of them that very row (the pattern test records the same round as
+#     1 failed, on its own single-test selection). The scope comment calls this material a REAL
+#     offender, and whether a quoted figure can be one is VMCP-210 (753) rather than something this
+#     assert settles. Do not restate that as "src/ is in the same position and its hit was
+#     dismissed": the same comment re-runs src/ at `6dd2803`, finds a second hit that IS real, and
+#     says in its own words that "the sole-false-positive argument is gone on BOTH scopes".
 #   * `uncontrolled_markdown` keys markdown paragraphs by file plus a 48-character head with none of
-#     the collision defence `_records` gives the tests/ side — measured, repo markdown already has
-#     20 duplicated keys covering 51 paragraphs, all under `docs/superpowers/`. Nothing here depends
-#     on those keys being distinct: the assert above reads paragraphs, and the one below only asks
-#     that the scan reach what the hand read found.
+#     the collision defence `_records` gives the tests/ side — measured: 840 markdown paragraphs
+#     collapse to 789 distinct keys, and the 20 keys shared by more than one paragraph cover 71 of
+#     them, all under `docs/superpowers/`. The 51 this bullet shipped is 840 - 789, the EXCESS over
+#     one paragraph per key, which is a different noun: a reader re-running the obvious ruler gets
+#     71 and, in this file's own words, cannot tell a wrong ruler from a wrong tree. Nothing here
+#     depends on those 20 being distinct: the assert above reads paragraphs, and
+#     the one below only asks that the scan reach what the hand read found.
 _LINE_FED_ANCHOR = "must not be LINE-FED"
 _LINE_FED_MEASUREMENT = "e86b2c9"
 
