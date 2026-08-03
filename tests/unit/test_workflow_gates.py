@@ -2436,3 +2436,121 @@ def test_the_per_stage_ownerless_exits_state_only_what_the_board_really_does():
     assert moved_from == {"Review": ["review_task(needs_work)->Queue"]}, \
         ("exactly one agent call moves an ownerless card out of a non-Queue stage, and the "
          f"per-stage exits are written around that: {moved_from}")
+
+
+# --- #693: who clears a stale verdict, expressed as a GRID rather than as four call sites ------
+
+# Every mutating Workflow tool, graded by what it must do to a verdict label the card already
+# carries. The grid is the deliverable of #693, not the two calls it added: its dossier asked for
+# "one rule for who clears verdict labels", and the reason the previous answer rotted is that the
+# rule lived as an ENUMERATION of call sites (`advance` x2, `decompose`) that nothing held. The
+# test below drives this table off the LIVE tool surface, so a thirteenth mutating tool fails it
+# until someone grades it here on purpose. That is the same shape workspace_cmd's
+# `_keep_is_expected` grid uses, and for the same reason: the failure mode is not a wrong entry,
+# it is a MISSING one, and only a registry-driven sweep can see a missing entry.
+#
+# CLEARS   — the card (re-)enters the active pipeline, or stops being work at all. A prior
+#            verdict has stopped describing it.
+# KEEPS    — deliberate. `call_human` parks a card that is STILL the agent's own work in flight
+#            behind the same assignee and comes back to Build; `review-failed` + Your Call is not
+#            a contradiction, and #693's dossier measured that and graded it not-a-defect.
+# SETS     — `review_task` is where a verdict comes FROM; clearing there would be circular.
+# NO-MOVE  — does not move the card between stages, so it cannot stale a verdict by moving one.
+_VERDICT_POLICY = {
+    "claim":               "CLEARS",   # Queue -> Design            (#693)
+    "advance":             "CLEARS",   # -> Build and -> Review     (#119)
+    "decompose":           "CLEARS",   # -> Backlog as an epic      (#673)
+    "return_task":         "CLEARS",   # -> Backlog, unassigned     (#693)
+    "call_human":          "KEEPS",    # -> Your Call, still in flight
+    "review_task":         "SETS",
+    "next_task":           "NO-MOVE",
+    "get_task":            "NO-MOVE",
+    "comment":             "NO-MOVE",
+    "file_task":           "NO-MOVE",  # creates a NEW card; never touches this one's labels
+    "attach_file":         "NO-MOVE",
+    "download_attachment": "NO-MOVE",
+}
+
+
+def test_every_agent_tool_is_graded_for_what_it_does_to_a_stale_verdict(env):
+    """The grid above covers the LIVE tool surface, and each CLEARS row actually clears.
+
+    WHY A GRID AND NOT FOUR TESTS. #693's own dossier names the disease in its option 3: the rule
+    "who clears verdict labels" was spread across `_clear_verdict_labels` call sites and "the
+    enumeration of tools is held by nothing". Four more assertions would have re-created exactly
+    that. What a new mutating tool trips is the COVERAGE half below — it is graded here or the
+    suite goes red — and that half is the only part a hand-written list cannot have.
+
+    MEASURED before the fix, real `Workflow` over `FakeAPI`, both routes from #693's dossier:
+    approve -> a human hand-drags the approved card back to Build -> `return_task` left Backlog
+    holding `['blocked', 'reviewed']` at once; approve -> a human hand-places the card in Queue
+    with the assignee cleared -> `claim` left Design holding `reviewed`. Both are red-first for
+    the rows below: with either call removed the matching row fails.
+
+    The KEEPS row is not a weaker CLEARS. It is asserted in the POSITIVE direction — the label
+    must SURVIVE `call_human` — so a future edit that "tidies up" by clearing everywhere reddens
+    this test rather than passing it. A grid whose exceptions are only ever unasserted is a list
+    with extra steps.
+
+    NOT claimed here: that a CLEARS tool is REACHABLE from every stage carrying a verdict. Each
+    row drives the one route #693 measured, and the stage gates that decide the rest are pinned by
+    their own tests above. This test is about the label, never about the gate.
+
+    MUTATION-CHECKED, selection `tests/unit/test_workflow_gates.py`, `__pycache__` deleted and then
+    PYTHONDONTWRITEBYTECODE=1, every round restored from a byte copy and the final file confirmed
+    sha256-identical to the pristine one. Each mutation is applied by a script that refuses to run
+    unless its target matches EXACTLY ONCE — needed rather than tidy, because
+    `self._clear_verdict_labels(task)` is not a unique string in this module (`advance` holds two
+    and `decompose` one), so a naive text mutation silently hits the wrong call site or none.
+    Control round: 0 failed.
+      * drop ONLY the new call in `return_task` -> 1 failed, on the `['blocked']` assert
+      * drop ONLY the new call in `claim` -> 1 failed, on the Design assert
+      * drop BOTH -> 1 failed (one test carries all three rows, so the count does not add up
+        across rounds — the row that fails first is what changes, not how many tests do)
+      * the OTHER direction, because a grid whose exceptions never fire is a list with extra
+        steps: add `_clear_verdict_labels` to `call_human` too -> 1 failed, on the KEEPS assert
+    Only the CALL is removed in each round, never the comment above it: mutating prose would
+    measure the docstring rather than the behaviour.
+    """
+    from vikunja_mcp import server
+
+    exposed = {fn.__name__ for fn in server._DEFERRED_TOOLS}
+    ungraded = exposed - set(_VERDICT_POLICY)
+    assert not ungraded, (
+        f"{sorted(ungraded)} are exposed as agent tools but carry no verdict-label grade. Add a "
+        "row to _VERDICT_POLICY deliberately — CLEARS if the tool moves a card into or out of the "
+        "active pipeline, KEEPS with a reason, SETS, or NO-MOVE. #693 exists because this "
+        "enumeration used to be held by nothing"
+    )
+    stale = set(_VERDICT_POLICY) - exposed
+    assert not stale, (
+        f"{sorted(stale)} are graded here but no longer exposed as agent tools — drop the rows"
+    )
+
+    api, wf, task = env
+
+    # CLEARS, route 1 — return_task out of an OPEN stage, the strong case from the dossier.
+    api.tasks[task["id"]]["labels"].append({"id": 901, "title": "reviewed"})
+    wf.return_task(task["id"], reason="upstream service is gone")
+    assert api.stage_of(task["id"]) == "Backlog"
+    assert _label_titles(api, task["id"]) == ["blocked"], (
+        "return_task left a stale verdict beside `blocked` — the board would claim approved AND "
+        "blocked at once, which is the very pair the Done refusal in this tool spells out"
+    )
+
+    # CLEARS, route 2 — claim into Design off a hand-placed, verdict-carrying Queue card.
+    other = api.add_task("hand-placed", "Queue")
+    api.tasks[other["id"]]["labels"].append({"id": 902, "title": "review-failed"})
+    wf.claim(other["id"])
+    assert api.stage_of(other["id"]) == "Design"
+    assert _label_titles(api, other["id"]) == [], "claim walked a stale verdict into Design"
+
+    # KEEPS — asserted positively, so "clear everywhere" cannot pass by accident.
+    parked = api.add_task("in flight", "Build", assignee=api.me_user)
+    api.tasks[parked["id"]]["labels"].append({"id": 903, "title": "review-failed"})
+    wf.call_human(parked["id"], question="which option do you want?")
+    assert api.stage_of(parked["id"]) == "Your Call"
+    assert _label_titles(api, parked["id"]) == ["review-failed"], (
+        "call_human cleared a verdict it is graded to KEEP: the card is still the agent's own "
+        "work in flight and returns to Build, so `review-failed` there is not a contradiction"
+    )

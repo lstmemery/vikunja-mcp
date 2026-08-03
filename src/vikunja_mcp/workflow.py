@@ -1248,6 +1248,14 @@ class Workflow:
                 "the assignment vanished during the claim (a human removed it) — retry next_task"
             )
 
+        # #693: entering the active pipeline invalidates any prior verdict, exactly as `advance`
+        # has done since #119 — a human can hand-place a verdict-carrying card back in Queue with
+        # the assignee cleared, and claiming it then walked `reviewed` into Design. The window is
+        # narrower than `return_task`'s (the very next `advance(to='build')` clears it anyway), so
+        # this is the same rule applied one step earlier rather than a second mechanism. `fresh`,
+        # not the board snapshot: `_clear_verdict_labels` only DELETEs links present on the
+        # snapshot it is handed, and the board copy is one read older than the labels being removed.
+        self._clear_verdict_labels(fresh)
         view = self._view()
         self.api.move_task(self.project_id, view["id"], self._bucket("Design")["id"], task_id)
         self.api.add_comment(task_id, f"[claim] {me['username']} взял задачу в работу")
@@ -1701,6 +1709,16 @@ class Workflow:
             )
         self._require_mine(task, stage)
         self.api.add_comment(task_id, f"[blocked] {reason.strip()}")
+        # #693: the card LEAVES the pipeline unassigned, so any prior verdict has stopped
+        # describing it — same reason `decompose` clears on its way out (#673). Measured before
+        # the call was added: approve -> a human hand-drags the approved card back to Build ->
+        # return_task left Backlog holding `['blocked', 'reviewed']` at once. That pair is the
+        # end state the Done refusal three blocks up REFUSES in so many words ("the board would
+        # claim 'approved' and 'blocked' at once") — reachable here from an OPEN stage, where
+        # `return_task` is legitimate and there is nothing to gate. `review-failed` + `blocked`
+        # is the weaker form of the same shape and goes with it: both are stale once the card is
+        # ownerless in Backlog awaiting a human's re-triage.
+        self._clear_verdict_labels(task)
         label = self.api.get_or_create_label(LABEL_BLOCKED)
         self.api.add_label(task_id, label["id"])
         self.api.remove_assignee(task_id, self._me()["id"])

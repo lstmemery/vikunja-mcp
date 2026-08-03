@@ -4906,11 +4906,19 @@ def test_the_implementer_RECEIVING_a_needs_work_report_is_told_it_may_be_a_QUEST
         "return_task no longer clears the assignee. SKILL.md says this branch hands the card to a "
         "human for re-triage — a card still assigned in Backlog is a different promise entirely"
     )
-    assert sorted(lb["title"] for lb in api3.tasks[stale["id"]]["labels"]) == [
-        "blocked", "review-failed"], (
-        "the external-block branch no longer leaves the verdict label in place. SKILL.md tells "
-        "the reader this is where the two Backlog branches DIFFER — the human triaging sees "
-        "`blocked` on top of `review-failed` here, and a bare `epic` on the split branch"
+    # #693 INVERTED this assert, and the inversion is the point rather than a maintenance edit.
+    # It used to require `['blocked', 'review-failed']`, because SKILL.md distinguished the two
+    # Backlog branches by the NUMBER of labels. That distinction rested on `return_task` keeping a
+    # verdict it had no business keeping: on the strong route (an APPROVED card a human hand-drags
+    # back to Build) the same code produced `['blocked', 'reviewed']` — the board claiming accepted
+    # AND blocked at once, which this very tool's Done refusal forbids in so many words. So the
+    # branches are now told apart by WHICH label, not by how many, and the paragraph in SKILL.md
+    # says so. Asserting the exact list, not `"review-failed" not in`, so that a future edit
+    # restoring the pair reddens this rather than passing.
+    assert sorted(lb["title"] for lb in api3.tasks[stale["id"]]["labels"]) == ["blocked"], (
+        "the external-block branch left something beside `blocked`. Since #693 both Backlog "
+        "branches clear the verdict and carry exactly ONE label — `blocked` here, `epic` on the "
+        "split branch — and SKILL.md tells the reader to tell them apart by which label it is"
     )
 
 
