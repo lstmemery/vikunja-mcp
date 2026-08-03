@@ -721,7 +721,24 @@ merge-base --is-ancestor <my bump> stable` returns 0 and BOTH tags are on the re
 so no version is skipped. When the channel was pointed by HAND off `main`, nothing
 heals it — ff-only refuses the next release too, and every one after that, until a
 human fixes it; that is #737's named cost, not a new one. Either way the refusal is
-loud and carries the fix command. What this does not
+loud and carries the fix command.
+
+**Atomicity also removed an ACCIDENTAL ESCAPE, and that trade is deliberate rather than
+overlooked.** If a version tag name is squatted on the remote by a foreign tag that appears
+AFTER the job's checkout — so the job's own clone does not have it and `git tag -a` succeeds
+locally — the separate pushes used to land the bump anyway, which advanced the version at
+`main`'s tip past the squatter, so the next landing computed the NEXT patch and the wedge
+healed after one red job. Measured on the stand, pre-#723 code: first job rc 1, then three
+consecutive landings all rc 0, version reaching 0.2.174, tags v0.2.171..174, channel moved.
+With the atomic push NOTHING lands, so the tip's version never advances, every later job
+computes the SAME taken version and dies at `git tag -a`: the same three landings give rc
+128, 128, 128, the version stays at 0.2.170 and the channel never moves again. The invariant
+holds — every one of those runs is RED, there is no silent green here — but "one red, then it
+heals itself" became "the channel stands until a human deletes the foreign tag". The trade
+was taken knowingly: the half-state it replaces was QUIET and unrecoverable (the skipped
+version never exists), while this is loud and one human command away (#769).
+
+What this does not
 touch: the pre-tag gate's four swallows (#740), and the local `git branch -f stable
 HEAD`, which is not a push at all — no remote sees it, and it can only fail locally
 (the stand got it two ways: an unwritable ref, and `stable` checked out in some
