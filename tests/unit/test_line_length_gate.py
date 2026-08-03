@@ -121,7 +121,7 @@ _SCANNED = ("src", "tests", "scripts")
 # the module docstring. Both are asserted against pyproject.toml rather than assumed, because the
 # defect this file closes was a declared number with nothing reading it.
 _WRAP_TARGET = 100
-_HARD_LIMIT = 120
+_HARD_LIMIT = 110
 
 
 def _ruff_config() -> dict:
@@ -188,7 +188,7 @@ def test_the_hard_limit_is_declared_where_the_lint_rule_reads_it():
     assert pycodestyle is not None, (
         "[tool.ruff.lint.pycodestyle] is gone, so E501 has silently fallen back to `line-length` "
         f"= {_WRAP_TARGET}. That is not a tightening, it is a break: the repo carries lines in the "
-        "101-120 band by an explicit, measured decision, and CI will now be red on all of them."
+        "101-110 band by an explicit, measured decision, and CI will now be red on all of them."
     )
     assert pycodestyle.get("max-line-length") == _HARD_LIMIT, (
         f"the enforced ceiling is {pycodestyle.get('max-line-length')!r}, not {_HARD_LIMIT}. "

@@ -1521,7 +1521,8 @@ def test_the_tree_wide_claims_in_this_file_are_asserted_rather_than_counted():
         "characters — both constructed and measured, VMCP-194 (724)"
     )
     assert set(line_fed_offenders) <= set(uncontrolled_markdown), (
-        f"the scan over repo markdown does not reach {sorted(set(line_fed_offenders) - set(uncontrolled_markdown))}, "
+        f"the scan over repo markdown does not reach "
+        f"{sorted(set(line_fed_offenders) - set(uncontrolled_markdown))}, "
         "which the assert above just read out of CLAUDE.md by hand. The two are separate asserts "
         "because they fail apart: the one above reads the file directly and says nothing about "
         "`_repo_markdown`, so a scope narrowed to exclude CLAUDE.md — or a `_paragraphs` that "

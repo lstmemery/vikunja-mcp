@@ -57,7 +57,12 @@ target-version = "py311"
 select = ["E4", "E7", "E9", "F", "E501"]
 
 [tool.ruff.lint.pycodestyle]
-# The HARD gate sits at 120, not at `line-length`, and the gap was measured rather than split
+# The HARD gate sits at 110, not at `line-length`, and the gap was measured rather than split
+# — #711 ratcheted it down from #669's 120, which cost SIX hand re-wraps because only six
+# lines in the whole tree were above 110. It was NOT taken to 100: measured then, 59 of the
+# 102 lines in the band were exactly 101 characters and 18 more were 102, so the population
+# is a one-or-two-character tail past the wrap target, and the composition below still holds.
+# The history #669 recorded is kept as history:
 # down the middle. On 2026-08-02 seventy-seven lines exceeded 100 characters across 18 files —
 # 41 of them CODE, 22 inside string literals (19 of those docstrings) and only 14 comments — and
 # SEVENTY-SIX of the 77 were 116 characters or shorter. The defect this rule was turned on for
@@ -70,12 +75,12 @@ select = ["E4", "E7", "E9", "F", "E501"]
 # either: its list would have had to name ALL EIGHTEEN files — api.py, workflow.py, server.py,
 # setup_cmd.py, workspace_cmd.py and thirteen test files holding 53 of the 77 lines — so the gate
 # would have been OFF in the very file where the defect happened.
-# TWO HONEST LIMITS, both measured. 101-120 is convention, not enforcement — wrap at 100 anyway.
+# TWO HONEST LIMITS, both measured. 101-110 is convention, not enforcement — wrap at 100 anyway.
 # And E501 does not fire on a line whose overlong part holds no whitespace (a long URL, a single
 # unbroken token): a 136-character comment ending in a URL passes at 120, because ruff will not
 # demand a break where none is possible. tests/unit/test_line_length_gate.py has no such
 # exemption and does flag that shape — the one place the two deliberately disagree.
-max-line-length = 120
+max-line-length = 110
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

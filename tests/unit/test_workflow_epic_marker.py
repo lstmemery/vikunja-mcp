@@ -180,8 +180,10 @@ def test_fake_hollows_related_subdicts_like_the_real_server(env):
     api, wf = env
     epic, (child,) = _epic(api, ["Build"])
     sub = ((api.get_task(child["id"]).get("related_tasks") or {}).get("parenttask") or [{}])[0]
-    assert sub.get("id") == epic["id"]        # the relation + scalar id survive (so id-reads still work)
-    assert sub.get("labels") is None          # ...but labels/assignees/relations are hollowed, as on the server
+    # the relation + scalar id survive (so id-reads still work)
+    assert sub.get("id") == epic["id"]
+    # ...but labels/assignees/relations are hollowed, as on the server
+    assert sub.get("labels") is None
     assert sub.get("assignees") is None
     assert sub.get("related_tasks") is None
 

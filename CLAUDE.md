@@ -42,11 +42,12 @@ docker rm -f vikunja-test
 
 **Line length is TWO numbers, and only one of them is a gate (tracker #669).** Wrap at **100** —
 that is `line-length`, the formatter's target and what this repo wraps to by hand — not perfectly,
-see the 76-line band below, but everywhere it matters. CI goes red at **121**: `E501` is selected
-with `[tool.ruff.lint.pycodestyle] max-line-length = 120`. The gap
+see the band below, but everywhere it matters. CI goes red at **111**: `E501` is selected
+with `[tool.ruff.lint.pycodestyle] max-line-length = 110` (#711 lowered it from 120; see the
+ratchet paragraph below for what that cost and what it did not). The gap
 between them is honest slack, not an oversight; the reasoning with its counts lives in
 `pyproject.toml` beside the settings and is pinned in `tests/unit/test_line_length_gate.py`. Three
-things follow for anyone writing prose here, which is most tasks. **The band 101-120 is convention
+things follow for anyone writing prose here, which is most tasks. **The band 101-110 is convention
 with nothing behind it** — a 103-character line ships green, so keep measuring your own additions
 rather than reading a green `ruff check` as "wrapped correctly". **Measure in CHARACTERS, never
 bytes**: ruff does, the shell reflex (`awk '{print length($0)}'`, `wc -c`) does not, and this prose
@@ -56,7 +57,7 @@ same at 120 (separate, not a subset: a line over 100 characters cannot be in the
 figures count prose, so they move with every landing — re-measure rather than quote them. VMCP-132
 (621)'s worklog records the mistake in those words — "an awk byte-count had falsely flagged one
 line because of the em-dash". In python it is `len(line)`, not `len(line.encode())`. And **"red at
-121" has one measured exception**: E501 does not fire on a line
+111" has one measured exception**: E501 does not fire on a line
 whose overlong part contains no whitespace — a long URL, one unbroken token — since ruff will not
 demand a break where none is possible (a 136-character comment ending in a URL passes at 120). The
 pin has no such exemption and flags that shape; that disagreement is deliberate.
@@ -69,11 +70,18 @@ file and leaves the 140-character line at 140, because it re-wraps code and does
 or string content — 36 of the 77 overlong lines. That is how the defect #669 fixed got in: a hand
 re-wrap in which one line absorbed the start of the next sentence instead of breaking, invisible to
 every tool, to the card that shipped it and to that card's reviewer.
-**The 120 is a ratchet, not a preference** — it is the smallest round number above every line the
-repo still held once #669's own defect was reflowed (the longest is now 116, in `workflow.py`),
-chosen so the gate could go on that day rather than after a 76-line cosmetic diff through 18 files,
-nine of them under active concurrent edit. Lowering it is the intended direction, the remaining
-band is card #711, and the decision point is the `_HARD_LIMIT` assertion in that test.
+**It is a ratchet, not a preference.** #669 set it at 120 — the smallest round number above every
+line the repo still held once its own defect was reflowed — so the gate could go on THAT DAY
+rather than after a cosmetic diff through 18 files, nine of them under active concurrent edit.
+#711 has since ratcheted it to **110**, and what made that step affordable is a measurement, not
+resolve: of the 102 lines then sitting in the 101-120 band, only SIX were above 110, so six hand
+re-wraps bought a halving of the unchecked band. The rest of the distribution is why the band was
+NOT closed outright: **59 of those 102 are exactly 101 characters** and 18 more are 102, i.e. the
+population is a one-or-two-character tail past the wrap target rather than long lines, and #669's
+count of what it is made of still holds — 41 code, 22 string literals, 14 comments, so "just
+re-wrap them" is false for two thirds of them. Lowering it further is the intended direction and
+the same measurement is how to price the next step; the decision point is the `_HARD_LIMIT`
+assertion in `tests/unit/test_line_length_gate.py`, which pyproject must agree with.
 
 ## Architecture
 
@@ -409,7 +417,7 @@ the workflow as TEXT — no git — so a shallow checkout cannot silence both.
 depends on WHICH grep, and the two on this machine need OPPOSITE ones.** Test
 prose here is hand-wrapped near 100 columns, and that is the repo's wrap
 TARGET (`line-length`) rather than a checked limit — since #669 the enforced
-ceiling is `max-line-length = 120`, so where a line actually breaks is a
+ceiling is `max-line-length = 110`, so where a line actually breaks is a
 convention, and a reflow can push a figure across a break without touching a
 digit. Measured on `e86b2c9^`, where `test_api_kanban.py` carried a real one
 at :1473-1474 ("… 5 failed / 102" ending one line, "passed for the whole

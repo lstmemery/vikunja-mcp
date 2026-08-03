@@ -1404,7 +1404,8 @@ def test_the_starving_waiting_line_reads_blocked_task_then_blocker_and_the_headl
 # since that test does not exist at BASE, and the rest is BASE. Do not read the two groups off the
 # headings alone — the ONE-LINE ALTERNATIVE paragraph SAYS "on BASE" inside itself, while the
 # paragraph actually HEADED that way is the WITHOUT one above it; the ONE-LINE ALTERNATIVE's own
-# last round, the wordless clause against the equality, is the landed tree by that rule. That two-way split is NOT
+# last round, the wordless clause against the equality, is the landed tree by that rule.
+# That two-way split is NOT
 # exhaustive, and reading it as exhaustive is the very failure it was written to prevent: measuring
 # below runs on a THIRD tree too — the two-row DRAFT of the equality test, which carries both its
 # own control and the clause round under it — and "the rest is BASE" would send it to a tree

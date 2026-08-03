@@ -24,7 +24,8 @@ ACTIVE_STAGES = ("Design", "Build")
 NEXT_TASK_STAGES = frozenset({"Queue", *ACTIVE_STAGES, "Review"})
 LABEL_BLOCKED = "blocked"
 LABEL_EPIC = "epic"
-LABEL_EPIC_READY = "epic-ready"        # маркер: все дети эпика в Review/Done — контейнер собран, ждёт Done человека
+# маркер: все дети эпика в Review/Done — контейнер собран, ждёт Done человека
+LABEL_EPIC_READY = "epic-ready"
 LABEL_BUG = "bug"
 LABEL_REVIEWED = "reviewed"            # прошёл независимое агентское ревью
 LABEL_REVIEW_FAILED = "review-failed"  # отбит на доработку, сейчас переделывается
