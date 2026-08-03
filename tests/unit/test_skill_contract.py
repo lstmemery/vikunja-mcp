@@ -2980,30 +2980,43 @@ def _return_task_bullet(text: str) -> str:
     ONE stage is how the sentence 72c6879 left standing here came out false — it named
     «Queue» alone among the stage-drops and concluded that exactly one round justified the last
     step. (Named, which is what the record shows; whether only that one was RUN is not
-    observable.) All five stages, each at all three scopes, alongside the count of that token's
-    twins inside the SECTION but outside this bullet:
+    observable.) All five stages, RE-MEASURED on 2026-08-03 when #700 rebuilt that loop's window,
+    alongside the count of that token's twins inside the SECTION but outside this bullet — and,
+    now that the window is built from BRACKETS, the count of those twins that stand inside a
+    parenthesised group, which is the number that actually decides the row:
 
-        drop Backlog    GREEN / GREEN / GREEN   0 section twins — but 3 more in this bullet: #700
-        drop Queue      RED   / RED   / GREEN   0
-        drop Design     RED   / GREEN / GREEN   1
-        drop Build      RED   / GREEN / GREEN   5
-        drop Your Call  RED   / GREEN / GREEN   8
+        drop Backlog    RED / RED   / n-a    0 section twins, 0 of them bracketed
+        drop Queue      RED / RED   / n-a    0                0
+        drop Design     RED / RED   / n-a    1                0
+        drop Build      RED / RED   / n-a    5                0
+        drop Your Call  RED / GREEN / n-a    8                1
 
-    The twin count is the mechanism, and it puts «Queue» alone in its column: of the four stages
-    that redden at bullet scope it is the only one whose sole occurrence in the whole SECTION is
-    the one the mutant deletes, so its section slice reddens along with the bullet and that round
-    measures the FIRST step of the narrowing, never the last. «Backlog» measures no step at all
-    — three more copies of the word survive inside the bullet itself — which is what #700 is
-    about. So of the loop's five stages, one speaks to the first step, one to neither, and three
-    to the last. That last step, section down to bullet, is held by FOUR of the rounds run here —
-    Design, Build, Your Call and the `file_task` sentence — across TWO assertions, the loop and
-    `file_task`. An enumeration of the rounds RUN, not a proof that no fifth mutant exists; and
-    scored with BOTH consumers in the selection, which matters, because a round can hold this
-    step for one test and not for the suite (the wider «Из Done» reading below is exactly that).
-    Nor does a twin inside this section single `file_task` out: Design, Build and Your Call have
-    1, 5 and 8 of them. The FIFTH assertion read from here, the caveat's «следующий мутирующий
-    тул», has no twin anywhere in SKILL.md and reddens at every scope: it shows that assertion is
-    live, not that the slice is.
+    The FILE column is «n-a», not GREEN, and the reason is worth more than the row would have
+    been: after #700 the test also asserts that the rule string occurs exactly ONCE in its slice,
+    and file-wide it occurs TWICE — line 1585 in the `decompose` bullet and line 1770 here — so
+    the file-scope probe fails its own control. Every file-scope figure would be a delta against
+    a dirty baseline, which is the one thing this repo's sweep contract forbids writing down. The
+    duplicate anchor is the same fact the pre-#700 record reported as a file-scope GREEN; it has
+    simply stopped being expressible as a colour.
+
+    Twin counts in PROSE used to be the mechanism here and are not any more. Before #700 the loop
+    read the whole bullet: «Backlog» scored GREEN/GREEN/GREEN, blind at every scope because three
+    copies of the word survive in this bullet's own prose; Design, Build and Your Call went
+    RED/GREEN/GREEN on their section twins; «Queue», twinless section-wide, went RED/RED/GREEN.
+    Those pre-#700 rows were RE-RUN at 5539ebae in a clone of their own rather than carried over
+    from the record they replace — an inherited figure is the thing this docstring has been wrong
+    about before. The loop now unions the parenthesised GROUPS above this bullet's sub-bullets, so
+    a twin only counts if it is bracketed, and that is exactly what splits the column: Design's
+    one section twin and Build's five sit in running prose and no longer reach the window, while
+    «Your Call» has a bracketed one — the `call_human` bullet's «(Your Call = припаркована, не
+    твоя активная)», printed rather than assumed — and is the only stage that still goes GREEN a
+    scope out. So the last step of the narrowing, section down to bullet, is held by TWO of the
+    rounds run here: `drop Your Call` and the `file_task` sentence. An enumeration of the rounds
+    RUN, not a proof that no other mutant holds it; and scored with BOTH consumers in the
+    selection, which matters, because a round can hold this step for one test and not for the
+    suite (the wider «Из Done» reading below is exactly that). The FIFTH assertion read from
+    here, the caveat's «следующий мутирующий тул», has no twin anywhere in SKILL.md and reddens
+    at every scope: it shows that assertion is live, not that the slice is.
 
     The superseded claim is written down so it is not re-derived. Beside the quotation dealt with
     above, its MECHANISM is wrong too: it said `Done` recurs in this section's reviewer
@@ -3051,17 +3064,22 @@ def _return_task_bullet(text: str) -> str:
     consumer, which #626 did not have.
 
     Scope OUTSIDE the bullet is the only thing this helper decides. Whether each assertion is
-    then sliced tightly enough INSIDE it is a separate question, and one is open there: #700,
-    where dropping «Backlog» from the promise list is measured green — the top row above. The two
-    are COUPLED, and that was run rather than reasoned: narrow the loop to the parenthesised
-    promise the way the decompose test already does, which is what #700 proposes, and all five
-    stage-drops turn RED at bullet AND at section scope, GREEN file-wide. The loop would then
-    hold the FIRST step of the narrowing only. The other rounds were re-run against that patched
-    test rather than assumed unaffected, and they leave `file_task` as the single assertion still
-    holding the last step: the `file_task` sentence stays RED at bullet and GREEN at section,
-    rule+list stays RED at both, and `#649` and the caveat go on reddening the decompose test at
-    exactly the scopes they did before. So the table above describes the loop as it stands today,
-    not as #700 would leave it, and whoever lands #700 re-measures these rows.
+    then sliced tightly enough INSIDE it is a SEPARATE question, and it was open here until #700
+    closed it for the stage loop: dropping «Backlog» from the promise list was measured GREEN at
+    all three scopes. The two questions are COUPLED, which is why the table above moved when #700
+    landed — it is re-measured there, not carried over. The other rounds were re-run alongside it
+    rather than assumed unaffected, and TWICE, because the window was rebuilt once more after
+    review: the `file_task` sentence still scores RED at bullet and GREEN at section, rule+list
+    RED at both, `#649` RED at both. Closing it for the loop does not close it for the
+    file, and the size of what is left is measured rather than guessed at: of the 154
+    `assert "LIT" in <slice>` assertions in this file, 130 hold a needle that occurs EXACTLY ONCE
+    in its slice and 3 test a non-str container, so 133 cannot have this defect at all; the
+    remaining 21 are carried by #758, with 11 of them measured blind to the removal of any single
+    occurrence. NONE of the 21 is read from THIS helper: its three surviving needles — `file_task`
+    in the test below, `#649` and «следующий мутирующий тул» in the decompose test — each occur
+    EXACTLY ONCE in the bullet, so the loop was the only twin-blind assertion reading it. The
+    nearest two belong to neighbours: `file_task` twice in `_decompose_bullet`, and `file_task`
+    twice in `_stuck_section` at the reviewer-routing test.
 
     No new code assertion was added here, and the reason first given for it — in #667's own first
     commit message, 72c6879: "would redden on any legitimate rewording of a neighbouring section"
@@ -3125,20 +3143,127 @@ def test_the_rulebook_names_BOTH_stages_return_task_refuses_from():
     control PASS; delete the Done sentence from the bullet while leaving «Done» and `file_task`
     elsewhere in the section -> FAIL (and a SECTION-wide substring was measured GREEN on that same
     mutation); INVERT the rule keeping every token -> FAIL; drop `Your Call` from the open list ->
-    FAIL; drop return_task's Done gate -> FAIL; drop its Review gate -> FAIL."""
+    FAIL; drop return_task's Done gate -> FAIL; drop its Review gate -> FAIL.
+
+    #700 then found that the open-stage loop did not pin the one stage this bullet is ABOUT. It
+    read the WHOLE bullet, and «Backlog» — the stage `return_task`'s entire job moves a card TO —
+    occurs three more times in that bullet's own prose: the opening «уходит в Backlog на
+    ре-триаж», #626's «уводил … в Backlog без ассайни», and the decompose caveat's «уводил
+    родителя в Backlog». All three sentences are load-bearing, so the redundancy stays in
+    SKILL.md and the PIN narrows. Measured in an isolated `git clone --no-hardlinks`
+    (`vikunja_mcp.__file__` confirmed to resolve INSIDE the clone, `__pycache__` cleared per
+    round, `PYTHONDONTWRITEBYTECODE=1`, every restore sha256-verified, whole file as the
+    selection, `collected 50 items` every round), one stage removed from the parenthesised list
+    at a time:
+
+        control                                                          0 failed
+        unsliced loop: drop Backlog                                      0 failed  <-- blind
+        unsliced loop: drop Queue / Design / Build / Your Call           1 failed each
+        sliced loop:   drop Backlog                                      1 failed
+        sliced loop:   drop Queue / Design / Build / Your Call           1 failed each
+
+    «Backlog» is the only mutant here that can demonstrate the slice: the other four have no twin
+    in the bullet and redden either way.
+
+    THE WINDOW IS BUILT FROM BRACKETS, not from a span anchored on the rule, and that is the
+    second design this card shipped — the first one was measured brittle by an adversarial second
+    pass and replaced. A span `bullet[rule_at:bullet.find(")", rule_at) + 1]`, which is what the
+    `decompose` sibling still uses, reddens on ANY bracket that lands between the anchor and the
+    end of the list; against control 0 failed, four ordinary rewordings scored 1 failed each — a
+    card ref on the rule («— Review и Done (#590, #626), — а работает…»), the same in inline code
+    («(`workflow.STAGES` минус эти две)»), a gloss on ONE stage inside the list («Design (спека
+    ещё не написана)»), and the list simply written BEFORE the rule sentence. This file is full
+    of `(#NNN)` and `(измерено …)`, so that is a live cost, not a hypothetical one. Unioning the
+    parenthesised groups above the sub-bullets scores 0 failed on all four and still kills every
+    stage-drop, because the only bracket in this head that is not the promise — the opening
+    «(чужой сервис лежит, нет зависимости, задача потеряла смысл)» — names no stage.
+
+    ELEVEN benign edits now measure 0 failed against control 0 failed, one round each: the four
+    above, plus reordering the stages inside the list, reflowing the line break between the rule
+    and the list, rewording the clarifier that follows the list, rewording the bullet's opening
+    sentence (which kills one «Backlog» twin), adding «— все пять» inside the list, rewording the
+    whole «Из Done» sub-bullet holding the other two twins, and un-bolding the rule. NO false red
+    is known — which is a statement about eleven constructed edits, not a proof that none exists.
+
+    The loose alternative was BUILT and measured too, against control 0 failed, and is still
+    rejected: ending the window at the first sub-bullet without restricting to brackets survives
+    the same four (0 failed) but
+    goes QUIET on a mutant this one catches — drop `Build` from the list while the clarifier
+    below it gains «(скажем, из Build)», 0 failed loose against 1 failed here. A bracket union
+    keeps that kill because the clarifier's gloss is a bracket the loop reads, and the stage is
+    then genuinely still promised somewhere in the head.
+
+    A UNIQUENESS GUARD rides along, and it exists because of a measured attack rather than a
+    worry: quote the pre-#700 formulation of the gate one sentence above the live rule — the kind
+    of sentence this bullet's own meta-prose invites — and then drop «Backlog» from the LIVE
+    list. `find` locks onto the quotation, the window is the QUOTED list, and the exact bug this
+    card exists to kill is back. Against control 0 failed that mutant scored 0 failed; with
+    `bullet.count(<rule>) == 1` asserted it is 1
+    failed. (First reproduction attempt scored it 1 failed and was INVALID: the quote had been
+    line-wrapped, so the anchor never matched inside it. The round measured the wrapping, not the
+    attack. Re-run unwrapped, it reproduced.)
+
+    WHAT THIS PIN DOES NOT CATCH, measured on the shipped form, each against control 0 failed —
+    and stated at its measured size, because an earlier draft of this paragraph described the
+    residual hole as merely ADDITIVE and the second pass disproved that by construction:
+      * the words AROUND the names are not read at all, so the promise can be INVERTED or
+        retracted stage by stage while every name stays in the brackets. «— и из остальных пяти
+        тоже НЕ работает (Backlog, Queue, Design, Build, Your Call)» scores 0 failed; so do
+        «работает ТОЛЬКО из Build», a per-stage carve-out, a `force=True` qualifier, and
+        demoting the list to an unimplemented PLAN.
+      * a list that also names a SHUT stage passes: «, Review» scores 0 failed, and so does
+        naming all seven.
+      * the live rule and promise can be DELETED outright if a historical quotation is left
+        behind to satisfy both the anchor and the names: 0 failed. The uniqueness guard catches
+        the variant that keeps the live rule, not this one.
+      * deleting the promise list with nothing left in its place IS caught: 1 failed.
+    All of it is one class — the pin reads NAMES, never CLAIMS — and it is the same class the
+    sibling decompose pin has. Filed as #759 rather than widened here; the fix has to distinguish
+    a statement from a quotation of one, which no substring test does."""
     text = _skill_text()
     bullet = _return_task_bullet(text)
 
     # the RULE, not its vocabulary: which stages are shut, spelled out
     assert "ОТКАЗЫВАЕТ из ДВУХ стадий — Review и Done" in bullet, \
         "the bullet no longer states WHICH stages return_task refuses from (#590 Review, #626 Done)"
+    # ...and it must be stated ONCE. A second copy — a card quoting an older formulation of the
+    # gate, which this bullet's meta-prose invites — would leave the pin unable to tell the live
+    # rule from the quotation, and measurably lets the promise be gutted next to a quote that
+    # still reads correctly (#700, «quoted anchor» in the docstring).
+    assert bullet.count("ОТКАЗЫВАЕТ из ДВУХ стадий — Review и Done") == 1, \
+        "the rule is spelled out TWICE in this bullet; the pin can no longer tell which is live"
     assert "file_task" in bullet, \
         "the bullet no longer routes unusable Done work to file_task, the one channel left"
-    # ...and the open list must be exactly the complement, straight out of the code
+    # ...and every stage that is NOT shut must be named in the promise, the complement coming
+    # straight out of the code. Only one direction: this asks that each open stage appear, never
+    # that a shut one is absent and never that the words around them still PROMISE anything —
+    # both measured, both left as findings (#759). Scoped to the parenthesised ENUMERATIONS above
+    # the first sub-bullet, NOT the whole bullet (#700): «Backlog» occurs three more times in this
+    # bullet's own prose — the opening «уходит в Backlog на ре-триаж» and, inside the «Из Done»
+    # sub-bullet, #626's «уводил … в Backlog без ассайни» and the decompose caveat's «уводил
+    # родителя в Backlog» — so an unsliced `in` stayed GREEN with «Backlog» quietly dropped from
+    # the promise, and «Backlog» is the ONE stage the whole bullet is about. The other four have
+    # no twin in the bullet and redden at either scope, so none of them can demonstrate this.
+    # Parenthesised rather than a span anchored on the rule: the promise IS an enumeration in
+    # brackets, and a span ending at the first «)» reddens on any bracket that lands between the
+    # anchor and the list — a card ref, an inline-code aside, a gloss on one stage inside the
+    # list, or the list simply being written before the rule. All four measured; see the docstring.
+    head_end = bullet.find("\n  - **", bullet.find("ОТКАЗЫВАЕТ из ДВУХ стадий"))
+    assert head_end != -1, "the return_task bullet no longer has the sub-bullets naming its gates"
+    open_list, depth, start = "", 0, 0
+    for i, ch in enumerate(bullet[:head_end]):
+        if ch == "(":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == ")" and depth:
+            depth -= 1
+            if depth == 0:
+                open_list += bullet[start:i + 1] + "\n"
     for stage in workflow.STAGES:
         if stage in ("Review", "Done"):
             continue
-        assert stage in bullet, \
+        assert stage in open_list, \
             f"the bullet promises the OTHER stages keep working but never names {stage!r}"
 
     # the code: both doors really are shut
