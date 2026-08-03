@@ -70,9 +70,21 @@ them up.
     which is the tempting overstatement and is false: `a8573e6` landed between the sixth tree and
     the seventh and moved none of the four, being prose rewritten inside paragraphs that already
     existed. The claim is about those seven trees, not about time. What is left standing
-    are counts over bounded, NAMED sets — the ten legacy entries that sit on comment runs, the six
-    runs above `_spelled_ref`, the thirteen rows of the pattern test — and not one of those three
-    moved across the same seven, which is why converting them would have bought nothing. The unit
+    are counts over bounded, NAMED sets — and that half holds of TWO of the three examples it
+    used to name, re-measured for VMCP-194 (724) across those same seven trees. The six runs
+    above `_spelled_ref` and the thirteen rows of the pattern test are six and thirteen at every
+    one of the seven. The legacy entries that sit on comment runs are NOT: three at `889befd`,
+    `93714d5` and `94bae3d`, ten at `6dd2803`, `bba4fed`, `75a1e52`, `e77b0cf` and `9489de3`, and
+    nine at `52d6085`, where VMCP-155 (660)'s entry left, and still nine at `eb14eb4`, this card's
+    base. Those are trees actually walked rather than a range read off two endpoints. So the bare
+    "ten" that stood in this sentence had moved once before it was written and moved again after,
+    and the step is not prose drift: it is
+    `6dd2803`, this card's OWN first commit, where the rekey turned seven record keys into
+    sixteen paragraph keys. The dividing line is therefore not boundedness but WHO may move the
+    set — the six runs and the thirteen rows move only when code does, while the legacy list is
+    the very thing this file's ratchet edits, and the list's own comment already says its SIZE
+    moves when an entry leaves. Converting the two that hold would still have bought nothing;
+    the third wanted no assert either, only the shas it now carries. The unit
     is deliberately not the finest split available: splitting at BULLETS instead strands round
     counts
     INSIDE records that DO state a control, because it severs the canonical shape this file asks
@@ -165,7 +177,11 @@ TESTS_DIR = REPO_ROOT / "tests"
 # markdown holds a real offender too, and the sole-false-positive argument is gone on BOTH scopes,
 # leaving only the behaviour-change reason above. How many hits there are is deliberately not
 # written here any more: that number moved twice inside one afternoon, and what a reader needs
-# from it — that markdown is NOT clean — is asserted in the tree-wide test at the end of the file.
+# from it is asserted in the tree-wide test at the end of the file. WHAT it asserts is THIS
+# paragraph — the line-fed one, found by an anchor phrase — and no longer the weaker "markdown is
+# NOT clean" it asserted until VMCP-194 (724), which was satisfied by any OTHER uncontrolled
+# paragraph of CLAUDE.md while the one named here was clean. The sentence you are reading could
+# therefore go false with the guard green, and that is the state 724 was filed against.
 
 # A ROUND COUNT: a number of failing tests. Two forms are excluded, both because they were
 # measured in this repo and both false positives. `(?<![:.\w])` drops a number that is part of an
@@ -481,9 +497,11 @@ def _comment_runs(source: str):
     the opening line in the key and 1 failed WITHOUT it, and is NAMED both times — the paragraph
     half of the key now does the disambiguating that the opening line used to do alone, so the
     "1 passed" above is history rather than current behaviour. Dropping the opening line is still
-    1 failed, but because ten legacy entries change key at once, not because a regression is
-    swallowed. What the opening line alone still separates is narrower than the round above
-    measured: two runs over ONE definition whose corresponding PARAGRAPHS agree. And that shape has
+    1 failed, but because the legacy entries sitting on comment runs change key at once — TEN of
+    them on the tree that round ran on, `e77b0cf`, and nine at `eb14eb4` after VMCP-155 (660)'s
+    entry left — not because a regression is swallowed. What the opening line alone still separates
+    is narrower than the round above measured: two runs over ONE definition whose corresponding
+    PARAGRAPHS agree. And that shape has
     NO instance on this tree — dropping the opening line and keying by definition plus paragraph
     head still leaves ZERO collisions, which the tree-wide test at the end of this file asserts —
     so what it separates today is nothing, which is the honest price of keeping it. The key COUNT
@@ -718,8 +736,10 @@ def test_a_sweep_record_that_quotes_a_failure_count_states_its_control_count():
         the two rows that use the word in another sense. Written
         down rather than dropped, because a redundancy that vanishes quietly is how a guard turns
         into decoration
-      * key a comment run by its definition ALONE, dropping the opening line -> 1 failed, ten
-        legacy entries changing key at once. The SECOND half of this row no longer holds, and is
+      * key a comment run by its definition ALONE, dropping the opening line -> 1 failed, every
+        legacy entry that sits on a comment run changing key at once (ten of them on the tree that
+        round ran on; the count is `_comment_runs`'s to carry, with a sha, and VMCP-194 (724) put
+        one there after finding it stale in two places). The SECOND half of this row no longer holds, and is
         corrected here rather than left standing: under the record unit the same new uncontrolled
         banner above `_spelled_ref` was 1 failed WITH the opening line in the key and 1 passed
         without it, swallowed by a grandfathered key. Re-measured at paragraph granularity it is
@@ -931,6 +951,43 @@ def test_a_control_in_one_paragraph_does_not_vouch_for_the_next():
         "rather than on the block's last words, because the last words are edited far more often"
 
 
+# The measured counter-example of the line-fed rule, pinned as a CO-OCCURRENCE rather than as a
+# token — VMCP-194 (724), found by sweeping this file's OWN asserts with the rule the card was
+# filed under. `[[:space:]]` alone occurs TWICE in that CLAUDE.md paragraph, in two different
+# sentences that say OPPOSITE things: the counter-example (the class was tried per line and changed
+# nothing) and BSD grep's lever (the class is half of what DOES work). So the bare token pinned the
+# PARAGRAPH, not the counter-example the assert's message names. Constructed and measured on the
+# whole scanner file, `__pycache__` deleted then `PYTHONDONTWRITEBYTECODE=1`, control 0 failed:
+# delete only the counter-example clause and leave the lever sentence -> 0 failed under the bare
+# token, 1 failed under this pattern. It is `_CONTROL_COUNT`'s idiom one file over — a token and
+# the claim it belongs to, close enough together to be one statement — and it carries the same
+# caveat: `[^.;]` narrows the window, it does not bound it to a clause.
+# THE BUDGET IS 200 RATHER THAN `_CONTROL_COUNT`'s 60, and the difference was measured rather than
+# picked: the two sit about 48 characters apart today, and a good-faith rewrite of the paragraph
+# that inserts one clause between them ran past 120. Same control of 0 failed: that rewrite,
+# keeping every literal BOTH pins ask for, is 1 failed at a 120-character budget and 0 failed at
+# 200, while deleting the counter-example clause and leaving the lever sentence stays 1 failed at
+# both — what separates those two sentences is the `.` stop, not the budget, so widening it buys
+# room for prose without giving the hole back.
+# WHAT IT COSTS is a reword of `recovers nothing`, which fires it — measured, a rewrite that keeps
+# the class and drops that finding is 1 failed; that is the ratchet's trade, and the message names
+# the phrase so a rewriter knows what to restate.
+# WHAT IT STILL DOES NOT HOLD is POLARITY, and both instances were built by the independent second
+# pass rather than reasoned about, from the same control of 0 failed: delete the counter-example
+# clause and reword the LEVER sentence to end `recovers nothing` -> 0 failed, the pin matching the
+# sentence that says the class WORKS; and keep both tokens where they are while flipping the
+# finding into `LOOSEN the regex: a [[:space:]] class is what reaches it` -> 0 failed, CLAUDE.md now
+# prescribing what the paragraph exists to refute. So this pins adjacency, not the claim: it kills
+# the plain deletion the bare token missed, and a rewrite that carries the phrase somewhere else
+# defeats it. It also cannot say the measurement was re-run, nor reach a counter-example rewritten
+# around a DIFFERENT pattern than the class.
+_MEASURED_COUNTER_EXAMPLE = re.compile(
+    r"\[\[:space:\]\][^.;]{0,200}?recovers nothing"
+    r"|recovers nothing[^.;]{0,200}?\[\[:space:\]\]",
+    re.IGNORECASE,
+)
+
+
 def _testing_philosophy() -> str:
     """CLAUDE.md's Testing Philosophy section, sliced like every other prose pin in this repo.
 
@@ -1078,10 +1135,14 @@ def test_claude_md_says_a_stale_figure_sweep_is_not_line_fed():
         "here is hand-wrapped near 100 columns — a convention, not the gate, which sits at " \
         "`max-line-length = 120` since #669 — so `grep -rn` reports a file CLEAN at a wrapped " \
         "figure, which is the one answer a sweep exists to give"
-    assert "[[:space:]]" in section, \
+    assert _MEASURED_COUNTER_EXAMPLE.search(" ".join(section.split())), \
         "CLAUDE.md no longer carries the measured counter-example, and the rule is worth less " \
         "without it: read PER LINE, loosening the PATTERN does not help — the same 15 hits on " \
-        "both greps. Without this the next reader fixes the regex and stays blind"
+        "both greps. Without this the next reader fixes the regex and stays blind. What is pinned " \
+        "is the class token NEXT TO its negative finding (`recovers nothing`) in one sentence — " \
+        "VMCP-194 (724), because the token alone occurs twice in that paragraph and the second is " \
+        "BSD grep's lever, so it pinned the paragraph and not the counter-example. Reworded the " \
+        "finding? Restate it beside the class, or update `_MEASURED_COUNTER_EXAMPLE` to match"
     assert "DIFF against the per-line hits" in section, \
         "CLAUDE.md no longer says WHAT to report. A raw spanning hit list is dominated by what " \
         "the line-anchored sweep already found, so the difference is the only useful output — " \
@@ -1174,15 +1235,86 @@ def _repo_markdown():
         yield relative.as_posix(), path.read_text(encoding="utf-8")
 
 
+# The material the SCOPE comment at the top of this file points at, identified by two FINGERPRINTS
+# rather than by its key, its prose or its paragraph boundary — VMCP-194 (724). The markdown assert
+# below used to ask only that SOME paragraph of CLAUDE.md quote a round count without a control,
+# while the scope comment names a specific thing: the line-fed paragraph `aadde71` landed and
+# `75a1e52` added a second count to. So destroying exactly the named material left the guard GREEN,
+# which is the shape this whole file exists to refuse. Measured on the whole scanner file,
+# `__pycache__` deleted per round and then `PYTHONDONTWRITEBYTECODE=1`, control 0 failed — and EVERY
+# NUMBER IN THIS PARAGRAPH IS OF THE FORM THIS REPLACED, so re-running them here answers
+# differently on purpose: add `control 0 failed` to the named paragraph AND plant an unrelated
+# uncontrolled paragraph elsewhere in CLAUDE.md -> 0 failed; replace the named paragraph's body
+# outright with the plant in place -> 1 failed, and that one was the line-fed pin firing, never this
+# assert. The documented kill round did work ALONE — `control 0 failed` into the named paragraph
+# with nothing planted -> 1 failed — which is how it survived three review rounds, and it worked
+# only because that paragraph happened to be the ONLY uncontrolled markdown paragraph in the repo
+# (measured: the offender list held exactly one entry). The plant alone is 0 failed, so neither
+# mutation is individually suspicious. It is the SAME defect one level down from the one this test's
+# own round list already records — 688 moved the hole from "any stray `.md` in a checkout" to "any
+# stray PARAGRAPH of CLAUDE.md".
+#
+# WHY FINGERPRINTS AND NOT THE PROSE, THE KEY, OR THE PARAGRAPH. Pinning the wording would fire on
+# any rewrite of a file several cards a day edit. Pinning the KEY is what the first spelling of this
+# fix did and it was defeated in review: `_paragraph_head` truncates at `_KEY_HEAD`, the anchor
+# starts past that cut, so a decoy paragraph agreeing in its first 48 characters put the SAME string
+# in the offender list while the named paragraph was clean — control 0 failed, that construction
+# 0 failed. Asking about the PARAGRAPH instead answers it, and asking about a paragraph BOUNDARY is
+# the next trap: splitting this 46-line paragraph at its own natural seam is ordinary housekeeping,
+# and it strands the round counts in the half that does not carry the anchor — control 0 failed,
+# that split 1 failed with a message that said the offender was gone when it had merely moved. So
+# the filter is a disjunction of two marks that TRAVEL with the counts: the anchor phrase, and
+# `e86b2c9`, the sha the measurement was taken on. Both occurrences of that sha sit in the same
+# paragraph as a round count, and a sha cannot be reworded — it is the mark that survives both a
+# split and a copyedit.
+#
+# THE ANCHOR HALF COSTS NOTHING THIS REPO IS NOT ALREADY CARRYING:
+# `test_claude_md_says_a_stale_figure_sweep_is_not_line_fed` asserts that phrase verbatim already,
+# so breaking it is red there whether or not this assert exists. From the same control of 0 failed:
+# rewrapping the line so `must not be` ends it and `LINE-FED` opens the next -> 1 failed, on that
+# sibling ALONE, because the sha half keeps this one green; rewriting the paragraph's opening and
+# body while keeping what both pins ask for -> 0 failed.
+#
+# WHAT IT DOES NOT CATCH, priced rather than rounded up, and two of these came from the independent
+# second pass rather than from the author.
+#   * It holds the material's SHAPE — a round count with no control beside it — never its content:
+#     a rewrite keeping a fingerprint and any `N failed` satisfies it.
+#   * A DELIBERATE decoy carrying a fingerprint would satisfy it while the real material is clean.
+#     The measured plant does not (it carries neither mark), and that is the difference between
+#     this and the form it replaced; a decoy written to carry one is a different, adversarial thing.
+#   * It certifies that the trigger FIRES on that material, not that the hit is a real sweep round.
+#     Measured, the two matches there are a verbatim QUOTATION of the wrapped tally the sweep hunts
+#     at `test_api_kanban.py:1473` and an ILLUSTRATIVE tally naming this scanner — and the same
+#     CLAUDE.md sentence calls both of them false positives. The scope comment says markdown is in
+#     the SAME position as src/, whose own hit was DISMISSED on exactly that ground; that half is
+#     VMCP-210 (753) rather than something this assert settles.
+#   * `uncontrolled_markdown` keys markdown paragraphs by file plus a 48-character head with none of
+#     the collision defence `_records` gives the tests/ side — measured, repo markdown already has
+#     20 duplicated keys covering 51 paragraphs, all under `docs/superpowers/`. Nothing here depends
+#     on those keys being distinct: the assert above reads paragraphs, and the one below only asks
+#     that the scan reach what the hand read found.
+_LINE_FED_ANCHOR = "must not be LINE-FED"
+_LINE_FED_MEASUREMENT = "e86b2c9"
+
+
 def test_the_tree_wide_claims_in_this_file_are_asserted_rather_than_counted():
     """The claims this file makes about the whole tree, RUN instead of quoted — VMCP-167 (688).
 
     WHY THIS TEST EXISTS, and it is a measured failure rather than a tidiness argument. Four
-    tree-wide counts written into this file were correct at `6dd2803` and wrong at `bba4fed`, the
-    commit 80 minutes later that shipped them, because `aadde71` landed in between: records
+    tree-wide counts this file quoted went stale inside 80 minutes, because `aadde71` landed
+    between the tree they were taken on and `bba4fed`, the commit that shipped them: records
     1098 / 870 / 83 -> 1111 / 881 / 85, distinct keys without the run's opening line 1760 -> 1794,
-    the bullet-split pair 49/36 -> 53/40, markdown hits five -> six. Every one carried a DATE and
-    the date was the same on both trees. Three review rounds of one card each ended on an instance
+    the bullet-split pair 49/36 -> 53/40, markdown hits five -> six. TWO CLAIMS IN THAT SENTENCE
+    ARE CORRECTED HERE rather than left standing, re-measured for VMCP-194 (724). The distinct-key
+    row is not an instance of "correct at `6dd2803`, stale at `bba4fed`" at all: no distinct-key
+    count stood in this file at `6dd2803` — that tree carries no such sentence — and the number
+    that shipped at `bba4fed` was 1761, which `_comment_runs` above then established belongs to no
+    committed tree in the window it could have been taken in. So `1760 -> 1794` names what that
+    ruler WOULD have given, not what a reader found here. Nor did every one carry a DATE: three
+    did — the bullet pair "DATED 2026-08-02", the markdown hits "so it is dated", the records
+    triple "the SAME day" — while the 1761 sentence carried neither a date nor a sha, only the
+    word "today". The count wearing no label at all is the one that rotted hardest, which sharpens
+    the rule rather than softening it. Three review rounds of one card each ended on an instance
     of that, so the answer here is not a fourth re-measurement: a count over the tree gets an
     ASSERT if a reader acts on it, a SHA if it is history, and never a date.
 
@@ -1218,6 +1350,27 @@ def test_the_tree_wide_claims_in_this_file_are_asserted_rather_than_counted():
         only for a NON-EMPTY offender list and this construction was 0 failed: any stray `.md` in
         anyone's checkout silenced it. It now names CLAUDE.md. Found by the independent second
         pass, reproduced here before it was changed
+      * and naming CLAUDE.md MOVED that hole rather than closing it, which is VMCP-194 (724) and
+        the reason this assert now goes by fingerprints. Under the `any(... "CLAUDE.md::")` form it
+        replaced, with an unrelated uncontrolled paragraph planted at the END of CLAUDE.md: the
+        plant alone -> 0 failed, `control 0 failed` added to the line-fed paragraph alone
+        -> 1 failed, BOTH TOGETHER -> 0 failed — the named material clean, its scope sentence
+        false, the guard green. Gutting the named paragraph with the plant in place was 1 failed
+        there, and that one was the line-fed pin, never this assert
+      * the fingerprint form, whole battery from one control of 0 failed, every mutation applied by
+        a script that refuses to run unless its target matches exactly once: control into the named
+        paragraph -> 1 failed; that plus the plant -> 1 failed; that plus a DECOY whose first 48
+        characters equal the named paragraph's -> 1 failed, which the KEY form of this fix did not
+        catch (0 failed, found in review — `_KEY_HEAD` cuts before the anchor, so a colliding head
+        put the same string in the offender list); gut plus plant -> 2 failed; the scan made to
+        skip CLAUDE.md -> 1 failed on the second assert alone
+      * the other direction, because a pin that fires on prose would be worse than the hole. Same
+        control: SPLITTING that 46-line paragraph at its own natural seam -> 0 failed, where the
+        paragraph-shaped version of this fix went red and told the reader the offender was gone
+        when it had only moved into the half without the anchor — which is why the sha `e86b2c9` is
+        the second fingerprint. Rewrapping the anchor across a line break -> 1 failed, on the
+        SIBLING alone, because that test pins the phrase verbatim already and the sha keeps this
+        one green. A full rewrite of the paragraph keeping what both pins ask for -> 0 failed
       * tighten one of `_WEAK_CONTROL_READINGS` into `_CONTROL_COUNT` itself -> 1 failed. The
         first version compared the strong pattern against a single weak constant and this was
         0 failed: an identity check between a pattern and itself. The loosest-reading assert is
@@ -1306,14 +1459,30 @@ def test_the_tree_wide_claims_in_this_file_are_asserted_rather_than_counted():
         for paragraph in _paragraphs(text)
         if _quotes_a_round_count(paragraph) and not _states_a_control_count(paragraph)
     )
-    assert any(key.startswith("CLAUDE.md::") for key in uncontrolled_markdown), (
-        f"no paragraph of CLAUDE.md quotes a round count without a control any more "
-        f"(uncontrolled markdown paragraphs found: {uncontrolled_markdown}), so the SCOPE comment "
-        "at the top is wrong where it says repo markdown holds a real offender and is in the same "
-        "position as src/. Rewrite that half of the scope comment; the argument the scope actually "
-        "rests on — that widening it is a behaviour change, VMCP-187 (712) — is untouched either "
-        "way. This names CLAUDE.md rather than asking for a non-empty list because ANY stray `.md` "
-        "in a checkout would satisfy the looser form, which was constructed and measured"
+    line_fed_offenders = sorted(
+        f"CLAUDE.md::¶{_paragraph_head(paragraph)}"
+        for paragraph in _paragraphs((REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8"))
+        if (_LINE_FED_ANCHOR in paragraph or _LINE_FED_MEASUREMENT in paragraph)
+        and _quotes_a_round_count(paragraph) and not _states_a_control_count(paragraph)
+    )
+    assert line_fed_offenders, (
+        "the CLAUDE.md material the SCOPE comment at the top NAMES — the line-fed rule — no longer "
+        "quotes a round count without a control beside it, so that half of the scope comment is "
+        f"false (uncontrolled markdown paragraphs found anywhere: {uncontrolled_markdown}). "
+        "Rewrite it; the argument the scope actually rests on — that widening the scan is a "
+        "behaviour change, VMCP-187 (712) — is untouched either way. This asks about THAT material, "
+        "found by the anchor phrase or by the sha of its measurement, rather than about any "
+        "`CLAUDE.md::` key: the looser form is satisfied by ANY other uncontrolled paragraph while "
+        "the named one is clean, and a key form by any paragraph agreeing in its first 48 "
+        "characters — both constructed and measured, VMCP-194 (724)"
+    )
+    assert set(line_fed_offenders) <= set(uncontrolled_markdown), (
+        f"the scan over repo markdown does not reach {sorted(set(line_fed_offenders) - set(uncontrolled_markdown))}, "
+        "which the assert above just read out of CLAUDE.md by hand. The two are separate asserts "
+        "because they fail apart: the one above reads the file directly and says nothing about "
+        "`_repo_markdown`, so a scope narrowed to exclude CLAUDE.md — or a `_paragraphs` that "
+        "splits the file differently from the hand read — would leave it green while the markdown "
+        "half of this test measured nothing at all"
     )
 
     assert "a DATE does not name a TREE" in _testing_philosophy(), (
