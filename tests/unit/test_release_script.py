@@ -78,6 +78,12 @@ ATOMIC_PUSH_BLOCK = (
     'if ! git push --atomic origin "HEAD:refs/heads/${MAIN_BRANCH}" \\\n'
     '        "refs/tags/${VERSION}:refs/tags/${VERSION}"; then\n'
 )
+
+# ГЕЙТ ЧЕСТНОСТИ SKIP'а (#740): «меня накрыли» уходит в зелёное, только если это доказано —
+# канал уже несёт мой sha, ЛИБО вершину ещё никто не выпускал. Мутация вставляет безусловный
+# skip первой же строкой тела, то есть возвращает поведение ДО #740 буквально, не трогая ни
+# одну строку решения самого накрытия. Переименуют функцию — тест упадёт на ассерте ниже.
+HONEST_SKIP_GATE = "skip_or_refuse() {\n"
 SEPARATE_MAIN_PUSH = 'if ! git push origin "HEAD:refs/heads/${MAIN_BRANCH}"; then\n'
 STABLE_LOCAL_MOVE = 'git branch -f "${STABLE_BRANCH}" HEAD'
 SEPARATE_TAG_PUSH = 'git push origin "refs/tags/${VERSION}:refs/tags/${VERSION}"\n'
@@ -152,6 +158,16 @@ def _release_sh_with_a_separate_tag_push() -> str:
         )
     text = text.replace(ATOMIC_PUSH_BLOCK, SEPARATE_MAIN_PUSH)
     return text.replace(STABLE_LOCAL_MOVE, SEPARATE_TAG_PUSH + STABLE_LOCAL_MOVE)
+
+
+def _release_sh_without_the_honest_skip_gate() -> str:
+    """Поведение ДО #740: накрытие ЛЮБОЙ вершиной — сразу зелёный skip, без доказательств."""
+    text = RELEASE_SH.read_text()
+    assert text.count(HONEST_SKIP_GATE) == 1, (
+        "гейт честности skip'а не найден дословно ровно один раз в scripts/release.sh — "
+        "мутация ничего не снимет, и тест мутации станет тавтологией"
+    )
+    return text.replace(HONEST_SKIP_GATE, HONEST_SKIP_GATE + '    skip "$tip"\n    exit 0\n')
 
 
 def _release_sh_with_a_forced_stable_push() -> str:
@@ -314,6 +330,59 @@ def stand(tmp_path: Path):
             )
             (bin_dir / "git").chmod(0o755)
             return bin_dir
+
+        def shim_ls_remote_fails(self) -> Path:
+            """PATH-шим: `git ls-remote` не отвечает вовсе, остальные чтения — настоящие.
+
+            Нужен ровно гейту честности skip'а (#740): у него ДВА доказательства, и второе
+            («вершину ещё никто не выпускал») читается перечислением тегов. Отдельный шим, а
+            не сломанный origin, потому что вопрос именно в том, что делает скрипт, когда ОДНО
+            из чтений не отвечает, — «не смог спросить» обязано быть красным, а не зелёным.
+            """
+            real = shutil.which("git")
+            assert real, "git не найден в PATH"
+            bin_dir = self.root / "shim-ls-remote"
+            bin_dir.mkdir()
+            (bin_dir / "git").write_text(
+                "#!/bin/sh\n"
+                'for a in "$@"; do\n'
+                '  case "$a" in ls-remote)\n'
+                '    echo "fatal: could not read from remote repository" >&2\n'
+                "    exit 1;;\n"
+                "  esac\n"
+                "done\n"
+                f'exec "{real}" "$@"\n'
+            )
+            (bin_dir / "git").chmod(0o755)
+            return bin_dir
+
+        def orphan_the_tip_with_a_foreign_bump(self) -> tuple[str, list[str]]:
+            """Вершину main держит ЧУЖОЙ осиротевший bump: job сиблинга умер на push'е КАНАЛА.
+
+            Ровно тот вход, ради которого заведена #740. С #723 полу-состояние может быть
+            только одной формы — bump И ТЕГ на remote, не двинут ровно `stable`, — поэтому
+            строится оно отказом на канале, а не на теге. Отдаёт (вершину, теги сиблинга).
+            """
+            hook = self.origin / "hooks" / "pre-receive"
+            hook.write_text(
+                "#!/bin/sh\n"
+                "while read -r old new ref; do\n"
+                '  case "$ref" in refs/heads/stable) echo "refused $ref" >&2; exit 1;; esac\n'
+                "done\n"
+                "exit 0\n"
+            )
+            hook.chmod(0o755)
+            sibling = self.land_sibling("sib")            # таск-коммит сиблинга поверх c0
+            died = self.release_job(self.checkout("sib-job", sibling), sibling)
+            assert died.returncode != 0, died.stdout      # его релиз умирает на push'е КАНАЛА
+            hook.unlink()                                 # дальше remote ЗДОРОВЫЙ
+
+            orphan = self.remote_main()
+            assert orphan != sibling, "вершиной должен стать bump сиблинга, а не его таск-коммит"
+            tags = self.remote_tags()
+            assert tags == [NEXT_VERSION]                 # тег СИБЛИНГА уехал атомарно с bump'ом
+            assert self.remote_stable() is None
+            return orphan, tags
 
         def disable_atomic_push(self) -> None:
             """Сервер перестаёт advertise'ить возможность `atomic` (git ≥ 2.6)."""
@@ -638,24 +707,34 @@ def test_a_landed_push_that_reported_failure_still_releases(stand):
     assert stand.remote_stable() == tip
 
 
-def test_without_the_landed_question_the_release_is_silently_lost(stand):
-    """МУТАЦИЯ: снимаем ПЕРВЫЙ вопрос — обязан вернуться тихий зелёный без релиза.
+def test_without_the_landed_question_the_release_is_lost(stand):
+    """МУТАЦИЯ: снимаем ПЕРВЫЙ вопрос — релиз обязан не состояться.
 
     Негативный пин не считается пином, пока не показано, что он краснеет от снятия
     ИМЕННО своей защиты: без этого он сертифицирует собственную зелень.
+
+    ПРЕДМЕТ ПИНА СУЗИЛА #740, и это надо было заметить, а не переписать ассерт молча. Тест
+    назывался «...silently_lost» и мерил ТИШИНУ — зелёный job без сдвига канала. Тишину у
+    этой мутации отобрал гейт честности skip'а: вершина здесь — МОЙ СОБСТВЕННЫЙ приземлившийся
+    bump, на нём мой тег, а канал меня не несёт, то есть ровно та форма, на которую гейт и
+    краснеет (измерено: с гейтом эта мутация даёт rc 1 там, где до него давала rc 0). Значит
+    два гварда ПЕРЕКРЫЛИСЬ, и остаток, который держит только ПЕРВЫЙ вопрос, — не «громко ли»,
+    а «состоялся ли релиз»: без него канал не двигается вовсе (соседний
+    test_a_landed_push_that_reported_failure_still_releases — тот же вход с гвардом, там
+    `stable` встаёт на bump). Ассерты ниже поэтому спрашивают про ПОТЕРЮ, а не про тишину.
     """
     work = stand.checkout("w", stand.c0, release_sh=_release_sh_without_the_landed_question())
     shim = stand.shim_push_lands_but_fails()
     done = stand.release_job(work, stand.c0, path_prefix=shim)
 
-    assert done.returncode == 0, done.stdout + done.stderr
-    assert "release skipped" in done.stdout          # молча решил, что накрыт
-    assert stand.remote_stable() is None             # канал не двинулся
-    # ...при том что bump УЖЕ на main: состояние полу-собранное, а job зелёный.
+    assert done.returncode != 0, done.stdout + done.stderr
+    assert "release skipped" not in done.stdout      # накрытым себя больше не объявляет...
+    assert "but landed" not in done.stdout           # ...но и вопроса «а не уехало ли?» нет
+    assert stand.remote_stable() is None             # канал не двинулся — релиз не собран
+    # ...при том что bump УЖЕ на main: состояние полу-собранное.
     assert '"0.2.171"' in stand.remote_file("refs/heads/main", "src/vikunja_mcp/__init__.py")
     # С #723 тег уехал ВМЕСТЕ с bump'ом (шим выполняет push по-настоящему), поэтому
-    # полу-собрано тут ровно одно — канал. До #723 в этой же точке не было и тега:
-    # состояние стало МЕНЬШЕ, а дефект — тот же, зелёный job без сдвига канала.
+    # полу-собрано тут ровно одно — канал.
     assert stand.remote_tags() == [NEXT_VERSION]
 
 
@@ -1024,44 +1103,136 @@ def test_a_server_without_atomic_support_pushes_nothing(stand):
     assert stand.remote_stable() is None
 
 
-def test_a_foreign_orphan_bump_swallows_an_earlier_landing(stand):
-    """ЧЕТВЁРТОЕ проглатывание, ПИН ИЗВЕСТНОГО ЗАЗОРА, а не желаемого (tracker #740).
+def test_a_foreign_orphan_bump_no_longer_swallows_an_earlier_landing(stand):
+    """ЧЕТВЁРТОЕ проглатывание ЗАКРЫТО В СВОЕЙ ФОРМЕ: накрытие ТРУПОМ красное (tracker #740).
 
-    Вершину main держит ЧУЖОЙ осиротевший bump: job сиблинга умер на push'е КАНАЛА,
-    оставив свой bump (и свой тег) вершиной main. Тогда БОЛЕЕ РАННЕЕ приземление, чей job
-    запускается ПОСЛЕ, глотается
-    на своём ПЕРВОМ и ЕДИНСТВЕННОМ прогоне — перезапусков ноль, второго актора в его
-    собственном пути нет.
+    «В своей форме» — несущая оговорка, а не скромность: закрыт вход, который этот скрипт
+    СПОСОБЕН построить, пока сервер соблюдает `atomic`, то есть вершина-bump С ТЕГОМ. Тот же
+    осиротевший bump БЕЗ тега глотает как раньше, и это отдельный пин соседом —
+    test_an_untagged_orphan_bump_still_swallows, где и разобрано, почему остаток не закрыт.
 
-    Почему это НЕ проглатывание (2): у (2) оговорка «первый прогон ГРОМКИЙ» держится на
-    том, что вершина — СОБСТВЕННЫЙ bump упавшего job'а, и тихо становится только после
-    ручного `gh run rerun`. Здесь обрыв случился в ЧУЖОМ прогоне, и глотается тот, кто
-    не падал вовсе. Почему НЕ (3): там вершина — коммит, у которого ПРОГОН ЕСТЬ (красный,
-    отменённый); здесь вершина — BUMP-коммит, а на них прогонов не бывает вовсе
-    (перемерено: 60 из 60 подряд bump-sha отдают `[]`).
+    Вершину main держит ЧУЖОЙ осиротевший bump: job сиблинга умер на push'е КАНАЛА, оставив
+    свой bump и свой тег вершиной main. БОЛЕЕ РАННЕЕ приземление, чей job запускается ПОСЛЕ,
+    раньше глоталось тут на своём ПЕРВОМ и ЕДИНСТВЕННОМ прогоне — перезапусков ноль, второго
+    актора в его собственном пути нет, — потому что предтеговой гейт спрашивал ровно «содержит
+    ли меня вершина», а на это труп отвечает «да» так же уверенно, как здоровый сосед.
 
-    Тест пинит ТЕКУЩЕЕ поведение, а не желаемое: гейт ВНЁС этот зазор (на том же входе
-    до-716 инлайн даёт `non-fast-forward` и exit 1), и закрывать его в карточке про
-    коллизию тега — новая красная ветка на релизном пути, то есть отдельная работа.
+    ЧТО ИМЕННО ЗАКРЫТО, а что нет. Гейт честности требует ПОЛОЖИТЕЛЬНОГО доказательства: либо
+    канал уже несёт мой sha, либо вершину ещё НИКТО не выпускал (на ней нет версионного тега).
+    Труп проваливает оба — тег на нём есть, канал стоит, — и job краснеет. Проглатывание (3)
+    (вершина — таск-коммит, чей прогон красный/отменён) при этом НЕ закрыто и намеренно: там
+    тега на вершине нет, доказательство P2 выполняется честно, и спросить «выпустят ли её»
+    отсюда нечем. Соседний test_superseded_with_the_tag_still_free_also_skips — ровно тот
+    вход, и он по-прежнему ЗЕЛЁНЫЙ.
 
-    Что тест НЕ тавтология — ИЗМЕРЕНО, а не обещано: «мутацией» тут служит сама починка,
-    поэтому проверялось так. Кандидат в починку #740 (не считать «накрыт», если вершина —
-    осиротевший bump: `! git log -1 --format=%s "$tip" | grep -q "^chore: v"` третьим
-    конъюнктом) даёт на выборке `tests/unit/test_release_script.py`, collected 17 в обоих
-    раундах: control 0 failed; кандидат 5 failed, и ЭТОТ тест — среди упавших. Значит он
-    покраснеет, когда #740 закроют, и позовёт переписать (4) в `scripts/release.sh` и в
-    CLAUDE.md — иначе прозе поверят, а она устареет молча. Остальные четыре падения —
-    отдельная находка для #740: наивный признак «вершина это bump» ЛОМАЕТ здоровый
-    superseded-путь, потому что в его стендах вершина тоже bump. Признак нужен другой.
+    ЦЕНА КРАСНОГО ИЗМЕРЕНА, а не оценена: ассерты ниже показывают, что после красного на
+    remote не двинулся НИ ОДИН из трёх рефов, за которые отвечает этот шаг (вершина, теги,
+    канал), — ветка, на которую встал новый отказ, не пушит ничего.
+    Поэтому он не пропускает версию, не занимает имя тега и не морозит канал: следующее
+    приземление уводит канал дальше само, и последние четыре строки это ПРОГОНЯЮТ, а не
+    обещают.
 
     КОНСТРУКЦИЮ ПЕРЕСОБРАЛА #723, СВОЙСТВО НЕ ТРОГАЛА. Раньше сирота строилась отказом на
     push'е ТЕГА: у сиблинга bump уезжал в main, а тег — нет. С атомарным push'ем такого
-    состояния больше не существует (отказ на теге не оставляет и bump'а), поэтому сирота
-    строится следующей точкой отказа — push'ем КАНАЛА. Меняется только ФОРМА полу-состояния
-    (тег сиблинга теперь на месте, не хватает ровно `stable`); проглатывание — вершина,
-    которая СОДЕРЖИТ мой sha и никем не будет выпущена, — на месте целиком. То есть #723
-    сузила МНОЖЕСТВО путей к чужому осиротевшему bump'у, но не закрыла КЛАСС: остаются
-    отказ канала и убитый между push'ями раннер.
+    состояния больше не существует, поэтому сирота строится следующей точкой отказа — push'ем
+    КАНАЛА (см. `orphan_the_tip_with_a_foreign_bump`).
+    """
+    orphan, sib_tags = stand.orphan_the_tip_with_a_foreign_bump()
+
+    # МОЙ job: первый и единственный прогон для c0, никаких шимов и перезапусков.
+    done = stand.release_job(stand.checkout("mine", stand.c0), stand.c0)
+
+    assert done.returncode != 0, done.stdout + done.stderr
+    assert "release skipped" not in done.stdout
+    assert "ALREADY TAGGED" in done.stderr
+    assert stand.remote_main() == orphan          # ...и на remote не изменилось НИЧЕГО:
+    assert stand.remote_tags() == sib_tags        # ни вершина, ни теги,
+    assert stand.remote_stable() is None          # ни канал
+
+    # Красный тут — предупреждение, а не тупик: канал догоняет на следующем приземлении.
+    nxt = stand.land_sibling("nxt")
+    later = stand.release_job(stand.checkout("nxt-job", nxt), nxt)
+    assert later.returncode == 0, later.stdout + later.stderr
+    channel = stand.remote_stable()
+    assert channel is not None
+    caught_up = _git(stand.origin, "merge-base", "--is-ancestor", stand.c0, channel, check=False)
+    assert caught_up.returncode == 0, "канал обязан догнать проглоченное приземление"
+
+
+def test_without_the_honest_skip_gate_the_foreign_orphan_swallows_again(stand):
+    """МУТАЦИЯ к предыдущему: снимаем гейт честности — проглатывание возвращается дословно.
+
+    Негативный пин не считается пином, пока не показано, что он краснеет от снятия ИМЕННО
+    своей защиты. Мутация вставляет безусловный `skip` первой строкой `skip_or_refuse`, то
+    есть возвращает поведение ДО #740, не трогая строку решения самого накрытия, — и job
+    снова зелен на состоянии, которого не выпустит никто.
+    """
+    orphan, sib_tags = stand.orphan_the_tip_with_a_foreign_bump()
+
+    work = stand.checkout("mine", stand.c0, release_sh=_release_sh_without_the_honest_skip_gate())
+    done = stand.release_job(work, stand.c0)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "release skipped" in done.stdout       # ЗЕЛЁНЫЙ, и это и есть проглатывание
+    assert stand.remote_tags() == sib_tags        # моего релиза не случилось
+    assert stand.remote_stable() is None          # канал не двинулся
+    assert stand.remote_main() == orphan
+
+
+def test_an_untagged_orphan_bump_still_swallows(stand):
+    """ОСТАТОК #740, ПИН ИЗВЕСТНОГО ЗАЗОРА: осиротевший bump БЕЗ тега глотает по-прежнему.
+
+    «Закрыто» у двух соседних пинов означает ровно ОДНУ форму — ту, которую этот скрипт
+    СПОСОБЕН оставить, пока сервер соблюдает `atomic`: bump И ТЕГ на remote, не двинут
+    `stable`. Тег и есть доказательство P2, поэтому осиротевший bump БЕЗ тега проходит P2
+    честно и глотается зелёным ровно как до #740. Строится такая вершина не скриптом, а
+    снаружи, и маршрута известно два: сервер, который `atomic` ОБЪЯВЛЯЕТ и не соблюдает (шим
+    #723, он же в test_a_landed_push_without_its_tag_is_loud), и человек, стирающий версионный
+    тег (`git push origin :refs/tags/vX.Y.Z` — ровно то лекарство, которое предписывает #769).
+
+    Закрывать остаток НЕ стали, и причина измеренная, а не эстетическая: отличить осиротевший
+    bump без тега от обычного таск-коммита можно только ПО ФОРМЕ вершины, а разбор темы
+    коммита предыдущий круг уже отверг замером (control 0 failed; кандидат 5 failed, четыре
+    падения — здоровые superseded-пути). Версия в файлах вершины не годится по той же причине
+    с другой стороны: РУЧНОЙ minor/major-бамп — задокументированная процедура этого
+    репозитория, он двигает версию, не будучи релизом, и стал бы ложным красным. Поэтому
+    остаток НАЗВАН и ЗАПИНЕН — как названы (1) и (3), — а не закрыт наугад.
+    """
+    sibling = stand.land_sibling("sib")
+    shim = stand.shim_push_drops_the_tag_and_lies()
+    died = stand.release_job(stand.checkout("sib-job", sibling), sibling, path_prefix=shim)
+    assert died.returncode != 0, died.stdout      # #723: сервер соврал, и это ЗАМЕЧЕНО
+
+    orphan = stand.remote_main()
+    assert orphan != sibling, "вершиной должен стать bump сиблинга, а не его таск-коммит"
+    assert stand.remote_tags() == []              # ...но БЕЗ тега: сервер выбросил рефспек
+    assert stand.remote_stable() is None
+
+    done = stand.release_job(stand.checkout("mine", stand.c0), stand.c0)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "release skipped" in done.stdout       # P2 выполняется честно — и глотает
+    assert stand.remote_main() == orphan
+    assert stand.remote_tags() == []
+    assert stand.remote_stable() is None
+
+
+def test_a_rerun_over_its_own_orphan_bump_is_no_longer_green(stand):
+    """Проглатывание (2) закрыто ТЕМ ЖЕ гейтом и в той же форме — ИЗМЕРЕНО (tracker #740).
+
+    (2) — «любое полу-собранное состояние + ПЕРЕЗАПУСК = зелёный skip»: job, оставивший свой
+    СОБСТВЕННЫЙ bump вершиной main, при `gh run rerun` читал эту вершину как «меня накрыли».
+    С #723 форма такого полу-состояния ровно одна — bump и тег на remote, не двинут `stable`,
+    — а её гейт честности и ловит: тег на вершине есть, канал меня не несёт. Отличие от (4)
+    только в том, ЧЕЙ job умер; вопрос к состоянию один и тот же, поэтому и ответ один.
+
+    Перезапуск при этом по-прежнему ничего не ЧИНИТ (канал так и стоит) — он перестаёт врать
+    зелёным. Ровно этого от него и надо: `gh run rerun` ПЕРЕПИСЫВАЕТ вердикт того же прогона,
+    поэтому зелёный перезапуск СТИРАЛ единственный красный, который у этого состояния был.
+
+    Оговорка та же, что у (4): закрыта форма С ТЕГОМ. Полу-состояние без тега этот скрипт под
+    `atomic` не строит, но снаружи оно достижимо, и тогда перезапуск снова зелен — см.
+    test_an_untagged_orphan_bump_still_swallows.
     """
     hook = stand.origin / "hooks" / "pre-receive"
     hook.write_text(
@@ -1072,27 +1243,44 @@ def test_a_foreign_orphan_bump_swallows_an_earlier_landing(stand):
         "exit 0\n"
     )
     hook.chmod(0o755)
-    sibling = stand.land_sibling("sib")           # таск-коммит сиблинга поверх c0
-    sib_job = stand.checkout("sib-job", sibling)
-    died = stand.release_job(sib_job, sibling)    # его релиз умирает на push'е КАНАЛА
-    assert died.returncode != 0, died.stdout
-    hook.unlink()                                 # дальше remote ЗДОРОВЫЙ
+    first = stand.release_job(stand.checkout("w", stand.c0), stand.c0)
+    assert first.returncode != 0, first.stdout    # ПЕРВЫЙ прогон громкий и до #740
+    hook.unlink()
 
     orphan = stand.remote_main()
-    assert orphan != sibling, "вершиной должен стать bump сиблинга, а не его таск-коммит"
-    sib_tags = stand.remote_tags()
-    assert sib_tags == [NEXT_VERSION]             # тег СИБЛИНГА уехал атомарно с его bump'ом
+    assert stand.remote_tags() == [NEXT_VERSION]  # МОЙ bump и МОЙ тег уехали атомарно
     assert stand.remote_stable() is None
 
-    # МОЙ job: первый и единственный прогон для c0, никаких шимов и перезапусков.
-    work = stand.checkout("mine", stand.c0)
-    done = stand.release_job(work, stand.c0)
+    rerun = stand.release_job(stand.checkout("rerun", stand.c0), stand.c0)
 
-    assert done.returncode == 0, done.stdout + done.stderr
-    assert "release skipped" in done.stdout       # ЗЕЛЁНЫЙ, и это и есть проглатывание
-    assert stand.remote_tags() == sib_tags        # моего релиза не случилось
-    assert stand.remote_stable() is None          # канал не двинулся
-    assert stand.remote_main() == orphan          # вершина осталась чужим сиротой
+    assert rerun.returncode != 0, rerun.stdout + rerun.stderr
+    assert "release skipped" not in rerun.stdout
+    assert "ALREADY TAGGED" in rerun.stderr
+    assert stand.remote_main() == orphan
+    assert stand.remote_stable() is None
+
+
+def test_an_unanswerable_tag_read_is_never_a_skip(stand):
+    """«Не смог спросить — не решай» у ЧЕТВЁРТОГО чтения — списка тегов (tracker #740).
+
+    Вход тут БУКВАЛЬНО тот же, что у зелёного test_superseded_with_the_tag_still_free_also_
+    skips: сиблинг приземлился, не релизясь, тегов на remote нет вовсе. Разница одна — шим,
+    от которого не отвечает `git ls-remote`. Доказательство P2 («вершину ещё никто не
+    выпускал») тогда НЕДОСТУПНО, а не опровергнуто, и скрипт обязан молчать красным, а не
+    зеленеть на молчании: пустой ответ сломанного чтения выглядит ровно как «тегов нет».
+    """
+    sibling = stand.land_sibling("sib")
+
+    work = stand.checkout("w", stand.c0)
+    done = stand.release_job(work, stand.c0, path_prefix=stand.shim_ls_remote_fails())
+
+    assert done.returncode != 0, done.stdout + done.stderr
+    assert "release skipped" not in done.stdout
+    # Текст ИМЕННО про список тегов: канал тут читался нормально и просто ответил «нет».
+    assert "the tag list on origin could not be read" in done.stderr
+    assert stand.remote_main() == sibling
+    assert stand.remote_tags() == []
+    assert stand.remote_stable() is None
 
 
 def test_the_channel_is_never_moved_backwards(stand):
@@ -1427,13 +1615,21 @@ def test_ci_serialises_release_jobs():
     """Пин на `concurrency` — потому что после #737 её пропажу больше нечем заметить.
 
     Раньше группа была ЕДИНСТВЕННЫМ, что закрывало окно перед push'ем канала, и её снятие
-    вернуло бы откат; теперь откат ловит сам скрипт, а самые частые исходы гонок, которые
-    группа предотвращает, ЗЕЛЁНЫЕ — skip «меня накрыли» и notice «канал уже впереди».
+    вернуло бы откат; после #737 откат ловит сам скрипт, а самые частые исходы гонок, которые
+    группа предотвращает, стали ЗЕЛЁНЫМИ — skip «меня накрыли» и notice «канал уже впереди».
     Сказать «ни одного красного» нельзя (ветка «мой bump на main, а поверх легло новее»
-    красная, и без группы она тоже учащается) — но НАДЁЖНОГО сигнала не остаётся, а
+    красная, и без группы она тоже учащается) — но НАДЁЖНОГО сигнала не оставалось, а
     ненадёжный сигнал не сигнал. Значит заметить удаление или переименование группы можно
-    ровно одним способом: спросить об этом текстом. Держит она две разные вещи:
-    сериализацию (`group`) и то, что идущий
+    было ровно одним способом: спросить об этом текстом.
+
+    С #740 обоснование ПОМЕНЯЛОСЬ, а пин остался: между атомарным push'ем и push'ем канала
+    скрипт держит ровно ту форму, которую гейт честности читает как труп («bump с тегом,
+    канал не двинут»), поэтому второй релизный job, попавший чтением в это окно, теперь
+    краснеет — симптом у пропажи группы появился. Текстовый пин от этого не лишний: симптом
+    ЛОЖНЫЙ (сосед достраивает релиз через секунду), а ловить пропажу конфигурации ложными
+    красными на живых релизах — не то же самое, что спросить о ней прямо.
+
+    Держит она две разные вещи: сериализацию (`group`) и то, что идущий
     релиз не отменяют на полпути между push'ями (`cancel-in-progress: false`), поэтому
     и спрашивается про обе — свип, выборка `tests/unit/test_release_script.py`,
     collected 25 во всех раундах: control 0 failed; убрать строку `group: release` из

@@ -647,8 +647,11 @@ RED**. Both green branches need a proof that the channel carries my code, so
 "channel not moved AND my code not in it" is green on no branch OF THIS STEP. **Wider
 than this step that sentence is FALSE, and an attack pass built the counterexample
 three ways**: the PRE-TAG gate still returns a green skip with the channel unmoved —
-that is its four documented swallowings, the most ordinary being a runner killed
-between pushes followed by a `gh run rerun`. This fix removes the channel ROLLBACK, not
+that is its documented swallowings. #740 narrowed that list without emptying it, and the
+sentence survives: the most ordinary example used to be a runner killed between
+pushes followed by a `gh run rerun`, and #740 reddens exactly that one — but (1) and (3)
+below still build the counterexample outright, and so does (4)'s own residue, an orphan
+bump with no tag on it. This fix removes the channel ROLLBACK, not
 the whole class "green job, channel behind" (#723, #740), which it neither introduced
 nor closes. A BARE `--force-with-lease` (no argument — it leases against
 `refs/remotes/origin/stable`) was measured and rejected, and the FIRST of those
@@ -785,7 +788,9 @@ was taken knowingly: the half-state it replaces was QUIET and unrecoverable (the
 version never exists), while this is loud and one human command away (#769).
 
 What this does not
-touch: the pre-tag gate's four swallows (#740), and the local `git branch -f stable
+touch: the pre-tag gate's swallows — #740 later reddened (2) and (4) in the shape where
+the tip's bump carries its tag, and left the rest —
+and the local `git branch -f stable
 HEAD`, which is not a push at all — no remote sees it, and it can only fail locally
 (the stand got it two ways: an unwritable ref, and `stable` checked out in some
 worktree, which git refuses before writing anything — rc 128, loud under `set -eu`).
@@ -807,13 +812,42 @@ the tag already on the remote at checkout. So `scripts/release.sh` asks, before
 `git tag` and again after that rejected push (`git push --atomic origin
 HEAD:refs/heads/main refs/tags/vX.Y.Z:…` since #723): is `main`'s tip
 a DIFFERENT commit that CONTAINS `$GITHUB_SHA`? If yes, a newer landing is already
-on top, so the job prints a notice and exits 0 — and the notice says only that,
+on top — **but since #740 that answer alone no longer buys a green exit**, because the
+thing on top can be the CORPSE of a job that died mid-release. The skip now needs a
+positive proof that the supersession is benign, and there are exactly two, either of
+which will do, both read from the REMOTE: `stable` already contains `$GITHUB_SHA` (the
+release that carried me reached consumers), or NO version tag points at the tip (nobody
+has released the tip yet, so my skip is evidence of nothing). Neither one holding is
+exit 1. **"Could not ask" is fail-closed for ONE of the two reads only — do not read it
+as "any read"**: the proofs are tried in order, so an unreadable — or simply
+absent — channel decides nothing by itself, it merely yields no P1, and P2 still answers.
+An absent `stable` is the ordinary state of a young repo and still skips green. A broken
+TAG list is different: its empty answer is indistinguishable from an honest "no tags", so
+that is where the refusal sits (`test_an_unanswerable_tag_read_is_never_a_skip`).
+**The red cannot freeze anything, and the reason is the
+PLACE rather than the wording**: the branch it sits on pushes NOTHING, so no ref on the
+remote moves whether the job goes green or red — tip, tags and channel are asserted
+unchanged on the red side in
+`test_a_foreign_orphan_bump_no_longer_swallows_an_earlier_landing` and on the green side
+by its mutational neighbour, so it takes the PAIR to pin it. That is
+what separates it from the reds the two neighbouring cards bought, and those two are not
+the same as each other either: #723's foreign-tag squatter stops VERSIONS (every later
+job dies at `git tag -a`), while #737's hand-pointed channel keeps cutting versions and
+stops the CHANNEL. What this one costs is attention. Its PRECISION, not its safety, leans
+on `concurrency: release`: with the group gone the red could fire on a tip whose own job
+is still between its two pushes — and it would still cost attention and nothing else.
+Only with a proof does the job print a notice and exit 0 — and the notice says only that,
 never who will release the tip. Round 1's notice promised "releasing it is that
-newer tip's job", which is false in THREE of the four swallows below: in two of them
+newer tip's job", which was false in THREE of the four swallows below: in two of them
 the tip is a bump commit, and bump commits get no runs at all — by construction
 (`GITHUB_TOKEN` does not re-trigger CI, plus the ci-skip marker) and re-measured on 60
 consecutive bump shas, every one of which returns `[]` from `gh run list --commit
-<full sha>`; in the third the tip has a run and that run releases nothing.
+<full sha>`; in the third the tip has a run and that run releases nothing. Those first
+two are the ones #740 closed, and only in the shape where the tip's bump CARRIES ITS TAG
+— which is the only shape this script can leave while the server honours `atomic`, since
+the tag is what fails the second proof. The tail is still not knowledge: it stays false
+in (3), and false again on an orphan bump with NO tag, which the gate lets past honestly.
+Do not put it back.
 
 **After a rejected push that question is asked SECOND, and the order is
 load-bearing** — the same order this file already prescribes to agents above
@@ -846,59 +880,101 @@ force-pushed BACKWARDS is not superseded at all: the rollback tip is an ANCESTOR
 `$GITHUB_SHA`, so the bump is a fast-forward and the job pushes straight over the
 rollback — measured on the stand, byte-for-byte the same outcome with the guard and
 without it, so this is pre-existing behaviour rather than anything this card
-introduced or fixed. And the guard's own cost is FOUR swallows, a number RECOUNTED
-TWICE rather than inherited: round 1 said two, round 2 fixed one (the landed push
+introduced or fixed. And the guard's own cost was FOUR swallows, a number RECOUNTED at
+every round rather than inherited: round 1 said two, round 2 fixed one (the landed push
 above) and its second pass built two more, and the rework's own second pass then
-built a fourth — which also DISPROVED the sentence (2) used to close on. All four
-are constructed, and they do not sit at the same gate.
+built a fourth — which also DISPROVED the sentence (2) used to close on. #740 then
+closed (2) and (4) with ONE gate — **but "closed" is about a SHAPE, not a class, so do
+not restate the cost as a single smaller number**: what is closed is the tip-bump that
+CARRIES ITS TAG, the only shape this script itself can leave; an orphan bump with no tag
+(a server that lied about `atomic`, a human deleting the tag) still swallows, green, and
+is pinned as the residue. (1) and (3) stay open outright. All four
+are constructed, they do not sit at the same gate, and the two closed ones stay
+enumerated below with their construction: what keeps them closed is a pin, not this
+prose, and the next edit here has to be able to see what is load-bearing.
 
 **(1) The post-push recheck** still never asks WHY git refused, so a non-race
 refusal (permissions, branch protection) that COINCIDES with a sibling landing exits
 green where it used to be red. The mitigation is real but weaker than round 1's "the
 TIP has no sibling by definition": measured with a standing push denial and a
 landing inside every job's window, a series of five gave FOUR green swallows and ONE
-red — the last. So the surviving signal is one red per SERIES, not one per job.
-**(2) The pre-tag gate, as a CLASS**: any half-assembled state plus a RE-RUN is a
-green skip. A job that left its own bump as the tip — killed between the atomic push
-and the channel push, or between that and the local `git branch -f`, which can fail
-too — re-runs, reads the tip as "superseded" by its own orphan,
-and goes green. THAT job's first run is loud and only a hand `gh run rerun` silences
-it — but the qualifier rests on the tip being the job's OWN bump, and must not be
-read as "a half-state is always loud first": a DIFFERENT landing under the same
-half-state is swallowed on its first run, which is (4). Round
+red — the last. So the surviving signal is one red per SERIES, not one per job. #740's
+gate sits on this branch too (the recheck calls the same helper), and it does NOT close
+this class — it asks about the TIP's release state, never about why git refused. **The
+overlap is real, though, and must not be denied**: when the non-race refusal coincides
+with a landing that is itself a half-release (bump + tag, channel behind), the job now
+reddens. That is the tip's shape doing the work, not any new insight into git's refusal;
+coincide with a plain task commit and it is a green skip exactly as before. What pins the
+recheck's routing is a MUTATION, not a green neighbour: strip the routing and
+`test_without_the_landed_question_the_release_is_lost` fails (control 0 failed; that
+round 1 failed), while `test_lost_race_after_the_pre_push_check_still_skips` traverses
+the branch and stays green, so it proves nothing about the routing.
+**(2) CLOSED by #740 in the "bump WITH its tag" shape. The pre-tag gate, as a CLASS**:
+any half-assembled state plus a
+RE-RUN used to be a green skip. A job that left its own bump as the tip — killed
+between the atomic push and the channel push, or between that and the local
+`git branch -f`, which can fail too — re-runs, read the tip as "superseded" by its own
+orphan, and went green. THAT job's first run is loud and only a hand `gh run rerun`
+silenced it — but the qualifier rests on the tip being the job's OWN bump, and must not
+be read as "a half-state is always loud first": a DIFFERENT landing under the same
+half-state was swallowed on its first run, which is (4). Round
 1 described the class narrower than it is ("without ever cutting the tag"), and #723
 narrowed the class itself rather than the description: with bump and tag indivisible,
 the ONLY shape this script can leave is "bump AND tag on the remote, `stable` not
 moved" — "bump without tag" is no longer constructible from it, as long as the server
-honours `atomic`.
+honours `atomic`. That single shape is precisely what fails BOTH of #740's proofs, which
+is why one gate closed (2) and (4) together; the re-run is now red
+(`test_a_rerun_over_its_own_orphan_bump_is_no_longer_green`). Take the tag away — a
+server that lied about `atomic`, a human deleting it — and the re-run is green again
+(`test_an_untagged_orphan_bump_still_swallows`). It still FIXES nothing —
+the channel is as behind as it was — but it stops erasing the one red the state had,
+since `gh run rerun` rewrites the conclusion of the same run in place.
 The landed question does not rescue a re-run, and should not — a re-run commits its
 OWN bump (fresh committer date, different sha), so "did MY push land?" is honestly
-no. Before the guard the re-run was red (`fatal: tag … already exists`), which fixed
-nothing but was visible. Class tracked as #723.
+no. Before the #716 guard the re-run was red for a different reason
+(`fatal: tag … already exists`), which fixed nothing but was visible. Class tracked
+as #723.
 **(3) The pre-tag gate again**: the tip that supersedes me will not release EITHER —
 its run is red, its ci-skip marker was swallowed, or its job was cancelled. The skip
 is then literally true and still leaves `stable` where it was. This is the stand's
 CASE C, the "tag name still free" row of the card's own table: the same input was
 `! [rejected] … (non-fast-forward)`, exit 1, before the guard. The script cannot
 check it from here, which is exactly why the notice promises nothing — and it is not
-rare: seven of fifteen consecutive `main` runs were red on the night of 31.07.
-**(4) The pre-tag gate a third time, and it is neither (2) nor (3)**: the tip is
-ANOTHER job's orphaned bump, and what gets swallowed is a DIFFERENT, EARLIER landing
-on its FIRST and only run — no re-run, no second actor inside its own path. Unlike
-(2), the hangup happened in someone else's run, so "the first run is loud" never
+rare: seven of fifteen consecutive `main` runs were red on the night of 31.07. #740
+leaves this one open ON PURPOSE, and it is the reason the gate needed two proofs rather
+than one: here the tip carries no tag, so "nobody has released the tip yet" is TRUE, and
+demanding the channel as well would redden the ordinary race where the tip's own job
+simply has not run yet. The green input is
+`test_superseded_with_the_tag_still_free_also_skips`.
+**(4) CLOSED by #740 in the "bump WITH its tag" shape. The pre-tag gate a third time,
+and it was neither (2) nor (3)**:
+the tip is ANOTHER job's orphaned bump, and what got swallowed is a DIFFERENT, EARLIER
+landing on its FIRST and only run — no re-run, no second actor inside its own path.
+Unlike (2), the hangup happened in someone else's run, so "the first run is loud" never
 applies; unlike (3), the tip is a BUMP commit, which gets no run at all (re-measured:
 60 of 60 consecutive bump shas return `[]`), so "its run is red" is not even a
 question that can be asked — the job that owed that tip a release already ran and
-died. One hangup swallows as many landings as it buried: two, measured on three
+died. One hangup swallowed as many landings as it buried: two, measured on three
 commits. And this one the guard INTRODUCED rather than inherited — on identical
 input the pre-716 inline gives `! [rejected] … (non-fast-forward)` and exit 1, round
-1 gives rc=0 and round 2 still gives rc=0. Pinned by
-`test_a_foreign_orphan_bump_swallows_an_earlier_landing`, tracked as #740. #723
-rebuilt that pin's CONSTRUCTION without touching the property: the orphan used to be
+1 gives rc=0 and round 2 still gives rc=0; today the same input is rc=1 with every ref
+on the remote untouched. Pinned now by its inverse,
+`test_a_foreign_orphan_bump_no_longer_swallows_an_earlier_landing`, whose mutational
+neighbour brings the swallow back verbatim. #723
+had rebuilt that pin's CONSTRUCTION without touching the property: the orphan used to be
 made by refusing the TAG push, which no longer leaves a bump behind at all, so it is
-now made by refusing the CHANNEL push. Fewer routes reach a foreign orphaned bump;
-the class is not closed — a refused (or unreadable) channel, a failed local `git branch
--f`, and a runner killed between the two pushes all still get there.
+now made by refusing the CHANNEL push — and the routes to a foreign orphaned bump are
+still several (a refused or unreadable channel, a failed local `git branch -f`, a runner
+killed between the two pushes), which is why the fix had to grade the STATE rather than
+enumerate the routes. **What "closed" does NOT mean**, two things, both measured. The
+channel is still behind at that moment and the red only says so out loud — "the next
+landing carries the channel past it" holds when the channel is merely BEHIND, which the
+pin runs rather than promises, and NOT when something is still refusing the channel push,
+where the next landing hits the same refusal. And the closure is over the shape with a
+TAG on the tip: strip the tag and the same input swallows green again
+(`test_an_untagged_orphan_bump_still_swallows`, which also records why the residue was
+named rather than guessed at — every discriminator left is the tip's FORM, and both
+candidates for that were measured and rejected).
 
 What that does NOT change is what reaches consumers ON THE SUPERSEDED PATH — and
 the scope of that sentence matters, because on the landed-but-reported-failure path
