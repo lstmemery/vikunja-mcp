@@ -332,6 +332,39 @@ property instead of writing the number — that is the one form that cannot go
 stale, and `tests/unit/test_mutation_sweep_contract.py` carries the worked
 example.
 
+**That anchor is now CHECKED — but only as a LABEL** (card 699).
+`tests/unit/test_measured_figure_anchors.py` resolves every figure written as
+the preposition `at` plus a backticked 7-to-40-character sha, across this repo's
+`.py` and `.md` prose, and fails unless that commit both EXISTS and is an
+ancestor of `HEAD`. It never re-derives the figure: a wrong number under a real
+anchor still ships, and what cannot ship is a number whose tree nobody can open.
+**It is PROPHYLACTIC, and that is measured rather than glossed:** all 486 commits
+reachable at `8d2734c` were scanned, asking of each whether its own tree carried
+an anchor failing resolve-or-ancestor at that commit, and the answer is ZERO — the
+idiom first appears at `1c295cb` and has never once shipped broken. So it has
+caught nothing historically; it caught its own author, twice, on the day it
+landed. Do not read the neighbouring `1761` story as a catch either: that figure
+was measured in an uncommitted tree and shipped with NO anchor at all, which this
+gate cannot see. What it does close is the step after — the moment you DO commit
+and DO anchor, since `git rebase origin/main` before pushing is mandatory here and
+it orphans a sha anchored to your own un-pushed HEAD. Even there the check only
+ever LOOSENS as history moves: a sha that is not an ancestor yet goes green once
+it is merged, prose unchanged, so a red is a prompt to re-measure and not a latch.
+It is deliberately NOT a general
+stale-count detector, and that is measured rather than conceded: three wider
+triggers were run over the tree and every one is red on arrival against prose
+that is perfectly correct — spelled-out numbers beside a counting noun (36 hits,
+almost none of them measurements), digits beside one (which matches a CARD
+number), and every backticked hex token (which matches PNG/JPEG/PDF magic bytes,
+and commits a design doc quotes precisely BECAUSE a rebase orphaned them). The
+anchor idiom separates those by itself, with no exclusion list. Deriving the
+count instead was priced, not waved off: walking all 123 commits of one window,
+the count in question moved at six of them — one real landing in ten — so that
+shape turns an unrelated card's docstring edit into a red suite in a hot file.
+The gate needs real history, so `lint-and-unit` checks out with `fetch-depth: 0`;
+on a depth-1 clone not one anchor in this repo resolves, and a second test reads
+the workflow as TEXT — no git — so a shallow checkout cannot silence both.
+
 **And the sweep that HUNTS stale figures must not be LINE-FED — but do not
 "fix" that by writing a cleverer grep: which lever reaches a wrapped figure
 depends on WHICH grep, and the two on this machine need OPPOSITE ones.** Test

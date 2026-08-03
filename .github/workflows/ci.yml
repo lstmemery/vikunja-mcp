@@ -8,6 +8,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # вся история — её требует tests/unit/test_measured_figure_anchors.py: он
+          # резолвит каждый sha-якорь, которым проза подписывает замер, а в дефолтном
+          # depth-1 чекауте не резолвится НИ ОДИН (замерено), и гейт молча скипается.
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v5
       # --locked: падаем громко, если uv.lock разъехался с pyproject (без флага
       # uv молча перепишет лок в раннере и job позеленеет, пряча drift).
