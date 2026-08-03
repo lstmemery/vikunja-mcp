@@ -2782,8 +2782,11 @@ def test_the_rulebook_routes_a_stuck_REVIEWER_to_the_only_door_that_is_open_to_i
     Design/Build and (as of this card) `return_task` refuses too — and in multi-identity the card
     isn't even theirs. Measured before the gate landed: `return_task` from Review passed with no
     refusal and walked reviewed work to Backlog, unassigned and labeled `blocked` (the journal and
-    any `reviewed` label survive — it is the STAGE and the assignment that are walked back, and
-    `next_task` stops offering the card). That was the rulebook's own "stuck?" advice quietly
+    any `reviewed` label SURVIVED it — it was the STAGE and the assignment that were walked back,
+    and `next_task` stops offering the card). #693 has since made `return_task` clear the verdict
+    on its way out, so re-running that measurement today leaves only the journal — the parenthesis
+    is kept in the past tense because it is what THIS card measured, not what the tool does now.
+    That was the rulebook's own "stuck?" advice quietly
     resetting the pipeline state it never mentioned.
 
     So the prose now names the reviewer's ONE channel — `review_task(verdict='needs_work')`, which
@@ -4872,9 +4875,16 @@ def test_the_implementer_RECEIVING_a_needs_work_report_is_told_it_may_be_a_QUEST
         f"got {parent}"
     )
     assert api2.stage_of(split["id"]) == "Backlog"
-    # the two Backlog branches are NOT label-symmetric, and the rulebook now says so: decompose
-    # CLEARS the verdict, return_task (below) adds to it. Both measured, both pinned, because
-    # side-by-side bullets invite the reader to assume the halves match.
+    # the two Backlog branches are told apart by WHICH label, never by how MANY: since #693 both
+    # CLEAR the verdict, so on THESE two routes both land carrying exactly one — `epic` here,
+    # `blocked` below. Only the VERDICT is cleared, so "exactly one" is a property of these two
+    # cards and not of the tools: a card also carrying `bug` keeps it and lands with two. This
+    # comment used to claim the opposite ("decompose CLEARS the verdict, return_task (below) adds
+    # to it" — quoted with its "(below)", since a sentence whose job is to record what the text
+    # used to say is the last place to paraphrase it), and that was true only while `return_task`
+    # kept a verdict it had no business keeping; the assert at the end of this function records
+    # the inversion in full. Both measured, both pinned, because side-by-side bullets invite the
+    # reader to assume the halves match.
     assert [lb["title"] for lb in api2.tasks[split["id"]]["labels"]] == ["epic"], (
         "the split branch no longer leaves the parent carrying `epic` alone. SKILL.md contrasts "
         "it with the external-block branch precisely on the labels — if that changed, the "

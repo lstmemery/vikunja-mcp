@@ -712,10 +712,13 @@ def test_decompose_clears_the_stale_verdict_off_the_card_it_turns_into_an_epic(e
     uncommitted work.
 
     Out of this card's slice, measured on the same run and FILED as #693 rather than fixed here:
-    the same hanging verdict rides `return_task` (an approved card a human hand-pulled back to
-    Build then hit an external block lands in Backlog as `['reviewed', 'blocked']` — #626's
+    the same hanging verdict USED TO ride `return_task` (an approved card a human hand-pulled back
+    to Build then hit an external block LANDED in Backlog as `['reviewed', 'blocked']` — #626's
     'approved and blocked' shape, per the attribution measured above, NOT #590's) and `claim` (a
-    hand-parked verdict rides into Design, where the next `advance(to='build')` clears it)."""
+    hand-parked verdict RODE into Design, where the next `advance(to='build')` cleared it). #693
+    has since closed both, so that sentence is history rather than a live defect — it is kept in
+    the past tense because it is what this card MEASURED and filed. The standing rule now lives in
+    `_VERDICT_POLICY` below, graded per tool off the live tool surface."""
     api, wf, _t = env
 
     def _reviewer():
@@ -2502,26 +2505,61 @@ def test_every_agent_tool_is_graded_for_what_it_does_to_a_stale_verdict(env):
     with the assignee cleared -> `claim` left Design holding `reviewed`. Both are red-first for
     the rows below: with either call removed the matching row fails.
 
+    EVERY CLEARS ROW IS DRIVEN HERE, and that is #693's REWORK rather than its first shape. The
+    first version opened on the sentence above while driving only the two rows #693 itself added
+    (`return_task`, `claim`): removing BOTH of `advance`'s calls, or `decompose`'s one, left THIS
+    test GREEN — measured, 1 passed both times — and only the neighbouring #119/#673 tests
+    reddened, 4 of them for `advance` and 1 for `decompose`. Those two rows were graded but
+    UNEXERCISED, which is the "guard oversold" this repo refuses: a reader who deletes a call
+    BECAUSE the grid claims to hold the rule has to see the grid go red. `advance` needs BOTH of
+    its forms driven rather than one, and that is MEASURED rather than reasoned: with only the
+    to='build' half of route 3 present, dropping the to='review' call leaves THIS test green
+    (1 passed) — the same oversell in miniature. Both halves are driven, so both removals redden.
+
+    Driving them here does NOT retire the #119/#673 tests and is not meant to. The counts below
+    (5 catchers for `advance`, 2 for `decompose`, against 1 each if this test stood alone) are
+    OVERLAP, and overlap alone is not a measure of what those tests add. What they add is ROUTES:
+    they reach the same call sites through the needs_work cycle, the manual-bounce route and the
+    first-submit no-op, none of which this test walks. Two of the five also assert strictly more
+    than a label — `test_manual_bounce_of_approved_card_clears_reviewed_on_resubmit` checks the
+    card stops being OFFERED for review — but two others assert labels ONLY, so "they assert more"
+    would be the wrong reason to keep them. The routes are the reason.
+
     The KEEPS row is not a weaker CLEARS. It is asserted in the POSITIVE direction — the label
     must SURVIVE `call_human` — so a future edit that "tidies up" by clearing everywhere reddens
     this test rather than passing it. A grid whose exceptions are only ever unasserted is a list
     with extra steps.
 
-    NOT claimed here: that a CLEARS tool is REACHABLE from every stage carrying a verdict. Each
-    row drives the one route #693 measured, and the stage gates that decide the rest are pinned by
-    their own tests above. This test is about the label, never about the gate.
+    NOT claimed here, and the bound is deliberately narrow, because this is the sentence a reader
+    consults before deleting something. Every CLEARS row is driven, but one route per CALL SITE,
+    not per stage: five routes over four tools, since `advance` holds two calls and needs both.
+    It is NOT claimed that a CLEARS tool is REACHABLE from every stage carrying a verdict — the
+    stage gates that decide that are pinned by their own tests above. Nor is every ROW of the grid
+    driven: `review_task` (SETS) and the seven NO-MOVE rows are graded and never called here,
+    because what holds them is the COVERAGE sweep, not a route. This test is about the label,
+    never about the gate.
 
     MUTATION-CHECKED, selection `tests/unit/test_workflow_gates.py`, `__pycache__` deleted and then
     PYTHONDONTWRITEBYTECODE=1, every round restored from a byte copy and the final file confirmed
     sha256-identical to the pristine one. Each mutation is applied by a script that refuses to run
     unless its target matches EXACTLY ONCE — needed rather than tidy, because
-    `self._clear_verdict_labels(task)` is not a unique string in this module (`advance` holds two
-    and `decompose` one), so a naive text mutation silently hits the wrong call site or none.
-    Control round: 0 failed.
+    `self._clear_verdict_labels(...)` is not a unique string in this module: FIVE call sites —
+    `advance` two, `claim`, `decompose` and `return_task` one each — so a naive text mutation
+    silently hits the wrong one or none. The rounds below therefore address a call site by LINE
+    and assert its content before touching it, and that content check is what fired on the
+    rework's first run: `claim`'s call passes `fresh`, not `task`, so a target written for
+    `(task)` did not match there. A multiplicity check alone would NOT have caught that — it is
+    the per-site content assertion that did.
+    Control round: 0 failed. Every round OF THIS SWEEP fails THIS test; the number given is the
+    selection's total, larger where a #119/#673 test catches the same mutation too.
       * drop ONLY the new call in `return_task` -> 1 failed, on the `['blocked']` assert
       * drop ONLY the new call in `claim` -> 1 failed, on the Design assert
-      * drop BOTH -> 1 failed (one test carries all three rows, so the count does not add up
-        across rounds — the row that fails first is what changes, not how many tests do)
+      * drop BOTH -> 1 failed (one test carries every CLEARS row and the KEEPS row, so counts do
+        not add up across rounds — what changes is which row fails first, not how many tests do)
+      * drop ONLY `advance`'s to='build' call -> 2 failed; ONLY its to='review' call -> 4; BOTH
+        -> 5. Before the rework that two-call round was 4 failed WITHOUT this test among them
+      * drop `decompose`'s call -> 2 failed. Before the rework: 1 failed, without this test
+      * drop all four CLEARS tools at once -> 6 failed
       * the OTHER direction, because a grid whose exceptions never fire is a list with extra
         steps: add `_clear_verdict_labels` to `call_human` too -> 1 failed, on the KEEPS assert
     Only the CALL is removed in each round, never the comment above it: mutating prose would
@@ -2559,6 +2597,37 @@ def test_every_agent_tool_is_graded_for_what_it_does_to_a_stale_verdict(env):
     wf.claim(other["id"])
     assert api.stage_of(other["id"]) == "Design"
     assert _label_titles(api, other["id"]) == [], "claim walked a stale verdict into Design"
+
+    # CLEARS, route 3 — `advance`, and BOTH of its forms, because one row covers two call sites:
+    # driving only to='build' leaves the removal of the to='review' call green here (measured, 1
+    # passed) — the same oversell in miniature. These are #119's routes, driven here so the row is
+    # not decoration in the grid that claims to hold the rule.
+    back = api.add_task("hand-dragged back", "Design", assignee=api.me_user)
+    api.tasks[back["id"]]["labels"].append({"id": 904, "title": "reviewed"})
+    wf.advance(back["id"], to="build", spec="доделать по замечаниям")
+    assert api.stage_of(back["id"]) == "Build"
+    assert _label_titles(api, back["id"]) == [], (
+        "advance(to='build') walked a stale verdict into Build — a human can hand-drag an "
+        "APPROVED card back here, and `reviewed` must not survive the re-entry"
+    )
+    api.tasks[back["id"]]["labels"].append({"id": 905, "title": "review-failed"})
+    wf.advance(back["id"], to="review", worklog="доделал", evidence="deadbeef")
+    assert api.stage_of(back["id"]) == "Review"
+    assert _label_titles(api, back["id"]) == [], (
+        "advance(to='review') resubmitted with a stale verdict still standing — the resubmit is "
+        "what invalidates the previous review, so the label cannot ride along into the new one"
+    )
+
+    # CLEARS, route 4 — `decompose`: the card stops being work at all and becomes a container.
+    # #673's route, driven here for the same reason as route 3.
+    big = api.add_task("слишком крупная задача", "Build", assignee=api.me_user)
+    api.tasks[big["id"]]["labels"].append({"id": 906, "title": "review-failed"})
+    wf.decompose(big["id"], [{"title": "часть A"}, {"title": "часть B"}])
+    assert api.stage_of(big["id"]) == "Backlog"
+    assert _label_titles(api, big["id"]) == ["epic"], (
+        "decompose left a stale verdict beside `epic` — the parent is a container now, and a "
+        "verdict on a container is a claim about code it no longer holds"
+    )
 
     # KEEPS — asserted positively, so "clear everywhere" cannot pass by accident.
     parked = api.add_task("in flight", "Build", assignee=api.me_user)

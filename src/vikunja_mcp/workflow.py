@@ -1729,9 +1729,9 @@ class Workflow:
             raise WorkflowError(
                 "return_task is not available from Done: a human accepted this card, and walking "
                 "accepted work back out to Backlog is the human's call too — the Done transition "
-                "is human-only in BOTH directions. It would also unassign the card and stack "
-                "`blocked` on top of `reviewed`, so the board would claim 'approved' and 'blocked' "
-                "at once. If Done work needs redoing, file_task a follow-up card "
+                "is human-only in BOTH directions. It would also unassign the card and CLEAR the "
+                "`reviewed` label on the way out, so the human's acceptance would vanish from the "
+                "board altogether. If Done work needs redoing, file_task a follow-up card "
                 "(related_task_id=<this task>) for a human to triage — call_human refuses from "
                 "Done as well; a human can also move this card back themselves."
             )
@@ -1740,12 +1740,15 @@ class Workflow:
         # #693: the card LEAVES the pipeline unassigned, so any prior verdict has stopped
         # describing it — same reason `decompose` clears on its way out (#673). Measured before
         # the call was added: approve -> a human hand-drags the approved card back to Build ->
-        # return_task left Backlog holding `['blocked', 'reviewed']` at once. That pair is the
-        # end state the Done refusal three blocks up REFUSES in so many words ("the board would
-        # claim 'approved' and 'blocked' at once") — reachable here from an OPEN stage, where
-        # `return_task` is legitimate and there is nothing to gate. `review-failed` + `blocked`
-        # is the weaker form of the same shape and goes with it: both are stale once the card is
-        # ownerless in Backlog awaiting a human's re-triage.
+        # return_task left Backlog holding `['blocked', 'reviewed']` at once — the 'approved AND
+        # blocked' pair #626 measured coming out of Done, reachable here from an OPEN stage, where
+        # `return_task` is legitimate and there is nothing to gate. This call is ALSO why the Done
+        # refusal three blocks up no longer names that pair as its counterfactual: with the verdict
+        # cleared first, walking a Done card out would ERASE the acceptance rather than contradict
+        # it, so the refusal now says that instead — measured, `['blocked']` alone with the Done
+        # gate lifted. `review-failed` + `blocked` is the weaker form of the same shape and goes
+        # with it: both are stale once the card is ownerless in Backlog awaiting a human's
+        # re-triage.
         self._clear_verdict_labels(task)
         label = self.api.get_or_create_label(LABEL_BLOCKED)
         self.api.add_label(task_id, label["id"])
