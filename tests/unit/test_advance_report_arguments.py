@@ -48,7 +48,11 @@ catching — and this paragraph WAS the instance. It used to say that two tests 
 killed by any round, and cannot be by mutating this repo ... which no edit to our source
 changes". The first half holds; the second was FALSE, and review disproved it by construction.
 Round 4, selection = exactly test_a_dropped_optional_argument_reaches_the_tool_body_as_none
-and test_a_misspelled_parameter_name_is_dropped_in_silence: control 0 failed; `advance`'s
+and the misspelling test — which VMCP-192 (720) has since RENAMED to
+`test_a_misspelled_parameter_name_is_now_refused_BY_NAME`, because that card closed the class
+this round measured. The rounds below are history and are kept at the tree they were taken on;
+do not re-read them as describing today's behaviour, where an unknown key is refused at the
+boundary rather than dropped. Control 0 failed; `advance`'s
 signature in server.py written as `worklog: str = ""` -> 2 failed, BOTH of them; written as
 `worklog: object | None` -> 1 failed, the misspelled one; control after restore 0 failed. The
 surviving half was re-measured in that round rather than inherited: all EIGHT mutations of
@@ -72,6 +76,7 @@ why it is deliberate — it is also where the old claim contradicted itself, sin
 stated that a REQUIRED `worklog` would change this very behaviour.
 """
 import asyncio
+import io
 import json
 import os
 import pathlib
@@ -342,24 +347,102 @@ def test_docs_quote_the_state_phrase_the_tool_actually_emits(surface):
     assert "comment(" in text and "[worklog]" in text
 
 
-def test_a_misspelled_parameter_name_is_dropped_in_silence():
-    """The cause the first investigation missed, and — of the ones still standing once an agent
-    is sure it DID pass a long value — the only one it can fix itself (the count used to be
-    written as "one of three", which went stale the moment an explicit null was named as a
-    fourth arrival that looks identical): an unknown key is discarded without a word, so
-    `wroklog=<7 KB>` produces the exact
-    refusal a lost argument does. Unlike a wrong TYPE, which pydantic rejects loudly by name.
-    That is why the refusal text tells agents to check the spelling FIRST."""
+def test_a_misspelled_parameter_name_is_now_refused_BY_NAME():
+    """VMCP-192 (720) closed the class this test used to CHARACTERIZE, and the inversion is the
+    deliverable — so the history stays rather than being tidied away.
+
+    WHAT IT PINNED BEFORE: an unknown key was discarded without a word, so `wroklog=<7 KB>`
+    produced the exact refusal a lost argument does — byte-identical, measured, to omitting the
+    key and to passing `worklog=None`. The agent was told to write a report it had already
+    written. A wrong TYPE, by contrast, was always rejected loudly and by name, which is what
+    made the silence look like a policy rather than a gap.
+
+    WHAT IT PINS NOW: `_forbid_unknown_tool_arguments` turns every one of the 12 tools' argument
+    models to `extra="forbid"` after registration, so the same call is refused at the boundary
+    and the refusal NAMES `wroklog`. The wrong-TYPE row stays, unchanged, as the control it
+    always was — if both rows ever passed again the gate would be off.
+
+    Why this is worth doing at all when a LOST argument arrives the same way: #657 measured that
+    the loss is not ours (nothing truncates below 4-8 MiB in this server or its transport), while
+    the typo is entirely ours. Closing it shrinks an ambiguous class to the half nobody here can
+    control, which is the most a gate can do about it.
+
+    MUTATION-CHECKED for #720, selection `tests/unit/test_advance_report_arguments.py` plus
+    `tests/unit/test_server.py`, `__pycache__` deleted and then PYTHONDONTWRITEBYTECODE=1, each
+    round restored from a byte copy and the file confirmed sha256-identical; the script refuses
+    unless its target matches exactly once. Control round: 0 failed.
+      * drop the `_forbid_unknown_tool_arguments` call from `_server()` -> 2 failed, this test
+        and the all-12 sibling
+      * keep the call but drop the `tool.parameters = …` line -> 1 failed, the sibling's
+        ADVERTISED half alone. That is what says the two halves are separate facts rather than
+        one written twice
+      * keep the call but drop `model_rebuild(force=True)` -> 1 failed, THIS test alone: the
+        config key is set (so the sibling's `extra` half is green) while validation still lets
+        the misspelling through. A pin on `model_config` alone would have called that a pass
+    Three rounds, three different failure sets — the shape that says each assertion is load-
+    bearing on its own.
+    """
     typo, wrong_type = _drive_probe_server([
         ("advance", {"task_id": 657, "to": "review", "wroklog": "ц" * 7000,
                      "evidence": "a" * 40}),
         ("advance", {"task_id": 657, "to": "review", "worklog": 12345,
                      "evidence": "a" * 40}),
     ])
-    assert not typo[0], "an unknown key is accepted, not refused"
-    assert typo[1]["worklog_len"] == -1, "the misspelled value must arrive as None"
-    assert wrong_type[0], "a wrong TYPE, by contrast, is refused at the boundary"
+    assert typo[0], "an unknown key is accepted again — the extra='forbid' gate is off"
+    assert "wroklog" in str(typo[1]), (
+        f"the refusal must name the offending key, or it is no better than the old silence: "
+        f"{typo[1]}"
+    )
+    assert wrong_type[0], "a wrong TYPE, the control, is refused at the boundary as it always was"
     assert "worklog" in str(wrong_type[1])
+
+
+def test_every_tool_forbids_an_unknown_argument_and_publishes_that():
+    """The gate is global on purpose: `advance` is where it was measured, but a rule that held
+    for one tool would be forgotten by the thirteenth. Both halves are asserted, because they
+    are separate facts — `extra="forbid"` is what the server ENFORCES, `additionalProperties:
+    false` is what it ADVERTISES, and the published schema is frozen at registration, so
+    setting only the first would refuse calls the advertised schema still calls legal."""
+    from vikunja_mcp import server
+
+    tools = server._server()._tool_manager._tools
+    assert len(tools) == 12, f"the tool surface moved: {sorted(tools)}"
+    unforbidden = sorted(
+        name for name, tool in tools.items()
+        if tool.fn_metadata.arg_model.model_config.get("extra") != "forbid"
+    )
+    assert not unforbidden, f"these tools still accept unknown arguments silently: {unforbidden}"
+    unadvertised = sorted(
+        name for name, tool in tools.items()
+        if tool.parameters.get("additionalProperties") is not False
+    )
+    assert not unadvertised, (
+        f"these tools enforce the gate but do not publish it: {unadvertised} — a client reading "
+        "the schema would still believe an extra key is allowed"
+    )
+
+
+def test_the_forbid_gate_degrades_instead_of_killing_the_server():
+    """`_tool_manager` is private and `mcp` is pinned `>=2,<3` while the `stable` channel
+    re-resolves dependencies and ignores the lock — so a minor SDK release can move this handle.
+    When it does, the stdio server must still start: the old ambiguity is bad, a server that
+    refuses to boot for every consumer is worse. One line to stderr, never stdout (a byte there
+    corrupts the protocol), and no exception."""
+    from vikunja_mcp import server
+
+    class Broken:
+        @property
+        def _tool_manager(self):
+            raise AttributeError("the SDK moved this")
+
+    captured = io.StringIO()
+    stderr, sys.stderr = sys.stderr, captured
+    try:
+        server._forbid_unknown_tool_arguments(Broken())      # must not raise
+    finally:
+        sys.stderr = stderr
+    assert "could not forbid unknown tool arguments" in captured.getvalue()
+    assert "dropped silently" in captured.getvalue()
 
 
 def test_the_refusal_names_the_misspelling_cause(env):

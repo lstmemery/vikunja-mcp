@@ -59,7 +59,64 @@ def _server():
         _mcp_server = MCPServer("vikunja-tracker", version=__version__)
         for fn in _DEFERRED_TOOLS:
             _mcp_server.tool()(fn)
+        _forbid_unknown_tool_arguments(_mcp_server)
     return _mcp_server
+
+
+def _forbid_unknown_tool_arguments(server) -> None:
+    """Make a MISSPELLED parameter name a loud, named refusal instead of a silent drop (#720).
+
+    WHAT IS BROKEN WITHOUT THIS. Measured on the real `MCPServer` over real stdio with a raw
+    JSON-RPC client (so a key can be genuinely ABSENT rather than `None`):
+    `advance(to='review', wroklog=<7000 chars>, evidence=<40>)` came back `isError=False` with
+    "Review needs a report … worklog — arrived as null" — BYTE-IDENTICAL to the same call with
+    the key omitted and to one passing `worklog=None`. The 7 KB the agent wrote was dropped by
+    pydantic before the function ran, and the agent was told to write a report it had already
+    written. Contrast, from the same run: a wrong TYPE (`worklog=12345`) and a missing REQUIRED
+    key (`to`) are both caught loudly and BY NAME. Only an unknown key was silent.
+
+    That matters beyond one typo. A dropped key and a lost argument arrive identically, and #657
+    established the loss is NOT ours to fix (nothing truncates below 4-8 MiB anywhere in this
+    server or its transport) — but the typo IS ours, and closing it shrinks that ambiguous class
+    to the half we cannot control.
+
+    WHY HERE AND NOT IN `_tool`. Not a preference: the SDK calls `fn(**validated.model_dump…)`,
+    so pydantic discards the unknown key BEFORE the function body exists to see it. Measured —
+    inside the tool, `worklog` is simply None and `wroklog` leaves no trace at all. A decorator
+    cannot catch what never reaches it.
+
+    WHY BOTH LINES. `extra="forbid"` changes what the SERVER accepts; `tool.parameters` is the
+    schema the server PUBLISHES, and it is frozen at registration. Measured: before the mutation
+    the two agree exactly, after it they differ by the single key `additionalProperties: false`,
+    and the reassignment does reach `list_tools()`. Setting only the first would refuse calls
+    that the advertised schema still says are legal.
+
+    BEST-EFFORT BY DESIGN. `_tool_manager` is private and `mcp` is pinned `>=2,<3`, while the
+    `stable` channel re-resolves dependencies and ignores the lock — so a minor SDK release can
+    move this. A failure here degrades to the OLD behaviour (a silent drop) and writes one line
+    to stderr; it never raises, because a stdio server that refuses to start is worse for every
+    consumer than one that keeps the ambiguity. stderr only — a byte on stdout corrupts the
+    protocol. That the gate is actually ON is pinned by tests rather than assumed.
+    """
+    try:
+        tools = getattr(server._tool_manager, "_tools", None)
+        if not tools:
+            raise RuntimeError("no tool registry on the tool manager")
+        for tool in tools.values():
+            arg_model = tool.fn_metadata.arg_model
+            arg_model.model_config["extra"] = "forbid"
+            arg_model.model_rebuild(force=True)
+            tool.parameters = arg_model.model_json_schema()
+    except Exception as exc:                      # noqa: BLE001 — see BEST-EFFORT above
+        try:
+            print(
+                "vikunja-mcp: could not forbid unknown tool arguments "
+                f"({exc.__class__.__name__}: {exc}); a misspelled parameter name will be "
+                "dropped silently, as before #720",
+                file=sys.stderr,
+            )
+        except Exception:
+            pass
 
 
 def __getattr__(name: str):
