@@ -1824,7 +1824,17 @@ class Workflow:
                 # record the child the instant it exists on the board — BEFORE add_relation
                 # /_move — so a failure anywhere below still reports it. This is the retry-
                 # duplication boundary: once create_task returned, a naive re-run doubles it.
-                created.append({"id": child["id"], "title": child["title"]})
+                # `ref` alongside the id (#749), the same fix #735 made in `file_task`:
+                # `child` IS the create_task response and already carries `identifier`
+                # (measured on live 2.3.0 — a project with no prefix yields `#<index>`,
+                # byte-identical to a read-back), so this value was on hand and thrown
+                # away. SKILL.md forbids an agent to BUILD a ref: the per-project index
+                # follows from nothing about the global id, so a composed one does not
+                # look broken — it points at an unrelated LIVE card. Without this key the
+                # rulebook's own advice was a `get_task` per child, or a guess.
+                created.append(
+                    {"id": child["id"], "ref": self._ref(child), "title": child["title"]}
+                )
                 self.api.add_relation(child["id"], task_id, "parenttask")
                 self._move(child["id"], "Queue")
             # ordered chain (option C, epic #94): link adjacent children so each precedes the

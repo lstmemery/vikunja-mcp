@@ -2658,3 +2658,40 @@ def test_an_epic_container_is_exempt_from_the_root_cause_gate(env):
     t = _bug_in_build(api, wf, extra_labels=("epic",))
     wf.advance(t["id"], to="review", worklog="container", evidence="a" * 40)
     assert api.stage_of(t["id"]) == "Review"
+
+
+def test_decompose_hands_back_a_ref_for_every_child(env):
+    """VMCP-206 (749): the same key #735 added to `file_task`, on the sibling that lacked it.
+
+    Not cosmetic. SKILL.md tells agents to name a card human-readably and FORBIDS composing a
+    ref: the per-project index follows from nothing about the global id, so an invented one does
+    not look broken — it points at an unrelated LIVE card, which is a mistake this repo has
+    already shipped once. Until this change `decompose` was the one surface where the rulebook's
+    own advice cost a `get_task` per child, and the value was on hand the whole time: `child` is
+    the `create_task` response and already carries `identifier`.
+
+    Compared against `_ref` OF THE CARD AS THE BOARD HOLDS IT, not against a string this test
+    builds — a test that concatenates the expected ref itself would pass on a wrong prefix as
+    happily as on a right one.
+
+    MUTATION-CHECKED, selection `tests/unit/test_workflow_gates.py`, caches cleared and then
+    PYTHONDONTWRITEBYTECODE=1, restored from a byte copy. Control round: 0 failed.
+      * drop the `ref` key -> 1 failed
+      * keep the key but COMPOSE its value as `#<id>` -> 1 failed. That round is the point of
+        the third assertion: a pin that only asked "is there a ref" would call an invented one a
+        pass, and an invented ref is the failure mode — it resolves to a real, unrelated card
+    """
+    api, wf, task = env
+    res = wf.decompose(task["id"], [{"title": "one"}, {"title": "two"}])
+
+    assert [c["id"] for c in res["created"]], "decompose returned no children"
+    for child in res["created"]:
+        assert set(child) == {"id", "ref", "title"}, child
+        assert child["ref"] == Workflow._ref(api.get_task(child["id"])), (
+            f"child {child['id']} came back with ref {child['ref']!r}, which is not what the "
+            "board says its identifier is"
+        )
+        assert child["ref"].startswith("HGI-"), (
+            f"{child['ref']!r} is not the project-prefixed form — a bare '#<id>' here would mean "
+            "the identifier was lost and the fallback fired, which is the state 749 is about"
+        )
