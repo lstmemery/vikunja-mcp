@@ -972,18 +972,40 @@ def _inspect_status(path: Path) -> tuple[list[str], list[str]]:
     ignored `.venv/`, both grace markers stay byte-identical, while the same command WITHOUT
     `GIT_OPTIONAL_LOCKS=0` moves the index mtime.
 
-    BOTH HALVES GO BLIND UNDER ONE GIT SETTING, and it is not this function's to fix: with
-    `status.showUntrackedFiles = no` (config, any level) the command prints NEITHER `??` NOR `!!`
-    lines — measured, a tree holding an untracked `REAL-WORK.txt` and an ignored `shot-42.png`
-    returned the empty string, so the dirty guard passed and both files were destroyed. That is a
-    PRE-EXISTING hole in `dirty`, older than this function and merely inherited by the inventory
-    beside it; filed separately rather than fixed here, because forcing the setting (`-c
-    status.showUntrackedFiles=normal`) is a change to what the DIRTY GUARD refuses on, which is the
-    product decision this card was told not to take.
+    BOTH HALVES WENT BLIND UNDER ONE GIT SETTING, and VMCP-223 (766) closes it here with the
+    `-c status.showUntrackedFiles=normal` prefix below. With `status.showUntrackedFiles = no`
+    (config, ANY level — repo, global, system; a linked worktree shares `.git/config` with the
+    main checkout) the command prints NEITHER `??` NOR `!!` lines. Measured on a real bare origin
+    plus a real worktree, BEFORE the prefix: a tree holding an untracked-and-NOT-ignored
+    `REAL-WORK.txt` and an ignored `shot-766.png` returned the EMPTY STRING, the dirty guard
+    passed, `release_workspace` answered `{"released": true}` with no `code`, no `warning` and no
+    `removed_ignored` — and the file was gone. That is the module's own invariant ("push OK ->
+    remove, push FAIL -> KEEP … housekeeping is never how an agent's work disappears") failing
+    whole rather than at an edge, and `--gc` does it unattended, on every tick.
+
+    WHY THIS IS A FIX AND NOT THE PRODUCT DECISION 710 WAS TOLD TO LEAVE ALONE, because the two
+    look alike and the difference is the whole justification. The open question (VMCP-221, 764)
+    is whether `dirty` should be WIDENED to hold a tree for IGNORED files — today it deliberately
+    does not, and changing that has a price (a tree that passed every gate would be held by its
+    own `.venv`). That question is untouched here. This one is the opposite direction: the guard
+    already CLAIMS untracked-and-not-ignored, that claim is its entire reason to exist, and a
+    performance knob was silently taking it away. Restoring a claimed scope is not widening one.
+    Measured rather than argued: with the setting at its DEFAULT the prefix changes nothing —
+    same refusals, same entry counts, same `removed_ignored` — so no tree that used to be
+    released is held now. What changed is that the answer stopped depending on someone else's
+    config.
+
+    A per-invocation `-c` deliberately, never `git config`: the user's setting is not rewritten,
+    only what THIS inspection sees. Someone who set it for speed keeps it everywhere else, and a
+    CLEAN tree under that setting still releases normally (measured) — which is the objection
+    that ruled out refusing outright while the setting is in force.
     """
     dirty: list[str] = []
     ignored: list[str] = []
-    for line in _git_inspect("status", "--porcelain", "--ignored", cwd=path).splitlines():
+    for line in _git_inspect(
+        "-c", "status.showUntrackedFiles=normal",
+        "status", "--porcelain", "--ignored", cwd=path,
+    ).splitlines():
         if line.startswith("!! "):
             ignored.append(line[3:])
         else:

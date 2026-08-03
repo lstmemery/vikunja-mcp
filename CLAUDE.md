@@ -241,11 +241,16 @@ band is card #711, and the decision point is the `_HARD_LIMIT` assertion in that
   `git status --porcelain`, which does not report ignored paths at all,
   so a tree where everything is committed and pushed but `shot-<id>.png` or `.playwright-mcp/<id>/`
   sits on disk reads CLEAN and is destroyed with them. Untracked-but-NOT-ignored (`??`) the guard
-  does see and does hold on **at git's default `status.showUntrackedFiles`** — set it to `no` at any
-  config level and the SAME command emits neither `??` nor `!!` (measured: a tree holding an
-  untracked `REAL-WORK.txt` plus an ignored `shot-42.png` returned the empty string and was
-  destroyed whole), which is an older hole in `dirty` that the inventory merely inherits, filed
-  separately rather than closed here. Otherwise the hole is exactly the ignored ones — and it is
+  does see and does hold on, and since #766 that no longer depends on anyone's config. It used to:
+  `status.showUntrackedFiles = no` at ANY config level made the SAME command emit neither `??` nor
+  `!!` (measured on a real bare origin plus a real worktree — a tree holding an untracked
+  `REAL-WORK.txt` plus an ignored `shot-766.png` returned the empty string, `release_workspace`
+  answered `released: true` with no `code` and no `removed_ignored`, and the file was gone), so one
+  performance knob switched the whole guard off. `_inspect_status` now forces
+  `-c status.showUntrackedFiles=normal` on that single call. **That is a restoration, not the
+  widening question below** — the guard already claimed `??`, and measured at the default setting
+  the prefix changes no verdict, no entry count and no `removed_ignored`; a CLEAN tree still
+  releases under the knob, so nobody who set it deliberately is paralysed. Otherwise the hole is exactly the ignored ones — and it is
   this repo's own
   rulebook that puts them there, since SKILL.md's browser recipes write both INTO the agent's
   worktree. Closing it by widening the guard to `--porcelain --ignored` was measured and rejected:

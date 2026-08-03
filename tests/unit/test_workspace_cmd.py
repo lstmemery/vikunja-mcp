@@ -3528,3 +3528,80 @@ def test_gc_still_reaps_a_tree_that_holds_only_build_detritus(repo, tracker):
     assert "removed_ignored" not in res["released"][0]
     assert res["kept"] == [] and res["expected"] == []
     assert not path.exists()
+
+
+# --- VMCP-223 (766): one git setting used to switch the dirty guard off entirely ---------------
+
+def test_the_dirty_guard_survives_status_showUntrackedFiles_no(repo):
+    """A performance knob must not be able to destroy an agent's uncommitted work.
+
+    MEASURED before the fix, on this very fixture shape (real bare origin, real worktree):
+    with `git config status.showUntrackedFiles no`, `git status --porcelain --ignored` returned
+    the EMPTY STRING for a tree holding an untracked-and-NOT-ignored `REAL-WORK.txt` — neither
+    `??` nor `!!` lines survive that setting — so the dirty guard passed, `release_workspace`
+    answered `{"released": true}` with no `code`, no `warning`, no `removed_ignored`, and the
+    file was gone. That is this module's stated invariant failing whole: "push OK -> remove,
+    push FAIL -> KEEP … housekeeping is never how an agent's work disappears". `--gc` does it
+    unattended on every tick.
+
+    The setting is reachable from ANY config level and a linked worktree shares `.git/config`
+    with the main checkout, so an agent cannot rule it out by looking at its own tree.
+
+    This is NOT VMCP-221 (764), the open question of whether `dirty` should be WIDENED to hold a
+    tree for IGNORED files. The guard already claimed untracked-and-not-ignored; the knob was
+    taking that claim away. The sibling test below is the other half of the same fix.
+
+    MUTATION-CHECKED, selection `tests/unit/test_workspace_cmd.py`, `__pycache__` deleted and then
+    PYTHONDONTWRITEBYTECODE=1, each round restored from a byte copy and the file confirmed
+    sha256-identical; the script refuses unless the call matches exactly once. Control round:
+    0 failed.
+      * drop the `-c` prefix (the pre-#766 call) -> 2 failed, this test and the `removed_ignored`
+        sibling — i.e. the two halves the setting silenced, and nothing else
+      * a plausible HALF-fix — force the setting but lose `--ignored` -> 7 failed, which is what
+        says the two flags are not interchangeable: the override restores `??`, `--ignored`
+        restores `!!`, and #766 needed both
+    """
+    _git(repo, "config", "status.showUntrackedFiles", "no")
+    path = Path(ensure_workspace(766, cwd=repo)["path"])
+    (path / "REAL-WORK.txt").write_text("unsaved work\n")
+
+    assert _git(path, "status", "--porcelain", "--ignored") == "", (
+        "the premise of this test has evaporated: plain `git status` now sees the file under "
+        "showUntrackedFiles=no, so this fixture no longer reproduces what 766 measured"
+    )
+    res = release_workspace(766, cwd=repo)
+    assert res["released"] is False and res["code"] == workspace_cmd.CODE_DIRTY, res
+    assert (path / "REAL-WORK.txt").read_text() == "unsaved work\n"
+
+
+def test_removed_ignored_also_survives_status_showUntrackedFiles_no(repo):
+    """The same setting silenced `!!` too, so #710's post-mortem list went quiet with the guard.
+    A clean, fully-pushed tree still releases — the knob does not paralyse whoever set it — but
+    what it destroyed is named."""
+    _git(repo, "config", "status.showUntrackedFiles", "no")
+    path = Path(ensure_workspace(767, cwd=repo)["path"])
+    (repo / ".gitignore").write_text("shot-*.png\n")
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-m", "ignore shots")
+    _git(repo, "push", "origin", "main")
+    _git(path, "fetch", "origin")
+    _git(path, "rebase", "origin/main")
+    (path / "shot-767.png").write_text("PNG\n")
+
+    res = release_workspace(767, cwd=repo)
+    assert res["released"] is True, res
+    assert res.get("removed_ignored") == ["shot-767.png"], res
+
+
+def test_the_override_changes_nothing_at_the_default_setting(repo):
+    """The control for the two above, and the reason this is a fix rather than a scope change:
+    with the setting at its default the forced `-c` alters no verdict. Same tree, same code, same
+    refusal — so no tree that used to be released is held now."""
+    path = Path(ensure_workspace(768, cwd=repo)["path"])
+    (path / "REAL-WORK.txt").write_text("unsaved work\n")
+    res = release_workspace(768, cwd=repo)
+    assert res["released"] is False and res["code"] == workspace_cmd.CODE_DIRTY, res
+
+    clean = Path(ensure_workspace(769, cwd=repo)["path"])
+    assert release_workspace(769, cwd=repo)["released"] is True
+    assert not clean.exists()
