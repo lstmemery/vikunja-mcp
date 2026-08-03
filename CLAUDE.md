@@ -545,6 +545,73 @@ pushed with `GITHUB_TOKEN`, which by design does NOT re-trigger CI (plus
 `[skip ci]` as a second belt). So `stable` always tracks the latest green `main`,
 patch-bumped, hands-off.
 
+**The bump and its tag are ONE server transaction, and the flag is what makes that
+true** (tracker #723). They used to be two pushes in a row, so a refusal on the
+SECOND (network, 5xx, ref protection) left the bump on `main` with no tag — measured
+on the stand with a hook refusing only `refs/tags/*`: `tags = []` under
+`__version__ = "0.2.171"` at the tip, exit 1. That state does not heal. A re-run of
+the same job reads its own orphaned bump as "superseded" and exits GREEN having fixed
+nothing, and the next landing bumps to the patch AFTER it, so the skipped version
+never exists and `git branch -f stable vX.Y.Z` can never name it again. Both halves
+are now one `git push --atomic origin HEAD:refs/heads/main refs/tags/vX.Y.Z:…`, and
+the same input leaves the remote untouched. **"One command" and `--atomic` are not
+the same guard, and which one does the work depends on the SHAPE of the server's
+refusal** — measured on both hook kinds. A `pre-receive` is one hook per PUSH, so
+exiting non-zero refuses the whole batch with or without the flag, and bundling alone
+covers that input. An `update` hook is per REF — the shape a host's ref-protection
+takes — and a non-atomic batch then takes what it can, in BOTH directions. Refuse the
+TAG: `HEAD -> main` lands beside `! [remote rejected] v1 -> v1 (hook declined)`, i.e.
+this card's own "bump without tag" is reachable from a SINGLE command too, and only
+the flag stops it (same input, with it: `! [remote rejected] HEAD -> main (atomic push
+failure)`, `main` untouched). So "bump without tag needs two separate pushes" would be
+FALSE — it holds only for a whole-push refusal. **That input also came within one
+measurement of being SILENT, and closing it added the second layer**: run whole, the
+client reported failure, the recheck asked its first question, saw its own bump on
+`main`, printed `finishing the release`, moved the channel and exited **0** — bump and
+channel present, tag absent, job green, where even the pre-#723 shape went red under
+`set -eu`. So the recheck's one GREEN branch now also asks the remote where the tag is,
+instead of trusting that `--atomic` was honoured; the same input is red today
+(`the push was accepted NON-atomically`). Two layers, and they are not the same thing:
+`--atomic` stops the state from EXISTING, the tag check stops it from passing QUIETLY.
+An attack pass built the case that needs the second — a server that ADVERTISES atomic,
+takes the branch, drops the tag and lies — and before the check it went green with a
+tagless release, a hole the #723 fix would itself have opened by removing the separate
+tag push that used to re-establish it. Refuse `main` instead (non-ff while the
+tag name is free) and the non-atomic push
+creates the tag and rejects `main`. That orphan tag is strictly worse than the hole
+it replaces: the version at `main`'s tip never advanced, so every later job computes
+the SAME version and dies on `fatal: tag … already exists` — two consecutive
+landings run, both rc 128 (the pin keeps one), and the mechanism says every later one
+is the same — and the job that
+created it is GREEN, because the recheck honestly sees a supersession. **Atomicity is
+a SERVER capability, not a client flag**, and that dependency fails safe rather than
+silently: with `receive.advertiseAtomic=false` git refuses to push anything at all
+(`fatal: the receiving end does not support --atomic push`, rc 128, remote clean),
+which lands in the recheck's red branch — there is no quiet downgrade to a
+non-atomic push. GitHub advertises it, read two ways: the capability line at
+`https://github.com/<repo>.git/info/refs?service=git-receive-pack` (the same HTTPS
+`actions/checkout` pushes over) and a live `git push --atomic --dry-run` that cleared
+the client-side capability check. That second read went over SSH, so together they say
+"advertised on HTTPS" and "the client accepts it" — NOT "a full atomic push over HTTPS
+was exercised", which no stand for this repo can do. **`stable`
+is deliberately NOT in that bundle.** A third refspec is syntactically fine (same
+remote, no force anywhere since #737), but with the channel pointed by HAND off
+`main` — #737's named cost — a three-ref atomic push refuses EVERYTHING: `main` stays
+put and no tag is cut, so one channel anomaly would freeze versions entirely and on
+every following release. The residual half-state it buys instead — bump and tag
+landed, channel not moved — heals only in ONE of its two forms, and the two are worth
+keeping apart. When the channel is merely BEHIND (absent, or an ancestor of my bump)
+the next landing catches it up: re-measured on both forms, the next job exits 0, `git
+merge-base --is-ancestor <my bump> stable` returns 0 and BOTH tags are on the remote,
+so no version is skipped. When the channel was pointed by HAND off `main`, nothing
+heals it — ff-only refuses the next release too, and every one after that, until a
+human fixes it; that is #737's named cost, not a new one. Either way the refusal is
+loud and carries the fix command. What this does not
+touch: the pre-tag gate's four swallows (#740), and the local `git branch -f stable
+HEAD`, which is not a push at all — no remote sees it, and it can only fail locally
+(the stand got it two ways: an unwritable ref, and `stable` checked out in some
+worktree, which git refuses before writing anything — rc 128, loud under `set -eu`).
+
 **The release belongs to the TIP of `main`; a superseded landing skips, green**
 (tracker #716). `actions/checkout@v4` holds each job at its OWN trigger sha, so
 two landings close enough together leave BOTH checkouts on the same version base
@@ -559,7 +626,8 @@ the run was created: the loser's `integration` job sat unstarted for five minute
 the two `release` jobs never overlapped at all, the winner's running
 15:40:34–15:40:44Z and the loser's 15:41:58–15:42:04Z, which is why the loser saw
 the tag already on the remote at checkout. So `scripts/release.sh` asks, before
-`git tag` and again after a rejected `git push origin HEAD:main`: is `main`'s tip
+`git tag` and again after that rejected push (`git push --atomic origin
+HEAD:refs/heads/main refs/tags/vX.Y.Z:…` since #723): is `main`'s tip
 a DIFFERENT commit that CONTAINS `$GITHUB_SHA`? If yes, a newer landing is already
 on top, so the job prints a notice and exits 0 — and the notice says only that,
 never who will release the tip. Round 1's notice promised "releasing it is that
@@ -580,10 +648,18 @@ tag and moved no `stable`, with no second actor, no human and no re-run involved
 Constructed on the stand with a shim that performs the push and then reports the
 hangup: round 1 gave `rc=0 tags=[] stable=none`, round 2 gives `rc=0 tag=v0.2.171
 stable=<the bump>`. So the recheck now asks in three steps. My HEAD IS the tip →
-the push landed, finish the release (tag, then `stable`). My HEAD is ON `main` but
-something NEWER sits on top → LOUD, exit 1: the tag never reached the remote, so a
-tag-less half-release stays as
-red as it was before any guard existed (#723's class). Only then, my HEAD is not on
+the push landed, and since #723 the tag landed WITH it, so all that is left is
+`stable`. My HEAD is ON `main` but something NEWER sits on top → LOUD, exit 1 —
+and the REASON has been rewritten twice, each time because it went false. #737
+killed the first ("a force-push would roll the channel back": there is no `-f` on
+the channel any more), #723 killed the second ("the tag never reached the remote":
+under `--atomic` it did, and the log line that said `tag … NOT pushed` was lying).
+What survives is the repo's standing rule — sound beats silence: the channel is
+unmoved, so the release is not fully assembled. Finishing it from there (while the channel has not passed my bump, fast-forwarding
+`stable` onto it is a legal FORWARD move even with a newer tip on `main`; once it has,
+the channel's own gradation says so) is deliberately NOT done: it would turn red into green on a state where
+the script cannot know who will release the tip, which is the very prediction the
+skip notice refuses to make. Only then, my HEAD is not on
 `main` at all → the supersession question, whose "no" is exit 1.
 
 Everything else proceeds exactly as it did before the guard — with qualifications
@@ -605,15 +681,18 @@ TIP has no sibling by definition": measured with a standing push denial and a
 landing inside every job's window, a series of five gave FOUR green swallows and ONE
 red — the last. So the surviving signal is one red per SERIES, not one per job.
 **(2) The pre-tag gate, as a CLASS**: any half-assembled state plus a RE-RUN is a
-green skip. A job that left its own bump as the tip — killed between pushes, or with
-the TAG push landing while the client reported failure (the same hangup this card
-fixes, one push later) — re-runs, reads the tip as "superseded" by its own orphan,
+green skip. A job that left its own bump as the tip — killed between the atomic push
+and the channel push, or between that and the local `git branch -f`, which can fail
+too — re-runs, reads the tip as "superseded" by its own orphan,
 and goes green. THAT job's first run is loud and only a hand `gh run rerun` silences
 it — but the qualifier rests on the tip being the job's OWN bump, and must not be
 read as "a half-state is always loud first": a DIFFERENT landing under the same
 half-state is swallowed on its first run, which is (4). Round
-1 described this narrower than it is ("without ever cutting the tag"): when the
-hangup hits the tag push, the tag IS on the remote and what is lost is `stable`.
+1 described the class narrower than it is ("without ever cutting the tag"), and #723
+narrowed the class itself rather than the description: with bump and tag indivisible,
+the ONLY shape this script can leave is "bump AND tag on the remote, `stable` not
+moved" — "bump without tag" is no longer constructible from it, as long as the server
+honours `atomic`.
 The landed question does not rescue a re-run, and should not — a re-run commits its
 OWN bump (fresh committer date, different sha), so "did MY push land?" is honestly
 no. Before the guard the re-run was red (`fatal: tag … already exists`), which fixed
@@ -636,14 +715,19 @@ died. One hangup swallows as many landings as it buried: two, measured on three
 commits. And this one the guard INTRODUCED rather than inherited — on identical
 input the pre-716 inline gives `! [rejected] … (non-fast-forward)` and exit 1, round
 1 gives rc=0 and round 2 still gives rc=0. Pinned by
-`test_a_foreign_orphan_bump_swallows_an_earlier_landing`, tracked as #740.
+`test_a_foreign_orphan_bump_swallows_an_earlier_landing`, tracked as #740. #723
+rebuilt that pin's CONSTRUCTION without touching the property: the orphan used to be
+made by refusing the TAG push, which no longer leaves a bump behind at all, so it is
+now made by refusing the CHANNEL push. Fewer routes reach a foreign orphaned bump;
+the class is not closed — a refused (or unreadable) channel, a failed local `git branch
+-f`, and a runner killed between the two pushes all still get there.
 
 What that does NOT change is what reaches consumers ON THE SUPERSEDED PATH — and
 the scope of that sentence matters, because on the landed-but-reported-failure path
 above the fix deliberately pushes MORE than the pre-fix step did. Measured on a
 bare-repo stand, the pre-fix superseded job dies at `git tag` when the sibling
 already took the name and at `! [rejected] HEAD -> main (non-fast-forward)` when it
-did not — and `git tag` sits BEFORE all four pushes, so in both cases the remote's
+did not — and `git tag` sits BEFORE every push, so in both cases the remote's
 `main`, tags and `stable` are unchanged before and after; there, and only there,
 just the job's CONCLUSION moves, from a false red to a green no-op. Two readings
 follow. N rapid landings can share ONE patch bump (already true before the fix),

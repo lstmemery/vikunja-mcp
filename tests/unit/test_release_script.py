@@ -39,7 +39,8 @@ DECISION_LINE = '    [ "$tip" != "$GITHUB_SHA" ] && git merge-base --is-ancestor
 # ПЕРВЫЙ вопрос перепроверки — «а не приземлился ли мой push?» — двумя ветвями: «я всё
 # ещё вершина» и «уехало, но поверх легло новее». Мутация гасит ОБЕ, и получается ровно
 # круг 1 этой карточки: вопрос не задан, приземлившийся собственный bump читается как
-# «меня накрыли», job зеленеет без тега и без stable (tracker #716).
+# «меня накрыли», job зеленеет без сдвига канала (tracker #716). С #723 тег при этом на
+# remote ЕСТЬ — он уехал атомарно с bump'ом; круг 1 #716 терял здесь и его.
 LANDED_LINES = (
     '    if [ "$tip" = "$head" ]; then\n',
     '    elif git merge-base --is-ancestor "$head" "$tip"; then\n',
@@ -55,6 +56,31 @@ STABLE_PUSH_LINE = (
 FORCED_STABLE_PUSH_LINE = (
     'if ! git push -f origin "refs/heads/${STABLE_BRANCH}:refs/heads/${STABLE_BRANCH}"; then\n'
 )
+
+# `--atomic` на ПЕРВОМ push'е: bump и его тег едут ОДНОЙ серверной транзакцией (#723).
+# Мутация снимает ТОЛЬКО флаг, оставляя оба рефспека в одной команде, — то есть строит
+# ровно ту «дешёвую» замену, которую легко принять за эквивалент, и обязана вернуть два
+# РАЗНЫХ измеренных дефекта: полу-состояние «bump без тега» и тег-сироту.
+ATOMIC_PUSH_LINE = 'if ! git push --atomic origin "HEAD:refs/heads/${MAIN_BRANCH}" \\\n'
+UNATOMIC_PUSH_LINE = 'if ! git push origin "HEAD:refs/heads/${MAIN_BRANCH}" \\\n'
+
+# ...а ЭТА мутация возвращает ФОРМУ до #723 целиком: main отдельным push'ем, тег — вторым,
+# ПОСЛЕ него. Две мутации нужны потому, что защита двусоставная, и какая половина работает —
+# зависит ОТ ФОРМЫ ОТКАЗА СЕРВЕРА, что измерено на двух видах хуков:
+#   `pre-receive` (ОДИН на push) отвергает пачку ЦЕЛИКОМ и без всякого `--atomic` — на таком
+#   входе достаточно уже того, что рефспека два в одной команде;
+#   `update` (ПО РЕФУ — это и есть форма ref-protection у хостингов) отвергает ровно свой
+#   реф, и неатомарная пачка тогда берёт что может: main уезжает, тег отвергнут, то есть
+#   «bump без тега» строится и ОДНОЙ командой. Здесь несущий уже флаг.
+# Ровно поэтому «строится только раздельными push'ами» было бы ложью, и ровно поэтому мутация
+# «снять только флаг» проверяется на `update`-хуке, а не на `pre-receive`.
+ATOMIC_PUSH_BLOCK = (
+    'if ! git push --atomic origin "HEAD:refs/heads/${MAIN_BRANCH}" \\\n'
+    '        "refs/tags/${VERSION}:refs/tags/${VERSION}"; then\n'
+)
+SEPARATE_MAIN_PUSH = 'if ! git push origin "HEAD:refs/heads/${MAIN_BRANCH}"; then\n'
+STABLE_LOCAL_MOVE = 'git branch -f "${STABLE_BRANCH}" HEAD'
+SEPARATE_TAG_PUSH = 'git push origin "refs/tags/${VERSION}:refs/tags/${VERSION}"\n'
 
 
 def _env() -> dict[str, str]:
@@ -104,6 +130,28 @@ def _release_sh_without_the_landed_question() -> str:
         )
         text = text.replace(line, dead)
     return text
+
+
+def _release_sh_without_atomic() -> str:
+    """Поведение ДО #723 по РЕЗУЛЬТАТУ: два рефа в одном push'е, но без атомарности."""
+    text = RELEASE_SH.read_text()
+    assert text.count(ATOMIC_PUSH_LINE) == 1, (
+        "атомарный push не найден дословно ровно один раз в scripts/release.sh — мутация "
+        "ничего не снимет, и тест мутации станет тавтологией"
+    )
+    return text.replace(ATOMIC_PUSH_LINE, UNATOMIC_PUSH_LINE)
+
+
+def _release_sh_with_a_separate_tag_push() -> str:
+    """Форма ДО #723: main одним push'ем, тег — вторым, уже после победы."""
+    text = RELEASE_SH.read_text()
+    for needle in (ATOMIC_PUSH_BLOCK, STABLE_LOCAL_MOVE):
+        assert text.count(needle) == 1, (
+            f"{needle!r} не найдено дословно ровно один раз в scripts/release.sh — мутация "
+            "ничего не снимет, и тест мутации станет тавтологией"
+        )
+    text = text.replace(ATOMIC_PUSH_BLOCK, SEPARATE_MAIN_PUSH)
+    return text.replace(STABLE_LOCAL_MOVE, SEPARATE_TAG_PUSH + STABLE_LOCAL_MOVE)
 
 
 def _release_sh_with_a_forced_stable_push() -> str:
@@ -195,6 +243,81 @@ def stand(tmp_path: Path):
             )
             (bin_dir / "git").chmod(0o755)
             return bin_dir
+
+        def shim_push_drops_the_tag_and_lies(self) -> Path:
+            """PATH-шим: сервер, который atomic ОБЪЯВИЛ, но не соблюл.
+
+            Ветку берёт, рефспек ТЕГА выбрасывает, потом врёт клиенту отказом. Подделка тут
+            в одном — в том, что сервер нарушает собственный контракт; всё остальное
+            настоящее. Построено атакующим проходом #723: без проверки тега перепроверка на
+            этом входе уходит в ЗЕЛЁНОЕ с релизом без тега.
+            """
+            real = shutil.which("git")
+            assert real, "git не найден в PATH"
+            bin_dir = self.root / "shim-drop-tag"
+            bin_dir.mkdir()
+            (bin_dir / "git").write_text(
+                "#!/bin/sh\n"
+                'for a in "$@"; do\n'
+                "  case \"$a\" in HEAD:refs/heads/main)\n"
+                # пересобираем аргументы БЕЗ рефспека тега
+                '    set -- "$@"; args=""\n'
+                '    for x in "$@"; do\n'
+                '      case "$x" in refs/tags/*:refs/tags/*) continue;; esac\n'
+                '      args="$args \'$x\'"\n'
+                "    done\n"
+                f'    eval "\'{real}\' $args" >/dev/null 2>&1\n'
+                '    echo "fatal: the remote end hung up unexpectedly" >&2\n'
+                "    exit 1;;\n"
+                "  esac\n"
+                "done\n"
+                f'exec "{real}" "$@"\n'
+            )
+            (bin_dir / "git").chmod(0o755)
+            return bin_dir
+
+        def shim_sibling_lands_just_before_push(self) -> Path:
+            """PATH-шим: сиблинг приземляется в ОКНЕ между гейтом и push'ем в main.
+
+            Проигранная гонка БЕЗ единого хука: гейт перед `git tag` вершину ещё видел
+            своей, а к моменту push'а main уже ушёл вперёд. Отличие от
+            `shim_push_lands_but_fails` — тут ничего не подделывается вовсе: push
+            выполняется по-настоящему и по-настоящему отбивается сервером, поэтому видно,
+            какие рефы он успел взять, а какие нет.
+            """
+            real = shutil.which("git")
+            assert real, "git не найден в PATH"
+            bin_dir = self.root / "shim-race"
+            bin_dir.mkdir()
+            clone = self.root / "sib-mid-window"
+            _git(self.root, "clone", "-q", str(self.origin), str(clone))
+            land = bin_dir / "land"
+            land.write_text(
+                f"#!/bin/sh\nset -e\n"
+                f'"{real}" -C "{clone}" fetch -q origin\n'
+                f'"{real}" -C "{clone}" checkout -q -B main origin/main\n'
+                f'echo sib > "{clone}/note.txt"\n'
+                f'"{real}" -C "{clone}" add -A\n'
+                f'"{real}" -C "{clone}" commit -qm "task commit sib"\n'
+                f'"{real}" -C "{clone}" push -q origin HEAD:refs/heads/main\n'
+            )
+            land.chmod(0o755)
+            (bin_dir / "git").write_text(
+                "#!/bin/sh\n"
+                'for a in "$@"; do\n'
+                "  case \"$a\" in HEAD:refs/heads/main)\n"
+                f'    if [ ! -e "{bin_dir}/done" ]; then : > "{bin_dir}/done"; "{land}"; fi\n'
+                f'    exec "{real}" "$@";;\n'
+                "  esac\n"
+                "done\n"
+                f'exec "{real}" "$@"\n'
+            )
+            (bin_dir / "git").chmod(0o755)
+            return bin_dir
+
+        def disable_atomic_push(self) -> None:
+            """Сервер перестаёт advertise'ить возможность `atomic` (git ≥ 2.6)."""
+            _git(self.origin, "config", "receive.advertiseAtomic", "false")
 
         def shim_stable_push(self, *, action: str) -> Path:
             """PATH-шим на ПОСЛЕДНЕМ push'е релиза — том, что двигает канал.
@@ -425,7 +548,9 @@ def test_without_the_guard_the_tag_collision_comes_back(stand):
 
     assert done.returncode != 0
     assert f"fatal: tag '{NEXT_VERSION}' already exists" in done.stderr
-    # Даже падая, шаг ничего не пушит: `git tag` стоит ДО всех четырёх push'ей.
+    # Даже падая, шаг ничего не пушит: `git tag` стоит ДО ОБОИХ push'ей (их с #723 два —
+    # атомарный bump+тег и канал; счёт «четыре» из прежней редакции включал локальный
+    # `git branch -f`, который push'ем не является).
     assert (stand.remote_main(), stand.remote_tags(), stand.remote_stable()) == before
 
 
@@ -496,7 +621,8 @@ def test_a_landed_push_that_reported_failure_still_releases(stand):
     Ни второго актора, ни человека, ни второй попытки: я ВЕРШИНА, прогон один. Круг 1
     этой карточки задавал только ВТОРОЙ вопрос («меня накрыли?») — и получал «да», потому
     что накрыл его СОБСТВЕННЫЙ приземлившийся bump: тега нет, `stable` не двинулся, job
-    ЗЕЛЁНЫЙ. Здесь релиз обязан ДОЕХАТЬ: тег и `stable` ещё не пушились.
+    ЗЕЛЁНЫЙ. Здесь релиз обязан ДОЕХАТЬ: с #723 тег уехал ВМЕСТЕ с bump'ом (шим выполняет
+    push по-настоящему), поэтому доводить осталось ровно канал — что и проверяют ассерты.
     """
     work = stand.checkout("w", stand.c0)
     shim = stand.shim_push_lands_but_fails()
@@ -524,19 +650,62 @@ def test_without_the_landed_question_the_release_is_silently_lost(stand):
 
     assert done.returncode == 0, done.stdout + done.stderr
     assert "release skipped" in done.stdout          # молча решил, что накрыт
-    assert stand.remote_tags() == []                 # тега нет
     assert stand.remote_stable() is None             # канал не двинулся
     # ...при том что bump УЖЕ на main: состояние полу-собранное, а job зелёный.
     assert '"0.2.171"' in stand.remote_file("refs/heads/main", "src/vikunja_mcp/__init__.py")
+    # С #723 тег уехал ВМЕСТЕ с bump'ом (шим выполняет push по-настоящему), поэтому
+    # полу-собрано тут ровно одно — канал. До #723 в этой же точке не было и тега:
+    # состояние стало МЕНЬШЕ, а дефект — тот же, зелёный job без сдвига канала.
+    assert stand.remote_tags() == [NEXT_VERSION]
+
+
+def test_a_landed_push_without_its_tag_is_loud(stand):
+    """#723: зелёная ветка перепроверки не верит серверу на слово и про ТЕГ тоже.
+
+    Вход построил атакующий проход: сервер ОБЪЯВЛЯЕТ `atomic`, берёт ветку, роняет рефспек
+    тега и врёт клиенту отказом. Ветка «а не приземлилось ли?» — единственная, которая после
+    отбитого push'а идёт в ЗЕЛЁНОЕ, и раньше она спрашивала remote только про `main`: тег
+    считался взятым «раз атомарно». На этом входе получался rc 0 и релиз БЕЗ ТЕГА, то есть
+    ровно дыра #723 — причём внесённая её же починкой (до неё отдельный push тега тег
+    восстанавливал). Теперь ветка спрашивает и про тег, а «не смог спросить» — тоже красное.
+
+    Свип, выборка `tests/unit/test_release_script.py`, collected 31 во всех раундах,
+    возмущался МИР (`scripts/release.sh`), а не тело теста: control 0 failed; снять проверку
+    тега (`if false` вместо условия) 1 failed — ровно ЭТОТ тест. Он же — причина не читать
+    «`--atomic` избавляет от вопросов к remote»: избавляет от ВТОРОГО PUSH'А, не от проверки.
+    """
+    work = stand.checkout("w", stand.c0)
+    shim = stand.shim_push_drops_the_tag_and_lies()
+    done = stand.release_job(work, stand.c0, path_prefix=shim)
+
+    assert done.returncode != 0, done.stdout
+    assert "finishing the release" not in done.stdout
+    assert "NON-atomically" in done.stderr
+    my_bump = _git(work, "rev-parse", "HEAD").stdout.strip()
+    assert stand.remote_main() == my_bump          # ветку сервер взял...
+    assert stand.remote_tags() == []               # ...а тег нет, и это замечено
+    assert stand.remote_stable() is None           # канал не двинут, и job красный
 
 
 def test_a_landed_push_with_a_newer_tip_on_top_is_loud(stand):
     """Приземлилось, но поверх УЖЕ легло новее: ЗВУК ВАЖНЕЕ ТИШИНЫ (tracker #716).
 
-    Тега на remote нет, а тег без `stable` это половина релиза, — значит громко, ровно
-    как было ДО всякого гейта: отбитый push = красный job. Обоснование тут с #737 ДРУГОЕ:
-    прежнее «форс-push откатил бы канал назад» стало ложным, когда `-f` с канала убрали.
-    Класс полу-состояний — #723.
+    Обоснование красноты тут переписывалось ДВАЖДЫ, и оба раза потому, что становилось
+    ложным. #737 обнулил первое («форс-push откатил бы канал назад»): `-f` с канала убрали.
+    #723 обнулил второе («тега на remote нет»): bump и тег теперь уезжают ОДНОЙ
+    транзакцией, шим выполняет push по-настоящему — значит тег ЕСТЬ, и текст «tag NOT
+    pushed» стал бы враньём в логе job'а. Красным это остаётся по третьей, устойчивой
+    причине: канал не двинут, релиз собран не до конца.
+
+    Поэтому тест теперь пинит и НАБЛЮДАЕМОЕ состояние (тег на месте, канал нет), и то, что
+    сообщение об этом состоянии не врёт.
+
+    Что вторая половина — не украшение, показал отдельный раунд свипа: выборка
+    `tests/unit/test_release_script.py`, collected 31 во всех раундах, возмущался МИР
+    (`scripts/release.sh`), control 0 failed; вернуть в эту ветку прежний текст
+    «tag ${VERSION} NOT pushed» 1 failed — ровно ЭТОТ тест. Исход job'а мутация не меняет
+    вовсе (он красный и так), меняется только правдивость строки в логе — то есть без этого
+    ассерта проза устарела бы молча.
     """
     work = stand.checkout("w", stand.c0)
     shim = stand.shim_push_lands_but_fails(then_land_sibling=True)
@@ -544,8 +713,10 @@ def test_a_landed_push_with_a_newer_tip_on_top_is_loud(stand):
 
     assert done.returncode != 0, done.stdout
     assert "release skipped" not in done.stdout
-    assert "NOT pushed" in done.stderr
-    assert stand.remote_tags() == []
+    assert "stable NOT moved" in done.stderr
+    assert f"tag {NEXT_VERSION} pushed with it" in done.stderr
+    assert "NOT pushed" not in done.stderr.replace("stable NOT moved", "")
+    assert stand.remote_tags() == [NEXT_VERSION]
     assert stand.remote_stable() is None
     my_bump = _git(work, "rev-parse", "HEAD").stdout.strip()
     assert stand.remote_main() != my_bump
@@ -617,13 +788,23 @@ def test_a_stale_fetch_head_never_decides(stand):
     assert stand.remote_stable() == stand.remote_main()
 
 
-def test_a_refused_tag_push_is_loud(stand):
-    """Пинит `set -eu`: отказ на ВТОРОМ push'е обязан быть красным, а не тихим.
+def _refuse_tag_pushes_per_ref(stand) -> None:
+    """`update`-хук: отвергает РОВНО `refs/tags/*`, остальные рефы пачки проходят.
 
-    Полу-состояние (bump в `main`, тега нет, `stable` не двинулся) этот шаг умеет
-    оставлять и до, и после гейта — оно вынесено отдельной карточкой. Здесь пинится
-    ровно одно: что оно ГРОМКОЕ. Без `set -eu` тот же прогон отдаёт код 0.
+    Это форма, в которой отказывает ref-protection у хостинга, и единственная, на которой
+    видно работу `--atomic`: `pre-receive` (ниже) валит push целиком и без флага.
     """
+    hook = stand.origin / "hooks" / "update"
+    hook.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in refs/tags/*) echo "refused $1" >&2; exit 1;; esac\n'
+        "exit 0\n"
+    )
+    hook.chmod(0o755)
+
+
+def _refuse_tag_pushes_whole_push(stand) -> None:
+    """`pre-receive`-хук: увидев тег, отвергает ВСЮ пачку — так этот хук и устроен."""
     hook = stand.origin / "hooks" / "pre-receive"
     hook.write_text(
         "#!/bin/sh\n"
@@ -634,20 +815,220 @@ def test_a_refused_tag_push_is_loud(stand):
     )
     hook.chmod(0o755)
 
+
+def test_a_refused_tag_leaves_nothing_behind(stand):
+    """#723: отказ на теге больше не оставляет ПОЛУ-СОСТОЯНИЯ — ни bump'а, ни тега.
+
+    Раньше тег пушился ОТДЕЛЬНОЙ командой ПОСЛЕ успешного push'а в main, и отказ на ней
+    (сеть, 5xx, защита рефов) оставлял версию БЕЗ ТЕГА: измерено на этом же стенде —
+    `tags = []` при `__version__ = "0.2.171"` на вершине main, exit 1. Само это не
+    лечилось: перезапуск ТОГО ЖЕ job'а отвечал зелёным `release skipped` (предтеговой гейт
+    читает собственный осиротевший bump как «меня накрыли»), а следующее приземление
+    выпускало v0.2.172 — то есть пропущенная версия не появлялась НИКОГДА, и откатить на
+    неё канал было уже нечем.
+
+    Теперь bump и тег едут ОДНОЙ серверной транзакцией, поэтому тот же вход оставляет
+    remote нетронутым. Проверяется именно ЭТО (`main` == c0 и версия на вершине всё ещё
+    базовая), а не только красный код возврата: громким этот путь был и раньше.
+
+    Хук здесь ПО-РЕФОВЫЙ (`update`), а не `pre-receive`, и это не деталь стенда: он моделирует
+    ref-protection хостинга и он единственный, на котором видно работу `--atomic`. Соседний
+    test_with_a_separate_tag_push_the_half_state_comes_back берёт `pre-receive` ровно затем,
+    чтобы показать вторую половину защиты и её границу.
+
+    Свип, выборка `tests/unit/test_release_script.py`, collected 31 во всех раундах,
+    возмущался МИР (`scripts/release.sh`), а не тело теста: control 0 failed; снять ТОЛЬКО
+    `--atomic` 8 failed; вернуть форму до #723 (main отдельным push'ем, тег вторым, после)
+    8 failed. ЭТОТ тест среди упавших в ОБОИХ раундах и оба раза ПОВЕДЕНЧЕСКИ — то есть он
+    один держит обе половины защиты. Разбор состава каждого раунда — в докстрингах
+    соответствующих мутационных соседей.
+    """
+    _refuse_tag_pushes_per_ref(stand)
+
     work = stand.checkout("w", stand.c0)
     done = stand.release_job(work, stand.c0)
 
     assert done.returncode != 0, done.stdout
+    assert "release skipped" not in done.stdout
+    assert stand.remote_main() == stand.c0, "bump не должен был уехать без своего тега"
+    assert '"0.2.170"' in stand.remote_file("refs/heads/main", "src/vikunja_mcp/__init__.py")
     assert stand.remote_tags() == []
     assert stand.remote_stable() is None
+
+
+def test_without_atomic_the_refused_tag_bumps_main_anyway(stand):
+    """МУТАЦИЯ к предыдущему: снимаем ТОЛЬКО флаг — полу-состояние из карточки возвращается.
+
+    Оба рефспека остаются в ОДНОЙ команде, меняется ровно `--atomic`. На ПО-РЕФОВОМ отказе
+    этого достаточно: сервер берёт main и отвергает тег, и на remote снова «bump 0.2.171 без
+    тега» — та самая пропущенная навсегда версия, ради которой заведена #723. Значит работу
+    делает АТОМАРНОСТЬ, а не то, что рефспеки лежат рядом.
+
+    ЗАЧЕМ ТУТ ДВА СЛОЯ И ЧЕМ ОНИ РАЗНЫЕ. Отбой этой мутации ловит уже НЕ отсутствие состояния,
+    а проверка тега в ветке «а не приземлилось ли?» — job краснеет с «the push was accepted
+    NON-atomically». Промерено, что без ТОЙ проверки эта же мутация уходила в ЗЕЛЁНОЕ
+    (перепроверка видела свой bump на main, печатала `finishing the release`, двигала канал,
+    rc 0 — релиз без тега и без единого сигнала), и именно этот прогон её и завёл. Итог:
+    `--atomic` не даёт состоянию ВОЗНИКНУТЬ, проверка тега не даёт ему пройти ТИХО, и путать
+    их нельзя — здесь на remote полу-состояние ЕСТЬ (bump уехал), просто оно замечено.
+
+    Свип, выборка `tests/unit/test_release_script.py`, collected 31 во всех раундах,
+    возмущался МИР (`scripts/release.sh`): control 0 failed; снять ТОЛЬКО `--atomic` 8 failed;
+    снять проверку тега в зелёной ветке 2 failed, и ЭТОТ тест — один из двух (второй
+    `test_a_landed_push_without_its_tag_is_loud`), потому что он держит ИМЕННО второй слой.
+    Из восьми в первом раунде ПЯТЬ поведенческих — `test_a_refused_tag_leaves_nothing_behind`,
+    этот,
+    `test_a_lost_race_does_not_squat_the_version_name`,
+    `test_a_server_without_atomic_support_pushes_nothing` и ПОСТОРОННИЙ, ранее существовавший
+    пин `test_a_tip_that_does_not_contain_us_is_not_superseded` (вместе с
+    `test_without_the_guard_a_free_tag_name_does_not_help`, ловящим тег-сироту своим
+    `remote_tags() == []`). Остальные ТРИ — сработавшие гарды мутационных хелперов
+    (`assert 0 == 1`: якоря в файле уже нет, хелпер отказывается стать тавтологией);
+    убийствами они не являются, поэтому названы отдельно. Классификация не выведена из
+    названий — прогнана отдельным раундом и прочитана по тексту ассертов.
+    """
+    _refuse_tag_pushes_per_ref(stand)
+
+    work = stand.checkout("w", stand.c0, release_sh=_release_sh_without_atomic())
+    done = stand.release_job(work, stand.c0, path_prefix=None)
+
+    assert done.returncode != 0, done.stdout + done.stderr
+    assert "NON-atomically" in done.stderr            # поймал второй слой, а не первый
+    assert "finishing the release" not in done.stdout
+    assert stand.remote_main() != stand.c0            # ...но bump на remote УЖЕ уехал
     assert '"0.2.171"' in stand.remote_file("refs/heads/main", "src/vikunja_mcp/__init__.py")
+    assert stand.remote_tags() == []                  # версия v0.2.171 не появится НИКОГДА
+    assert stand.remote_stable() is None
+
+
+def test_with_a_separate_tag_push_the_half_state_comes_back(stand):
+    """ВТОРАЯ мутация: возвращаем ФОРМУ до #723 — тег отдельным push'ем ПОСЛЕ main.
+
+    Отличается от предыдущей и ВХОДОМ, и тем, что держит: хук здесь `pre-receive`, то есть
+    сервер отвергает пачку ЦЕЛИКОМ. На таком входе снятие одного лишь `--atomic` НИЧЕГО не
+    ломает (измерено: неатомарная пачка тоже не оставляет ничего — `pre-receive` по
+    устройству один на push, а не на реф), и мутация была бы зелёной. Полу-состояние тут
+    возвращает именно РАЗДЕЛЬНЫЙ push. Так и распределены две половины защиты: «одна
+    команда» покрывает отказ-целиком, `--atomic` — отказ по-рефовый.
+
+    Свип, выборка `tests/unit/test_release_script.py`, collected 31 во всех раундах,
+    возмущался МИР (`scripts/release.sh`): control 0 failed; вернуть форму до #723 8 failed.
+    Из восьми ПЯТЬ поведенческих (`test_a_refused_tag_leaves_nothing_behind`, ТРИ пина ветки
+    «приземлилось» — включая `test_a_landed_push_that_reported_failure_still_releases`, где
+    под этой мутацией тег к моменту перепроверки ещё не запушен, — и
+    `test_a_server_without_atomic_support_pushes_nothing`), ТРИ — гарды мутационных хелперов
+    на исчезнувший якорь.
+
+    Что мутация ПРИМЕНИЛАСЬ, а не промахнулась мимо изменившегося текста, гарантирует
+    `count == 1` в самом хелпере: свип это подтвердил с другой стороны — в раунде «снять
+    только `--atomic`» ЭТОТ тест падает не поведением, а как раз этим гардом
+    (`assert 0 == 1`, якоря в файле больше нет).
+    """
+    _refuse_tag_pushes_whole_push(stand)
+
+    work = stand.checkout("w", stand.c0, release_sh=_release_sh_with_a_separate_tag_push())
+    done = stand.release_job(work, stand.c0)
+
+    assert done.returncode != 0, done.stdout
+    assert stand.remote_main() != stand.c0
+    assert '"0.2.171"' in stand.remote_file("refs/heads/main", "src/vikunja_mcp/__init__.py")
+    assert stand.remote_tags() == []                 # версия v0.2.171 не появится НИКОГДА
+    assert stand.remote_stable() is None
+
+
+def test_a_lost_race_does_not_squat_the_version_name(stand):
+    """#723, ВТОРАЯ причина держать `--atomic`: проигранная гонка не оставляет тег-сироту.
+
+    Сиблинг приземляется в ОКНЕ между предтеговым гейтом и push'ем (шим, никаких хуков:
+    push настоящий и отбивается настоящим сервером). Исход по доске — обычный зелёный skip
+    «меня накрыли», и он тут не главное. Главное — что на remote НЕ ПОЯВИЛОСЬ имя версии.
+
+    Почему это отдельный тест, а не оговорка: тег-сироту (имя версии на коммите, которого
+    нет в main) следующее приземление НЕ ЛЕЧИТ, а упирается в него — версия на вершине main
+    так и осталась базовой, поэтому каждый следующий job считает ТУ ЖЕ версию и умирает на
+    `fatal: tag 'v0.2.171' already exists`. Измерено: два приземления подряд, оба rc=128,
+    релизы встали НАВСЕГДА. Это строго хуже пропущенной версии, ради которой карточку и
+    заводили, — поэтому «просто сложить два рефспека в один push» без `--atomic` было бы
+    не дешёвой заменой, а регрессией.
+
+    Свип этого раунда записан у мутационного соседа
+    (`test_without_atomic_the_refused_tag_is_swallowed_green`): выборка
+    `tests/unit/test_release_script.py`, collected 31 во всех раундах, control 0 failed;
+    снять ТОЛЬКО `--atomic` 8 failed, и ЭТОТ тест среди пяти поведенческих — падает на
+    `remote_tags() == []` с текстом «имя версии занято коммитом, которого нет в main».
+    """
+    work = stand.checkout("w", stand.c0)
+    shim = stand.shim_sibling_lands_just_before_push()
+    done = stand.release_job(work, stand.c0, path_prefix=shim)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "release skipped" in done.stdout
+    assert stand.remote_tags() == [], "имя версии занято коммитом, которого нет в main"
+    assert stand.remote_stable() is None
+
+
+def test_without_atomic_a_lost_race_squats_the_version_name(stand):
+    """МУТАЦИЯ к предыдущему: без `--atomic` тег-сирота появляется при ЗЕЛЁНОМ job'е.
+
+    Тот же стенд, тот же шим, единственная разница — снят флаг. Сервер берёт тег (он новый)
+    и отбивает main (он не-ff), перепроверка честно видит «меня накрыли» и выходит нулём:
+    job зелёный, а имя версии занято навсегда. Ровно этот зелёный и делает дефект опасным.
+    """
+    work = stand.checkout("w", stand.c0, release_sh=_release_sh_without_atomic())
+    shim = stand.shim_sibling_lands_just_before_push()
+    done = stand.release_job(work, stand.c0, path_prefix=shim)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "release skipped" in done.stdout
+    assert stand.remote_tags() == [NEXT_VERSION]
+    # ...и тег висит НЕ на вершине main: версия там осталась базовой.
+    assert '"0.2.170"' in stand.remote_file("refs/heads/main", "src/vikunja_mcp/__init__.py")
+
+    # И это КЛИН, а не разовая потеря: следующее приземление считает ТУ ЖЕ версию.
+    nxt = stand.land_sibling("nxt")
+    again = stand.release_job(
+        stand.checkout("nxt-job", nxt, release_sh=_release_sh_without_atomic()), nxt
+    )
+    assert again.returncode != 0
+    assert f"fatal: tag '{NEXT_VERSION}' already exists" in again.stderr
+
+
+def test_a_server_without_atomic_support_pushes_nothing(stand):
+    """Новая зависимость названа и запинена: атомарность — свойство СЕРВЕРА, не клиента.
+
+    `--atomic` требует, чтобы receive-pack advertise'ил соответствующую возможность. Важно
+    не то, что GitHub её advertise'ит (измерено двумя каналами — чтением
+    `info/refs?service=git-receive-pack` по HTTPS и `git push --atomic --dry-run`), а то,
+    что будет, ЕСЛИ перестанет: тихой деградации до неатомарного push'а не происходит —
+    клиент отказывается пушить вовсе (`fatal: the receiving end does not support --atomic
+    push`), remote остаётся нетронутым, и отказ попадает в красную ветку перепроверки.
+    То есть отказ этой зависимости — громкий и с ЧИСТЫМ состоянием.
+
+    Пин ПОВЕДЕНЧЕСКИЙ, а не текстовый, и это видно по свипу: выборка
+    `tests/unit/test_release_script.py`, collected 31 во всех раундах, возмущался МИР
+    (`scripts/release.sh`), control 0 failed; снять `--atomic` 8 failed, а вернуть
+    до-#723 форму 8 failed — ЭТОТ тест падает в ОБОИХ, и оба раза поведением
+    (`assert 0 != 0`: без флага push проходит, и никакого «does not support» в stderr нет),
+    а не проверкой строчки в файле.
+    """
+    stand.disable_atomic_push()
+
+    work = stand.checkout("w", stand.c0)
+    done = stand.release_job(work, stand.c0)
+
+    assert done.returncode != 0, done.stdout
+    assert "release skipped" not in done.stdout
+    assert "does not support --atomic push" in done.stderr
+    assert stand.remote_main() == stand.c0
+    assert stand.remote_tags() == []
+    assert stand.remote_stable() is None
 
 
 def test_a_foreign_orphan_bump_swallows_an_earlier_landing(stand):
     """ЧЕТВЁРТОЕ проглатывание, ПИН ИЗВЕСТНОГО ЗАЗОРА, а не желаемого (tracker #740).
 
-    Вершину main держит ЧУЖОЙ осиротевший bump: job сиблинга умер между push'ем main и
-    push'ем тега. Тогда БОЛЕЕ РАННЕЕ приземление, чей job запускается ПОСЛЕ, глотается
+    Вершину main держит ЧУЖОЙ осиротевший bump: job сиблинга умер на push'е КАНАЛА,
+    оставив свой bump (и свой тег) вершиной main. Тогда БОЛЕЕ РАННЕЕ приземление, чей job запускается ПОСЛЕ, глотается
     на своём ПЕРВОМ и ЕДИНСТВЕННОМ прогоне — перезапусков ноль, второго актора в его
     собственном пути нет.
 
@@ -671,25 +1052,35 @@ def test_a_foreign_orphan_bump_swallows_an_earlier_landing(stand):
     CLAUDE.md — иначе прозе поверят, а она устареет молча. Остальные четыре падения —
     отдельная находка для #740: наивный признак «вершина это bump» ЛОМАЕТ здоровый
     superseded-путь, потому что в его стендах вершина тоже bump. Признак нужен другой.
+
+    КОНСТРУКЦИЮ ПЕРЕСОБРАЛА #723, СВОЙСТВО НЕ ТРОГАЛА. Раньше сирота строилась отказом на
+    push'е ТЕГА: у сиблинга bump уезжал в main, а тег — нет. С атомарным push'ем такого
+    состояния больше не существует (отказ на теге не оставляет и bump'а), поэтому сирота
+    строится следующей точкой отказа — push'ем КАНАЛА. Меняется только ФОРМА полу-состояния
+    (тег сиблинга теперь на месте, не хватает ровно `stable`); проглатывание — вершина,
+    которая СОДЕРЖИТ мой sha и никем не будет выпущена, — на месте целиком. То есть #723
+    сузила МНОЖЕСТВО путей к чужому осиротевшему bump'у, но не закрыла КЛАСС: остаются
+    отказ канала и убитый между push'ями раннер.
     """
     hook = stand.origin / "hooks" / "pre-receive"
     hook.write_text(
         "#!/bin/sh\n"
         "while read -r old new ref; do\n"
-        '  case "$ref" in refs/tags/*) echo "refused $ref" >&2; exit 1;; esac\n'
+        '  case "$ref" in refs/heads/stable) echo "refused $ref" >&2; exit 1;; esac\n'
         "done\n"
         "exit 0\n"
     )
     hook.chmod(0o755)
     sibling = stand.land_sibling("sib")           # таск-коммит сиблинга поверх c0
     sib_job = stand.checkout("sib-job", sibling)
-    died = stand.release_job(sib_job, sibling)    # его релиз умирает на push'е ТЕГА
+    died = stand.release_job(sib_job, sibling)    # его релиз умирает на push'е КАНАЛА
     assert died.returncode != 0, died.stdout
     hook.unlink()                                 # дальше remote ЗДОРОВЫЙ
 
     orphan = stand.remote_main()
     assert orphan != sibling, "вершиной должен стать bump сиблинга, а не его таск-коммит"
-    assert stand.remote_tags() == []
+    sib_tags = stand.remote_tags()
+    assert sib_tags == [NEXT_VERSION]             # тег СИБЛИНГА уехал атомарно с его bump'ом
     assert stand.remote_stable() is None
 
     # МОЙ job: первый и единственный прогон для c0, никаких шимов и перезапусков.
@@ -698,7 +1089,7 @@ def test_a_foreign_orphan_bump_swallows_an_earlier_landing(stand):
 
     assert done.returncode == 0, done.stdout + done.stderr
     assert "release skipped" in done.stdout       # ЗЕЛЁНЫЙ, и это и есть проглатывание
-    assert stand.remote_tags() == []              # тега по-прежнему нет
+    assert stand.remote_tags() == sib_tags        # моего релиза не случилось
     assert stand.remote_stable() is None          # канал не двинулся
     assert stand.remote_main() == orphan          # вершина осталась чужим сиротой
 
@@ -1023,5 +1414,8 @@ def test_ci_serialises_release_jobs():
     assert "concurrency:" in text
     assert "group: release" in text, "релизные job'ы обязаны сериализоваться одной группой"
     assert "cancel-in-progress: false" in text, (
-        "отмена идущего релиза оставит полу-состояние: bump на main без тега и без канала"
+        # Форму этого полу-состояния сузила #723: bump и тег теперь неделимы, поэтому
+        # отмена между push'ями оставляет «bump и тег на main, канал не двинут», а не
+        # «bump без тега». Само состояние никуда не делось — не делись и пин.
+        "отмена идущего релиза оставит полу-состояние: bump и тег на main без канала"
     )
