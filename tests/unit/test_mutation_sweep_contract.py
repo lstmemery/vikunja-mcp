@@ -289,7 +289,22 @@ _KEY_HEAD = 48
 # was vouching for every paragraph under it, which is this card's own bug one level down. The
 # other THREE are a single record that had been green outright.
 # It has SHRUNK since, by the first of the two routes above: VMCP-155 (660) re-measured the
-# starving base's rounds under its own control, so the `DELIBERATELY NOT PINNED` entry left. No new
+# starving base's rounds under its own control, so the `DELIBERATELY NOT PINNED` entry left. And
+# since, by the SECOND: VMCP-173 (698) took the two `--- the prose's INTERPOLATED VALUES` entries
+# off it WITHOUT RE-RUNNING A SINGLE MUTATION ROUND, because that record stated its controls as
+# PASS TOTALS («at baseline 716 passed», «every restore returns to 721») — unreadable to the
+# pattern, and the same summary lines a `control 0 failed` names. Described exactly rather than
+# loosely, that was route two's MOVE for the two paragraphs holding no baseline of their own —
+# the section's headline control carried down into each — plus a REWORDING of the headline itself,
+# which stated its baseline as a pass total. So it is the first worked example of the rewording
+# the MODULE DOCSTRING says two other entries would need, and it is NOT evidence that a rewording
+# belongs to route two, which that docstring defines as a move. (698 did re-run the CONTROL at the
+# base those rounds name and got the same 716 back — corroboration, not the ground the removal
+# stands on: had that base been gone, the re-reading would have been just as sound.) It also means
+# the enumeration here and in the module docstring — five entries in three records that state a
+# baseline this pattern cannot read — was INCOMPLETE when it was written, because this record
+# stated one too. Both sentences stay arithmetically true now that these two entries are gone;
+# read them as a list of what was NOTICED, not of what exists. No new
 # total is written here on purpose — a size stated beside the list it counts goes stale the next
 # time the list does its job, which is the self-reference the scope comment above flags. What that
 # landing falsified ELSEWHERE in this file was ONE sentence, and it is FIXED here rather than
@@ -415,12 +430,6 @@ LEGACY_RECORDS_WITHOUT_A_CONTROL_COUNT = frozenset({
     "tests/unit/test_workflow_sequence_gate.py::comments-above:_blocker_moved_to_backlog"
     ":--- the starving-tail message is the plain tail "
     "::¶WHAT THE SECOND ROW DOES NOT BUY, so it is not o",
-    "tests/unit/test_workflow_sequence_gate.py::comments-above:_spelled_ref"
-    ":--- the prose's INTERPOLATED VALUES, not just it"
-    "::¶#586 pinned next_task's prose against CLAUSE gro",
-    "tests/unit/test_workflow_sequence_gate.py::comments-above:_spelled_ref"
-    ":--- the prose's INTERPOLATED VALUES, not just it"
-    "::¶WHAT THE ENVS HOLD APART. The cycle env gives it",
     "tests/unit/test_workflow_sequence_gate.py::comments-above"
     ":test_a_tail_needs_retriage_when_ANY_of_its_blockers_sits_in_backlog_not_when_all_do"
     ":--- the QUANTIFIER over a tail's blockers (VMCP-"

@@ -1079,27 +1079,61 @@ def test_the_starving_message_is_the_plain_tail_plus_the_retriage_escalation_and
 # literal and asserted against BOTH SKILL.md and the payload ("Pinned as the VALUES and the
 # IMPERATIVE, not as prose"). VMCP-125 (606) pinned the first value inside the STARVING message
 # (the retriage count). This section pins six more, each measured GREEN — i.e. genuinely
-# unprotected — on 886211e, this commit's parent, at baseline **716 passed**: the four values of
-# `_cycle_signal` (the closed loop, each ref, each stage, the task count), the LEFT side of
-# `_starving_tail`'s waiting line, and the starving headline's count. With the pins in place the
-# same six go red (2 or 3 failed of **721**) and every restore returns to 721. Each was probed
+# unprotected — on BASE 886211e, against an unmutated whole-suite control of 0 failed: the four
+# values of `_cycle_signal` (the closed loop, each ref, each stage, the task count), the LEFT side
+# of `_starving_tail`'s waiting line, and the starving headline's count. With the pins in place the
+# same six go red, 2 or 3 failed, and every restore returns to 0 failed. Each was probed
 # alone, on a pristine workflow.py in an isolated clone, needle asserted to occur exactly once (the
 # waiting line's f-string occurs VERBATIM three times — in `_starving_tail`, `claim` and `advance`
 # — so a bare needle silently mutates three renderings), caches cleared, restores
-# checksum-verified. A seventh probe, swapping the waiting line's BLOCKER ref, came back 1 failed /
-# 715 passed WITHOUT these pins: 606's ref-anchored helper already catches it, as a precondition
+# checksum-verified. A seventh probe, swapping the waiting line's BLOCKER ref, came back 1 failed
+# WITHOUT these pins: 606's ref-anchored helper already catches it, as a precondition
 # rather than as a statement about the arrow. The pin below makes that half semantic too, so it no
 # longer depends on a helper's internals.
+#
+# THE BASE IS NAMED BY A SHA, AND WHAT THAT REPLACED IS RECORDED RATHER THAN QUIETLY REWRITTEN
+# (VMCP-173 / #698). Until that card the sentence above read «on 886211e, this commit's parent»,
+# and the appositive was false the day it landed: `git log --format='%H %P' -1 1bcdede` gives this
+# section's own commit the parent c45bd21 — the v0.2.120 bump, TWO commits past 886211e, with
+# ec68f43 between them. 632's worklog says the base moved under it mid-integration, precisely what
+# the phrase is banned for in the param-set note inside
+# `test_the_starving_waiting_line_reads_blocked_task_then_blocker_and_the_headline_counts_them`
+# below, and again in #660's section and #664's — named by CARD rather than by position, because
+# sections here are APPENDED and «the two after this one» goes false on the next one written. The
+# SHA was right and only the relationship was not, so nothing above needed re-measuring: re-run on
+# 886211e for #698, the selection collects 716 with 0 failed, so the BASELINE those six rounds
+# were taken against reproduces at the sha they name — as it does on the parent it misnamed, which
+# collects the same 716, so this defect never showed itself as a wrong NUMBER. Only as a wrong
+# tree to check out. The six rounds themselves were NOT re-applied: what is re-read below is the
+# green they were already measured against, not a fresh kill count.
+# EIGHT PASS TOTALS WENT WITH IT — 716/721/715, four in the paragraph above, two in
+# `WHY PER-IDENTIFIER` below and two in `WHAT THE ENVS HOLD APART`. Every
+# claim they decorated survives as the failure count already beside it, and the total is the half
+# that rots: the same selection collects 716 at 886211e and 884 at e9639c7 — both SHA-pinned,
+# which is the form VMCP-167 (688) leaves open for HISTORY, its other branch being an ASSERT for a
+# count a reader acts on, and nobody acts on these — while 698's own card reached for a third
+# figure and pinned it to a DATE, which for a tree-wide count is the one anchor nobody can check
+# out. Re-reading each GREEN above as `control 0 failed` fabricates nothing: a pytest summary
+# carrying no `failed` clause IS zero failures, so what changed is which half of an already
+# measured line is quoted, not when it was taken. That is what let both of this section's entries
+# leave `LEGACY_RECORDS_WITHOUT_A_CONTROL_COUNT` without a re-measurement. FOUR totals do survive
+# above, and they are a different animal: the 716s and the 884 are the SIZE of a named tree, which
+# is all «collects» claims, and no round in this section is quoted with a denominator any more.
+# Do not read any of it as a guard on totals: `_ROUND_COUNT` there matches `N failed` only, so
+# putting the old wording back is 0 failed — run twice while this card was in flight, once over
+# the whole `tests/unit` and once over the two-file selection that carries the ratchet, each
+# against its own unmutated control of 0 failed on that same selection.
 #
 # WHY PER-IDENTIFIER SUBSTRING ASSERTIONS CANNOT DO THIS JOB, and this is the whole point of the
 # section. Every ref in `_cycle_signal`'s message renders TWICE — once in `loop`, once in `detail`
 # — and the head ref THREE times, because the loop is closed with `nodes[0]`. So the pre-existing
 # `identifier in message` checks are satisfied by whichever copy survives. Measured in two halves,
-# because no ONE tree shows both: rendering `n['stage']` where `n['ref']` belongs leaves the whole
-# suite green at 716 WITHOUT this section, and under THIS section's env (stages pairwise distinct)
-# the same mutant renders `Задачи в цикле: Queue in 'Queue'; Build in 'Build'; Design in 'Design'`
-# — every identity gone from the detail clause — while every pre-existing test still passes (3
-# failed of 721, and the three are this section's own params). Mutual masking, demonstrated rather
+# because no ONE tree shows both: rendering `n['stage']` where `n['ref']` belongs is 0 failed
+# WITHOUT this section — same BASE 886211e, same unmutated control of 0 failed — and under THIS
+# section's env (stages pairwise distinct) the same mutant renders
+# `Задачи в цикле: Queue in 'Queue'; Build in 'Build'; Design in 'Design'`
+# — every identity gone from the detail clause — while every pre-existing test still passes:
+# 3 failed, and the three are this section's own params. Mutual masking, demonstrated rather
 # than argued. The repair is therefore not another PER-IDENTIFIER check but a CONTIGUOUS literal
 # spanning a value in its position — `in msg` is still the operator, what changed is what the
 # literal covers: the surviving copy is rendered with different punctuation and cannot satisfy it.
@@ -1116,13 +1150,15 @@ def test_the_starving_message_is_the_plain_tail_plus_the_retriage_escalation_and
 # blocker and the arrow's two sides genuinely differ. Both properties are asserted, not assumed:
 # 606's bug was an env that silently collapsed into an equality and blinded a correct pin.
 # PARAMETRIZING OVER SIZE is what kills a hard-coded count, which no single state can, and that is
-# measured HERE rather than inherited: hard-coding the cycle count to `2` goes red at sizes 1 and 3
-# and green at 2 (2 failed of 721); hard-coding the headline to `2` goes red at 3 tails only (1
-# failed of 721). 606 hit that limit from the other side — its review comment measured a hard-coded
-# 2 passing 606's single-state pin, and a hard-coded 1 passes it by construction, since 606's old
-# env rendered a literal 1. The self-loop is the case the production comment names FIRST ("render
-# the loop CLOSED ... so a 2-cycle and a self-loop both read unambiguously" — it names both, and
-# both are parametrized): drop the closure and a self-loop renders as a bare ref with no arrow.
+# measured HERE rather than inherited, both rounds on BASE 886211e with the pins in place and both
+# against the same unmutated control of 0 failed: hard-coding the cycle count to `2` goes red at
+# sizes 1 and 3 and green at 2 — 2 failed; hard-coding the headline to `2` goes red at 3 tails
+# only — 1 failed. 606 hit that limit from the other side — its review comment measured a
+# hard-coded 2 passing 606's single-state pin, and a hard-coded 1 passes it by construction,
+# since 606's old env rendered a literal 1. The self-loop is the case the production comment names
+# FIRST ("render the loop CLOSED ... so a 2-cycle and a self-loop both read unambiguously" — it
+# names both, and both are parametrized): drop the closure and a self-loop renders as a bare ref
+# with no arrow.
 #
 # NOT PINNED HERE — AND NO LONGER UNPINNED, which is a narrower sentence than "closed" and is meant
 # to be. This paragraph is now a POINTER, kept rather than deleted because the note it replaces was
