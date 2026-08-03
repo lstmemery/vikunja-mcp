@@ -98,13 +98,16 @@ def _forbid_unknown_tool_arguments(server) -> None:
     consumer than one that keeps the ambiguity. stderr ONLY, and `sys.stderr is None` (fd 2
     closed at exec) is checked EXPLICITLY rather than caught, because `print(file=None)` writes
     to STDOUT and raises nothing — the same trap CLAUDE.md records for `claimable_cmd`, where no
-    `except` can see it. What that costs is measured rather than asserted, and it is LESS than
-    "a byte on stdout corrupts the protocol", which is what this docstring claimed first: the
-    real mcp 2.0 client logs `Failed to parse JSONRPC message from server` and keeps going —
-    `initialize` and a `call_tool` after it both succeed. So a stray line is noise the peer
-    recovers from, not a dead session. Measured AT STARTUP, which is where this one would land
-    (`_server()` runs before `.run()`); a line interleaved mid-session was not tried, so read
-    this as "worth avoiding, not worth overstating" rather than as a licence to write there.
+    `except` can see it. What that costs was measured, and the measurement SPLITS — which is the
+    part an earlier pass here got backwards, nearly retiring a true sentence as an overstatement.
+    A complete LINE is survivable: the real mcp 2.0 client logs `Failed to parse JSONRPC message
+    from server` and keeps going, `initialize` and a `call_tool` after it both succeeding. A
+    single BYTE with no newline is NOT: `initialize` never returns and the session hangs. So "a
+    byte on stdout corrupts the protocol" is TRUE of its own subject, and only the LINE case is
+    the mild one. `print` appends the newline, so this code can emit only the mild case — a
+    property of the call, not a licence to write there. Both measured AT STARTUP, where this one
+    lands (`_server()` runs before `.run()`); mid-session was not tried, and the log line is no
+    help in telling the two apart — it appears in the hung case too.
     That the gate is actually ON is pinned by tests rather than assumed.
     """
     try:
@@ -124,7 +127,8 @@ def _forbid_unknown_tool_arguments(server) -> None:
                 "vikunja-mcp: could not forbid unknown tool arguments "
                 f"({exc.__class__.__name__}: {exc}); a misspelled parameter name will be "
                 "dropped silently, as before #720 — on every tool, or, if this failed "
-                "part-way through the loop, on the ones it had not reached",
+                "part-way, on every tool it had not FINISHED: the one it was ON can be left "
+                "accepting extras while its published schema already denies them",
                 file=sys.stderr,
             )
         except Exception:
@@ -501,8 +505,10 @@ def advance(
     from repeating the call, so nothing says a retry would work. A MISSPELLED parameter name is
     no longer one of the possibilities: since #720 an unknown argument is refused at the boundary
     BY NAME, before this tool runs, so reading 'arrived as null' rules that cause out instead of
-    leaving it first in line. What still arrives as null — an explicit null, a dropped key and an
-    omitted argument — the tool can report as a STATE but never tell apart as a cause. Advance
+    leaving it first in line — best-effort, like the gate itself, which reaches into the SDK and
+    restores the old silent drop when it cannot be installed. What still arrives as null — an
+    explicit null, a dropped key and an omitted argument — the tool can report as a STATE but
+    never tell apart as a cause. Advance
     with a SHORT worklog and post the full
     text as separate comment() calls marked [worklog] (say so in the short one, so the
     journal does not read as a placeholder)."""

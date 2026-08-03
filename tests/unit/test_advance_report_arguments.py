@@ -72,7 +72,11 @@ worth writing down rather than leaving to be discovered: the pin reads `_LOST_AR
 nothing else, so the same retired advice reinstated in SKILL.md or in `advance`'s docstring dies
 to no test here — those two are pinned for QUOTING `arrived as null`, never for what they say
 its cause might be. The gap is the reason this card was bounced in the first place, so it is a
-known hole, not a fixed one.
+known hole, not a fixed one. An independent second pass replayed both rounds in its own clone,
+same selection, and got the same numbers: control 0 failed, each mutation 1 failed, each
+on-name, control after restore 0 failed. That replicates the ROUNDS and says nothing about the
+PROSE — the same pass disproved two claims made around them, and both corrections are written
+where the claims were, not here.
 
 Where each death LANDS is worth writing down, because two of the three are on-name and one is
 not — and "each died on its own assertion, not collaterally" is what this paragraph said first,
@@ -450,10 +454,13 @@ def test_the_forbid_gate_degrades_instead_of_killing_the_server():
     choice: measured, `print(x, file=None)` writes to STDOUT and raises nothing, so the
     `except` around it can never see it — the same trap CLAUDE.md records for `claimable_cmd`.
     Without the check the degradation path splices a non-JSON-RPC line into the protocol stream.
-    Priced, also by running: a real mcp 2.0 client SURVIVES that line — it logs `Failed to parse
-    JSONRPC message from server`, then initialize and a tool call both succeed — so this is noise
-    to recover from rather than a dead session, which is why the docstring no longer says a byte
-    on stdout corrupts the protocol."""
+    Priced, also by running, and the price SPLITS on what lands there: a real mcp 2.0 client
+    survives a complete LINE — it logs `Failed to parse JSONRPC message from server`, then
+    initialize and a tool call both succeed — but a single BYTE with no newline HANGS it,
+    initialize never returning. `print` appends the newline, so this path can only ever emit the
+    survivable one. The source docstring carries the same split, because an earlier draft of it
+    retired "a byte on stdout corrupts the protocol" as an overstatement when that sentence is
+    true of a byte; and the parse-error log is not the discriminator, appearing in both."""
     from vikunja_mcp import server
 
     class Broken:
@@ -487,11 +494,14 @@ def test_the_forbid_gate_degrades_instead_of_killing_the_server():
 def test_the_refusal_RULES_OUT_the_misspelling_cause():
     """The mirror of the sibling above, on the agent-facing side, and it was INVERTED with it.
 
-    Until #720 this test was `test_the_refusal_names_the_misspelling_cause` and pinned the
-    opposite advice — "CHECK THE PARAMETER NAME FIRST" — which was correct while an unknown key
-    was dropped in silence. It stopped being correct the moment the gate landed, and the pin
-    would have gone on HOLDING the retired sentence in place: green, agent-facing, and wrong.
-    That is the defect this round was bounced for, so the pin is retargeted rather than deleted.
+    Until #720 this test was `test_the_refusal_names_the_misspelling_cause`, and its entire body
+    was `assert "misspelling" in str(exc.value)`. An earlier draft of this docstring said that
+    pin "would have gone on HOLDING the retired sentence in place", and that is measurably FALSE
+    — the independent second pass disproved it by running the verbatim old assertion against the
+    CORRECTED text, where it PASSES, because the new sentence contains the word too ("so a
+    misspelling cannot reach this text"). The old pin was not a holder; it was BLIND, green
+    whichever direction shipped, and unable to tell "check the name first" from "the name is the
+    one thing ruled out". That is the better argument for retargeting, and it is the true one.
 
     WHY THE REFUSAL CAN SAY THIS AT ALL. Re-measured over real stdio on this tree, not inherited:
     `advance(to='review', wroklog=<7000 chars>, evidence=<40>)` comes back `isError=True` with
