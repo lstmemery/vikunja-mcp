@@ -481,6 +481,48 @@ writes. The remedy is a separate tree, not a stronger control: SKILL.md's «ГД
 HEAD`/`git apply` pair, since a clone carries only COMMITTED work and the text
 under audit is usually uncommitted.
 
+**A prose claim that quotes a string as being IN this repository is checked now,
+in a small NAMED set of spellings — and the naming is the part you have to act
+on.** Writing the tree from memory is how `889befd`, a commit titled for
+correcting six measured claims, shipped a seventh: two example phrases asserted
+to be here "each in test_api_kanban.py", one of which occurred nowhere in the
+checkout. Nothing caught it — not CI, not review, and not the sweep scanner
+whose own pattern is defined thirteen lines below that comment. Measured before the gate existed, whole `tests/unit` in an isolated
+clone with the caches cleared: control 0 failed; a fabricated repo-content
+quotation planted in a COMMENT 0 failed; the same planted in a DOCSTRING
+0 failed. `tests/unit/test_repo_quotation_claims.py` closes the part a scanner
+can close. It reads the SENTENCE around one of the assertive idioms its
+`_CLAIM_TRIGGERS` names — read the SYMBOL, since the prose beside it only
+paraphrases the list — and requires
+every phrase quoted in that sentence to occur, whitespace-flattened, somewhere
+in what `git ls-files` carries OUTSIDE THE FILE making the claim. That unit is
+the sharp part and the obvious one is wrong: excluding only the claiming
+PARAGRAPH lets the founding defect through, because at `889befd` the fabricated
+phrase sat twice in one file — at line 88 in the sentence asserting it, and at
+line 336 as a constructed row of a test — so the phantom vouched for itself. A
+file arguing about a phrase quotes the phrase. Two consequences for whoever
+writes such a sentence. **Use one of those idioms when you mean it**: the gate
+is exactly as wide as the vocabulary it names, so a fabrication phrased "the
+phrase X appears in Y.py" is invisible, and that spelling is outside the list
+because including it cost three false reds on this repo's real prose. **And when the quotation is NOT meant to be a repo string** —
+another repository, a card description, a tool's output, a wording quoted
+BECAUSE it was retracted — expect to name it in that file's ratchet with your
+reason beside it; three entries are there already, one per class. The naive rule
+was measured before it was rejected, not argued away: "every quoted string in
+prose must be found in the tree" is 2,975 violations out of 11,299 quotations
+against the 15 the shipped rule asks about, and every one of those figures moves
+with every landing — so the file asserts the RATIO and says how to re-run the
+digits. An independent adversarial pass then built sixteen fabrications the gate
+shipped green; the trigger, the scan and the delimiter set were widened to close
+TEN of them at a measured cost of ZERO false reds, and the six still open are
+named in the file rather than left for the next audit to find.
+What the gate does NOT reach is written where it lives rather than promised here
+— it checks PRESENCE, never meaning and never location; a bare pointer
+(`:1473`, a card ref, a sha) is not a quotation at all; and the corpus is the
+working tree, so a commit message or a card description is outside it. This
+paragraph's own author committed the class while writing the guard, misquoting
+that commit subject by one letter, and the file records it.
+
 ## Releases: the `stable` channel
 
 Consumers' `.mcp.json` subscribes to the moving `stable` branch with
