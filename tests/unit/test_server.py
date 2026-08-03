@@ -507,8 +507,14 @@ def test_reload_still_refuses_a_rotation_to_a_genuinely_different_endpoint(
         ("https://tracker.zz.hgdev.com/Vikunja", "https://tracker.zz.hgdev.com/vikunja"),
         ("https://User@tracker.zz.hgdev.com", "https://user@tracker.zz.hgdev.com"),
         ("https://u:PassWord@tracker.zz.hgdev.com", "https://u:password@tracker.zz.hgdev.com"),
+        # tracker #707 — an IPv6 zone id is an OS INTERFACE NAME, not part of the address.
+        ("https://[fe80::1%25ETH0]", "https://[fe80::1%25eth0]"),
+        ("https://[fe80::1%25ETH0]:3456", "https://[fe80::1%25eth0]:3456"),
     ],
-    ids=["path-case", "userinfo-user-case", "userinfo-password-case"],
+    ids=[
+        "path-case", "userinfo-user-case", "userinfo-password-case",
+        "ipv6-zone-id-case", "ipv6-zone-id-case-with-port",
+    ],
 )
 def test_reload_still_refuses_a_rotation_that_changes_only_a_CASE_SENSITIVE_part(
     monkeypatch, capsys, baseline_url, rotated_url
@@ -551,6 +557,55 @@ def test_reload_still_refuses_a_rotation_that_changes_only_a_CASE_SENSITIVE_part
     assert server._workflow is sentinel                # did NOT rebuild onto the other endpoint
     assert server._workflow_token == "OLD"             # baseline not advanced by a refused reload
     assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize(
+    ("baseline_url", "rotated_url"),
+    [
+        ("https://[FE80::1]", "https://[fe80::1]"),
+        ("https://[::FFFF:1]:3456", "https://[::ffff:1]:3456"),
+        ("https://[FE80::1%25eth0]", "https://[fe80::1%25eth0]"),
+    ],
+    ids=["ipv6-hex-case", "ipv6-hex-case-with-port", "ipv6-hex-case-BESIDE-a-zone-id"],
+)
+def test_reload_self_heals_a_rotation_that_changes_only_the_IPv6_HEX_case(
+    monkeypatch, capsys, baseline_url, rotated_url
+):
+    """#707's PAIRED direction, and the reason it is a separate test rather than another row above.
+
+    #707 stopped the zone id folding. The mistake that fix could have made is to stop folding the
+    whole bracketed literal, which would be the STRICT failure: a rotation rewriting only the
+    address's hex digits is cosmetic — `FE80::1` and `fe80::1` are the same address (measured:
+    `IPv6Address('FE80::1') == IPv6Address('fe80::1')`, and str()s to lowercase; RFC 5952 prefers
+    lowercase too) — and refusing it would break a healthy rotation, which is #154's inversion of
+    #148 all over again. So the two halves of one literal must go SEPARATE ways, and both ways need
+    a pin at the level that matters: the guard. The rows above pin the zone half refusing; these
+    pin the hex half still folding. The third row is the one neither test would have caught alone —
+    hex and zone in the SAME url, hex changing, zone held constant.
+
+    MUTATION-CHECKED over the whole `tests/unit` selection, `__pycache__` deleted and
+    `PYTHONDONTWRITEBYTECODE=1`, restores confirmed by re-running to the control. Control round:
+    0 failed.
+      * `_fold_host` -> `return host` for a bracketed literal (fold NOTHING inside brackets, the
+        over-correction this test exists for) -> 4 failed, all three rows here among them
+      * `_fold_host` -> `host.lower()` (the pre-#707 body) -> 8 failed, and these three rows stay
+        GREEN — which is what makes them the paired half rather than a duplicate of the rows above
+    """
+    rebuilt = object()
+    monkeypatch.setattr(server, "_workflow", None, raising=False)
+    monkeypatch.setattr(server, "_build_workflow", lambda cfg: rebuilt)
+    _set_session_baseline(monkeypatch, token="OLD", url=baseline_url, project_id=10)
+    monkeypatch.setattr(
+        server, "load_config",
+        lambda: Config(url=rotated_url, token="ROTATED", project_id=10),
+    )
+    try:
+        assert server._reload_workflow_from_disk() is True   # rebuilt, NOT refused as a repoint
+        assert server._workflow is rebuilt
+        assert server._workflow_token == "ROTATED"
+        assert capsys.readouterr().out == ""
+    finally:
+        server._reset_workflow_cache()
 
 
 def test_401_rotation_with_a_cosmetic_url_change_still_self_heals(monkeypatch, capsys):

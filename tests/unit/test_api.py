@@ -346,12 +346,25 @@ def test_connection_drop_retried_for_get_not_for_put(no_sleep):
         ("https://a@b:PW@T.EXAMPLE", "https://a@b:PW@t.example/api/v1"),
         ("https://[::1]:3456", "https://[::1]:3456/api/v1"),
         ("https://t.example:443", "https://t.example:443/api/v1"),
+        # tracker #707 — the zone id is an OS interface name, so its case is MEANINGFUL.
+        ("https://[fe80::1%25ETH0]", "https://[fe80::1%25ETH0]/api/v1"),
+        ("https://[FE80::1%25ETH0]:3456", "https://[fe80::1%25ETH0]:3456/api/v1"),
+        ("https://[fe80::1%ETH0]", "https://[fe80::1%ETH0]/api/v1"),
+        ("https://[FE80::1]", "https://[fe80::1]/api/v1"),
+        ("https://[fe80::1%25]", "https://[fe80::1%25]/api/v1"),
+        ("https://User:PassWord@[FE80::1%25ETH0]", "https://User:PassWord@[fe80::1%25ETH0]/api/v1"),
+        ("https://h%25ST.example", "https://h%25st.example/api/v1"),
+        ("https://[fe80::1%25ETH%2D0]", "https://[fe80::1%25ETH%2D0]/api/v1"),
     ],
     ids=[
         "trailing-slash-stripped", "scheme-case-folded", "host-case-folded",
         "path-case-KEPT", "path-case-KEPT-multi-segment",
         "userinfo-case-KEPT", "userinfo-KEPT-while-host-folds", "split-on-the-LAST-at",
         "ipv6-literal", "default-port-KEPT",
+        "ipv6-zone-id-case-KEPT", "ipv6-hex-folds-WHILE-zone-KEPT", "ipv6-bare-percent-zone-KEPT",
+        "ipv6-hex-still-folds-without-a-zone", "ipv6-empty-zone-unchanged",
+        "userinfo-AND-zone-both-KEPT-while-hex-folds", "reg-name-with-pct-encoding-still-folds",
+        "zone-id-with-its-own-pct-encoding-KEPT",
     ],
 )
 def test_canonical_base_url_folds_the_case_insensitive_parts_and_nothing_else(raw, expected):
@@ -448,6 +461,10 @@ def test_the_canonicalizer_changes_the_client_url_only_in_these_measured_classes
         "https://t.example/Vikunja", "https://t.example/vikunja",
         "https://User:PassWord@t.example", "https://user:password@t.example",
         "https://[::1]:3456", "https://t.example/api/v1",
+        # tracker #707 — RED before that card: this used to fold to `[fe80::1%25eth0]` and so
+        # belonged to the divergence list below. Now the client builds the same request either
+        # way, because httpx passes a zone id through verbatim (measured, 0.28.1).
+        "https://[fe80::1%25ETH0]", "https://[fe80::1%25ETH0]:3456",
     ]:
         assert wire(canonical_base_url(raw)) == wire(pre_154(raw)), \
             f"canonicalizing {raw!r} changed the url the client builds"
@@ -459,9 +476,12 @@ def test_the_canonicalizer_changes_the_client_url_only_in_these_measured_classes
         wire(pre_154("HTTPS://t.example:8443")), \
         "the exception is the DEFAULT port specifically; a non-default port must be unaffected"
 
-    # Class 2 — IPv6 literal written with uppercase hex.
+    # Class 2 — IPv6 literal written with uppercase hex. The ADDRESS still folds; what #707 took
+    # out of this class is the zone id, which used to ride along with it.
     assert wire(pre_154("https://[::FFFF:1]:3456")) == "https://[::FFFF:1]:3456/api/v1"
     assert wire(canonical_base_url("https://[::FFFF:1]:3456")) == "https://[::ffff:1]:3456/api/v1"
+    # ... and the two halves of one literal go SEPARATE ways: hex down, zone untouched.
+    assert wire(canonical_base_url("https://[FE80::1%25ETH0]")) == "https://[fe80::1%25ETH0]/api/v1"
 
     # Class 3 — query/fragment BEFORE the first `/`, so it lands in the authority slice and folds.
     # Characterization of a KNOWN-OPEN permissive fold, not an endorsement (see the docstring).
@@ -469,3 +489,8 @@ def test_the_canonicalizer_changes_the_client_url_only_in_these_measured_classes
     assert canonical_base_url("https://t.example#Frag") == "https://t.example#frag/api/v1"
     # ... and the same query AFTER a `/` is in the path slice, so it is correctly left alone.
     assert canonical_base_url("https://t.example/x?Q=A") == "https://t.example/x?Q=A/api/v1"
+    # The SEAM between #707 (fixed) and #706 (open), in one url that carries both. #707 cuts the
+    # zone at the literal's closing `]`, so everything after it — a port, and until #706 a query or
+    # fragment — keeps folding exactly as before. Characterization again, not endorsement: when #706
+    # lands, THIS assert is the one it has to come past, and the zone half must survive it intact.
+    assert canonical_base_url("https://[fe80::1%25ETH0]?Q=A") == "https://[fe80::1%25ETH0]?q=a/api/v1"

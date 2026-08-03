@@ -113,6 +113,52 @@ _MAX_UNPROVEN_PAGES = 120
 # going". If any shortness inference ever comes back, this comes back with it.
 
 
+def _fold_host(host: str) -> str:
+    """Lowercase the case-INSENSITIVE part of a host slice, and only that (tracker #707).
+
+    This exists because `host` is not homogeneous, which is the one thing canonical_base_url's
+    shape (`scheme.lower()` + userinfo verbatim + host + path verbatim) could not say. RFC 3986
+    6.2.2.1 makes the host case-insensitive; RFC 6874 then grafts an IPv6 ZONE ID into that same
+    production (`IPv6addrz = IPv6address "%25" ZoneID`) WITHOUT saying it inherits that property —
+    measured, the RFC is silent on the zone's case altogether. And it does not inherit it: a zone
+    id is an operating-system INTERFACE NAME, and interface names are case-SENSITIVE. That is a
+    measurement, not a reading of the RFC — `socket.if_nametoindex` on 2026-08-03 answered `eth0`
+    -> 426 and `ETH0` -> OSError("no interface with this name") on Linux (python:3.12-alpine, the
+    platform CI runs), and `lo0` -> 1 / `LO0` -> OSError on this darwin box, 11 of 11 and 6 of 6
+    interfaces respectively. Python's own stdlib models it the same way: `IPv6Address('fe80::1%
+    ETH0').scope_id` keeps `ETH0` and compares UNEQUAL to `...%eth0` (different hashes), while
+    `IPv6Address('FE80::1') == IPv6Address('fe80::1')` is True and str()s to `fe80::1`.
+
+    So the hex folds and the zone does not. Folding the zone collapsed two DIFFERENT interfaces
+    onto one string — the permissive direction #148 exists to close and #164 removed from
+    userinfo, for a shape nobody had named. Not reachable from a real config (a Vikunja base url
+    is `https://tracker.zz.hgdev.com`), so this fixes an unclosed part of an accepted decision
+    rather than a live harm; it also makes this function AGREE with httpx here, which was measured
+    to pass `[fe80::1%25ETH0]` through verbatim.
+
+    The two cuts are ABNF boundaries, not guesses. The literal ends at `]` (`IP-literal = "[" (
+    IPv6address / IPv6addrz / IPvFuture ) "]"`), so a port — and, until #706, a query or fragment
+    that landed in this slice — keeps folding exactly as before. Inside the brackets the zone
+    starts at the FIRST `%`, because inside brackets a `%` cannot be anything else: `IPv6address`
+    has no `%`, and `IPvFuture = "v" 1*HEXDIG "." 1*( unreserved / sub-delims / ":" )` admits none
+    either (`%` is in neither set; measured besides that httpx refuses IPvFuture outright —
+    `httpx.URL('https://[v1.aB:c]/api/v1')` raises InvalidURL). Cutting at the first `%` therefore
+    also protects the sloppy bare-`%` spelling `[fe80::1%ETH0]`, which httpx accepts and preserves;
+    that makes this function fold LESS, never more, which is the only safe direction here.
+
+    NOT this function's business, deliberately: the query/fragment that reaches it inside `host`
+    when it appears before the first `/`. That is a slicing bug one line up (`rest.partition("/")`
+    is blind to `?` and `#`) rather than an exception inside the host, it is filed as #706, and it
+    is still open — `https://t.example?Q=A` still folds to `?q=a`. Measured that the two fixes land
+    on DIFFERENT lines and compose: on `https://[fe80::1%25ETH0]?Q=A` this body keeps the zone and
+    still lowercases the query, which is precisely the seam between the two cards."""
+    if host.startswith("["):
+        literal, bracket, tail = host.partition("]")
+        address, percent, zone = literal.partition("%")
+        return f"{address.lower()}{percent}{zone}{bracket}{tail.lower()}"
+    return host.lower()
+
+
 def canonical_base_url(base_url: str) -> str:
     """Canonicalize a Vikunja base URL — the SINGLE normalization shared by the client (which builds
     requests from it) and the 401 repoint guard in server.py (which compares a reloaded config's url
@@ -135,7 +181,13 @@ def canonical_base_url(base_url: str) -> str:
         third is a genuine over-fold of the shape this card removed from userinfo, left open and
         FILED rather than fixed here. All three predate this card — they come from folding the
         scheme and host, which is #154's. The point is that "identical" was wider than its
-        measurement; the second test in tests/unit/test_api.py now pins the rule AND all three;
+        measurement; the second test in tests/unit/test_api.py now pins the rule AND all three.
+        A FOURTH was hiding inside the second, and #707 fixed it: the host was folded whole, so an
+        IPv6 ZONE ID went down with the hex (`[fe80::1%25ETH0]` -> `[fe80::1%25eth0]`). That one is
+        not the same endpoint — a zone id is an OS interface name and interface names are
+        case-sensitive (measured, both platforms) — so it was the userinfo defect again in a shape
+        the word "IPv6 literal" hid. The host's case rule now lives in `_fold_host` above, which
+        is where the hex-vs-zone split is argued and measured;
       * ensures the `/api/v1` suffix.
     It deliberately does NOT touch the scheme VALUE (http vs https — a plaintext downgrade is REAL),
     the host, the port, or the path (all case-sensitive): a rotation moving any of those is a genuine
@@ -158,7 +210,10 @@ def canonical_base_url(base_url: str) -> str:
     and all 36 of those are the uppercase-scheme + default-port class — userinfo has stopped being a
     difference at all. That grid is a GRID, though, and the IPv6-hex and query-before-slash classes
     are precisely shapes it cannot contain; they were found by looking outside it, which is the
-    standing reason not to read 36 as a total. The split is on the LAST `@`, which is httpx's too
+    standing reason not to read 36 as a total. The zone-id class (#707) is the same lesson told
+    twice: it was found by #164's REVIEWER sweeping 16,320 urls on a grid built deliberately
+    outside the implementer's, and no count from either grid could have named it.
+    The split is on the LAST `@`, which is httpx's too
     (`https://a@b:PW@HOST` → host `host`, userinfo `a%40b:PW`) — an un-encoded `@` in the userinfo
     is illegal per RFC anyway, and this way it makes the function fold LESS, never more.
     Read "CREDENTIAL" above operationally: the one the request AUTHENTICATES with, i.e. the
@@ -186,7 +241,7 @@ def canonical_base_url(base_url: str) -> str:
     if sep:
         authority, slash, path = rest.partition("/")
         userinfo, at, host = authority.rpartition("@")     # ("", "", authority) when there is no @
-        base = f"{prefix.lower()}{sep}{userinfo}{at}{host.lower()}{slash}{path}"
+        base = f"{prefix.lower()}{sep}{userinfo}{at}{_fold_host(host)}{slash}{path}"
     else:
         base = base_url
     base = base.rstrip("/")
