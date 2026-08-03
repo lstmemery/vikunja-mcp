@@ -489,15 +489,45 @@ three ways**: the PRE-TAG gate still returns a green skip with the channel unmov
 that is its four documented swallowings, the most ordinary being a runner killed
 between pushes followed by a `gh run rerun`. This fix removes the channel ROLLBACK, not
 the whole class "green job, channel behind" (#723, #740), which it neither introduced
-nor closes. `--force-with-lease`
-was measured and rejected: without `refs/remotes/origin/stable` it rejects even a
-perfectly normal push, with no race in sight (`! [rejected] … (stale info)`), which
-would make the release depend on `actions/checkout`'s refspec — whether checkout
-creates that ref was NOT measured here, and that is the objection rather than a hole
-in it, since this repo can neither run a runner on a stand nor pin what the action
-does — and WITH that ref a plain `git fetch origin` before the push resets the lease
-and lets the rollback through. A plain push has neither dependency: the comparison is the
-server's, and the stand gives the same refusal with and without the tracking ref.
+nor closes. A BARE `--force-with-lease` (no argument — it leases against
+`refs/remotes/origin/stable`) was measured and rejected, and the FIRST of those
+measurements runs the other way, so it goes first. **That ref IS created on the
+runner**: read out of the `Run actions/checkout@v4` step of the very job that does the
+pushing (job 91562691267 of run 30772730104 — the release of `ad41397`, this card's
+first landing), where `fetch-depth: 0` makes checkout run `git -c protocol.version=2
+fetch --prune --no-recurse-submodules origin +refs/heads/*:refs/remotes/origin/*
++refs/tags/*:refs/tags/*` and print `* [new branch] stable -> origin/stable`. Not one
+run: the same line is in job 91515383221 of run 30754732335, which covers the SECOND
+configuration, tip ≠ trigger sha — `origin/main` was `dff2def0` at fetch time while the
+job's TRIGGER sha was `0664256f` (that job released nothing at all: it died on `fatal:
+tag 'v0.2.171' already exists` before its first push — it is #716's own case), so
+checkout runs a SECOND, targeted fetch, `git … fetch --no-tags --prune
+--no-recurse-submodules origin +0664256f…:refs/remotes/origin/main`, which force-updates
+`origin/main` ALONE and leaves the `origin/stable` the first fetch created — `--prune`
+deleted no ref in that job (zero `[deleted]` lines). So on the runner the lease would
+have a value and would have refused this very race, and the sentence that used to stand
+here — "whether checkout creates that ref was NOT measured" — is false as of those runs.
+Honest bound on the second witness: it adds a second CONFIGURATION, not a second action
+VERSION — both runs pulled the same `actions/checkout@v4`,
+`SHA:11d5960a326750d5838078e36cf38b85af677262`, on the same day, and versions are exactly
+what the next sentence is about. It is still rejected, for two reasons the fact does not
+touch. First, the refspec is the ACTION's, not ours, and `ci.yml` subscribes to the
+FLOATING `@v4`: it can change with any move of that tag, and the one way to pin it —
+nailing the action to a sha — is not what this repo does. The cost of it changing is not
+"a race slips through" but "EVERY release is red": WITHOUT the ref a bare lease rejects
+even a perfectly normal push, with no race in sight (`! [rejected] … (stale info)`, rc=1
+on the stand). Second, WITH the ref a plain `git fetch origin` before the push resets the
+lease and lets the rollback through (measured, rc=0), because a fetch updates exactly the
+value the lease compares; today no such fetch precedes the channel push in `release.sh`
+(the two earlier ones both read `refs/heads/main`, and the only `refs/heads/stable` read
+sits AFTER the refusal), but that is a property of the current text, not a guarantee. The
+EXPLICIT form (`--force-with-lease=refs/heads/stable:<sha>`) depends on no tracking ref
+and neither reason reaches it; it is rejected by an argument rather than a stand — a lease
+asks "has anything changed since I looked?" where the property wanted is "does the new
+value contain the current one?", and those coincide only if you looked BEFORE the sibling.
+Look after it and you lease an already-advanced channel, the lease agrees, and the force
+performs exactly the rollback. A plain push asks the wanted question always: the comparison
+is the server's, and the stand gives the same refusal with and without the tracking ref.
 What this does NOT fix, measured on the same stand: a HUMAN's documented rollback
 (`git branch -f stable vX.Y.Z && git push -f origin stable`) performed inside a live
 release job's window is still silently undone, because the old tag is an ANCESTOR of
