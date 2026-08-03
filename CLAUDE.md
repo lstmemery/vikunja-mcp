@@ -1087,7 +1087,18 @@ covered on a macOS checkout and NOT on Linux, where CI runs. The guarantee that
 does not depend on the name is a unit test: it asks git what `git add -A` would publish and
 fails on any file of storage-state SHAPE (`{"cookies": […], "origins": […]}`) under any name,
 tracked or untracked, and at any SIZE — a candidate too big to read is reported rather than
-skipped. The format holds a localStorage array PER ORIGIN, filled from every origin the context
+skipped. **"Tracked" became true of the LOCAL run only at #630**, and the gap is worth knowing
+because nothing about it was visible: the candidate LIST always came from git, but the BYTES
+came from the worktree, so a shaped file that was staged and then deleted from disk, or whose
+worktree copy was overwritten with `{}`, or that was committed and then removed locally without
+committing the removal, read as clean — three states, all built, all `1 passed`, while
+`git cat-file -p :<path>` still handed out the cookie. CI never saw any of it (a fresh checkout
+has no divergence to have), which is why this was a hardening and not a leak. The scan now reads
+tracked candidates out of the INDEX, which is what `git add -A` would publish. The same change
+reads BYTES rather than utf-8 text, closing three encodings that used to be skipped in silence —
+`UnicodeDecodeError` is a `ValueError`, so a BOM'd or UTF-16 export fell into the same `continue`
+as "not JSON at all". Not an encoding cure-all: a genuinely invalid byte is still refused, and
+correctly, since it is not JSON in any encoding. The format holds a localStorage array PER ORIGIN, filled from every origin the context
 visited, so an export has no fixed upper size and "too large to classify" is exactly what a fat
 credential looks like. That part was itself a bounce: the first version capped the scan at 1 MiB
 on the reasoning that "a credential export that big is not a thing", and a correctly-shaped

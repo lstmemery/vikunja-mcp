@@ -427,7 +427,17 @@ ENV_TRUE_VALUES = frozenset({"true", "1"})
 # report itself. `_git_bytes(` joined the list with #629: a door that is not listed here is a door
 # the scanner cannot see, so adding one without adding it here would silently take the next
 # git-backed pin out of the guard.
-GIT_CALL_MARKERS = ("_git(", "_git_bytes(", "_ignore_rule(")
+GIT_CALL_MARKERS = (
+    "_git(", "_git_bytes(", "_ignore_rule(",
+    # VMCP-141 (630) lifted the shape scan into a helper so its pins could drive the SHIPPED
+    # scanner instead of a copy. That put a git call one level of indirection away, and this
+    # gate reads a test's OWN source — so the refactor would have exempted every caller.
+    # The door is the call carrying REPO_ROOT, not the helper: a pin that hands it a
+    # throwaway clone it built itself runs fine outside a checkout, and marking those would
+    # SKIP tests that work — trading a false alarm for lost coverage, which is the same
+    # trade #622 exists to refuse, just pointing the other way.
+    "_scan_for_storage_state_shape(REPO_ROOT",
+)
 
 # --- Is this tree a git checkout at all? (#622) ---------------------------------------------
 #
@@ -473,14 +483,14 @@ requires_git_checkout = pytest.mark.skipif(
 )
 
 
-def _git(*args: str) -> subprocess.CompletedProcess:
+def _git(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess:
     """git, always rooted at the repo — never at whatever cwd pytest happened to be started in."""
     return subprocess.run(
-        ["git", *args], cwd=REPO_ROOT, capture_output=True, text=True
+        ["git", *args], cwd=cwd or REPO_ROOT, capture_output=True, text=True
     )
 
 
-def _git_bytes(*args: str) -> subprocess.CompletedProcess:
+def _git_bytes(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess:
     """git, rooted at the repo, returning RAW BYTES — for reading a blob straight out of the index.
 
     Exists because a candidate's content is not always on disk: a path can be in the index with no
@@ -488,7 +498,7 @@ def _git_bytes(*args: str) -> subprocess.CompletedProcess:
     skip. Separate from `_git` because that one decodes as text, which mangles the first bytes of
     a PNG — the exact thing the caller is trying to look at.
     """
-    return subprocess.run(["git", *args], cwd=REPO_ROOT, capture_output=True)
+    return subprocess.run(["git", *args], cwd=cwd or REPO_ROOT, capture_output=True)
 
 
 def _ignore_rule(path: str, *, ignorecase: bool | None = None) -> tuple[bool, str | None, str | None]:
@@ -1590,6 +1600,97 @@ def test_every_filename_skill_md_prescribes_is_excluded_by_this_repos_gitignore(
         ".gitignore to keep"
 
 
+def _scan_for_storage_state_shape(root: Path) -> tuple[list[str], list[str]]:
+    """The shape scan, as ONE implementation, parameterised by repo root — VMCP-141 (630).
+
+    It takes a root so the pins can drive the SHIPPED scanner over a throwaway clone instead of
+    a copy of it. That mattered here rather than in the abstract: the first version of those pins
+    duplicated this loop, and the mutation "read the worktree instead of the index" — the exact
+    defect 630 is about — left them GREEN, because they were measuring the copy. A pin that
+    cannot see its own subject change is not a pin.
+
+    The real test below passes REPO_ROOT and nothing else does, so the parameter buys the pins
+    their subject without giving anyone a scanner aimed somewhere else by default.
+    """
+    # TRACKED and UNTRACKED are kept apart, which VMCP-141 (630) is about. The candidate LIST
+    # always came from git; the BYTES came from the worktree, and where the two disagree the scan
+    # went quiet. Built rather than reasoned about, on a clean clone: a shaped file `git add -f`ed
+    # and then DELETED from the worktree -> 1 passed; the worktree copy overwritten with `{}`
+    # while the index blob stayed a cookie -> 1 passed; committed and then deleted locally without
+    # committing the deletion (` D` in status) -> 1 passed. In all three `git cat-file -p :<path>`
+    # still hands out the credential. CI never saw it (a fresh checkout is clean, and there the
+    # index half IS the whole scan), which is why this is a hardening rather than a leak — but the
+    # local run was claiming a guarantee it did not have.
+    tracked, untracked = set(), set()
+    for args, into in ((("ls-files", "-z"), tracked),
+                       (("ls-files", "--others", "--exclude-standard", "-z"), untracked)):
+        listed = _git(*args, cwd=root)
+        assert listed.returncode == 0, f"git {' '.join(args)} failed: {listed.stderr.strip()}"
+        into.update(p for p in listed.stdout.split("\0") if p)
+
+    def _candidate_bytes(rel: str) -> tuple[int, bytes] | None:
+        """(size, content) for one candidate, or None when there is nothing to classify.
+
+        For a TRACKED path both come from the INDEX — that is what `git add -A` would publish,
+        and it is the only copy that exists in the three states above. For an untracked one the
+        worktree is the only copy there is.
+        """
+        if rel in tracked:
+            sized = _git("--no-pager", "cat-file", "-s", f":{rel}", cwd=root)
+            if sized.returncode != 0:
+                return None                      # unmergeable/conflicted entry — nothing to read
+            size = int(sized.stdout.strip())
+            if size == 0 or size > SHAPE_SCAN_MAX_BYTES:
+                return size, b""
+            blob = _git_bytes("--no-pager", "cat-file", "blob", f":{rel}", cwd=root)
+            if blob.returncode != 0:
+                return None
+            return size, blob.stdout
+        path = root / rel
+        try:
+            if not path.is_file():
+                return None
+            size = path.stat().st_size
+            if size == 0 or size > SHAPE_SCAN_MAX_BYTES:
+                return size, b""
+            return size, path.read_bytes()
+        except OSError:
+            return None
+
+    offenders, unclassified = [], []
+    for rel in sorted(tracked | untracked):
+        found = _candidate_bytes(rel)
+        if found is None:
+            continue
+        size, raw = found
+        if size == 0:
+            continue  # an empty file cannot be a JSON object
+        if size > SHAPE_SCAN_MAX_BYTES:
+            unclassified.append(rel)  # REPORTED, never skipped — see SHAPE_SCAN_MAX_BYTES
+            continue
+        try:
+            # BYTES, not `read_text(encoding="utf-8")`. That call sat inside this same
+            # `except (OSError, ValueError)` and `UnicodeDecodeError` is a subclass of
+            # `ValueError`, so a shaped file written with a BOM or in UTF-16 was skipped in
+            # SILENCE. Measured: `json.loads` on BYTES accepts UTF-8-with-BOM, UTF-16 and
+            # UTF-32 (it detects the encoding itself), while the text path fails on all three.
+            # Precisely those three axes close — a file with a genuinely invalid byte still
+            # raises, and should: it is not valid JSON in any encoding, so that is a correct
+            # refusal rather than a miss. No real producer writes those forms either
+            # (playwright-core 1.62.0 writes utf8 via JSON.stringify), which is why this is
+            # hardening: a `continue` that goes quiet on a shaped file is the class this repo
+            # keeps filing cards about, reachable or not.
+            data = json.loads(raw)
+        except (OSError, ValueError):
+            continue  # unreadable, not text, or not JSON — cannot be a storage state
+        if isinstance(data, dict) and all(
+            isinstance(data.get(key), list) for key in STORAGE_STATE_SHAPE_KEYS
+        ):
+            offenders.append(rel)
+
+    return offenders, unclassified
+
+
 @requires_git_checkout
 def test_no_file_of_storage_state_shape_is_reachable_by_git():
     """Layer two: the guard that does NOT depend on the name, and the reason the card shipped.
@@ -1655,34 +1756,7 @@ def test_no_file_of_storage_state_shape_is_reachable_by_git():
       message gives (`.gitignore` it) also removes it from `git add -A`'s reach, so the noise
       resolves in the same direction as the guard.
     """
-    candidates = set()
-    for args in (("ls-files", "-z"), ("ls-files", "--others", "--exclude-standard", "-z")):
-        listed = _git(*args)
-        assert listed.returncode == 0, f"git {' '.join(args)} failed: {listed.stderr.strip()}"
-        candidates.update(p for p in listed.stdout.split("\0") if p)
-
-    offenders, unclassified = [], []
-    for rel in sorted(candidates):
-        path = REPO_ROOT / rel
-        try:
-            if not path.is_file():
-                continue
-            size = path.stat().st_size
-        except OSError:
-            continue
-        if size == 0:
-            continue  # an empty file cannot be a JSON object
-        if size > SHAPE_SCAN_MAX_BYTES:
-            unclassified.append(rel)  # REPORTED, never skipped — see SHAPE_SCAN_MAX_BYTES
-            continue
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue  # unreadable, not text, or not JSON — cannot be a storage state
-        if isinstance(data, dict) and all(
-            isinstance(data.get(key), list) for key in STORAGE_STATE_SHAPE_KEYS
-        ):
-            offenders.append(rel)
+    offenders, unclassified = _scan_for_storage_state_shape(REPO_ROOT)
 
     assert not offenders, \
         f"{offenders} — git can publish {'a file' if len(offenders) == 1 else 'files'} shaped " \
@@ -1951,3 +2025,114 @@ def test_every_pin_here_that_shells_out_to_git_declares_it():
         "from a real finding in a `-q` summary and CONSTANT, so it survives every before/after " \
         "comparison looking like signal. That is tracker #622, and it already corrupted one " \
         "mutation sweep's numbers (#594) by exactly the count of tests in this position"
+
+
+# --- VMCP-141 (630): the shape gate read the INDEX for names and the WORKTREE for bytes --------
+
+_SHAPE = b'{"cookies": [{"name": "s", "value": "SECRET"}], "origins": []}'
+
+
+@pytest.fixture
+def clone(tmp_path):
+    """A throwaway git repo. NEVER this checkout: every round below stages a file of exactly the
+    shape the real gate forbids, so building them here would leave the repository holding what
+    its own guard exists to reject."""
+    root = tmp_path / "clone"
+    root.mkdir()
+    for args in (("init", "-b", "main"), ("config", "user.email", "t@e.com"),
+                 ("config", "user.name", "T")):
+        subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+    (root / "README.md").write_text("hi\n")
+    subprocess.run(["git", "add", "README.md"], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=root, check=True, capture_output=True)
+    return root
+
+
+def _stage(clone: Path, name: str, body: bytes) -> None:
+    (clone / name).write_bytes(body)
+    subprocess.run(["git", "add", "-f", name], cwd=clone, check=True, capture_output=True)
+
+
+@pytest.mark.parametrize("state", ["worktree-copy-deleted", "worktree-copy-blanked",
+                                   "committed-then-deleted-locally"])
+def test_the_shape_gate_reads_the_INDEX_for_a_tracked_candidate(clone, state):
+    """The three states that used to pass in silence, each rebuilt.
+
+    In all three `git cat-file -p :tracker-login.json` still hands out the cookie, so `git add -A`
+    would publish it — while the pre-#630 scan, reading `path.read_text()`, saw either nothing or
+    `{}` and said the repo was clean. Measured on a clean clone before the fix: 1 passed, 1 passed,
+    1 passed. CI never saw any of it, because a fresh checkout has no worktree/index divergence to
+    have — which is exactly why the LOCAL run was the half making a promise it could not keep.
+    """
+    _stage(clone, "tracker-login.json", _SHAPE)
+    if state == "worktree-copy-deleted":
+        (clone / "tracker-login.json").unlink()
+    elif state == "worktree-copy-blanked":
+        (clone / "tracker-login.json").write_bytes(b"{}")
+    else:
+        subprocess.run(["git", "commit", "-m", "add"], cwd=clone, check=True, capture_output=True)
+        (clone / "tracker-login.json").unlink()
+
+    offenders, _ = _scan_for_storage_state_shape(clone)
+    assert offenders == ["tracker-login.json"], (
+        f"state {state!r}: the index still holds a storage state and `git add -A` would publish "
+        f"it, but the scan reported {offenders}"
+    )
+
+
+# MUTATION-CHECKED for #630, selection `tests/unit/test_repo_browser_isolation.py`, `__pycache__`
+# deleted and then PYTHONDONTWRITEBYTECODE=1, each round restored from a byte copy and the file
+# confirmed sha256-identical; the script refuses unless its target matches exactly once.
+# Control round: 0 failed.
+#   * read the WORKTREE for tracked candidates too (the pre-#630 body) -> 3 failed, the three
+#     index rows above
+#   * `json.loads(raw.decode("utf-8"))` (the pre-#630 call) -> 3 failed, the three encoding rows
+#
+# THE FIRST VERSION OF THESE PINS MEASURED NOTHING, and that is recorded because the failure is
+# invisible from a green run. They were written against a COPY of the scan loop living in this
+# file, so the `worktree` round above came back 74 PASSED — the mutation landed in the shipped
+# scanner while the pins exercised the duplicate beside it. That is the "a pin protects less
+# than its name promises" class, caught only because the round was run at all. The fix was to
+# lift the real loop into `_scan_for_storage_state_shape(root)` and point both the real test and
+# these rounds at it; the numbers above are from AFTER that, and the copy is gone.
+
+
+@pytest.mark.parametrize(
+    ("label", "body"),
+    [
+        ("utf-8-BOM", b"\xef\xbb\xbf" + _SHAPE),
+        ("utf-16", _SHAPE.decode().encode("utf-16")),
+        ("utf-32", _SHAPE.decode().encode("utf-32")),
+    ],
+)
+def test_the_shape_gate_survives_an_encoding_it_does_not_expect(clone, label, body):
+    """`json.loads(path.read_text(encoding="utf-8"))` lived inside `except (OSError, ValueError)`,
+    and `UnicodeDecodeError` is a subclass of `ValueError` — so a shaped file in any of these
+    encodings was skipped without a word. Measured: from BYTES `json.loads` accepts all three
+    (it sniffs the encoding); from text it raises on all three.
+
+    Narrower than "encoding is covered", which is the claim the card offered and this test
+    declines to make: a file with a genuinely invalid byte still raises, and must — it is not
+    valid JSON in any encoding, so that is a correct refusal rather than a silent skip. No real
+    producer writes these forms either (playwright-core 1.62.0 writes utf8 via JSON.stringify).
+    The reason to close them anyway is the shape of the bug, not its reachability: a `continue`
+    that goes quiet on a credential is the class, and this repo grades that class by what it
+    could hide, not by what it does hide today.
+    """
+    _stage(clone, "tracker-login.json", body)
+    offenders, _ = _scan_for_storage_state_shape(clone)
+    assert offenders == ["tracker-login.json"], f"{label} slipped past the shape scan"
+
+
+def test_an_invalid_byte_is_still_refused_and_that_is_correct(clone):
+    """The control for the row above — the boundary of what switching to bytes buys."""
+    _stage(clone, "tracker-login.json", _SHAPE[:5] + b"\xff" + _SHAPE[5:])
+    offenders, _ = _scan_for_storage_state_shape(clone)
+    assert offenders == [], "a byte sequence that is not JSON in any encoding is not a candidate"
+
+
+def test_an_ordinary_tracked_file_is_still_not_an_offender(clone):
+    """The other control: the index half must not start reporting things that are merely JSON."""
+    _stage(clone, "package.json", b'{"name": "x", "cookies": "not-a-list"}')
+    offenders, _ = _scan_for_storage_state_shape(clone)
+    assert offenders == []
