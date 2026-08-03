@@ -488,9 +488,15 @@ def test_canonical_base_url_folds_the_case_insensitive_parts_and_nothing_else(ra
         cut is unpinned in a way the `%` cut is not
     Reachability caveat on `zone-id-with-its-own-pct-encoding-KEPT`: httpx REFUSES that url
     (`InvalidURL: Invalid IPv6 address`), so no client can be built on it. The row earns its place
-    by being the only thing that kills the `rpartition("%")` mutation, not by describing traffic —
-    and per RFC 3986 2.1 the two case spellings of its `%2D` are EQUIVALENT, so what it pins is this
-    function declining to normalize percent-encoding case, which it declines to do everywhere.
+    by killing the `rpartition("%")` mutation rather than by describing traffic — but NOT by being
+    the only thing that does, which is what this caveat said until #707's reviewer read it against
+    the bullet four lines up: that round is 5 failed and names `ipv6-hex-still-folds-without-a-zone`
+    beside this row. What this row alone pins is the AIMED half (a zone carrying its own `%`); the
+    other row dies for an unrelated reason, spelled out in that bullet. Per RFC 3986 2.1 the two
+    case spellings of its `%2D` are EQUIVALENT, so what it pins is this function declining to
+    normalize percent-encoding case in the ZONE — and only there. It does not decline everywhere:
+    measured, a reg-name host folds `%2D` and `%2d` together, which `_fold_host`'s docstring now
+    records as the exception it is rather than as a uniform policy.
     The three legacy counts above were RE-MEASURED for #707 rather than copied: adding these rows
     moved two of them (6 -> 13, 4 -> 10) and the identity round (7 -> 14). Only the `path.lower()`
     round was unchanged at 4. A count recorded next to a growing table is stale by construction.
@@ -605,8 +611,11 @@ def test_the_canonicalizer_changes_the_client_url_only_in_these_measured_classes
     diverged; it now sits in the EQUAL set above, because httpx passes a zone id through verbatim
     (measured, 0.28.1: `httpx.URL` returns `[fe80::1%25ETH0]` unchanged and reads `.host` as
     `fe80::1%25ETH0`). Do NOT read that as "class 2 shrank": measured, that url carries no
-    uppercase hex digit at all, so class 2 as defined never covered it, while `[::FFFF:1]` is class
-    2 only and still diverges and `[FE80::1%25ETH0]` is in both. What the assert below pins is the
+    uppercase hex digit in its ADDRESS half, so class 2 as defined never covered it, while
+    `[::FFFF:1]` is class 2 only and still diverges and `[FE80::1%25ETH0]` is in both. The qualifier
+    is #707's reviewer's — the string does hold an uppercase `E`, in `ETH0`, so "at all" was the
+    literal-is-homogeneous conflation this very card removes, told about its own evidence. What the
+    assert below pins is the
     OVERLAP — the two halves of one literal going separate ways. Class 3 was untouched by #707 and
     is CLOSED by this commit; the SEAM assert at the end is the url that carries both cards at
     once, and it now reads the post-#706 way (zone kept, and the query kept too).

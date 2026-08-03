@@ -167,16 +167,24 @@ def _fold_host(host: str) -> str:
     and `[fe80::1%25ETH%2d0]` are one endpoint — and the guard, which ACCEPTED that rotation before
     #707, now REFUSES it. It is unreachable rather than harmless: httpx rejects that url outright
     (`InvalidURL: Invalid IPv6 address`), so the client cannot be built on either spelling and the
-    failure is fail-closed. Normalizing pct-encoding case is deliberately NOT done — this function
-    normalizes no percent-encoding anywhere (it does not upcase `%2f` in a path either), and adding
-    it for one component would be a wider change than this card.
+    failure is fail-closed. Normalizing pct-encoding case is deliberately NOT done, and the honest
+    scope of that is NARROWER than "nowhere" — #707's own reviewer disproved the wider wording by
+    construction and it is corrected here rather than left standing. Measured on this tree: the
+    path, the query and the zone all keep `%2F` and `%2f` APART, but a reg-name HOST folds them
+    together (`https://h%2Dt.example` and `https://h%2dt.example` canonicalize to ONE string),
+    because `.lower()` on a reg-name reaches an octet's hex digits like any other character. So the
+    zone is an EXCEPTION to what this function does on the component next door, not an instance of a
+    uniform policy. Which way each one goes is nevertheless right: on a reg-name the fold is what
+    RFC 3986 2.1 licenses, and on the zone the refusal is the deliberate false one measured above.
+    Real pct normalization for one component would be a wider change than this card.
 
     NOT this function's business, deliberately: the query/fragment that reaches it inside `host`
     when it appears before the first `/`. That is a slicing bug one line up (`rest.partition("/")`
-    is blind to `?` and `#`) rather than an exception inside the host, it is filed as #706, and it
-    is still open — `https://t.example?Q=A` still folds to `?q=a`. Measured that the two fixes land
-    on DIFFERENT lines and compose: on `https://[fe80::1%25ETH0]?Q=A` this body keeps the zone and
-    still lowercases the query, which is precisely the seam between the two cards."""
+    was blind to `?` and `#`) rather than an exception inside the host, and it was filed as #706 —
+    which has since LANDED, so `https://t.example?Q=A` now keeps its `?Q=A`. Measured before that
+    landing that the two fixes sit on DIFFERENT lines and compose, and measured after it on the url
+    that carries both: `https://[fe80::1%25ETH0]?Q=A` keeps the zone AND the query. That url is the
+    seam between the two cards, and it is pinned by one assert in tests/unit/test_api.py."""
     if host.startswith("["):
         literal, bracket, tail = host.partition("]")
         address, percent, zone = literal.partition("%")
@@ -220,8 +228,12 @@ def canonical_base_url(base_url: str) -> str:
         (measured, both platforms) — so it was the userinfo defect again in a shape the words "IPv6
         literal" hid. It OVERLAPS class 2 without either containing the other, and saying it "hid
         inside" class 2 would be false: measured, `[fe80::1%25ETH0]` carries no uppercase hex digit
-        at all yet diverged before #707, so class 2 as written never covered it;
-        `[FE80::1%25ETH0]` is in both; and `[::FFFF:1]` is in class 2 only and still diverges.
+        in its ADDRESS half yet diverged before #707, so class 2 as written never covered it. (The
+        qualifier is #707's reviewer's, and it is load-bearing rather than pedantic: the string does
+        hold an uppercase `E`, in `ETH0` — reading it as "no uppercase hex digit at all" is exactly
+        the "a literal is homogeneous" conflation this card exists to remove, made about the
+        card's own evidence.) `[FE80::1%25ETH0]` is in both; `[::FFFF:1]` is in class 2 only and
+        still diverges.
         Class 2 is therefore unchanged by #707, not shrunk. Read #706 and #707 together and the
         lesson is one: "#164 measured three" counted a LIST, and a list is not the world — one of
         the three was fixable and a fourth was never on it. The host's case rule now lives in
