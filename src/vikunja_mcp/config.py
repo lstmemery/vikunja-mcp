@@ -127,6 +127,43 @@ def load_config(cwd: Path | None = None, environ: Mapping[str, str] | None = Non
             f"no token: put VIKUNJA_TOKEN=... in {REPO_ENV_FILE} next to {REPO_FILE}, "
             f"in {USER_ENV_FILE} (chmod 600), or pass it via env {ENV_TOKEN}"
         )
+    # #768: a base url carrying a query or a fragment cannot work, and used to fail SILENTLY
+    # and far from here. `canonical_base_url` appends `/api/v1` to the END OF THE STRING, so
+    # measured on the real client: `https://h?Token=Ab` becomes `https://h?Token=Ab/api/v1`,
+    # whose raw_path is `/?Token=Ab/api/v1` — every call hits the instance ROOT and comes back
+    # 404 or HTML, never an API error a reader could act on. With a fragment it is quieter
+    # still: `https://h#Frag` sends raw_path `/` and the suffix never reaches the wire at all.
+    # A url that already ends in the suffix but carries a query gets it TWICE
+    # (`https://h/api/v1?x=1` -> `.../api/v1?x=1/api/v1`), because the string does not END with
+    # it. The same append also makes canonicalisation NON-INJECTIVE on these shapes, so the
+    # #148 repoint guard reads `https://h?a=b` and `https://h?a=b/api/v1` as ONE endpoint.
+    #
+    # REFUSED rather than repaired, and the choice is the point. Inserting the suffix into the
+    # PATH (`https://h?Q=A` -> `https://h/api/v1?Q=A`) would make the client work — by silently
+    # keeping a query nobody meant to send and attaching it to EVERY API call. A base url with a
+    # query is almost always a typo or a link copied out of a browser, so the useful answer is
+    # to say so at the moment the config is read.
+    #
+    # HERE and not in `canonical_base_url`, deliberately: that function raises NOTHING today,
+    # its docstring says so, and the argument against rewriting it onto `urllib.parse.urlsplit`
+    # rests on exactly that (urlsplit raises ValueError on an unclosed IPv6 authority — "a new
+    # crash class in a path that raises nothing"). Breaking its totality to fix this would
+    # cost that argument. Both consumers come through here anyway: the client is built from
+    # `cfg.url`, and the repoint guard calls `load_config()` and already raises ConfigError in
+    # that same path. BOUNDARY, stated rather than glossed: `VikunjaAPI("https://h?x=1", tok)`
+    # constructed directly still builds an unusable client. That is the price of keeping the
+    # normalizer total — the product entry point is the config, not the constructor.
+    if "?" in url or "#" in url:
+        bad = "query" if "?" in url else "fragment"
+        raise ConfigError(
+            f"the tracker url must not carry a {bad}: {url!r}. A Vikunja base url is "
+            f"scheme + host[:port] + an optional path (e.g. https://tracker.example or "
+            f"https://tracker.example/vikunja) — the /api/v1 suffix is appended for you. "
+            f"Written with a '?' or '#', the suffix lands INSIDE the query or fragment and "
+            f"every request goes to the instance root instead of the API, which surfaces as "
+            f"404s or HTML rather than as a config error. Drop everything from the first "
+            f"'?' or '#'."
+        )
     try:
         project_id = int(raw_pid)
     except (TypeError, ValueError):

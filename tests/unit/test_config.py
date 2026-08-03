@@ -366,3 +366,90 @@ def test_env_overrides_worktree_root(tmp_path):
     (tmp_path / ".vikunja-mcp.env").write_text("VIKUNJA_TOKEN=t\n")
     cfg = load_config(cwd=tmp_path, environ={"VIKUNJA_WORKTREE_ROOT": "/srv/trees"})
     assert cfg.worktree_root == "/srv/trees"
+
+
+# --- VMCP-225 (768): a base url carrying a query or fragment can never reach the API ----------
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://tracker.example?Token=Ab",
+        "https://tracker.example#Frag",
+        "https://tracker.example?a=1#f",
+        "https://tracker.example:3456?a=1",
+        "https://tracker.example/vikunja?a=1",
+        "https://tracker.example/api/v1?x=1",
+    ],
+    ids=["query", "fragment", "both", "query-behind-a-port", "query-after-a-path",
+         "query-after-the-suffix-itself"],
+)
+def test_a_url_with_a_query_or_fragment_is_refused_at_config_time(tmp_path, url):
+    """MEASURED before the fix, through the real client: `canonical_base_url` appends `/api/v1`
+    to the END OF THE STRING, so
+
+        https://h?Token=Ab   -> https://h?Token=Ab/api/v1     raw_path `/?Token=Ab/api/v1`
+        https://h#Frag       -> https://h#Frag/api/v1         raw_path `/`   (suffix never sent)
+        https://h/api/v1?x=1 -> https://h/api/v1?x=1/api/v1   (appended TWICE)
+
+    Every one of those talks to the instance ROOT, so the failure surfaces as a 404 or a page of
+    HTML rather than as a config error anyone can act on. The same append also makes the
+    canonicalisation NON-INJECTIVE here, which is why the #148 repoint guard read
+    `https://h?a=b` and `https://h?a=b/api/v1` as one endpoint.
+
+    Refused rather than repaired: inserting the suffix into the PATH would make the client work
+    while silently attaching a query nobody meant to send to EVERY API call.
+
+    `query-after-the-suffix-itself` is the row that would survive a narrower fix aimed only at
+    "url has no path".
+
+    MUTATION-CHECKED, selection `tests/unit/test_config.py`, `__pycache__` deleted and then
+    PYTHONDONTWRITEBYTECODE=1, each round restored from a byte copy and the file confirmed
+    sha256-identical; the script refuses unless the guard matches exactly once. Control round:
+    0 failed.
+      * remove the guard entirely -> 6 failed, i.e. every row here and nothing else
+      * keep only `?` (drop the fragment half) -> 1 failed, the `fragment` row alone
+      * keep only `#` (drop the query half) -> 4 failed, the four query-bearing rows
+    The last two are what say the two terminators are pinned SEPARATELY rather than by one row
+    that happens to carry both — the failure sets are disjoint and together they are the first
+    round's six.
+    """
+    _write_toml(tmp_path)
+    with pytest.raises(ConfigError) as exc:
+        load_config(cwd=tmp_path, environ={"VIKUNJA_TOKEN": "tk", "VIKUNJA_URL": url})
+    assert "must not carry a" in str(exc.value)
+    assert url in str(exc.value), "the refusal must quote the offending url back"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://tracker.example",
+        "https://tracker.example/",
+        "https://tracker.example:3456",
+        "https://tracker.example/vikunja",
+        "https://tracker.example/api/v1",
+        "http://localhost:3456",
+    ],
+)
+def test_ordinary_urls_are_untouched_by_the_query_guard(tmp_path, url):
+    """The control. A guard that also refused a legitimate url would be worse than the hole."""
+    _write_toml(tmp_path)
+    cfg = load_config(cwd=tmp_path, environ={"VIKUNJA_TOKEN": "tk", "VIKUNJA_URL": url})
+    assert cfg.url == url
+
+
+def test_the_normalizer_itself_stays_total(tmp_path):
+    """The BOUNDARY of this fix, asserted so it cannot be mistaken for a wider claim.
+
+    `canonical_base_url` still raises nothing on these shapes and still produces the broken
+    string — the refusal lives at the config layer, not in the normalizer. That is deliberate:
+    the normalizer raising NOTHING is the property its own docstring rests the argument against
+    `urllib.parse.urlsplit` on. So a caller who bypasses the config and constructs
+    `VikunjaAPI("https://h?x=1", tok)` by hand still gets an unusable client. The class is
+    closed at the product's ENTRANCE, not everywhere, and saying otherwise would be the kind of
+    claim wider than its evidence this repo keeps filing cards about.
+    """
+    from vikunja_mcp.api import canonical_base_url
+
+    assert canonical_base_url("https://h?Token=Ab") == "https://h?Token=Ab/api/v1"
+    assert canonical_base_url("https://h#Frag") == "https://h#Frag/api/v1"
