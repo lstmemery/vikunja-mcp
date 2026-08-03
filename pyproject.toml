@@ -39,18 +39,26 @@ dev = ["pytest>=8", "ruff>=0.6"]
 # opinion about long lines, it is the only one.
 #   ONE CAVEAT, so a later edit does not misread this: "drives no check" holds only while the
 #   pycodestyle table below exists. Delete that table and `line-length` becomes E501's limit
-#   directly — measured, 76 errors. That edit looks like a relaxation and lands as a tightening.
+#   directly — measured at `d857280`, 94 errors (it was 76 at #669's own landing `1ac64ca`; the
+#   band has grown WITH the tree, and the rate is flat rather than rising — 2.70 such lines per
+#   1000 then against 2.55 now — so do not read the growth as evidence of anything). Looks like
+#   a relaxation, lands as a tightening.
 line-length = 100
 target-version = "py311"
 
 [tool.ruff.lint]
-# E501 makes the limit mechanical, and it counts CHARACTERS, not bytes — measured, and that is
-# the reason to reach for it instead of the `awk length()` reflex: this repo's prose is full of
-# em-dashes (3 bytes) and Cyrillic (2 bytes each), so at 3db8ef9 there were 1015 lines at or under
-# 100 characters but over 100 BYTES, and 413 under 120 characters but over 120 bytes. A byte
-# counter calls every one of those a violation; ruff calls none of them, correctly. Those are two
-# separate sets, not one nested in the other, and the first counts em-dashes in PROSE — so it moves
-# with every landing (it is already 1020 on the commit that wrote this). Re-measure, do not quote.
+# E501 makes the limit mechanical, and it counts DISPLAY WIDTH rather than bytes — which is
+# `len(line)` for everything this repo contains, since it holds no tabs and no wide characters
+# (measured at all four shas named in tests/unit/test_line_length_gate.py). That is the reason to
+# reach for it instead of the `awk length()` reflex: this repo's prose is full of
+# em-dashes (3 bytes) and Cyrillic (2 bytes each), so at `d857280` there were 1626 lines at or
+# under 100 characters but over 100 BYTES, and 1004 at or under 110 characters but over 110 bytes.
+# A byte counter calls every one of those a violation; ruff calls none of them, correctly. Those
+# are two separate sets and neither is nested in the other — measured at the same sha, 989 lines
+# are in both, 637 only in the first and 15 only in the second. Both count em-dashes in PROSE, so
+# both move with every landing: those same two limits at `3db8ef9` give 1015 and 569. The 413 that
+# used to stand beside the 1015 here was the 120 ruler and retired with the ceiling — it is NOT
+# the same measurement taken earlier. Re-measure, do not quote.
 #   Selecting E501 is necessary and NOT sufficient: `ignore`, `per-file-ignores` and a `# noqa`
 #   each switch it back off with `select` untouched. tests/unit/test_line_length_gate.py reads the
 #   first two, because a pin that only checks `select` certifies a gate that may not be running.
@@ -76,10 +84,27 @@ select = ["E4", "E7", "E9", "F", "E501"]
 # setup_cmd.py, workspace_cmd.py and thirteen test files holding 53 of the 77 lines — so the gate
 # would have been OFF in the very file where the defect happened.
 # TWO HONEST LIMITS, both measured. 101-110 is convention, not enforcement — wrap at 100 anyway.
-# And E501 does not fire on a line whose overlong part holds no whitespace (a long URL, a single
-# unbroken token): a 136-character comment ending in a URL passes at 120, because ruff will not
-# demand a break where none is possible. tests/unit/test_line_length_gate.py has no such
-# exemption and does flag that shape — the one place the two deliberately disagree.
+# And UNDER THIS REPO'S SETTINGS E501 exempts exactly TWO shapes on its own — the count is about
+# the settings, not the rule, because two carve-outs sit outside it: a `# noqa` silences it as
+# well (covered above), and ruff's `ignore-overlong-task-comments`, left at its default of false
+# here, would add a third by exempting `# TODO`/`# FIXME` lines — measured, 111 characters of
+# `# TODO` fire by default and go silent with that flag on. Neither of the two is "the overlong
+# part holds no whitespace" — that phrasing stood here from #669 until #711's independent
+# REVIEWER produced the counterexample: `# ` plus 109 `x`, 111 characters with no whitespace past
+# the limit, duly reported. Measured at `d857280` on ruff
+# 0.15.20 the two are: (1) a line with fewer than two whitespace-separated chunks, where there is
+# no break to demand, even 201 characters pass, and leading indentation does not make a second
+# chunk; and (2) a line whose LAST chunk contains the
+# literal `://` while the rest fits the limit — a 136-character comment ending in a URL
+# passes, the same URL with one more word after it does not. The predicate is arithmetic on the
+# WHOLE line, `total - width(last chunk) <= limit`, so 110 characters ahead of the URL passes and
+# 111 fires, but a trailing space counts into `total` — "the width before the URL" is a
+# paraphrase, not the rule. (2) is a SUBSTRING test rather than URL recognition: `foo://…` is
+# exempt, `www.example.com/…` is not. tests/unit/test_line_length_gate.py has no exemption at all
+# and flags both shapes — the place the two most visibly disagree, and it is live rather than
+# theoretical: with THIS table removed, so E501 falls back to `line-length` = 100, the character
+# scan finds 95 lines and ruff 94, the single
+# difference being tests/unit/test_api.py:731, which ends in an IPv6 URL.
 max-line-length = 110
 
 [tool.pytest.ini_options]

@@ -24,7 +24,7 @@ guardrails for agents; the real security boundary is the scoped API token.
 ```bash
 uv sync                                   # env (Python 3.11+, uv)
 uv run pytest tests/unit -q               # 500+ unit tests (FakeAPI, MockTransport)
-uv run ruff check .                       # lint — wrap at 100, RED above 120 (see below)
+uv run ruff check .                       # lint — wrap at 100, RED above 110 (see below)
 uv run vikunja-mcp --version              # smoke
 uv run vikunja-mcp claimable              # one JSON line: is there claimable work for this
                                           # token? (hgdev-acp hub's pre-launch idle check)
@@ -51,16 +51,34 @@ things follow for anyone writing prose here, which is most tasks. **The band 101
 with nothing behind it** — a 103-character line ships green, so keep measuring your own additions
 rather than reading a green `ruff check` as "wrapped correctly". **Measure in CHARACTERS, never
 bytes**: ruff does, the shell reflex (`awk '{print length($0)}'`, `wc -c`) does not, and this prose
-is full of em-dashes (3 bytes) and Cyrillic (2 bytes each) — at `3db8ef9`, 1015 lines sat at or
-under 100 characters while a byte counter would call them violations, and a separate 413 did the
-same at 120 (separate, not a subset: a line over 100 characters cannot be in the first set). Both
-figures count prose, so they move with every landing — re-measure rather than quote them. VMCP-132
-(621)'s worklog records the mistake in those words — "an awk byte-count had falsely flagged one
-line because of the em-dash". In python it is `len(line)`, not `len(line.encode())`. And **"red at
-111" has one measured exception**: E501 does not fire on a line
-whose overlong part contains no whitespace — a long URL, one unbroken token — since ruff will not
-demand a break where none is possible (a 136-character comment ending in a URL passes at 120). The
-pin has no such exemption and flags that shape; that disagreement is deliberate.
+is full of em-dashes (3 bytes) and Cyrillic (2 bytes each) — at `d857280`, 1626 lines sat at or
+under 100 characters while a byte counter would call them violations, and 1004 lines did the
+same at the 110 ceiling. Those are two SEPARATE sets and neither contains the other, which is
+measured rather than argued: 989 lines are in both, 637 in the first only and 15 in the second
+only. Both figures count prose, so they move with every landing — re-measure rather than quote
+them: those same two limits replayed at `3db8ef9` give 1015 and 569. **The 413 this paragraph
+used to print beside the 1015 was the 120 ruler and retired with the ceiling** — it is not the
+same measurement taken earlier, and reading it as one would understate the second set by 156 at
+that very sha. VMCP-132 (621)'s worklog records the mistake in those words — "an awk byte-count
+had falsely flagged one line because of the em-dash". In python it is `len(line)`, not
+`len(line.encode())`. And **"red at 111" has exactly TWO measured exemptions that ruff
+applies ON ITS OWN — a `# noqa` silences it
+too, but that is an opt-out someone writes, not a decision the rule makes — and the one an earlier
+draft of this paragraph named, "the overlong part contains no whitespace", is NOT among them.**
+Measured at `d857280` on ruff 0.15.20: `# ` followed by 109 `x` is 111 characters with no
+whitespace past the limit, and it
+FIRES. What ruff actually exempts is (1) a line holding fewer than two whitespace-separated
+chunks — one unbroken token, so there is no break to demand — where even 201 characters pass, and
+(2) a line whose LAST chunk contains the literal `://` while the rest fits the limit: a
+136-character comment ending in a URL passes, the same URL followed by one more word fires. The
+rule there is arithmetic on the WHOLE line — `total − width(last chunk) ≤ 110` — so 110
+characters ahead of the URL passes and 111 fires, but a trailing space counts into `total`, which
+is why "everything before the URL" is a paraphrase and not the predicate. Exemption (2) is a
+SUBSTRING test, not URL recognition — `foo://…` is exempt and `www.example.com/…` is not. The
+pin has no exemption at all and flags both shapes; that disagreement is deliberate. One honest
+bound on this whole paragraph: ruff measures DISPLAY WIDTH, not `len(line)`, so a tab or a CJK
+character makes it red below 111 — measured, zero lines in `src`/`tests`/`scripts` differ between
+the two at any of the four shas named here, so the distinction is real but currently theoretical.
 
 Before #669 there was no gate at all: `line-length` was set, `E501` was **not** selected (it is
 absent from ruff's default `E4,E7,E9,F`), so `line-length` drove only the formatter — which this
@@ -74,13 +92,22 @@ every tool, to the card that shipped it and to that card's reviewer.
 line the repo still held once its own defect was reflowed — so the gate could go on THAT DAY
 rather than after a cosmetic diff through 18 files, nine of them under active concurrent edit.
 #711 has since ratcheted it to **110**, and what made that step affordable is a measurement, not
-resolve: of the 102 lines then sitting in the 101-120 band, only SIX were above 110, so six hand
-re-wraps bought a halving of the unchecked band. The rest of the distribution is why the band was
-NOT closed outright: **59 of those 102 are exactly 101 characters** and 18 more are 102, i.e. the
+resolve: of the 102 lines then sitting in the 101-120 band, only SIX were above 110 — six lines
+in FIVE files — so a handful of hand re-wraps bought it. Read "halved" as the band's WIDTH, not
+its population: the diff moved seven lines (one collateral) and took 102 unchecked lines to 95.
+The rest of the distribution is why the band was
+NOT closed outright: **59 of those 102 were exactly 101 characters** and 18 more were 102, i.e. the
 population is a one-or-two-character tail past the wrap target rather than long lines, and #669's
-count of what it is made of still holds — 41 code, 22 string literals, 14 comments, so "just
-re-wrap them" is false for two thirds of them. Lowering it further is the intended direction and
-the same measurement is how to price the next step; the decision point is the `_HARD_LIMIT`
+count of what it is made of still holds over ITS 77 — 41 code, 22 string literals, 14 comments.
+Read that composition the way #711's own filed correction does, not the way its first draft did:
+"just re-wrap them" is false for a little over HALF, not for two thirds. Nineteen of those 22
+literals are DOCSTRINGS, which re-wrap like prose, so pure-prose re-wraps are 33 of 77 and edits
+that have to preserve an expression or a string VALUE are 44 — and a docstring re-wrap is still
+not free the way a comment is, because it changes a string constant and therefore shows up in the
+AST, where a comment cannot. Lowering it further is the intended direction and the same
+measurement is how to price the next step, which at `d857280` is already on the shelf: the tree
+holds 95 lines over 100 characters and NONE over 109, so a step to 109 costs zero re-wraps, 105
+costs six, 104 costs seven and 102 costs eighteen. The decision point is the `_HARD_LIMIT`
 assertion in `tests/unit/test_line_length_gate.py`, which pyproject must agree with.
 
 ## Architecture
@@ -417,8 +444,9 @@ the workflow as TEXT — no git — so a shallow checkout cannot silence both.
 "fix" that by writing a cleverer grep: which lever reaches a wrapped figure
 depends on WHICH grep, and the two on this machine need OPPOSITE ones.** Test
 prose here is hand-wrapped near 100 columns, and that is the repo's wrap
-TARGET (`line-length`) rather than a checked limit — since #669 the enforced
-ceiling is `max-line-length = 110`, so where a line actually breaks is a
+TARGET (`line-length`) rather than a checked limit — the enforced ceiling is
+`max-line-length = 110`, set at 120 by #669 and ratcheted down by #711, so
+where a line actually breaks is a
 convention, and a reflow can push a figure across a break without touching a
 digit. Measured on `e86b2c9^`, where `test_api_kanban.py` carried a real one
 at :1473-1474 ("… 5 failed / 102" ending one line, "passed for the whole

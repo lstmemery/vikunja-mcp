@@ -8,8 +8,9 @@ lucky one: with E501 unselected, not one selected rule looks at length at all.
 
 AND "ONLY THE FORMATTER" IS NOT THE NEAR-MISS IT SOUNDS LIKE — running `ruff format` would NOT have
 caught this, which is the fact that makes the gate worth its config. Measured: `ruff format
---line-length 100` on the pre-fix api.py reports "1 file reformatted" and leaves the longest line at
-140. The formatter re-wraps CODE; it does not reflow comments or string content, and 36 of the 77
+--line-length 100` on the pre-fix api.py reports "1 file reformatted" and leaves the longest
+line at 140. The formatter re-wraps CODE; it does not reflow comments or string content, and
+36 of the 77
 overlong lines were comments or string literals. So the unrun formatter was never a latent safety
 net for this defect class, and E501 is not a second opinion on it — it is the only opinion.
 
@@ -25,11 +26,14 @@ its review, and the card that eventually reported it was reviewing something els
 to keep in mind — a re-wrap that swallows a sentence start leaves every word present and the
 paragraph readable, so it is cheap for a linter to see and easy for a reader to slide over.
 
-WHY THE HARD LIMIT IS 120 AND NOT 100, since that is the part a reader will want to argue with.
-Measured on 2026-08-02, over `src/`, `tests/` and `scripts/`: seventy-seven lines exceeded 100
-CHARACTERS across 18 files — 41 of them code, 22 inside string literals (19 of those docstrings)
-and only 14 comments — and seventy-six of the seventy-seven were 116 characters or shorter. The
-defect was 140: a 24-character outlier above every other PYTHON line in those three directories.
+WHY THE HARD LIMIT IS 110 AND NOT 100, since that is the part a reader will want to argue with.
+It got there in TWO steps, and everything in this paragraph is the FIRST one's evidence: #669
+turned the rule on at 120, and #711 ratcheted it to 110 (its own arithmetic is two paragraphs
+down). Measured on 2026-08-02, over `src/`, `tests/` and `scripts/`: seventy-seven lines
+exceeded 100 CHARACTERS across 18 files — 41 of them code, 22 inside string literals (19 of
+those docstrings) and only 14 comments — and seventy-six of the seventy-seven were 116
+characters or shorter. The defect was 140: a 24-character outlier above every other PYTHON
+line in those three directories.
 (Repo-wide it is not an outlier at all — 543 lines of markdown and other non-Python files exceed
 140, the longest at 1520 — but ruff reads none of them, so they are not what the number is about.)
 So the population is one real defect plus a long tail of one-to-sixteen-character overshoots, in
@@ -39,37 +43,83 @@ pure string, 19 carry code and a comment and a string on one line, 13 are pure c
 with a trailing comment, 7 are code with a string, and 5 are pure code — so the single largest
 class is a plain string line, and "code with some kind of trailing comment" is 29 of 76, the
 largest grouping but nothing like a majority. A gate at 100 would have demanded a 76-line cosmetic
-diff through all of that to catch a class it is not needed for; a gate at 120 was red on exactly
-the one real defect and green the moment it was reflowed. `per-file-ignores` was the third candidate
-and is worse than either, for a reason that is measurable rather than aesthetic: its list would have
+diff through all of that to catch a class it is not needed for; the gate as first set, at 120, was
+red on exactly the one real defect and green the moment it was reflowed. `per-file-ignores` was
+the third candidate and is worse than either, for a reason that is measurable rather than
+aesthetic: its list would have
 had to name all EIGHTEEN files — api.py, workflow.py, server.py, setup_cmd.py and workspace_cmd.py
 plus thirteen test files carrying 53 of the 77 lines — so the gate would have been OFF in the very
 file where the defect happened, and left on only where no violation has ever occurred. The remaining
-band is tracked as card #711.
+band was tracked as card #711, which halved its WIDTH.
+
+WHAT #711 BOUGHT AND WHAT IT COST, since this is the paragraph the next ratchet should copy.
+Measured on its pre-image `34ba644`: 102 lines sat in the 101-120 band and only SIX were above 110
+— six lines in FIVE files — so a handful of hand re-wraps moved the ceiling to 110. Read "halved"
+as the band's WIDTH and not its population, which is the sense a reader pricing the next step
+wants: the diff re-wrapped seven lines (the sixth's neighbour came along) and took the unchecked
+population from 102 to 95, a little under 7%. It was not closed
+outright because the distribution says not to — 59 of those 102 were exactly 101 characters and 18
+more were 102, a one-or-two-character tail past the wrap target rather than long lines. The
+composition above is also why "just re-wrap them" is false for a little over HALF of the 77 rather
+than for two thirds, which is the correction #711 filed against its own description: 19 of the 22
+string-literal lines are DOCSTRINGS and re-wrap like prose, putting pure-prose re-wraps at 33 and
+edits that must preserve an expression or a string VALUE at 44. A docstring re-wrap is still not
+free the way a comment is — it changes a string constant, so it moves the AST, where a comment
+cannot.
 
 WHAT IT DOES NOT BUY, priced rather than rounded up. TWO gaps, both measured. The band from 101 to
-120 characters is convention with no tool behind it: wrap at 100, but nothing will stop you at 103.
-That is a deliberate trade and not an oversight — the alternative was the 76-line diff above. The
-band shrinks by cleanup, and the ratchet direction is the pinned 120 below: lowering it is a
-decision someone makes on purpose, in this file, with the count of the day in hand. SECOND, and
-this is why the scan below is not merely a duplicate of ruff: E501 does not fire at all on a line
-whose overlong portion contains NO WHITESPACE — a long URL, one unbroken token — because ruff will
-not demand a break where none is possible. Measured at limit 120: a 136-character comment ending in
-a long URL and a 136-character assignment of a long URL both pass, while a 149-character line with
-a space past the limit and a 151-character line of ordinary prose are both caught. The character
-scan below has no such exemption, so it flags the URL shape that ruff waves through; that is the
-one place the two deliberately disagree, and if a genuinely unwrappable line ever has to exceed 120
+110 characters is convention with no tool behind it: wrap at 100, but nothing will stop you at 103.
+That is a deliberate trade and not an oversight — the alternative was the cosmetic diff above. The
+band shrinks by cleanup, and the ratchet direction is the pinned 110 below: lowering it is a
+decision someone makes on purpose, in this file, with the count of the day in hand — and at
+`d857280` that count is 95 lines over 100 characters and NONE over 109, so a step to 109 costs no
+re-wraps at all, 105 costs six, 104 seven and 102 eighteen — and ruff agrees at every one of those
+limits, so the price is right in both channels. The COMPOSITION of that 95 was re-derived at the
+same sha rather than carried over from the 77: 44 code, 25 docstring, 15 comment, 11 other
+literals, so 40 lines re-wrap as prose and 55 need an edit that preserves an expression or a
+string value. Still a little over half, as it was. SECOND, and
+this is why the scan below is not merely a duplicate of ruff: under THIS repo's settings E501
+exempts exactly TWO shapes on its own. The count belongs to the settings, not to the rule — a
+`noqa` directive silences it as well, and ruff's `ignore-overlong-task-comments`, left at its
+default of false here, would add a third by waving through `# TODO`/`# FIXME` lines (measured:
+111 characters of task comment fire by default, go silent with that flag). And the shape this
+paragraph used to name, an overlong portion holding no whitespace, is NOT among
+them. Measured at `d857280` on ruff 0.15.20 with the limit at 110, `# ` followed by 109 `x` is 111
+characters, has no whitespace past the limit, and is duly reported. The two real exemptions are
+(1) a line with fewer than two whitespace-separated chunks, where no break is possible, even 201
+characters pass, and leading indentation does not make a second chunk; and (2) a line whose LAST
+chunk holds the literal `://` while the rest fits the limit. The predicate for (2) is arithmetic
+on the WHOLE line — `total - width(last chunk) <= limit` — so 110 characters ahead of the URL
+passes and 111 is reported, while a trailing space counts into `total`; "the width before the
+URL" is a paraphrase, not the rule. So a 136-character comment
+ending in a long URL and a 136-character assignment of one both pass, while the same URL followed
+by one more word, a 145-character prose comment and a 147-character line with a space past the
+limit are all caught. Exemption (2) is a SUBSTRING test and not URL recognition: `foo://…` is
+exempt, `www.example.com/…` is not. The character
+scan below has no exemption at all, so it flags both shapes ruff waves through; that is the
+place the two most visibly disagree, and it is live rather than theoretical — with the
+pycodestyle table removed so E501 falls back to `line-length` = 100, the scan finds 95 lines
+where ruff finds 94, differing on `tests/unit/test_api.py:731`,
+which ends in an IPv6 URL. If a genuinely unwrappable line ever has to exceed 110,
 this is where that argument gets had.
 
 WHY CHARACTERS AND NOT BYTES, which is the trap this repo keeps walking into by hand. Ruff counts
-CHARACTERS. The shell reflex — `awk '{ if (length($0) > 100) ... }'`, `wc -c` — counts BYTES, and
-this repo's prose is full of em-dashes (3 bytes) and Cyrillic (2 bytes each). Measured on the
-pre-image 3db8ef9: 1015 lines sit at or under 100 characters while exceeding 100 bytes, and 413 do
-so at 120. A byte counter calls every one of them a violation. Those two are DIFFERENT sets and
-neither contains the other — a line over 100 characters cannot be in the first — so do not read the
-413 as a subset of the 1015. And the 1015 is dated to a sha on purpose: it counts em-dashes in
-prose, so it moves whenever prose lands, this file's own docstring included (on the tree that ships
-it the figure is already 1020). Re-measure rather than quote it. VMCP-132 (621)'s worklog records
+DISPLAY WIDTH, which equals `len(line)` for everything here — measured, no line in the scan roots
+differs between the two at `3db8ef9`, `34ba644`, `26d15c2` or `d857280`, because the tree holds
+no tabs and no wide characters. A tab or a CJK character would break that equivalence, so the
+useful contrast is with BYTES. The shell reflex — `awk '{ if (length($0) > 100) ... }'`, `wc -c`
+— counts BYTES, and
+this repo's prose is full of em-dashes (3 bytes) and Cyrillic (2 bytes each). Measured at
+`d857280`: 1626 lines sit at or under 100 characters while exceeding 100 bytes, and 1004 do
+so at 110. A byte counter calls every one of them a violation. Those two are DIFFERENT sets
+and neither
+is nested in the other, which is measured here rather than argued from the definition: 989 lines
+are in both, 637 only in the first and 15 only in the second. And both are dated to a sha on
+purpose: they count em-dashes in prose, so they move whenever prose lands, this file's own
+docstring included — those same two limits replayed at `3db8ef9` give 1015 and 569. THE 413 THIS
+PARAGRAPH USED TO PRINT beside the 1015 was the 120 ruler and retired with the ceiling; it is not
+the same measurement taken earlier, and reading it as one understates the second set by 156 at
+that very sha. Re-measure rather than quote them. VMCP-132 (621)'s worklog records
 the mistake in this repo in those words: "an awk byte-count had falsely flagged one line because of
 the em-dash". The last test below pins that the distinction is still live here, so the paragraph
 cannot rot into a story about a hazard that no longer exists.
@@ -92,8 +142,10 @@ WHAT THOSE ROUNDS DIVIDE INTO, stated carefully because the obvious summary is w
 two and six are invisible to ruff: it reports nothing, because a linter cannot report that its own
 rule was switched off. Round five is the exemption ruff applies deliberately. Round four is the
 ordinary case both channels answer. Round THREE is neither — deleting the pycodestyle table does
-not switch E501 off, it silently TIGHTENS it to `line-length`, and ruff duly reports 76 errors on
-the grandfathered band. So that round is loud in both channels, and the earlier draft of this
+not switch E501 off, it silently TIGHTENS it to `line-length`, and ruff duly reported 76 errors on
+the grandfathered band — re-run at `d857280` that is 94, because the band grows with the tree, so
+take the 76 as belonging to the day of the round and not to the current tree. So that round is
+loud in both channels, and the earlier draft of this
 paragraph filed it under "invisible to ruff", which was false; the second independent pass caught
 it by running the round instead of reasoning about it. Worth keeping as written, because the
 failure mode it describes — a config edit that looks like a relaxation and lands as a tightening —
@@ -193,10 +245,11 @@ def test_the_hard_limit_is_declared_where_the_lint_rule_reads_it():
     assert pycodestyle.get("max-line-length") == _HARD_LIMIT, (
         f"the enforced ceiling is {pycodestyle.get('max-line-length')!r}, not {_HARD_LIMIT}. "
         "Moving it is a legitimate decision and this assertion is where it gets made on purpose: "
-        "LOWERING it needs the lines between the new value and 120 reflowed first (count them, do "
-        "not trust this docstring's figure — it was only ever true at the sha that wrote it), and "
-        "RAISING it needs a reason, because 120 was chosen as the smallest round number above "
-        "every line that existed on the day the gate went in."
+        f"LOWERING it needs the lines between the new value and {_HARD_LIMIT} reflowed first "
+        "(count them, do not trust this docstring's figure — it was only ever true at the sha "
+        "that wrote it), and RAISING it needs a reason, because each value this has held was "
+        "chosen as the smallest round number above every line the tree carried on the day it "
+        "moved — 120 when #669 turned the rule on, 110 since #711 ratcheted it."
     )
 
 

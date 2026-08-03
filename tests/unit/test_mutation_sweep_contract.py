@@ -1142,8 +1142,8 @@ def test_claude_md_says_a_stale_figure_sweep_is_not_line_fed():
     assert "must not be LINE-FED" in section, \
         "CLAUDE.md no longer says a sweep for stale figures must not be line-fed. Test prose " \
         "here is hand-wrapped near 100 columns — a convention, not the gate, which sits at " \
-        "`max-line-length = 120` since #669 — so `grep -rn` reports a file CLEAN at a wrapped " \
-        "figure, which is the one answer a sweep exists to give"
+        "`max-line-length = 110` since #711 ratcheted #669's 120 down — so `grep -rn` reports " \
+        "a file CLEAN at a wrapped figure, which is the one answer a sweep exists to give"
     assert _MEASURED_COUNTER_EXAMPLE.search(" ".join(section.split())), \
         "CLAUDE.md no longer carries the measured counter-example, and the rule is worth less " \
         "without it: read PER LINE, loosening the PATTERN does not help — the same 15 hits on " \
