@@ -1344,10 +1344,30 @@ def _build_workflow(root: Path) -> tuple:
 #     lines away staying exactly as it is, and the whole policy is "fail toward shouting". Pinned
 #     directly (test_keep_grading_of_unreachable_head_still_turns_on_the_role) rather than through
 #     a sweep, precisely because no sweep can construct it any more.
-# Neither set contains CODE_HALF_CREATED, CODE_LOCKED, CODE_SELF_TREE, CODE_RELEASE_ERROR or
-# CODE_NO_WORKTREE: a parked card must not launder a broken tool state. A half-created tree needs a
-# human with two git commands whether or not its card is parked, and the last three describe gc
-# itself, not the work in the tree.
+# Neither set contains CODE_DETACHED_BUILD, CODE_HALF_CREATED, CODE_LOCKED, CODE_NO_WORKTREE,
+# CODE_RELEASE_ERROR or CODE_SELF_TREE — all six, and that membership is DERIVED rather than
+# restated: test_the_policy_comment_enumerations_are_derived_from_the_code reads the RUN OF NAMES
+# above — the list itself, not this paragraph, because prose down here mentions some of them again
+# — and fails unless it is exactly the codes in neither set. Derived because as a hand-kept copy it
+# rotted twice, silently and in two different ways. It opened (VMCP-68) naming four and closing
+# cleanly on "the other three"; VMCP-142 inserted CODE_LOCKED at position two and rewrote that to
+# "the LAST three", which slid the referent past the new member and left it in a list with no bin at
+# all. The other rot is older and simpler: VMCP-86 declared CODE_DETACHED_BUILD and never added it
+# here, so the list was already short by one when VMCP-142 arrived. Neither rot was caught by the
+# card that caused it; both were caught by VMCP-91, which was rewriting a DIFFERENT closed
+# enumeration further down this block (the four bins under the grid), so what this needs is not
+# more care but an assert.
+#
+# A parked card must not launder any of the six, and each has its own reason to shout. Read the
+# bins as WHY-NOT-ROUTINE, not as a taxonomy: CODE_LOCKED also happens to be cleared by a git
+# command (`git worktree unlock`), so "needs a git command" is not what separates the groups.
+# CODE_HALF_CREATED and CODE_DETACHED_BUILD are the two whose refusal is a HANDOFF of specific
+# commands against the tree — the first to a human, the second to the AGENT (`git rebase
+# --continue`/`--abort`, which is why that refusal spells both out, since only the agent can know
+# which) — and a parked card neither runs them nor makes them unnecessary.
+# CODE_LOCKED has the paragraph directly below to itself, and that pointer is the repair for the
+# orphaning: it was never unexplained, only unreferenced. CODE_NO_WORKTREE, CODE_RELEASE_ERROR and
+# CODE_SELF_TREE describe gc itself, not the work in the tree.
 #
 # CODE_LOCKED (VMCP-142) is the one whose grading was an actual decision rather than a reading, so
 # say why it is `kept`. A human `git worktree lock` IS an explicit human action, which sounds like

@@ -6,6 +6,7 @@ matters: that housekeeping can never destroy an agent's unpushed work.
 import fcntl
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -2282,6 +2283,202 @@ def test_the_grading_grid_is_all_kept_outside_the_four_named_cells():
         (workspace_cmd.CODE_UNREACHABLE_HEAD, "review", True),
         (workspace_cmd.CODE_UNREACHABLE_HEAD, "review", False),
     }, "the set of cells graded routine moved — every OTHER cell in this grid must be `kept`"
+
+
+# --- VMCP-183 (708): the policy COMMENT's two closed enumerations, derived instead of restated ---
+
+def _policy_source() -> list[str]:
+    return Path(workspace_cmd.__file__).read_text().splitlines()
+
+
+# A run of separators, not one: a bullet-shaped list puts TWO between members (`, * CODE_X`), and a
+# single-separator pattern silently stopped at the first of them — reading four names out of six and
+# redding on a purely cosmetic edit. Measured, not guessed.
+_LIST_ITEM = re.compile(r"(?:\s*(?:[,;*•-]|\bor\b|\band\b))*\s*(CODE_[A-Z_]+)")
+
+
+def _enumerated_codes(lines: list[str]) -> list[str]:
+    """The MEMBERS of the `Neither set contains ...` list — the run of `CODE_*` names that follows
+    that phrase, and nothing else in the paragraph.
+
+    THE LIST, NOT THE PARAGRAPH, and that distinction is not a nicety: the first version of this
+    helper collected every `CODE_*` token in the whole paragraph, and a mutation round proved it
+    worthless. Deleting CODE_DETACHED_BUILD from the list left the paragraph's own provenance prose
+    ("VMCP-86 declared CODE_DETACHED_BUILD and never added it here") holding the name, so the token
+    set was unchanged and the whole `tests/unit` selection stayed green — a pin that could not see
+    the exact defect its card was filed for. Scoped to the list, the same mutation is caught however
+    often the name appears elsewhere.
+
+    Reading a RUN rather than a fixed shape is what keeps re-wrapping, reordering and swapping the
+    connector from redding it: lines are flattened first, and separators are optional.
+
+    THE REGION RUNS TO THE END OF THE COMMENT BLOCK, not to the first bare `#`, and blank comment
+    lines and bullet markers are absorbed rather than treated as terminators. That is the SECOND
+    thing measurement changed here: with a paragraph-terminated region, re-shaping the six names
+    into a bullet list (a purely cosmetic edit that leaves every claim true) put a bare `#` between
+    the phrase and the names, the region became one line long, zero names parsed, and the test went
+    red. It cost nothing to widen, because the run still stops at the first token that is not a
+    code name — so the wider region cannot swallow anything the narrow one did not."""
+    starts = [i for i, ln in enumerate(lines) if ln.startswith("# Neither set contains")]
+    assert len(starts) == 1, \
+        f"expected exactly one `# Neither set contains` sentence, found {len(starts)} — this pin " \
+        f"cannot tell which enumeration it is meant to be checking"
+    end = starts[0] + 1
+    while end < len(lines) and lines[end].startswith("#"):
+        end += 1
+    flat = " ".join(s for ln in lines[starts[0]:end] if (s := ln.lstrip("#").strip()))
+
+    head = "Neither set contains"
+    at = flat.index(head) + len(head)
+    names: list[str] = []
+    while (m := _LIST_ITEM.match(flat, at)) is not None:
+        names.append(m.group(1))
+        at = m.end()
+    assert names, f"no `CODE_*` run found after {head!r} in: {flat[:120]!r}"
+    assert len(names) == len(set(names)), f"the list repeats a member: {names}"
+    return names
+
+
+def _grid(lines: list[str]) -> tuple[list[tuple[str, bool]], dict[str, list[str]]]:
+    """The `code / build+parked / build / review+parked / review` table, parsed into its column
+    keys and its rows.
+
+    Tolerant by construction, because the point is to pin CLAIMS and not FORMATTING: columns come
+    from the header rather than from a hard-coded order, cells are the trailing run of E/K tokens,
+    and the label is whatever precedes them — so re-padding a column, renaming a row label with a
+    space in it, or reordering the columns cannot red this test on its own."""
+    heads = [i for i, ln in enumerate(lines)
+             if ln.lstrip("# ").startswith("code") and "build+parked" in ln]
+    assert len(heads) == 1, f"expected exactly one grid header line, found {len(heads)}"
+    tokens = lines[heads[0]].lstrip("# ").split()
+    assert tokens[0] == "code", tokens
+    columns = [(t.split("+")[0], t.endswith("+parked")) for t in tokens[1:]]
+
+    rows: dict[str, list[str]] = {}
+    for ln in lines[heads[0] + 1:]:
+        if not ln.startswith("#"):
+            break
+        body = ln.lstrip("#").split()
+        if len(body) <= len(columns) or set(body[-len(columns):]) - {"E", "K"}:
+            break
+        rows[" ".join(body[:-len(columns)])] = body[-len(columns):]
+    assert rows, "no E/K rows were parsed out of the grid"
+    return columns, rows
+
+
+def _graded(code, role: str, parked: bool, *, drop_code: bool = False) -> str:
+    entry = {"task_id": 7, "role": role}
+    if not drop_code:
+        entry["code"] = code
+    return "E" if workspace_cmd._keep_is_expected(entry, {7} if parked else set()) else "K"
+
+
+def test_the_policy_comment_enumerations_are_derived_from_the_code():
+    """This block holds TWO closed enumerations over the same population — the `Neither set
+    contains ...` paragraph and the E/K grid — and a closed enumeration nobody asserts is a rotting
+    form. Measured, not argued. The paragraph opened in VMCP-68 with four members and was COMPLETE
+    then — `git show "0da22fd:src/vikunja_mcp/workspace_cmd.py"` names four, and CODE_DETACHED_BUILD
+    did not yet exist (0 occurrences at that rev). VMCP-86 declared it and did not add it here,
+    which is where the list first went short. VMCP-142 then inserted CODE_LOCKED at position two and
+    rewrote the closing clause from "the other three" to "the LAST three", sliding the referent past
+    the new member and leaving it with no bin at all. Six codes are in neither `_EXPECTED_*` set and
+    the sentence named five. Both rots survived the card that made them and were found by VMCP-91
+    rewriting something else nearby.
+
+    WHAT THIS PINS THAT THE NEIGHBOURING TESTS DO NOT. `test_the_grading_grid_is_all_kept_outside_
+    the_four_named_cells` pins the GRADER against a cell set written in that test; this one pins the
+    COMMENT against the grader. They are different artifacts and each is invisible to the other: a
+    new `CODE_*` added to that test's row list and to the grid, but not to the LIST, is green
+    everywhere except here.
+
+    NOT the shape either historical rot took, and worth saying so rather than borrowing their
+    authority: when VMCP-142 landed there was no grid and no grid test (both arrived with VMCP-91,
+    AFTER it — `git show "bb81c39:src/vikunja_mcp/workspace_cmd.py" | grep -c build+parked` is 0),
+    so it had exactly one other place to update and missed it. The paired shape is what this region
+    produces from NOW on, because keeping a new code honest today means three edits, and only one
+    of them had an assert before this test.
+
+    WHAT IT DOES NOT COVER, said plainly because this card is about false completeness — and the
+    list itself was wrong twice before it was right, which is the honest reason to read it as a
+    floor. (1) TWO of the block's THREE enumerations. The rationale paragraph under the list names
+    all six again and sorts them into bins, and the four-bin sentence under the grid does the same
+    over prose categories; neither is pinned. Measured: orphaning a member in the rationale
+    paragraph, or asserting there outright that CODE_DIRTY is also in neither set, leaves the whole
+    selection green. (2) Only NAMES and VERDICTS: it cannot tell whether a rationale clause actually
+    accounts for the member it sits next to — the exact defect that orphaned CODE_LOCKED would still
+    be green if the name appeared in the list with no reason attached anywhere. The pointer to its
+    own paragraph is prose, not a pin. (3) The grid has no role-less column, so this test says
+    nothing about an entry carrying no `role`; the neighbouring test owns that. (4) One narrow
+    false-red edge, and it is the price of reading a RUN: prose written immediately after the last
+    member and opening with a separator plus a code name ("... or CODE_SELF_TREE and CODE_DIRTY is a
+    different matter") is swallowed into the list. Anything separated by other words is not — a
+    contrastive mention elsewhere in the paragraph is measured GREEN.
+
+    MUTATION-CHECKED — and the sweep earned its keep twice over, because it killed the FIRST version
+    of this test (see `_enumerated_codes`) and an independent second pass then killed a false RED
+    the first version also had. Selection `tests/unit` (895 collected), `__pycache__` purged and
+    `PYTHONDONTWRITEBYTECODE=1` each round, `vikunja_mcp.__file__` printed each round, `--tb=no` so
+    no docstring can reach the log. **control 0 failed**, and every count below is a delta on it:
+      * drop CODE_DETACHED_BUILD from the LIST, leaving the name in the paragraph's prose -> 1,
+        this test. This is the round that read 0 against v1.
+      * drop CODE_LOCKED from the list AND from every prose mention -> 1, this test.
+      * restore the exact pre-708 defective sentence verbatim -> 1, this test (0 against v1).
+        THIS ONE ROUND comes from a separate replay of the second independent pass's attacks, on
+        the narrower `tests/unit/test_workspace_cmd.py` selection and against ITS OWN control of
+        0 failed. Named rather than blended into the list above, because a count means nothing
+        except against the control that shares its selection.
+      * flip the `locked`/`build+parked` grid cell K -> E -> 1, this test.
+      * add CODE_LOCKED to `_EXPECTED_IN_A_PARKED_BUILD_TREE` -> 3: this test, the grid test, and
+        test_a_locked_tree_reports_the_lock_even_when_it_is_also_dirty.
+      * PAIRED, three coordinated edits: declare `CODE_NEWTHING`, add its all-K grid row, add it to
+        the neighbouring test's row list -> **1, this test ALONE**. Its halves are NOT innocent and
+        the sweep says so: the constant alone -> 2, constant plus grid row -> 2 (this test and the
+        grid test both). Only the full triple isolates this one.
+      * GREEN under: reordering the six names, swapping the `or` connector, re-shaping them into a
+        bullet list, re-padding the grid columns, and swapping two grid columns together with their
+        cells. On the narrower selection, also green under a contrastive `CODE_DIRTY` elsewhere in
+        the paragraph — which v1 red-flagged and had to declare as a cost.
+      * A ROUND IS ACCEPTED BY THE FAILING TEST'S NAME, NEVER BY THE COUNT, and this sweep is why.
+        Two rounds came back `1 failed` that had nothing to do with this pin: a re-wrap probe that
+        wrote a 121-character line (test_line_length_gate), and the second pass's "behaviour-neutral"
+        edit, which moved CODE_LOCKED into the parked-build set and duly broke
+        test_a_locked_tree_reports_the_lock_even_when_it_is_also_dirty. Read as numbers, both look
+        like this test false-redding; read as names, one is a bug in the probe and the other is
+        proof the edit was not behaviour-neutral after all."""
+    lines = _policy_source()
+    declared = {n: v for n, v in vars(workspace_cmd).items()
+                if n.startswith("CODE_") and isinstance(v, str)}
+    assert len(declared) >= 9, f"the module stopped declaring codes: {sorted(declared)}"
+    expected_anywhere = (workspace_cmd._EXPECTED_IN_A_PARKED_BUILD_TREE
+                         | workspace_cmd._EXPECTED_IN_A_REVIEW_TREE)
+
+    in_neither = {n for n, v in declared.items() if v not in expected_anywhere}
+    named = set(_enumerated_codes(lines))
+    assert named == in_neither, (
+        "the `Neither set contains ...` list no longer enumerates exactly the codes in "
+        f"neither `_EXPECTED_*` set. Missing from the prose: {sorted(in_neither - named)}. "
+        f"Named there but actually expected somewhere: {sorted(named - in_neither)}. A code with "
+        "no bin is an invitation to grade a NEW guard by a list that already forgot one."
+    )
+
+    columns, rows = _grid(lines)
+    by_value = {v: n for n, v in declared.items()}
+    assert set(declared.values()) <= set(rows), (
+        f"declared codes with no row in the policy grid: "
+        f"{sorted(declared.values() - set(rows))} — grade it in the table deliberately"
+    )
+    for label, cells in rows.items():
+        for (role, parked), cell in zip(columns, cells):
+            if label in by_value:
+                want = [_graded(label, role, parked)]
+            else:                       # the `<unknown / absent>` row: BOTH fallbacks, one cell
+                want = [_graded("a-code-nobody-declared", role, parked),
+                        _graded(None, role, parked, drop_code=True)]
+            assert set(want) == {cell}, (
+                f"the grid claims `{label}` is {cell!r} at role={role} parked={parked}, but "
+                f"`_keep_is_expected` answers {sorted(set(want))} — the comment is a copy that "
+                f"drifted from the function it describes"
+            )
 
 
 # --- VMCP-69 (517): the two behaviour leftovers of the parallel-drain branch ---
