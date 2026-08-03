@@ -4007,7 +4007,8 @@ def test_the_second_pass_runs_in_its_own_clone_and_the_recipe_carries_the_workin
     the copy loop; `clone`, `diff` and `ls-files` reach it by transitivity, measured rather than
     deduced — push any one of them alone below the marker -> 1 failed each). Author-side lines it
     does NOT pin are not held at all: the fence's two verification lines slide below the marker at
-    0 failed. PARTIAL is the operative word, and free does not mean harmless.
+    0 failed. PARTIAL is the operative word, and free does not mean harmless — every round in
+    this paragraph run with control 0 failed at both ends, `collected 1 item` throughout.
     Free and harmless, each round green and each one BUILT: swap `clone` with
     `diff`, lift the `ls-files` line above the clone, slide the patch pair below the whole
     untracked block -> 0 failed each, and on a throwaway repo all three still hand over a clone
@@ -4017,18 +4018,27 @@ def test_the_second_pass_runs_in_its_own_clone_and_the_recipe_carries_the_workin
     not exist yet (exit 2, module never copied); the loop's one working line, `mkdir … && cp …`,
     deleted while `while`/`done` stay, which sh and bash refuse as a syntax error at exit 2 while
     ZSH — what this repo's agents run — accepts the empty loop and copies nothing (exit 1, the
-    verification naming the lost file); any pinned line lifted ABOVE the `SP=`/`TREE=`/`P=`
-    assignments, which leaves its variables EMPTY — built for the clone line, that is
-    `git clone --no-hardlinks "" ""` at exit 128; and `cd "$CLONE" &&
-    uv sync` slid below the `__file__` print, its only pin being marker < sync, which runs the
-    print in the ORIGINAL tree and so aims this card's own anti-VMCP-148 check at the wrong `src`.
-    Three of those four are the second pass's, not the author's. None is pinned, deliberately —
-    but they do NOT all report the same way, and collapsing that would be the same overclaim
-    again. Three halt the chain with a non-zero exit. The `uv sync` one does not: it is exit 0 and
-    reports only as a PATH the auditor has to COMPARE with his own, which is why the section
-    mandates that print every round and why its own bullet says a control round will not catch it.
-    Naming what a pin does not reach is this paragraph's job; pinning the fence line by line is
-    not. Re-measured this round, control
+    verification naming the lost file); either ASSIGNMENT displaced below the step that reads it —
+    `TREE=`/`CLONE=` under the clone line (built: exit 128) or `P=` under the `diff` line (exit 1,
+    and the clone keeps the UNEDITED file, which a verification over untracked NAMES cannot see);
+    and `cd "$CLONE" && uv sync` slid below the `__file__` print, its only pin being
+    marker < sync. Three of those four are the second pass's, not the author's, and the last is
+    RUNNER-dependent in a way that is the point rather than a caveat: run from inside the clone —
+    the working directory the brief hands the auditor — the print still names the clone and
+    nothing is wrong; run from anywhere else, as the AUTHOR does when checking the whole fence,
+    and `uv` walks up to the ORIGINAL project and the print names the wrong `src` at exit 0. None
+    of the four is pinned, deliberately, and they do NOT report alike: three halt the chain with a
+    non-zero exit, while that one is exit 0 and speaks only as a PATH somebody has to COMPARE with
+    their own — which is what the per-round `__file__` print is there for.
+
+    Two things that list is NOT, both learned by measuring it line by line, control 0 failed at
+    both ends. It is not "any pinned line moved above the assignments": lifting `clone`, `diff` or
+    `ls-files` to the top of the fence -> 0 failed, but lifting `apply`, the copy loop, the marker
+    or `uv sync` -> 1 failed (`assert 367 < 0`, `585 < 0`, `651 < 0`, `992 < 0`). Three of seven,
+    not seven — and the marker case is one MUTATION-CHECKED already records as caught, so the
+    wider phrasing had this docstring calling one mutation red and green at once. Nor is the list
+    a census; naming what a pin does not reach is this paragraph's job, and pinning the fence line
+    by line is not. Re-measured this round, control
     0 failed at both ends and `collected 1 item` every round: point the clone at a different repo
     -> 0 failed; redirect the patch to a different file -> 0 failed; delete
     `export PYTHONDONTWRITEBYTECODE=1` from the fence -> 0 failed (its prose sub-bullet holds the
