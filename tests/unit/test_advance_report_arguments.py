@@ -32,8 +32,9 @@ docstring stops quoting it -> 1 failed; control after restore 0 failed.
 
 Round 3, after an independent re-measure added the misspelled-key case, selection = this file
 at 15 tests: control 0 failed; the refusal stops naming the misspelling cause -> 1 failed;
-control after restore 0 failed. The three rounds have DIFFERENT selections and each carries
-its own control, which is why they are three paragraphs and not one table.
+control after restore 0 failed. That mutation targeted the PRE-#720 sentence, and both it and
+the pin that held it are gone now — see round 5. The three rounds have DIFFERENT selections and
+each carries its own control, which is why they are three paragraphs and not one table.
 
 The truncation round is the load-bearing one, and NOT because the others are all prose — an
 earlier version of this sentence said "every other mutation here damages prose the tests read",
@@ -57,6 +58,21 @@ signature in server.py written as `worklog: str = ""` -> 2 failed, BOTH of them;
 `worklog: object | None` -> 1 failed, the misspelled one; control after restore 0 failed. The
 surviving half was re-measured in that round rather than inherited: all EIGHT mutations of
 rounds 1-3, replayed against this same two-test selection, are 0 failed.
+
+Round 5 is VMCP-192 (720)'s REWORK, and what it guards is a defect the fix itself introduced:
+closing the class made three AGENT-FACING texts false, since all three still said a misspelling
+is dropped in silence and should be checked FIRST. Selection = this file plus test_server.py at
+72 tests, `__pycache__` deleted and then PYTHONDONTWRITEBYTECODE=1, each round restored from a
+byte copy and confirmed sha256-identical: control 0 failed; restore the pre-#720 "CHECK THE
+PARAMETER NAME FIRST" sentence into `_LOST_ARGUMENT_HINT` -> 1 failed,
+test_the_refusal_RULES_OUT_the_misspelling_cause alone; drop the `sys.stderr is None` guard from
+the degradation path -> 1 failed, test_the_forbid_gate_degrades_instead_of_killing_the_server
+alone; control after restore 0 failed. Both deaths are on-name. What that does NOT cover is
+worth writing down rather than leaving to be discovered: the pin reads `_LOST_ARGUMENT_HINT` and
+nothing else, so the same retired advice reinstated in SKILL.md or in `advance`'s docstring dies
+to no test here — those two are pinned for QUOTING `arrived as null`, never for what they say
+its cause might be. The gap is the reason this card was bounced in the first place, so it is a
+known hole, not a fixed one.
 
 Where each death LANDS is worth writing down, because two of the three are on-name and one is
 not — and "each died on its own assertion, not collaterally" is what this paragraph said first,
@@ -427,7 +443,17 @@ def test_the_forbid_gate_degrades_instead_of_killing_the_server():
     re-resolves dependencies and ignores the lock — so a minor SDK release can move this handle.
     When it does, the stdio server must still start: the old ambiguity is bad, a server that
     refuses to boot for every consumer is worse. One line to stderr, never stdout (a byte there
-    corrupts the protocol), and no exception."""
+    is where the framing lives), and no exception.
+
+    The second half is the `sys.stderr is None` case (fd 2 closed at exec), added when #720 was
+    bounced. It is checked EXPLICITLY in the source rather than caught, and that is not a style
+    choice: measured, `print(x, file=None)` writes to STDOUT and raises nothing, so the
+    `except` around it can never see it — the same trap CLAUDE.md records for `claimable_cmd`.
+    Without the check the degradation path splices a non-JSON-RPC line into the protocol stream.
+    Priced, also by running: a real mcp 2.0 client SURVIVES that line — it logs `Failed to parse
+    JSONRPC message from server`, then initialize and a tool call both succeed — so this is noise
+    to recover from rather than a dead session, which is why the docstring no longer says a byte
+    on stdout corrupts the protocol."""
     from vikunja_mcp import server
 
     class Broken:
@@ -444,15 +470,49 @@ def test_the_forbid_gate_degrades_instead_of_killing_the_server():
     assert "could not forbid unknown tool arguments" in captured.getvalue()
     assert "dropped silently" in captured.getvalue()
 
+    # ...and with no stderr at all, the line must be DROPPED rather than land on stdout.
+    on_stdout = io.StringIO()
+    stdout, sys.stdout = sys.stdout, on_stdout
+    stderr, sys.stderr = sys.stderr, None
+    try:
+        server._forbid_unknown_tool_arguments(Broken())      # must not raise, must not print
+    finally:
+        sys.stderr, sys.stdout = stderr, stdout
+    assert on_stdout.getvalue() == "", (
+        f"the degradation notice reached STDOUT, where the JSON-RPC framing lives: "
+        f"{on_stdout.getvalue()!r}"
+    )
 
-def test_the_refusal_names_the_misspelling_cause(env):
-    """It is the one cause that is actionable without leaving the session — see the sibling test
-    for why this is not written as "one of three" any more."""
-    api, wf, t = env
-    wf.advance(t["id"], to="build", spec="s")
-    with pytest.raises(WorkflowError) as exc:
-        wf.advance(t["id"], to="review", evidence="a" * 40)
-    assert "misspelling" in str(exc.value)
+
+def test_the_refusal_RULES_OUT_the_misspelling_cause():
+    """The mirror of the sibling above, on the agent-facing side, and it was INVERTED with it.
+
+    Until #720 this test was `test_the_refusal_names_the_misspelling_cause` and pinned the
+    opposite advice — "CHECK THE PARAMETER NAME FIRST" — which was correct while an unknown key
+    was dropped in silence. It stopped being correct the moment the gate landed, and the pin
+    would have gone on HOLDING the retired sentence in place: green, agent-facing, and wrong.
+    That is the defect this round was bounced for, so the pin is retargeted rather than deleted.
+
+    WHY THE REFUSAL CAN SAY THIS AT ALL. Re-measured over real stdio on this tree, not inherited:
+    `advance(to='review', wroklog=<7000 chars>, evidence=<40>)` comes back `isError=True` with
+    "wroklog … Extra inputs are not permitted" and the tool body never runs, while the same call
+    with the key OMITTED reaches the body with `worklog_len == -1`. So a typo cannot produce this
+    text, and an agent who reads it has already ruled that cause out by reading it.
+
+    The negative assertion is the load-bearing one: the positive phrasing could be reworded
+    honestly by a later card, but the pre-#720 imperative reappearing means the prose regressed.
+    """
+    msg = _refusal_text(evidence="a" * 40)
+    assert "CHECK THE PARAMETER NAME FIRST" not in msg, (
+        "the pre-#720 advice is back in an agent-facing refusal: a misspelling is now refused "
+        f"at the boundary, so this sends agents to check the one cause reading it excludes: {msg}"
+    )
+    assert "misspelling cannot reach this text" in msg, (
+        f"the refusal must say WHY the name is not worth checking, not merely omit it: {msg}"
+    )
+    assert "THREE and no longer four" in msg, (
+        f"the count moved with the gate — three causes still arrive as null, not four: {msg}"
+    )
 
 
 def test_advance_keeps_worklog_optional_in_its_schema():

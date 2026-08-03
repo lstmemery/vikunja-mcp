@@ -95,8 +95,17 @@ def _forbid_unknown_tool_arguments(server) -> None:
     `stable` channel re-resolves dependencies and ignores the lock — so a minor SDK release can
     move this. A failure here degrades to the OLD behaviour (a silent drop) and writes one line
     to stderr; it never raises, because a stdio server that refuses to start is worse for every
-    consumer than one that keeps the ambiguity. stderr only — a byte on stdout corrupts the
-    protocol. That the gate is actually ON is pinned by tests rather than assumed.
+    consumer than one that keeps the ambiguity. stderr ONLY, and `sys.stderr is None` (fd 2
+    closed at exec) is checked EXPLICITLY rather than caught, because `print(file=None)` writes
+    to STDOUT and raises nothing — the same trap CLAUDE.md records for `claimable_cmd`, where no
+    `except` can see it. What that costs is measured rather than asserted, and it is LESS than
+    "a byte on stdout corrupts the protocol", which is what this docstring claimed first: the
+    real mcp 2.0 client logs `Failed to parse JSONRPC message from server` and keeps going —
+    `initialize` and a `call_tool` after it both succeed. So a stray line is noise the peer
+    recovers from, not a dead session. Measured AT STARTUP, which is where this one would land
+    (`_server()` runs before `.run()`); a line interleaved mid-session was not tried, so read
+    this as "worth avoiding, not worth overstating" rather than as a licence to write there.
+    That the gate is actually ON is pinned by tests rather than assumed.
     """
     try:
         tools = getattr(server._tool_manager, "_tools", None)
@@ -108,11 +117,14 @@ def _forbid_unknown_tool_arguments(server) -> None:
             arg_model.model_rebuild(force=True)
             tool.parameters = arg_model.model_json_schema()
     except Exception as exc:                      # noqa: BLE001 — see BEST-EFFORT above
+        if sys.stderr is None:                    # print(file=None) would go to STDOUT
+            return
         try:
             print(
                 "vikunja-mcp: could not forbid unknown tool arguments "
                 f"({exc.__class__.__name__}: {exc}); a misspelled parameter name will be "
-                "dropped silently, as before #720",
+                "dropped silently, as before #720 — on every tool, or, if this failed "
+                "part-way through the loop, on the ones it had not reached",
                 file=sys.stderr,
             )
         except Exception:
@@ -486,9 +498,12 @@ def advance(
     the fix: measured (#657) this server carries a 4 MiB argument byte-exact over its own
     stdio transport, so a kilobyte report hits no limit here and the loss is above it, where it
     was never reproduced — and the filing card's own success came from a SHORT worklog, not
-    from repeating the call, so nothing says a retry would work. And because an explicit null, a
-    dropped key, a misspelled parameter name and an omitted argument ALL arrive as null, the
-    tool can report the state but never the cause. Advance with a SHORT worklog and post the full
+    from repeating the call, so nothing says a retry would work. A MISSPELLED parameter name is
+    no longer one of the possibilities: since #720 an unknown argument is refused at the boundary
+    BY NAME, before this tool runs, so reading 'arrived as null' rules that cause out instead of
+    leaving it first in line. What still arrives as null — an explicit null, a dropped key and an
+    omitted argument — the tool can report as a STATE but never tell apart as a cause. Advance
+    with a SHORT worklog and post the full
     text as separate comment() calls marked [worklog] (say so in the short one, so the
     journal does not read as a placeholder)."""
     return _wf().advance(
