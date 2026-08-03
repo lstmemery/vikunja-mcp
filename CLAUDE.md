@@ -939,6 +939,20 @@ sha (`gh run list --commit "$(git rev-parse HEAD)"` — the FULL 40-char sha; an
 abbreviated one returns `[]` and exit 0, which reads exactly like "no run" and
 raises a false marker alarm) — "no run" and "green run" look identical from git.
 
+**And build the message with `git commit -F - <<'MSG'`, never `-m "…"`** (tracker #773).
+Same family, same silence: inside double quotes a backtick is command substitution, and the
+house style here wraps every identifier in backticks — so the more faithfully an agent follows
+it, the likelier the shell eats part of the message. Measured on a live shell:
+`-m "keeps \`blocked\` and \`epic\` and $HOME"` landed as `keeps  and  and /Users/…`; escaping
+each backtick works but has to be done by hand every time; a heredoc with an UNQUOTED delimiter
+substitutes just the same (`\`echo GONE\`` really runs); only the quoted `<<'MSG'` is verbatim,
+`$HOME` and `$(date)` included. The quoting of the delimiter is load-bearing, not cosmetic. The
+loss is not only omission — `$(…)` INSERTS foreign output into the message — which is also why
+"count the backticks afterwards" is not a usable check: it asks the author to remember the text
+they just lost, and it cannot see an insertion at all. Found on this repo's own `5389be0`, where
+three words vanished from the body; the history was not rewritten, because a force-push to main
+for a message is not worth it.
+
 **A run that EXISTS is not a run that PASSED, and that gap silently cost seven
 landings in one night** (tracker #614). Measured 2026-07-31 on this repo: 7 of 15
 consecutive runs on `main` were red, every one of them `lint-and-unit` success +

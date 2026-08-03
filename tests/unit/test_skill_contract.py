@@ -5257,3 +5257,68 @@ def test_skill_and_tool_docstring_tell_agents_to_echo_the_filed_ref_not_build_on
         "schema alone (no skill loaded) lose the rule entirely"
     assert "NEVER assemble" in doc, \
         "the file_task docstring no longer forbids assembling a ref from the id (#735/#660)"
+
+
+def _commit_recipe_slice(text: str) -> str:
+    """The rulebook's paragraph on how to BUILD a commit message — VMCP-229 (773)."""
+    start = text.find("СОБИРАЙ ТЕЛО КОММИТА ЧЕРЕЗ")
+    assert start != -1, (
+        "SKILL.md no longer tells agents how to build a commit message. That paragraph is the "
+        "whole of #773: without it the default is `git commit -m \"…\"`, where an unescaped "
+        "backtick is command substitution and the house style puts one around every identifier"
+    )
+    end = text.find("\n  - **", start)
+    assert start < end < len(text), "the commit-recipe slice is not a proper subset of SKILL.md"
+    return text[start:end]
+
+
+def test_the_rulebook_prescribes_a_commit_form_the_shell_cannot_rewrite():
+    """#773: `git commit -m "…"` silently ate three words out of this repo's own `5389be0`.
+
+    Two assertions, because they fail apart. The first asks that the prescribed form is there;
+    the second asks that the QUOTED delimiter is, and that one is not a restatement — measured on
+    a live shell, `<<MSG` without quotes substitutes exactly like `-m` does (a planted
+    `echo GONE` ran, `$HOME` expanded), so a recipe that said "use a heredoc" and stopped would
+    fix nothing while looking like a fix.
+    """
+    recipe = _commit_recipe_slice(_skill_text())
+    fence = [ln.strip() for ln in recipe.splitlines() if ln.strip().startswith("git commit")]
+    assert any(ln.startswith("git commit -F - <<'MSG'") for ln in fence), (
+        f"no line of the recipe's fence prescribes the QUOTED heredoc: {fence}. Asserted on the "
+        "FENCE LINE, not on the substring anywhere in the slice — the paragraph's own opening "
+        "sentence also contains `<<'MSG'`, so a substring check stayed GREEN when the working "
+        "example was mutated to an unquoted delimiter. Measured: that mutation was 53 passed"
+    )
+    assert any(ln.startswith("git commit -F - <<MSG") for ln in fence), (
+        f"the recipe stopped SHOWING the unquoted heredoc as a trap: {fence}. It is the row a "
+        "reader is most likely to write by accident, because it looks like the fix"
+    )
+
+
+def test_the_rulebook_shows_the_form_that_FAILS_beside_the_one_that_works():
+    """A rule that only shows the right answer is obeyed until someone is in a hurry. This one
+    carries the measured counter-example — the `-m` form losing its words — because an agent who
+    has just watched a message come back wrong needs to recognise WHICH shape did it, and the
+    two look alike at a glance.
+
+    MUTATION-CHECKED for both tests here, selection `tests/unit/test_skill_contract.py`,
+    `__pycache__` deleted and then PYTHONDONTWRITEBYTECODE=1, restored from a byte copy and the
+    file confirmed sha256-identical. Control round: 0 failed. Unquote the working heredoc -> 1
+    failed; delete the broken `-m` row -> 1 failed; drop the incident sha -> 1 failed.
+    THE FIRST TWO OF THOSE WERE 53 PASSED before the asserts were sharpened, and that is worth
+    recording rather than quietly fixing: both checks were substring lookups that the SURROUNDING
+    prose satisfied — the paragraph's opening sentence also names `<<'MSG'`, and the fence carries
+    a SECOND `-m` line (the escaped form that survives). Each pin looked exactly as green as it
+    does now while measuring nothing about the row it was named for."""
+    recipe = _commit_recipe_slice(_skill_text())
+    assert "keeps  and  and" in recipe, (
+        "the recipe no longer shows what the failing form ACTUALLY LANDED — the collapsed "
+        "`keeps  and  and /Users/…`. Asserted on that output rather than on the string "
+        "`commit -m \"`, because the fence carries TWO `-m` lines (the broken one and the "
+        "escaped one that survives): a check for the flag alone stayed GREEN with the broken "
+        "row deleted. Measured: that mutation was 53 passed"
+    )
+    assert "5389be0" in recipe, (
+        "the recipe stopped naming the commit this was measured on. The sha is what makes it an "
+        "incident report rather than a warning someone imagined"
+    )
