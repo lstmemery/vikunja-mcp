@@ -604,7 +604,9 @@ def test_reload_still_refuses_a_rotation_that_changes_only_a_CASE_SENSITIVE_part
     on the rows it names rather than derived from a total. The one round that WAS re-measured on
     the merged tree is written out in tests/unit/test_api.py's matching paragraph and covers the
     rows here too: same two-file selection, control round 0 failed, the pre-#706 body 15 failed,
-    restored 0 failed, with all four `query-*`/`fragment-*` rows of this table among the dead.
+    restored 0 failed, with all four `query-*`/`fragment-*` rows of this table among the dead —
+    fourteen of the fifteen are named rows across the two files, and the fifteenth is the
+    unparametrized httpx-divergence test in test_api.py.
 
     The `ipv6-zone-id-case` rows are #707's, and they are the same argument a third time. An IPv6
     zone id (`%25` + the id, RFC 6874) is an OS INTERFACE NAME grafted into the syntactic host, and

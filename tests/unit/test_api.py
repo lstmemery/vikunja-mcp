@@ -426,10 +426,14 @@ def test_canonical_base_url_folds_the_case_insensitive_parts_and_nothing_else(ra
     could have broken. Selection `tests/unit/test_api.py tests/unit/test_server.py`, `__pycache__`
     deleted and then PYTHONDONTWRITEBYTECODE=1, restored from a COPY and the restore confirmed by
     returning to the control AND by `git diff` being empty. Control round: 0 failed; the pre-#706
-    body (authority ends at `/` alone) -> 15 failed; restored -> 0 failed. Twelve of the fifteen
+    body (authority ends at `/` alone) -> 15 failed; restored -> 0 failed. FOURTEEN of the fifteen
     are named rows of this table and of the guard table in test_server.py — including
-    `at-INSIDE-the-query-is-not-userinfo` and both `slash-INSIDE-*` rows — so the boundary is
-    red-first on the tree that actually SHIPS, not only on the branch it was written on. That
+    `at-INSIDE-the-query-is-not-userinfo` and both `slash-INSIDE-*` rows — and the fifteenth is the
+    unparametrized httpx-divergence test below. So the boundary is
+    red-first on the tree that actually SHIPS, not only on the branch it was written on. (Fourteen
+    is #706's REVIEWER's count, not the merge's: the merge wrote twelve, which is the size of this
+    table's own #706 block carried over as if it were the size of the kill. The heading triple
+    0/15/0 was right; only the breakdown of the 15 was not, and it understated coverage.) That
     round says nothing about the other counts below, which is why they are labelled rather than
     quietly kept.
 
@@ -717,6 +721,11 @@ def test_the_canonicalizer_changes_the_client_url_only_in_these_measured_classes
     # zone half must survive it intact." This commit is that landing, and the assert is flipped
     # here rather than deleted so the prediction is visibly settled: the query half stopped
     # folding (`?Q=A`, was `?q=a`) and the zone half is untouched (`%25ETH0`), which is exactly
-    # what "must survive it intact" asked for. It is the only row in this file where the two
-    # cards' slices meet, so it is also the one that would notice either fix eating the other.
+    # what "must survive it intact" asked for. It is ONE OF TWO places where the two cards' slices
+    # meet — the merge's own comment said "the only row in this file", and #706's reviewer
+    # disproved that against the table above, which carries `zone-AND-query-both-KEPT-while-hex-
+    # folds`: same meeting point plus an uppercase-hex address and a port, a sub-case this assert
+    # does not hold. So the seam is not a single point of failure, which is the opposite of what
+    # #707's own record feared ("the whole boundary with #706 rests on ONE assert") and the reason
+    # that fear is now settled rather than merely restated.
     assert canonical_base_url("https://[fe80::1%25ETH0]?Q=A") == "https://[fe80::1%25ETH0]?Q=A/api/v1"
