@@ -235,7 +235,41 @@ band is card #711, and the decision point is the `_HARD_LIMIT` assertion in that
   normal place for a per-task agent, and where the gitignored `.vikunja-mcp.env` does not
   exist. Safety invariant taken from hgdev-acp's reaper: push OK → remove, push FAIL → KEEP
   (dirty, unpushed, or reachable-from-no-ref ⇒ reported, never destroyed).
-  Housekeeping is never how an agent's work disappears. **Only ONE of the two refusal channels is
+  Housekeeping is never how an agent's work disappears — **except for IGNORED files, and that
+  exception is real, measured, and deliberately NOT closed (#710).** The hole is in the FIRST of
+  those three guards only — the other two ask about commits — and it is that `dirty` is
+  `git status --porcelain`, which does not report ignored paths at all,
+  so a tree where everything is committed and pushed but `shot-<id>.png` or `.playwright-mcp/<id>/`
+  sits on disk reads CLEAN and is destroyed with them. Untracked-but-NOT-ignored (`??`) the guard
+  does see and does hold on **at git's default `status.showUntrackedFiles`** — set it to `no` at any
+  config level and the SAME command emits neither `??` nor `!!` (measured: a tree holding an
+  untracked `REAL-WORK.txt` plus an ignored `shot-42.png` returned the empty string and was
+  destroyed whole), which is an older hole in `dirty` that the inventory merely inherits, filed
+  separately rather than closed here. Otherwise the hole is exactly the ignored ones — and it is
+  this repo's own
+  rulebook that puts them there, since SKILL.md's browser recipes write both INTO the agent's
+  worktree. Closing it by widening the guard to `--porcelain --ignored` was measured and rejected:
+  the mandated gate (`uv run pytest`) creates `.venv` on its first invocation, so a build tree that
+  ran the gates holds ignored paths from then on — sampled 2026-08-03, 3 of 3 live build trees did
+  (7, 6 and 2 entries, every one of them `.venv/`/`__pycache__/`/a tool cache; the one review tree,
+  which had run nothing, held 0) — and `--gc` would stop reaping ANYTHING: trees pile up, disk
+  leaks, and the next human turns the guard off outright. A destroy-only-with-a-flag variant is
+  rejected by argument rather than by measurement, and the argument is that it has only two
+  settings: unset it reaps nothing, always-set it is today's behaviour with a longer argv. So the
+  removal stands and the SILENCE is what was fixed: `released` entries now carry
+  `removed_ignored: [paths]`, filtered against a small set of by-construction-regenerable names
+  (`.venv/`, `__pycache__/`, tool caches, `*.pyc`, `node_modules/`) so that the ABSENCE of the key
+  keeps meaning something — a field present on every entry is the never-read signal #516 had to
+  split `kept` in two to cure. That filter is a list and a list rots, which is why it decides only
+  what is REPORTED: out of date it costs one noisy line, never a stopped reaper. The dangerous
+  direction is ADDING to it — and that direction is guarded by a PARAGRAPH, not by the suite: an
+  independent pass measured that adding `.playwright-mcp` fails 2 tests while adding `dist`,
+  `build`, `out`, `artifacts`, `screenshots` fails none. **Naming
+  a loss is not preventing one, and the key reads in ONE direction only:** present ⇒ something
+  unrecognised was destroyed; absent ⇒ NOT a proof that nothing was, because `--ignored` collapses
+  an ignored DIRECTORY into one entry, so a file left inside `.venv/` dies unnamed (measured).
+  Whether the guard should also HOLD is a product question left to
+  a human, not guessed at in code (#764). **Only ONE of the two refusal channels is
   coded, and the split is deliberate — do not restate it as "every refusal".** A `--release`/`--gc`
   refusal is exit 0 + `released: false` + a machine-readable `code` beside the prose `reason` ("the
   tool RAN and is protecting your work"). The invariant is over `released: false`, NOT over the word

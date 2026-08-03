@@ -3123,3 +3123,211 @@ def test_a_locked_tree_reports_the_lock_even_when_it_is_also_dirty(repo, tracker
         (task_id, workspace_cmd.CODE_LOCKED)
     ]
     assert path.is_dir() and (path / "scratch.txt").exists()
+
+
+# --- VMCP-185 (710): the ignored payload a removal destroys is NAMED, never silently dropped ---
+#
+# `git status --porcelain` does not report ignored paths at all, so the dirty guard reads a tree
+# holding nothing but ignored files as CLEAN and both removal paths destroy them without a word.
+# These tests fix the REPORT, not the guard: the tree is still removed (the alternative, refusing
+# on any ignored path, paralyses every build tree that ran `uv run pytest` — see the module note).
+# So each one asserts BOTH halves: what the report now says, and that the files really are gone.
+
+
+def _ignoring(repo, *rules):
+    """Give the repo a committed, PUSHED `.gitignore` — worktrees branch from origin, not here."""
+    (repo / ".gitignore").write_text("".join(f"{rule}\n" for rule in rules))
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-m", "ignore rules")
+    _git(repo, "push", "origin", "main")
+
+
+def test_release_names_the_ignored_files_it_destroys(repo):
+    """The two artifacts SKILL.md tells an agent to write INTO its own worktree, both ignored."""
+    _ignoring(repo, "*.png", ".playwright-mcp/")
+    path = Path(ensure_workspace(42, cwd=repo)["path"])
+    (path / "shot-42.png").write_bytes(b"\x89PNG evidence for the card")
+    (path / ".playwright-mcp" / "42").mkdir(parents=True)
+    (path / ".playwright-mcp" / "42" / "page-1.yml").write_text("aria snapshot\n")
+
+    res = release_workspace(42, cwd=repo)
+
+    assert res["released"] is True, "reporting a loss must not turn into refusing to reap"
+    assert sorted(res["removed_ignored"]) == [".playwright-mcp/", "shot-42.png"]
+    # The honest half: naming is not saving. Both are gone, and the report is the only trace.
+    assert not path.exists()
+
+
+def test_release_does_not_flag_reproducible_build_detritus(repo):
+    """`.venv/` and `__pycache__/` are in EVERY build tree that ran the gates (measured, 3 of 3).
+
+    Reported, they would put the key on every released entry — the never-read signal VMCP-68 had
+    to split `kept` in two to cure, reintroduced in `released`. Absence of the key is the signal.
+
+    Carries one entry per MECHANISM of the filter, not one per name — the set's membership is its
+    own tautology, but the three ways a name is matched are real code: a path COMPONENT (`.venv/`),
+    the same component NESTED (`pkg/__pycache__/`, which is the shape live trees actually
+    have — `src/vikunja_mcp/__pycache__/` — and which a component-wise match reduced to "first
+    component" would miss), a SUFFIX (`stray.pyc`) and a LEAF name (`.DS_Store`).
+    """
+    (repo / "pkg").mkdir()
+    (repo / "pkg" / "mod.py").write_text("x = 1\n")        # tracked, so `pkg/` is not itself `??`
+    _git(repo, "add", "pkg")
+    _git(repo, "commit", "-m", "a package")
+    _ignoring(repo, ".venv/", "__pycache__/", "*.pyc", ".DS_Store")
+    path = Path(ensure_workspace(42, cwd=repo)["path"])
+    (path / ".venv").mkdir()
+    (path / ".venv" / "pyvenv.cfg").write_text("home = /usr\n")
+    (path / "pkg" / "__pycache__").mkdir()
+    (path / "pkg" / "__pycache__" / "mod.cpython-312.pyc").write_bytes(b"\x00")
+    (path / "stray.pyc").write_bytes(b"\x00")
+    (path / ".DS_Store").write_bytes(b"\x00")
+
+    res = release_workspace(42, cwd=repo)
+
+    assert res["released"] is True
+    assert "removed_ignored" not in res, res.get("removed_ignored")
+    assert not path.exists()
+
+
+def test_a_path_git_had_to_QUOTE_is_never_called_routine(repo):
+    """Fail-toward-reporting on the one input the filter cannot read: git escapes a name it cannot
+    print raw (`core.quotePath`, on by default), so matching it component-wise would match the
+    ESCAPE rather than the name.
+
+    THE INPUT IS THE POINT, and a first version of this test got it wrong: it used
+    `замер-42.png`, whose classification is False with the quote guard AND without it (no component
+    of it is in the filter either way), so DELETING the guard left the whole file green — a
+    fictitious pin, caught by an independent pass. The entry below carries a filtered component
+    (`node_modules`) inside a directory whose SPACE is what makes git quote the whole path, so it
+    is routine-looking to a component match and reported only because the guard fires first.
+    Both spellings are asserted: with the guard the tree's payload is NAMED, and the quoting is
+    what makes that non-obvious.
+    """
+    _git(repo, "config", "core.quotePath", "true")          # shared with every linked worktree
+    (repo / "my dir").mkdir()
+    (repo / "my dir" / "keep.txt").write_text("tracked, so the dir itself is not `??`\n")
+    _git(repo, "add", "my dir")
+    _git(repo, "commit", "-m", "a directory with a space in its name")
+    _ignoring(repo, "node_modules/", "*.png")
+    path = Path(ensure_workspace(42, cwd=repo)["path"])
+    (path / "my dir" / "node_modules").mkdir(parents=True)
+    (path / "my dir" / "node_modules" / "p.js").write_text("1\n")
+    (path / "замер-42.png").write_bytes(b"\x89PNG")
+
+    res = release_workspace(42, cwd=repo)
+
+    assert res["released"] is True
+    quoted = [e for e in res["removed_ignored"] if e.startswith('"')]
+    assert '"my dir/node_modules/"' in quoted, res["removed_ignored"]
+    assert len(quoted) == 2, res["removed_ignored"]         # the non-ASCII name is quoted as well
+    assert workspace_cmd._is_reproducible_ignored('"my dir/node_modules/"') is False, (
+        "an unquoted `my dir/node_modules/` IS routine — the guard is the only thing that keeps "
+        "the quoted spelling out of the filter, so this is what a deleted guard flips"
+    )
+
+
+def test_the_report_is_capped_but_the_count_is_not(repo):
+    """`--gc` runs unattended and its line is parsed by a hub process; a sibling project has
+    already lost a session to an oversized read. Truncation must not hide the SIZE of the loss."""
+    _ignoring(repo, "*.png")
+    path = Path(ensure_workspace(42, cwd=repo)["path"])
+    total = workspace_cmd._MAX_REPORTED_IGNORED + 7
+    for n in range(total):
+        (path / f"shot-{n:04d}.png").write_bytes(b"\x89PNG")
+
+    res = release_workspace(42, cwd=repo)
+
+    assert res["released"] is True
+    assert len(res["removed_ignored"]) == workspace_cmd._MAX_REPORTED_IGNORED
+    assert res["removed_ignored_truncated"] == total
+
+
+def test_the_detritus_filter_does_not_cover_what_an_agent_authors(repo):
+    """The dangerous direction of that filter, pinned: a name ADDED to it is a class of file this
+    module destroys silently again. These two are named in the card and must stay out of it."""
+    _ignoring(repo, ".vikunja-mcp.env", ".playwright-mcp/", ".venv/")
+    path = Path(ensure_workspace(42, cwd=repo)["path"])
+    (path / ".vikunja-mcp.env").write_text("VIKUNJA_TOKEN=irrecoverable\n")
+    (path / ".playwright-mcp").mkdir()
+    (path / ".playwright-mcp" / "page.yml").write_text("snapshot\n")
+    (path / ".venv").mkdir()                                  # routine, and must not mask them
+    (path / ".venv" / "pyvenv.cfg").write_text("home = /usr\n")
+
+    res = release_workspace(42, cwd=repo)
+
+    assert sorted(res["removed_ignored"]) == [".playwright-mcp/", ".vikunja-mcp.env"]
+
+
+def test_a_review_tree_reports_its_ignored_payload_too(repo):
+    """The role SKILL.md sends down a different code path (detached, `unreachable-head` instead of
+    the branch guard) — and the role that is TOLD to take screenshots of somebody else's work."""
+    _ignoring(repo, "*.png")
+    head = _git(repo, "rev-parse", "HEAD")
+    path = Path(ensure_workspace(42, role="review", at=head, cwd=repo)["path"])
+    (path / "shot-42.png").write_bytes(b"\x89PNG reviewer evidence")
+
+    res = release_workspace(42, role="review", cwd=repo)
+
+    assert res["released"] is True and res["branch"] is None
+    assert res["removed_ignored"] == ["shot-42.png"]
+    assert not path.exists()
+
+
+def test_the_ignored_inventory_leaves_the_dirty_guard_byte_for_byte(repo):
+    """`--ignored` only ADDS `!! ` lines — the guard must keep counting the OTHER ones only.
+
+    Its count is user-visible in the refusal text, so a tree with 1 real entry and 2 ignored ones
+    must still say `1 entries`, not 3. And a refused tree removes nothing, so it names nothing.
+    """
+    _ignoring(repo, "*.png", ".venv/")
+    path = Path(ensure_workspace(42, cwd=repo)["path"])
+    (path / "real-work.txt").write_text("uncommitted, NOT ignored\n")
+    (path / "shot-42.png").write_bytes(b"\x89PNG")
+    (path / ".venv").mkdir()
+    (path / ".venv" / "pyvenv.cfg").write_text("home = /usr\n")
+
+    res = release_workspace(42, cwd=repo)
+
+    assert res["released"] is False and res["code"] == workspace_cmd.CODE_DIRTY
+    assert res["reason"] == "working tree is dirty (1 entries)", res["reason"]
+    assert "removed_ignored" not in res
+    assert path.exists() and (path / "shot-42.png").exists()
+
+
+def test_gc_names_the_ignored_payload_it_destroys(repo, tracker):
+    """The unattended path — the one that runs every tick with nobody watching."""
+    _ignoring(repo, "secrets.env", "scratch/")
+    api, wf = tracker
+    path = Path(ensure_workspace(42, cwd=repo)["path"])        # nothing on the board -> dead
+    (path / "secrets.env").write_text("TOKEN=irrecoverable\n")
+    (path / "scratch").mkdir()
+    (path / "scratch" / "notes.txt").write_text("measurements not written up yet\n")
+    _quiesce(path)
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert res["kept"] == [] and res["expected"] == []
+    assert [r["task_id"] for r in res["released"]] == [42]
+    assert sorted(res["released"][0]["removed_ignored"]) == ["scratch/", "secrets.env"]
+    assert not path.exists()
+
+
+def test_gc_still_reaps_a_tree_that_holds_only_build_detritus(repo, tracker):
+    """THE anti-paralysis pin. The failure mode of "fixing" this by holding on any ignored path is
+    that `--gc` stops reaping anything at all — every build tree carries `.venv/` — trees pile up,
+    and the next human turns the guard off. Dead tree, detritus only: reaped, and quietly."""
+    _ignoring(repo, ".venv/", ".ruff_cache/", ".pytest_cache/", "__pycache__/")
+    api, wf = tracker
+    path = Path(ensure_workspace(42, cwd=repo)["path"])
+    for name in (".venv", ".ruff_cache", ".pytest_cache", "__pycache__"):
+        (path / name).mkdir()
+        (path / name / "marker").write_text("x\n")
+    _quiesce(path)
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert [r["task_id"] for r in res["released"]] == [42]
+    assert "removed_ignored" not in res["released"][0]
+    assert res["kept"] == [] and res["expected"] == []
+    assert not path.exists()

@@ -879,6 +879,140 @@ def _last_activity(wt_path: Path) -> float | None:
     return max(real) if real else max(mtimes)
 
 
+# WHAT `git status --porcelain` CANNOT SEE, AND WHY IT IS A HOLE IN THIS MODULE'S OWN INVARIANT
+# (VMCP-185). The header of this file promises "push OK -> remove, push FAIL -> KEEP … housekeeping
+# must never be how an agent's work disappears", and the dirty guard below is half of how that is
+# kept. But plain `--porcelain` does not report IGNORED paths at all, so for that guard a tree
+# holding nothing but ignored files is CLEAN. MEASURED (real git 2.50.1, a bare origin, a throwaway
+# tree): a dead build tree with everything committed and pushed (`status --porcelain` empty,
+# `origin/main..HEAD` empty) plus `secrets.env` and `scratch/notes.txt` on disk was released by
+# BOTH paths — `--release` returned `{"released": true}` and `--gc` put it in `released` — the
+# directory and both files gone, and NOTHING in `kept`, `expected` or `warning` said so. Untracked
+# but NON-ignored files (`??`) the guard does see and does hold on, so the hole is exactly the
+# ignored ones.
+#
+# IT IS NOT HYPOTHETICAL, AND THE REAL EXPOSURE IS NOT THE ONE IT LOOKS LIKE. `.vikunja-mcp.env`
+# (this repo's token) and `.playwright-mcp/` both live in the MAIN checkout, which nothing here
+# ever removes — measured across the four live worktrees on this machine, all four had neither.
+# What IS at risk sits in the per-task tree, and SKILL.md PRESCRIBES writing it there: its browser
+# recipes produce `shot-<id>.png` in the agent's own worktree (ignored by this repo's `*.png`) and
+# `--output-dir .playwright-mcp/<id>` under it (ignored wholesale). Measured on a stand carrying
+# this repo's real ignore rules: both were destroyed by a `released: true`, silently.
+#
+# WHY THIS ONLY REPORTS AND NEVER HOLDS — the alternative was measured and rejected. Making the
+# guard `--porcelain --ignored` refuses a tree that holds ANY ignored path, and the mandated gate
+# (`uv run pytest`) CREATES `.venv` on its first invocation, so every build tree that ran the gates
+# is permanently "dirty": measured live, 3 of 3 build trees (7, 6 and 2 ignored entries — all of
+# them `.venv/`, `__pycache__/`, `.ruff_cache/`, `.pytest_cache/`) and 0 for the one review tree
+# that never ran anything. `--gc` would stop reaping ANYTHING, trees would pile up, and the next
+# human would turn the guard off outright. A destroy-only-with-a-flag variant collapses into the
+# same two ends: unset, nothing is ever reaped; always set, it is today's behaviour with a longer
+# argv. So the tree is still removed, and what changes is that the removal STOPS BEING SILENT.
+#
+# SAY THAT PLAINLY RATHER THAN OVERSELL IT: naming a loss is not preventing one. The work is gone
+# either way; only the silence is fixed. Whether the guard should also HOLD is a product decision
+# left to a human (filed separately), not guessed at here.
+#
+# THE FILTER BELOW IS A LIST, AND A LIST ROTS — SO IT WAS PUT WHERE ROT IS CHEAP. It decides only
+# what gets REPORTED, never what gets removed. A build tool this set has never heard of appears ->
+# its directory is not recognised -> it is named in `removed_ignored` -> one noisy line in a
+# `released` entry, and the reaper keeps reaping. That is the whole cost of it being out of date.
+# The DANGEROUS direction is the other one: a name ADDED here is a class of file this module will
+# destroy without a word again, so add only what is reproducible by construction (a virtualenv, a
+# bytecode or tool cache, an npm install) and never something an agent AUTHORS. `.playwright-mcp/`
+# and `.vikunja-mcp.env` are deliberately absent and pinned absent by test_the_detritus_filter_
+# does_not_cover_what_an_agent_authors. Same fail-toward-shouting direction as `_keep_is_expected`:
+# unrecognised means REPORTED.
+#
+# **THAT PIN IS EXACTLY TWO NAMES WIDE — do not read it as a guard on the direction.** Measured by
+# an independent second pass: adding `.playwright-mcp` to this set fails 2 tests, while adding
+# `dist`, `build`, `out`, `artifacts`, `screenshots` in one go fails NONE — and those are precisely
+# the names an agent parks authored output under. A test that pinned the whole direction would have
+# to enumerate the complement of this set, which is not a thing; so what stands between a future
+# widening and a silent loss is this paragraph, not the suite. Two further measured qualifications.
+# The matching is CASE-SENSITIVE (`A.PYC`, `.ds_store` are NOT recognised), which fails open — they
+# get reported — and so is only noise, but on a `core.ignorecase=true` checkout they are the same
+# files this set recognises in lower case. And `.claude/*` is NOT here although this repo ignores
+# it: measured, a worktree session writing `settings.local.json` or `mailbox/` would then put the
+# field on EVERY released entry, which is the never-read signal this filter exists to avoid — none
+# of the four live trees held one on 2026-08-03, so it is a risk rather than a defect, and the
+# cheap failure (a noisy line) is the one this design deliberately buys.
+_REPRODUCIBLE_IGNORED_DIRS = frozenset({
+    ".venv", "venv",                 # measured: `uv run` creates it on the first gate command
+    "__pycache__",                   # measured in 3 of 3 live build trees
+    ".pytest_cache", ".ruff_cache", ".mypy_cache", ".tox",
+    "node_modules",
+})
+_REPRODUCIBLE_IGNORED_LEAVES = frozenset({".DS_Store"})
+_REPRODUCIBLE_IGNORED_SUFFIXES = (".pyc", ".pyo")
+# The report is BOUNDED, and the bound is about the CONSUMER, not about tidiness: `--gc` runs
+# unattended and its one JSON line is read by a hub process. Measured by the second pass — 3000
+# loose ignored files at a tree root produce 3000 entries and a 50,133-byte line, and a sibling
+# project has already lost a daemon session to an oversized read (hgdev-acp, a >24.5 KiB log pull).
+# Nothing is hidden by the cap: past it the entry also carries `removed_ignored_truncated` with the
+# TRUE total, so the count survives even when the names do not. Absence of that key means the list
+# is complete. Contrived state (git collapses ignored DIRECTORIES into one entry, so this needs
+# thousands of loose FILES), which is why it is a cap and not a refusal.
+_MAX_REPORTED_IGNORED = 50
+
+
+def _inspect_status(path: Path) -> tuple[list[str], list[str]]:
+    """One `git status` call, split into (what the dirty guard counts, what is merely IGNORED).
+
+    ONE call, not two: `--ignored` only ADDS `!! ` lines and leaves every other line byte-identical
+    — measured on a tree carrying both kinds at once (`['M README.md', '?? plain.txt']` before and
+    after, with `!! .playwright-mcp/` and `!! shot-8001.png` alongside). So the dirty guard keeps
+    seeing exactly what it saw before, including its entry COUNT, which is user-visible in the
+    refusal text. Cost of the wider walk on a real tree with a real `.venv`, 5 runs each: 17.6-25.6
+    ms plain against 26.6-36.5 ms with `--ignored`; no extra git invocation at all.
+
+    `_git_inspect`, like the call it replaces: this looks inside a tree we may end up refusing to
+    touch, and it must not leave a footprint the grace window later mistakes for an agent's
+    (VMCP-90). Re-measured for the wider walk: with `core.untrackedCache=true` and files under an
+    ignored `.venv/`, both grace markers stay byte-identical, while the same command WITHOUT
+    `GIT_OPTIONAL_LOCKS=0` moves the index mtime.
+
+    BOTH HALVES GO BLIND UNDER ONE GIT SETTING, and it is not this function's to fix: with
+    `status.showUntrackedFiles = no` (config, any level) the command prints NEITHER `??` NOR `!!`
+    lines — measured, a tree holding an untracked `REAL-WORK.txt` and an ignored `shot-42.png`
+    returned the empty string, so the dirty guard passed and both files were destroyed. That is a
+    PRE-EXISTING hole in `dirty`, older than this function and merely inherited by the inventory
+    beside it; filed separately rather than fixed here, because forcing the setting (`-c
+    status.showUntrackedFiles=normal`) is a change to what the DIRTY GUARD refuses on, which is the
+    product decision this card was told not to take.
+    """
+    dirty: list[str] = []
+    ignored: list[str] = []
+    for line in _git_inspect("status", "--porcelain", "--ignored", cwd=path).splitlines():
+        if line.startswith("!! "):
+            ignored.append(line[3:])
+        else:
+            dirty.append(line)
+    return dirty, ignored
+
+
+def _is_reproducible_ignored(entry: str) -> bool:
+    """Is this ignored path recognisably regenerable build output (-> not worth reporting)?
+
+    Fails toward REPORTING, in every uncertain case. A path git had to QUOTE (a newline, a tab, a
+    non-ASCII byte under `core.quotePath`) is never called routine: it arrives escaped, so matching
+    it component-wise would be matching the escape rather than the name.
+
+    KNOWN BOUND, deliberate: `--ignored` collapses an ignored DIRECTORY into one entry, so a file
+    an agent hid INSIDE `.venv/` is covered by that entry and goes unreported. Working inside a
+    directory the repo declares regenerable is not a case this can serve.
+    """
+    if entry.startswith('"'):
+        return False
+    parts = [component for component in entry.rstrip("/").split("/") if component]
+    if not parts:
+        return False
+    if any(component in _REPRODUCIBLE_IGNORED_DIRS for component in parts):
+        return True
+    leaf = parts[-1]
+    return leaf in _REPRODUCIBLE_IGNORED_LEAVES or leaf.endswith(_REPRODUCIBLE_IGNORED_SUFFIXES)
+
+
 def _release_locked(root: Path, task_id: int, role: str) -> dict:
     _check_role(role)
     _git("worktree", "prune", cwd=root)
@@ -949,13 +1083,14 @@ def _release_locked(root: Path, task_id: int, role: str) -> dict:
                 "reason": f"worktree is LOCKED ({reason}) — a deliberate hands-off marker, and "
                           f"git refuses to remove a locked tree. Nothing was removed and nothing "
                           f"was lost: `git worktree unlock {path}`, then release it again"}
-    # _git_inspect, not _git: this is a READ of a tree we may end up refusing to touch, and it must
-    # not leave a footprint the grace window will later mistake for an agent's (VMCP-90).
-    dirty = _git_inspect("status", "--porcelain", cwd=path)
+    # Both halves of one status call — see _inspect_status. `ignored` is not a guard input: it is
+    # read HERE, before anything is removed, because it is the last moment at which the payload
+    # this removal is about to destroy can still be named (VMCP-185).
+    dirty, ignored = _inspect_status(path)
     if dirty:
         return {"released": False, "task_id": task_id, "role": role, "path": str(path),
                 "code": CODE_DIRTY,
-                "reason": f"working tree is dirty ({len(dirty.splitlines())} entries)"}
+                "reason": f"working tree is dirty ({len(dirty)} entries)"}
     if wt["branch"] is not None:
         # a task/<id> BRANCH's unique history is only safe once it's on origin — the
         # unpushed-commits guard.
@@ -1023,6 +1158,22 @@ def _release_locked(root: Path, task_id: int, role: str) -> dict:
     _git("worktree", "remove", str(path), cwd=root)
     result = {"released": True, "task_id": task_id, "role": role,
               "path": str(path), "branch": wt["branch"]}
+    destroyed = [entry for entry in ignored if not _is_reproducible_ignored(entry)]
+    if destroyed:
+        # ADDED ONLY WHEN NON-EMPTY, exactly like `branch_deleted`/`warning` above and for the same
+        # reason: the absence of the key is the "nothing to see" signal. A field present on every
+        # released entry (which it would be, unfiltered — every build tree carries `.venv/`) is the
+        # never-read signal VMCP-68 had to split `kept` in two to cure, reintroduced in `released`.
+        # SKILL.md's rule is therefore "read `kept`, and scan `released` for `branch_deleted:
+        # false` AND `removed_ignored`".
+        #
+        # ONE DIRECTION ONLY, and the rulebook must say so: the key's PRESENCE proves something
+        # unrecognised was destroyed, but its ABSENCE does not prove nothing was. `--ignored`
+        # collapses an ignored DIRECTORY into a single entry, so a file an agent left inside
+        # `.venv/` is covered by `.venv/`, filtered as routine, and destroyed unnamed (measured).
+        result["removed_ignored"] = destroyed[:_MAX_REPORTED_IGNORED]
+        if len(destroyed) > _MAX_REPORTED_IGNORED:
+            result["removed_ignored_truncated"] = len(destroyed)
     if wt["branch"]:
         try:
             _git("branch", "-D", wt["branch"], cwd=root)
