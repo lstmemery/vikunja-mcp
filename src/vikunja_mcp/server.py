@@ -412,7 +412,10 @@ def advance(
     """Advance YOUR task. to='build' requires spec (approach/design). to='review'
     requires a WORK REPORT: worklog (what was done and how it was verified — by running,
     not by reading code) + evidence (commit/PR/verification output); for bug fixes
-    root_cause is MANDATORY — the cause of the bug (why it happened), not the symptom.
+    root_cause is MANDATORY — the cause of the bug (why it happened), not the symptom;
+    since #718 that word means a GATE, not a wish: a card labelled `bug` is refused without
+    it, by the same disjunctive check that guards worklog and evidence (an epic container is
+    exempt — nobody reviews it, so there is no one to owe a cause).
     The report is posted as a comment for the reviewer to read. There is no transition
     to Done — a human moves it to Done after review.
     EVERY task reaching Review returns review_needed=True + review_kind ('bug'|'change')

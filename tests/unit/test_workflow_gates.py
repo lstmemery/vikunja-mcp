@@ -1169,7 +1169,8 @@ def test_worklog_comment_is_html_but_markers_still_detected(env):
     api, wf, t = env
     api.tasks[t["id"]]["labels"].append({"id": 999, "title": "bug"})
     wf.advance(t["id"], to="build", spec="s")
-    wf.advance(t["id"], to="review", worklog="починил", evidence="commit c0ffee")
+    wf.advance(t["id"], to="review", worklog="починил", evidence="commit c0ffee",
+               root_cause="the marker was stripped by the HTML round-trip")
     raw = next(c["comment"] for c in api.comments(t["id"])
                if "[worklog]" in html_to_text(c["comment"]))
     assert raw.startswith("<p>[worklog]")          # stored as HTML
@@ -1225,7 +1226,8 @@ def test_review_flow_for_bug_labels(env):
     # довели багфикс до Review
     api.tasks[t["id"]]["labels"].append({"id": 999, "title": "bug"})
     wf.advance(t["id"], to="build", spec="s")
-    wf.advance(t["id"], to="review", worklog="w", evidence="e")
+    wf.advance(t["id"], to="review", worklog="w", evidence="e",
+               root_cause="the state was not subscribed to event X")
 
     # имплементеру (assignee) ревью НЕ предлагается
     assert "review" not in wf.next_task()
@@ -1252,7 +1254,8 @@ def test_review_flow_for_bug_labels(env):
 
     # после вердикта задача больше не предлагается на ревью (вернулась в Build);
     # доводим снова и апрувим
-    wf.advance(t["id"], to="review", worklog="w2", evidence="e2")
+    wf.advance(t["id"], to="review", worklog="w2", evidence="e2",
+               root_cause="the state was not subscribed to event X")
     reviewer.review_task(t["id"], verdict="approve", report="воспроизвёл, фикс по причине")
     assert api.stage_of(t["id"]) == "Review"
     assert any(c.startswith("[review] APPROVE") for c in api.comments_text(t["id"]))
@@ -1304,7 +1307,8 @@ def test_review_reoffered_after_needs_work_rework(env):
     api, wf, t = env
     api.tasks[t["id"]]["labels"].append({"id": 999, "title": "bug"})
     wf.advance(t["id"], to="build", spec="s")
-    wf.advance(t["id"], to="review", worklog="w1", evidence="e1")
+    wf.advance(t["id"], to="review", worklog="w1", evidence="e1",
+               root_cause="the state was not subscribed to event X")
 
     reviewer = type(wf)(api, project_id=3)
     reviewer._me_cache = {"id": 77, "username": "agent-reviewer"}
@@ -1313,7 +1317,8 @@ def test_review_reoffered_after_needs_work_rework(env):
     reviewer.review_task(t["id"], verdict="needs_work", report="не закрыта причина")
     assert not reviewer.next_task().get("review")          # в Build — ревьюить нечего
 
-    wf.advance(t["id"], to="review", worklog="w2: доработано", evidence="e2")
+    wf.advance(t["id"], to="review", worklog="w2: доработано", evidence="e2",
+               root_cause="the state was not subscribed to event X")
     offered = reviewer.next_task()
     assert offered.get("review") is True and offered["task"]["id"] == t["id"]  # re-offer!
 
@@ -1325,9 +1330,14 @@ def _label_titles(api, task_id):
     return [lb["title"] for lb in api.tasks[task_id]["labels"]]
 
 
-def _to_review(wf, task_id):
+def _to_review(wf, task_id, root_cause="the state was not subscribed to event X"):
+    """#718 made `root_cause` a precondition for a card labelled `bug`, and most callers
+    here label one purely to reach the bug branch of the review flow. The default keeps
+    those tests about what they were about; a caller that wants the field ABSENT passes
+    root_cause=None explicitly, which is what the gate's own tests do."""
     wf.advance(task_id, to="build", spec="s")
-    return wf.advance(task_id, to="review", worklog="w", evidence="e")
+    return wf.advance(task_id, to="review", worklog="w", evidence="e",
+                      root_cause=root_cause)
 
 
 def test_review_approve_adds_reviewed_strips_review_failed(env):
@@ -1361,10 +1371,12 @@ def test_advance_review_resubmit_strips_review_failed(env):
     api, wf, t = env
     api.tasks[t["id"]]["labels"].append({"id": 999, "title": "bug"})
     wf.advance(t["id"], to="build", spec="s")
-    wf.advance(t["id"], to="review", worklog="w1", evidence="e1")
+    wf.advance(t["id"], to="review", worklog="w1", evidence="e1",
+               root_cause="the state was not subscribed to event X")
     wf.review_task(t["id"], verdict="needs_work", report="не закрыта причина")
     assert "review-failed" in _label_titles(api, t["id"])  # needs_work повесил
-    wf.advance(t["id"], to="review", worklog="w2: доработано", evidence="e2")
+    wf.advance(t["id"], to="review", worklog="w2: доработано", evidence="e2",
+               root_cause="the state was not subscribed to event X")
     assert "review-failed" not in _label_titles(api, t["id"])  # ресабмит снял
 
 
@@ -1373,7 +1385,8 @@ def test_advance_review_first_submit_no_review_failed_label(env):
     api, wf, t = env
     api.tasks[t["id"]]["labels"].append({"id": 999, "title": "bug"})
     wf.advance(t["id"], to="build", spec="s")
-    wf.advance(t["id"], to="review", worklog="w", evidence="e")  # не падает
+    wf.advance(t["id"], to="review", worklog="w", evidence="e",
+               root_cause="the state was not subscribed to event X")
     assert "review-failed" not in _label_titles(api, t["id"])
     assert api.stage_of(t["id"]) == "Review"
 
@@ -1439,13 +1452,15 @@ def test_resubmit_after_needs_work_clears_review_failed_and_no_reviewed(env):
     api, wf, t = env
     api.tasks[t["id"]]["labels"].append({"id": 999, "title": "bug"})
     wf.advance(t["id"], to="build", spec="s")
-    wf.advance(t["id"], to="review", worklog="w1", evidence="e1")
+    wf.advance(t["id"], to="review", worklog="w1", evidence="e1",
+               root_cause="the state was not subscribed to event X")
     reviewer = type(wf)(api, project_id=3)
     reviewer._me_cache = {"id": 77, "username": "agent-reviewer"}
     reviewer.review_task(t["id"], verdict="needs_work", report="не закрыта причина")
     assert "review-failed" in _label_titles(api, t["id"])
     assert "reviewed" not in _label_titles(api, t["id"])
-    wf.advance(t["id"], to="review", worklog="w2: доработано", evidence="e2")
+    wf.advance(t["id"], to="review", worklog="w2: доработано", evidence="e2",
+               root_cause="the state was not subscribed to event X")
     titles = _label_titles(api, t["id"])
     assert "review-failed" not in titles   # ресабмит снял
     assert "reviewed" not in titles        # и не воскресил
@@ -2554,3 +2569,92 @@ def test_every_agent_tool_is_graded_for_what_it_does_to_a_stale_verdict(env):
         "call_human cleared a verdict it is graded to KEEP: the card is still the agent's own "
         "work in flight and returns to Build, so `review-failed` there is not a contradiction"
     )
+
+
+# --- #718: root_cause is gated for a bug, and only for a bug --------------------------------
+
+def _bug_in_build(api, wf, extra_labels=()):
+    t = api.add_task("job", "Design", assignee=api.me_user, labels=["bug", *extra_labels])
+    wf.advance(t["id"], to="build", spec="s")
+    return t
+
+
+def test_a_bug_cannot_reach_review_without_a_root_cause(env):
+    """#718: the field two shipped surfaces call MANDATORY is finally one.
+
+    MEASURED before the fix, real `Workflow` over `FakeAPI`: a card labelled `bug` advanced to
+    Review with no cause at all, and the SAME payload answered `review_kind: 'bug'` — so the tool
+    had the information and did not use it. `advance`'s tool docstring said "for bug fixes
+    root_cause is MANDATORY" and SKILL.md said ОБЯЗАТЕЛЕН; both promised a gate that did
+    not exist. The cost was not cosmetic: the reviewer's 'bug' rubric is "confirm the fix
+    closes the CAUSE from the report", and the report could contain no cause.
+
+    The refusal names the FIELD and its STATE, which is #657's shape rather than a new one — an
+    agent whose argument was dropped in transit and an agent who left the field blank need
+    different next moves, and a single sentence for both is what #657 removed.
+
+    MUTATION-CHECKED, selection `tests/unit/test_workflow_gates.py`, `__pycache__` deleted and
+    then PYTHONDONTWRITEBYTECODE=1, each round restored from a byte copy and the file confirmed
+    sha256-identical afterwards; the mutation script refuses to run unless the gate matches
+    exactly once. Control round: 0 failed.
+      * drop the gate (the pre-#718 body) -> 2 failed, this test and the null-vs-blank one
+      * gate EVERY card, not just bugs -> 10 failed. The blast radius IS the finding: eight of
+        those ten are ordinary review-flow tests that label a card `bug` only to reach the bug
+        branch, which is how a gate widened past its slice announces itself
+      * drop the epic exemption -> 1 failed, and it is the epic row alone — so that row is a
+        real pin and not decoration
+    The three rounds fail DIFFERENT tests, which is what says the rows below divide the gate's
+    behaviour rather than restating one assertion three times.
+    """
+    api, wf, _ = env
+    t = _bug_in_build(api, wf)
+    with pytest.raises(WorkflowError) as exc:
+        wf.advance(t["id"], to="review", worklog="fixed it", evidence="a" * 40)
+    assert "root_cause" in str(exc.value)
+    assert api.stage_of(t["id"]) == "Build", "the refusal must not move the card"
+
+
+def test_the_root_cause_refusal_tells_null_apart_from_blank(env):
+    """The two states are not one. `arrived as null` means no text reached the tool — the #657
+    class, where a retry of the same call is not the fix; `empty or whitespace-only` means the
+    agent left it blank and should write it. Asserted separately so a future edit cannot collapse
+    them into one sentence again."""
+    api, wf, _ = env
+    absent = _bug_in_build(api, wf)
+    with pytest.raises(WorkflowError) as e1:
+        wf.advance(absent["id"], to="review", worklog="w", evidence="e")
+    assert "root_cause — arrived as null" in str(e1.value)
+
+    blank = _bug_in_build(api, wf)
+    with pytest.raises(WorkflowError) as e2:
+        wf.advance(blank["id"], to="review", worklog="w", evidence="e", root_cause="   ")
+    assert "root_cause — passed, but empty or whitespace-only" in str(e2.value)
+
+
+def test_a_bug_with_a_root_cause_advances_and_the_cause_lands_in_the_journal(env):
+    api, wf, _ = env
+    t = _bug_in_build(api, wf)
+    wf.advance(t["id"], to="review", worklog="fixed it", evidence="a" * 40,
+               root_cause="the state was never subscribed to event X")
+    assert api.stage_of(t["id"]) == "Review"
+    journal = [c["comment"] for c in api.comments(t["id"]) if "[worklog]" in c["comment"]]
+    assert any("Причина: the state was never subscribed" in c for c in journal)
+
+
+def test_the_root_cause_gate_does_not_spread_beyond_bugs(env):
+    """The gate asks the SAME question that computes `review_kind` — `_has_label(task, bug)` —
+    so a change card is untouched. This is the row that fails if the condition is dropped."""
+    api, wf, t = env
+    wf.advance(t["id"], to="build", spec="s")
+    wf.advance(t["id"], to="review", worklog="did the change", evidence="a" * 40)
+    assert api.stage_of(t["id"]) == "Review"
+
+
+def test_an_epic_container_is_exempt_from_the_root_cause_gate(env):
+    """Exempt for the reason the push-nudge exempts it: an epic's code lives in its children and
+    no reviewer is ever offered the container, so a cause demanded here would have no consumer.
+    Positive assert, so removing the exemption reddens this rather than passing silently."""
+    api, wf, _ = env
+    t = _bug_in_build(api, wf, extra_labels=("epic",))
+    wf.advance(t["id"], to="review", worklog="container", evidence="a" * 40)
+    assert api.stage_of(t["id"]) == "Review"

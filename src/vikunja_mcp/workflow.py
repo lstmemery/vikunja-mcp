@@ -1420,7 +1420,24 @@ class Workflow:
             # read identically: an agent who wrote a full worklog and merely forgot evidence
             # got the same sentence as an agent whose 7 KB worklog never arrived. See
             # _LOST_ARGUMENT_HINT for what is and is not provable about the second one.
-            unusable = _unusable_report_fields(("worklog", worklog), ("evidence", evidence))
+            # #718: `root_cause` joins that guard for a BUG, and only for a bug. Until this card
+            # the field was a silent no-op — measured, a card labelled `bug` advanced to Review
+            # with no cause at all and the tool answered `review_kind: 'bug'` in the SAME payload,
+            # i.e. it knew. Meanwhile `advance`'s own docstring called the field MANDATORY and
+            # SKILL.md called it ОБЯЗАТЕЛЕН, so the rules promised a gate that did not exist and
+            # the reviewer's 'bug' rubric ("confirm the fix closes the CAUSE from the report")
+            # could be handed a report with no cause in it. Asked with the same expression that
+            # computes `review_kind` below, deliberately: a second definition of "what counts as
+            # a bug" is how the two would drift. Folded into the SAME call rather than a separate
+            # `if`, so an agent missing two fields of three is told all three at once — that
+            # disjunctive shape is #657's, and splitting it would undo it.
+            # The epic container is exempt for the reason the push-nudge below exempts it: its
+            # code lives in its children, no reviewer is ever offered it, so a cause demanded here
+            # would have no consumer.
+            fields = [("worklog", worklog), ("evidence", evidence)]
+            if self._has_label(task, LABEL_BUG) and not self._has_label(task, LABEL_EPIC):
+                fields.append(("root_cause", root_cause))
+            unusable = _unusable_report_fields(*fields)
             if unusable:
                 named = "; ".join(f"{name} — {state}" for name, state in unusable)
                 raise WorkflowError(
