@@ -211,8 +211,12 @@ def canonical_base_url(base_url: str) -> str:
     difference at all. That grid is a GRID, though, and the IPv6-hex and query-before-slash classes
     are precisely shapes it cannot contain; they were found by looking outside it, which is the
     standing reason not to read 36 as a total. The zone-id class (#707) is the same lesson told
-    twice: it was found by #164's REVIEWER sweeping 16,320 urls on a grid built deliberately
-    outside the implementer's, and no count from either grid could have named it.
+    twice, and its provenance is worth stating exactly rather than atmospherically: it surfaced in
+    the HOST bucket of #164's REVIEWER's own sweep — 16,320 urls, 5 schemes x 8 userinfo shapes x
+    24 hosts x 17 paths, per that reviewer's second pass, which corrected the factors it had first
+    written while confirming the total. What made it visible is not that the grid was "outside"
+    this one but that it varied 24 hosts where this one varies 5. Both are grids; neither total
+    could have named the class it does not contain.
     The split is on the LAST `@`, which is httpx's too
     (`https://a@b:PW@HOST` → host `host`, userinfo `a%40b:PW`) — an un-encoded `@` in the userinfo
     is illegal per RFC anyway, and this way it makes the function fold LESS, never more.

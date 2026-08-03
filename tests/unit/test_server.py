@@ -535,15 +535,33 @@ def test_reload_still_refuses_a_rotation_that_changes_only_a_CASE_SENSITIVE_part
     Measured — under the `path.lower()` mutation the `different-path` row stays GREEN and only this
     row goes red.
 
-    MUTATION-CHECKED over the whole `tests/unit` selection, `__pycache__` cleared and
-    `PYTHONDONTWRITEBYTECODE=1`, restores confirmed by re-running to the control. Control round:
-    0 failed.
+    The `ipv6-zone-id-case` rows are #707's, and they are the same argument a third time. An IPv6
+    zone id (`%25` + the id, RFC 6874) is an OS INTERFACE NAME grafted into the syntactic host, and
+    interface names are case-sensitive — measured on 2026-08-03 rather than read off the RFC, which
+    is silent on the question: `socket.if_nametoindex('eth0')` -> 426 and `'ETH0'` -> OSError("no
+    interface with this name") on Linux (python:3.12-alpine, 11 of 11 interfaces), `'lo0'` -> 1 and
+    `'LO0'` -> OSError on darwin (6 of 6). So `[fe80::1%25ETH0]` and `[fe80::1%25eth0]` are two
+    different interfaces, and before #707 this guard ACCEPTED a rotation between them. The ADDRESS's
+    hex is the opposite case and has its own test right below — the two must not be pinned together.
+
+    MUTATION-CHECKED over the whole `tests/unit` selection, `__pycache__` DELETED and then
+    `PYTHONDONTWRITEBYTECODE=1`, restores verified by sha256 against the pristine file. Two sweeps
+    on 2026-08-03, each opening with an unmutated control on the same selection; 921 collected every
+    round. Control round: 0 failed.
       * `{path}` -> `{path.lower()}` in canonical_base_url -> 4 failed, the `path-case` row here
-        among them. On the PRE-card tree, control 0 failed, that mutation was 0 failed
-      * fold the authority WHOLE again (`authority.lower()`, the pre-#164 body) -> 6 failed, BOTH
+        among them. On the PRE-#164 tree, control 0 failed, that mutation was 0 failed
+      * fold the authority WHOLE again (`authority.lower()`, the pre-#164 body) -> 13 failed, BOTH
         `userinfo-*` rows here among them, each as `DID NOT RAISE ConfigError` — i.e. that body
         had the guard accepting a CHANGED CREDENTIAL as the same endpoint, which is why those two
-        rows were red-first rather than pins of behaviour that was already correct
+        rows were red-first rather than pins of behaviour that was already correct. Both
+        `ipv6-zone-id-case*` rows are in that 13 too, for the same reason
+      * (#707) `_fold_host` -> `host.lower()`, the pre-#707 body -> 8 failed, BOTH
+        `ipv6-zone-id-case*` rows here among them, each as `DID NOT RAISE ConfigError`. Red-first:
+        this is the guard accepting a repoint between two different interfaces
+      * (#707) the same effect written as a PAIRED edit (helper kept, `zone.lower()` added back) ->
+        8 failed, identical set — these rows pin behaviour, not one spelling
+    The 6 above was re-measured for #707 and is now 13; it moved because #707 added rows to
+    tests/unit/test_api.py, not because anything regressed.
     """
     sentinel = object()
     monkeypatch.setattr(server, "_workflow", sentinel, raising=False)
@@ -583,13 +601,20 @@ def test_reload_self_heals_a_rotation_that_changes_only_the_IPv6_HEX_case(
     pin the hex half still folding. The third row is the one neither test would have caught alone —
     hex and zone in the SAME url, hex changing, zone held constant.
 
-    MUTATION-CHECKED over the whole `tests/unit` selection, `__pycache__` deleted and
-    `PYTHONDONTWRITEBYTECODE=1`, restores confirmed by re-running to the control. Control round:
-    0 failed.
+    MUTATION-CHECKED over the whole `tests/unit` selection, `__pycache__` DELETED and then
+    `PYTHONDONTWRITEBYTECODE=1`, restores verified by sha256 against the pristine file; 921
+    collected every round. Control round: 0 failed.
       * `_fold_host` -> `return host` for a bracketed literal (fold NOTHING inside brackets, the
-        over-correction this test exists for) -> 4 failed, all three rows here among them
+        over-correction this test exists for) -> 7 failed, all three rows here among them
+      * `address.lower()` -> `address` (a narrower way to write the same over-correction) -> 7
+        failed, the SAME set. So these tests catch the class but do NOT distinguish the two edits
       * `_fold_host` -> `host.lower()` (the pre-#707 body) -> 8 failed, and these three rows stay
         GREEN — which is what makes them the paired half rather than a duplicate of the rows above
+      * `rpartition("@")` -> `partition("@")` -> 10 failed, these rows among them: with no `@` the
+        whole authority lands in the userinfo half and nothing folds, hex included
+      * identity canonicalizer -> 14 failed, these rows among them
+    The first version of this record said 4 for the first round. That number was written from
+    expectation BEFORE the sweep ran and was wrong; the measured value is 7.
     """
     rebuilt = object()
     monkeypatch.setattr(server, "_workflow", None, raising=False)

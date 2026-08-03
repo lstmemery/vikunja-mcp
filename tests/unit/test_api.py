@@ -383,23 +383,52 @@ def test_canonical_base_url_folds_the_case_insensitive_parts_and_nothing_else(ra
     mutation at all; the case question for IPv6 is answered by the uppercase-hex assert in the test
     below, which is where it diverges from httpx.
 
-    MUTATION-CHECKED over the whole `tests/unit` selection, `__pycache__` cleared and
-    `PYTHONDONTWRITEBYTECODE=1`, every round restored with `git checkout --` and the restore
-    confirmed by re-running to the control. Control round: 0 failed.
+    The `ipv6-*` rows are #707's, and they exist because "IPv6 literal" named a thing that is not
+    homogeneous. The ADDRESS folds (`ipv6-hex-still-folds-without-a-zone`) and the ZONE ID does not
+    (`ipv6-zone-id-case-KEPT`), because a zone id is an OS interface name — measured, not read off
+    an RFC: `socket.if_nametoindex('eth0')` -> 426 while `'ETH0'` raises OSError on Linux, and
+    `IPv6Address('fe80::1%ETH0') != IPv6Address('fe80::1%eth0')` while `FE80::1 == fe80::1`.
+    `ipv6-hex-folds-WHILE-zone-KEPT` is the row that pins both halves of one literal going separate
+    ways, and it is the only row R1 and R2 below BOTH kill. `ipv6-empty-zone-unchanged` and
+    `reg-name-with-pct-encoding-still-folds` pin what #707 must NOT have changed: a `%25` outside
+    brackets is an ordinary reg-name octet and stays case-insensitive.
+
+    MUTATION-CHECKED over the whole `tests/unit` selection, `__pycache__` DELETED (not just
+    `PYTHONDONTWRITEBYTECODE=1` — that stops writing, not reading), every round restored with
+    `git checkout --` and the restore verified by sha256 against the pristine file. Two sweeps run
+    on 2026-08-03, each opening with an UNMUTATED CONTROL round on the same selection; all rounds
+    collected 921 items. Control round: 0 failed.
       * `{path}` -> `{path.lower()}` in canonical_base_url -> 4 failed, two of them this table's
         `path-case-KEPT` rows (the others are the httpx test below and the guard row in
-        test_server.py). On the PRE-card tree, control 0 failed, that same mutation was 0 failed —
-        which is the gap this card was filed for
-      * fold the authority WHOLE again (`authority.lower()`, the pre-#164 body) -> 6 failed, three
-        of them this table's `userinfo-case-KEPT`, `userinfo-KEPT-while-host-folds` and
-        `split-on-the-LAST-at` rows
-      * `rpartition("@")` -> `partition("@")` -> 4 failed: `split-on-the-LAST-at` as intended, plus
+        test_server.py). On the PRE-#164 tree, control 0 failed, that same mutation was 0 failed —
+        which is the gap #164 was filed for
+      * fold the authority WHOLE again (`authority.lower()`, the pre-#164 body) -> 13 failed, eight
+        of them rows here: `userinfo-case-KEPT`, `userinfo-KEPT-while-host-folds`,
+        `split-on-the-LAST-at` and all five zone rows
+      * `rpartition("@")` -> `partition("@")` -> 10 failed: `split-on-the-LAST-at` as intended, plus
         `host-case-folded` here, the test below, and `host-case` in test_server.py — because with no
         `@` present `partition` puts the WHOLE authority in the userinfo half and then folds nothing
         at all, so it breaks far more than the `@` split it was aimed at
-      * identity canonicalizer (suffix only, fold nothing) -> 7 failed, four of them rows here, so
-        this table pins the FOLDING side. The test below is among the other three, but only via its
+      * identity canonicalizer (suffix only, fold nothing) -> 14 failed, eight of them rows here, so
+        this table pins the FOLDING side. The test below is among the rest, but only via its
         divergence asserts; its equal set alone would not notice
+      * (#707) `_fold_host` -> `host.lower()`, the pre-#707 body -> 8 failed, FIVE of them rows here
+        (`ipv6-zone-id-case-KEPT`, `ipv6-hex-folds-WHILE-zone-KEPT`, `ipv6-bare-percent-zone-KEPT`,
+        `userinfo-AND-zone-both-KEPT-while-hex-folds`, `zone-id-with-its-own-pct-encoding-KEPT`)
+        and two the guard rows in test_server.py. Re-run as a PAIRED mutation — helper left in
+        place, `zone.lower()` added back instead — the failure set is IDENTICAL, so these rows pin
+        the behaviour rather than one spelling of the edit
+      * (#707) fold NOTHING inside brackets, and separately `address.lower()` -> `address` -> 7
+        failed EACH, with the SAME set both times: the two hex rows, `userinfo-AND-zone-...`, the
+        test below, and all three rows of the paired guard test. Honest limit — these tests do not
+        DISTINGUISH those two mutations
+      * (#707) `literal.partition("%")` -> `rpartition("%")` -> 5 failed, including
+        `zone-id-with-its-own-pct-encoding-KEPT` as aimed AND `ipv6-hex-still-folds-without-a-zone`,
+        which was not: on a literal with no `%` at all, `rpartition` returns `("", "", literal)`, so
+        the address lands in the zone half and stops folding entirely
+    The three legacy counts above were RE-MEASURED for #707 rather than copied: adding these rows
+    moved two of them (6 -> 13, 4 -> 10) and the identity round (7 -> 14). Only the `path.lower()`
+    round was unchanged at 4. A count recorded next to a growing table is stale by construction.
     """
     assert canonical_base_url(raw) == expected
 
@@ -436,18 +465,35 @@ def test_the_canonicalizer_changes_the_client_url_only_in_these_measured_classes
     and 3 are precisely shapes that grid could not contain — which is how they were found, and why
     "these measured classes" in the name is not "all classes".
 
-    MUTATION-CHECKED, same selection and hygiene as the table above. Control round: 0 failed.
+    #707 SHRANK class 2 rather than adding a fourth. The zone id used to ride down with the hex,
+    so `https://[fe80::1%25ETH0]` belonged in the divergence list; it now sits in the EQUAL set
+    above, because httpx passes a zone id through verbatim (measured, 0.28.1: `httpx.URL` returns
+    `[fe80::1%25ETH0]` unchanged and reads `.host` as `fe80::1%25ETH0`). Class 2 is now precisely
+    the ADDRESS's hex, and the assert that the two halves of one literal go separate ways is what
+    holds that line. Class 3 is untouched and still open — see the SEAM assert at the end, a url
+    carrying both cards at once.
+
+    MUTATION-CHECKED, same selection and hygiene as the table above, two sweeps on 2026-08-03, each
+    opening with an unmutated control on the same selection. Control round: 0 failed.
       * `{path}` -> `{path.lower()}` -> 4 failed, this test among them
-      * fold the authority WHOLE again (the pre-#164 body) -> 6 failed, this test among them, on
-        the `https://User:PassWord@t.example` row — which is what made this card's fix a fix and
-        not a preference
-      * identity canonicalizer (fold nothing) -> 7 failed, this test among them. It is caught by
+      * fold the authority WHOLE again (the pre-#164 body) -> 13 failed, this test among them, on
+        the `https://User:PassWord@t.example` row — which is what made #164's fix a fix and not a
+        preference
+      * identity canonicalizer (fold nothing) -> 14 failed, this test among them. It is caught by
         the divergence asserts, NOT by the equal set — an identity body satisfies every row of the
         equal set, since httpx folds scheme and host by itself. That is measured per-assert, and it
         corrects this record's first version, which said 6 failed and "this test is NOT among them":
-        both were true before the divergence asserts were added and went stale inside this card
+        both were true before the divergence asserts were added and went stale inside #164
+      * (#707) `_fold_host` -> `host.lower()` (pre-#707 body) -> 8 failed, this test among them —
+        red-first for the two zone urls now in the equal set
+      * (#707) `tail.lower()` -> `tail` -> 1 failed, and it is THIS test, via the SEAM assert
+        alone. Worth saying plainly rather than rounding up: the whole boundary with #706 rests on
+        that single assert. It is a real pin (the mutation reddens it), but there is no redundancy
+        behind it
       * of the divergence asserts, only the CANONICAL side of each pair can fail from a change to
         this function; the `pre_154` sides never call it and are httpx-bump tripwires only
+    The 6 and 7 in the first version of this record were re-measured for #707 and became 13 and 14;
+    they moved because #707 added rows, not because anything regressed.
     """
     def pre_154(url):
         stripped = url.rstrip("/")
