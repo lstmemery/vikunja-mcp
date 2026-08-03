@@ -1628,65 +1628,71 @@ def _scan_for_storage_state_shape(root: Path) -> tuple[list[str], list[str]]:
         assert listed.returncode == 0, f"git {' '.join(args)} failed: {listed.stderr.strip()}"
         into.update(p for p in listed.stdout.split("\0") if p)
 
-    def _candidate_bytes(rel: str) -> tuple[int, bytes] | None:
-        """(size, content) for one candidate, or None when there is nothing to classify.
+    def _candidate_sources(rel: str) -> list[tuple[int, bytes]]:
+        """EVERY copy of one candidate that git could publish — the UNION, not a choice.
 
-        For a TRACKED path both come from the INDEX — that is what `git add -A` would publish,
-        and it is the only copy that exists in the three states above. For an untracked one the
-        worktree is the only copy there is.
+        #630's first version READ THE INDEX INSTEAD OF THE WORKTREE, and its reviewer measured
+        that this swapped one blind spot for a wider one. Both copies matter, for two different
+        commands: for a tracked-and-modified path `git add -A` stages the WORKTREE bytes, while
+        `git commit` (with nothing staged) publishes the INDEX blob. Reading either alone leaves
+        a real state silent.
+
+        Measured, on a real repo, with the index-only version: a committed benign `package.json`
+        whose worktree copy was overwritten with a credential and NOT staged — `git status` says
+        ` M`, `git add -A --dry-run` says `add 'package.json'`, and the scan reported NOTHING,
+        while the ORIGINAL worktree-only scan caught it. That state is also more reachable than
+        the three this card was filed for: those need a deliberate `git add -f`, this needs only
+        an overwrite of a tracked file.
         """
+        found: list[tuple[int, bytes]] = []
         if rel in tracked:
             sized = _git("--no-pager", "cat-file", "-s", f":{rel}", cwd=root)
-            if sized.returncode != 0:
-                return None                      # unmergeable/conflicted entry — nothing to read
-            size = int(sized.stdout.strip())
-            if size == 0 or size > SHAPE_SCAN_MAX_BYTES:
-                return size, b""
-            blob = _git_bytes("--no-pager", "cat-file", "blob", f":{rel}", cwd=root)
-            if blob.returncode != 0:
-                return None
-            return size, blob.stdout
+            if sized.returncode == 0:            # a conflicted entry has no single size — skip it
+                size = int(sized.stdout.strip())
+                if size > SHAPE_SCAN_MAX_BYTES:
+                    found.append((size, b""))
+                elif size:
+                    blob = _git_bytes("--no-pager", "cat-file", "blob", f":{rel}", cwd=root)
+                    if blob.returncode == 0:
+                        found.append((size, blob.stdout))
         path = root / rel
         try:
-            if not path.is_file():
-                return None
-            size = path.stat().st_size
-            if size == 0 or size > SHAPE_SCAN_MAX_BYTES:
-                return size, b""
-            return size, path.read_bytes()
+            if path.is_file():
+                size = path.stat().st_size
+                if size > SHAPE_SCAN_MAX_BYTES:
+                    found.append((size, b""))
+                elif size:
+                    found.append((size, path.read_bytes()))
         except OSError:
-            return None
+            pass
+        return found
 
     offenders, unclassified = [], []
     for rel in sorted(tracked | untracked):
-        found = _candidate_bytes(rel)
-        if found is None:
-            continue
-        size, raw = found
-        if size == 0:
-            continue  # an empty file cannot be a JSON object
-        if size > SHAPE_SCAN_MAX_BYTES:
-            unclassified.append(rel)  # REPORTED, never skipped — see SHAPE_SCAN_MAX_BYTES
-            continue
-        try:
-            # BYTES, not `read_text(encoding="utf-8")`. That call sat inside this same
-            # `except (OSError, ValueError)` and `UnicodeDecodeError` is a subclass of
-            # `ValueError`, so a shaped file written with a BOM or in UTF-16 was skipped in
-            # SILENCE. Measured: `json.loads` on BYTES accepts UTF-8-with-BOM, UTF-16 and
-            # UTF-32 (it detects the encoding itself), while the text path fails on all three.
-            # Precisely those three axes close — a file with a genuinely invalid byte still
-            # raises, and should: it is not valid JSON in any encoding, so that is a correct
-            # refusal rather than a miss. No real producer writes those forms either
-            # (playwright-core 1.62.0 writes utf8 via JSON.stringify), which is why this is
-            # hardening: a `continue` that goes quiet on a shaped file is the class this repo
-            # keeps filing cards about, reachable or not.
-            data = json.loads(raw)
-        except (OSError, ValueError):
-            continue  # unreadable, not text, or not JSON — cannot be a storage state
-        if isinstance(data, dict) and all(
-            isinstance(data.get(key), list) for key in STORAGE_STATE_SHAPE_KEYS
-        ):
-            offenders.append(rel)
+        for size, raw in _candidate_sources(rel):
+            if size > SHAPE_SCAN_MAX_BYTES:
+                if rel not in unclassified:
+                    unclassified.append(rel)  # REPORTED, never skipped — see SHAPE_SCAN_MAX_BYTES
+                continue
+            try:
+                # BYTES, not `read_text(encoding="utf-8")`. That call sat inside this same
+                # `except (OSError, ValueError)` and `UnicodeDecodeError` is a subclass of
+                # `ValueError`, so a shaped file written with a BOM or in UTF-16 was skipped in
+                # SILENCE. Measured: `json.loads` on BYTES accepts UTF-8-with-BOM, UTF-16 and
+                # UTF-32 (it detects the encoding itself), while the text path fails on all three.
+                # Precisely those three axes close — a file with a genuinely invalid byte still
+                # raises, and should: it is not valid JSON in any encoding, so that is a correct
+                # refusal rather than a miss. No real producer writes those forms either
+                # (playwright-core 1.62.0 writes utf8 via JSON.stringify), which is why this is
+                # hardening: a `continue` that goes quiet on a shaped file is the class this repo
+                # keeps filing cards about, reachable or not.
+                data = json.loads(raw)
+            except (OSError, ValueError):
+                continue  # unreadable, not text, or not JSON — cannot be a storage state
+            if isinstance(data, dict) and all(
+                isinstance(data.get(key), list) for key in STORAGE_STATE_SHAPE_KEYS
+            ) and rel not in offenders:
+                offenders.append(rel)      # named ONCE, whichever copy carries the credential
 
     return offenders, unclassified
 
@@ -2136,3 +2142,35 @@ def test_an_ordinary_tracked_file_is_still_not_an_offender(clone):
     _stage(clone, "package.json", b'{"name": "x", "cookies": "not-a-list"}')
     offenders, _ = _scan_for_storage_state_shape(clone)
     assert offenders == []
+
+
+@pytest.mark.parametrize("staged", [False, True])
+def test_the_shape_gate_reads_the_WORKTREE_too_for_a_tracked_candidate(clone, staged):
+    """The axis #630's FIRST version broke, and the reason the scan reads a UNION.
+
+    That version swapped the sources instead of adding one: it read the INDEX for every tracked
+    path and stopped looking at the worktree. Its reviewer built the inverse of the three states
+    the card was filed for and measured the trade — a committed, benign `package.json` whose
+    worktree copy is overwritten with a credential and NOT staged. `git status` says ` M`,
+    `git add -A --dry-run` says `add 'package.json'`, the ORIGINAL worktree-only scan caught it,
+    and the index-only version reported nothing.
+
+    That state is also MORE reachable than the three it was traded for: those need a deliberate
+    `git add -f`, this needs only an overwrite of a file the repo already tracks.
+
+    Both parametrisations are the same file with the credential in a different place — unstaged
+    (only the worktree has it) and staged (both do) — so the row also pins that a union names the
+    path ONCE rather than twice.
+    """
+    (clone / "package.json").write_bytes(b'{"name": "x"}\n')
+    subprocess.run(["git", "add", "package.json"], cwd=clone, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "benign"], cwd=clone, check=True, capture_output=True)
+    (clone / "package.json").write_bytes(_SHAPE)
+    if staged:
+        subprocess.run(["git", "add", "package.json"], cwd=clone, check=True, capture_output=True)
+
+    offenders, _ = _scan_for_storage_state_shape(clone)
+    assert offenders == ["package.json"], (
+        f"staged={staged}: `git add -A` would publish this worktree copy, and the scan reported "
+        f"{offenders}. Reading only the index is what #630's first version did"
+    )

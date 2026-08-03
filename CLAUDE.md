@@ -258,7 +258,8 @@ assertion in `tests/unit/test_line_length_gate.py`, which pyproject must agree w
   `-c status.showUntrackedFiles=normal` on that single call. **That is a restoration, not the
   widening question below** — the guard already claimed `??`, and measured at the default setting
   the prefix changes no verdict, no entry count and no `removed_ignored`; a CLEAN tree still
-  releases under the knob, so nobody who set it deliberately is paralysed. Otherwise the hole is exactly the ignored ones — and it is
+  releases under the knob, so nobody who set it deliberately is paralysed. Otherwise the hole is
+exactly the ignored ones — and it is
   this repo's own
   rulebook that puts them there, since SKILL.md's browser recipes write both INTO the agent's
   worktree. Closing it by widening the guard to `--porcelain --ignored` was measured and rejected:
@@ -1115,12 +1116,18 @@ came from the worktree, so a shaped file that was staged and then deleted from d
 worktree copy was overwritten with `{}`, or that was committed and then removed locally without
 committing the removal, read as clean — three states, all built, all `1 passed`, while
 `git cat-file -p :<path>` still handed out the cookie. CI never saw any of it (a fresh checkout
-has no divergence to have), which is why this was a hardening and not a leak. The scan now reads
-tracked candidates out of the INDEX, which is what `git add -A` would publish. The same change
+has no divergence to have), which is why this was a hardening and not a leak. The scan now reads BOTH copies of a tracked candidate — the index blob and the worktree
+bytes — and that UNION is #630's own correction: its first version read the index INSTEAD of
+the worktree, and its reviewer measured the trade. A committed, benign `package.json` whose
+worktree copy is overwritten with a credential and left unstaged is published by `git add -A`,
+was caught by the ORIGINAL scan, and went silent under the index-only one — a state more
+reachable than the three above, which need a deliberate `git add -f`. Neither source alone is
+"what git would publish": `git add -A` stages the worktree, `git commit` publishes the index. The same change
 reads BYTES rather than utf-8 text, closing three encodings that used to be skipped in silence —
 `UnicodeDecodeError` is a `ValueError`, so a BOM'd or UTF-16 export fell into the same `continue`
 as "not JSON at all". Not an encoding cure-all: a genuinely invalid byte is still refused, and
-correctly, since it is not JSON in any encoding. The format holds a localStorage array PER ORIGIN, filled from every origin the context
+correctly, since it is not JSON in any encoding. The format holds a localStorage array PER ORIGIN,
+filled from every origin the context
 visited, so an export has no fixed upper size and "too large to classify" is exactly what a fat
 credential looks like. That part was itself a bounce: the first version capped the scan at 1 MiB
 on the reasoning that "a credential export that big is not a thing", and a correctly-shaped
