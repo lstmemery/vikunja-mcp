@@ -2661,6 +2661,77 @@ def test_every_agent_tool_is_graded_for_what_it_does_to_a_stale_verdict(env):
     )
 
 
+def test_claim_clears_a_verdict_that_appeared_AFTER_the_board_read(env):
+    """#786: `claim` hands `_clear_verdict_labels` the FRESH read, not the board copy — and until
+    this test that CHOICE was held by a comment and nothing else.
+
+    WHY IT WAS UNPINNABLE, which is the whole card. `_remove_label` DELETEs only links it can see
+    on the snapshot it was handed, so the argument decides what gets cleared. Measured on #693:
+    swapping `fresh` -> `task` left the ENTIRE unit suite green. The cause was not a coverage gap
+    anyone could close by writing another test — `FakeAPI.get_task` returned a SHALLOW copy, so
+    every snapshot shared ONE `labels` list with the store and with each other. "Snapshot A is
+    older than snapshot B" was not a state the fake could hold, so no test on it could tell a
+    correct argument from a stale one. #786 deepened the copy (`FakeAPI._snapshot`, and the reason
+    it is a fidelity fix rather than a convenience is written there); this is what the deepening
+    BUYS, and without it the label assert below passes with either argument.
+
+    THE STATE IT BUILDS is the one the comment in `claim` is about: a human labels the card in the
+    window between the pump's board read and claim's own verify read. `add_assignee` sits exactly
+    there — `_board()`, then the gates, then `add_assignee`, then the fresh `get_task` — so
+    hooking it puts the label in that window with no reach into `Workflow` at all.
+
+    TWO INDEPENDENT DETECTORS, and they answer different questions, which is why both are here.
+    The label assert is the product one: passing the board snapshot leaves `reviewed` riding into
+    Design — the #693 failure it was supposed to prevent, arriving one read later. The aliasing
+    assert above it is the FAKE one: it fails the moment `FakeAPI` starts sharing its store again,
+    which is the condition under which the label assert silently stops meaning anything. NOT
+    claimed here: that `fresh` is safer on the REAL client for any other reason. Real
+    `VikunjaAPI.get_task` reparses JSON per request, so it cannot alias; that is why the fake had
+    to be corrected to match rather than the production code.
+
+    MUTATION-CHECKED, selection `tests/unit/test_workflow_gates.py`, `__pycache__` deleted then
+    PYTHONDONTWRITEBYTECODE=1, every mutation asserted to have LANDED before its round and the
+    sources restored and sha256-verified after. Control round: 0 failed.
+      * `claim`'s `_clear_verdict_labels(fresh)` -> `(task)` -> 1 failed, this test, on the LABEL
+        assert (`['reviewed'] == []`). That single delta is the deliverable of #786.
+      * the SAME swap with `_snapshot` reverted to a shallow copy -> 1 failed, and the round is
+        recorded because it refuted its own prediction: the draft above expected 0 failed, and it
+        is 1, dying on the ALIASING assert rather than the label one. Which is the detectors
+        working as split — so the blind half had to be measured on its own.
+      * that same pre-#786 world with the aliasing assert deleted -> 0 failed. THAT is the
+        card's symptom reproduced by construction: the label assert alone cannot see the swap
+        until the fake stops aliasing. Both halves are needed — the deepening without this test
+        pins nothing, and this test without the deepening is green on the bug.
+    """
+    api, wf, _seed = env
+
+    card = api.add_task("hand-placed in Queue by a human", "Queue")
+    real_add_assignee = api.add_assignee
+
+    def assign_then_a_human_labels_it(task_id, user_id):
+        real_add_assignee(task_id, user_id)
+        api.tasks[task_id]["labels"].append({"id": 907, "title": "reviewed"})
+
+    api.add_assignee = assign_then_a_human_labels_it
+
+    board_copy = next(
+        t for b in api.view_tasks(api.project["id"], api.view["id"]) for t in b["tasks"]
+        if t["id"] == card["id"]
+    )
+    wf.claim(card["id"])
+
+    assert board_copy["labels"] == [], (
+        "the board snapshot moved under the reader — `FakeAPI` is aliasing its store again, and "
+        "with it the label assert below goes blind: a stale snapshot stops being representable"
+    )
+    assert api.stage_of(card["id"]) == "Design"
+    assert _label_titles(api, card["id"]) == [], (
+        "claim walked a verdict into Design that appeared AFTER its board read — it must clear "
+        "off the FRESH snapshot, since `_remove_label` only DELETEs links present on the copy it "
+        "is handed and the board copy is one read older"
+    )
+
+
 # --- #718: root_cause is gated for a bug, and only for a bug --------------------------------
 
 def _bug_in_build(api, wf, extra_labels=()):

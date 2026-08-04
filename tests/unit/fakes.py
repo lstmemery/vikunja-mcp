@@ -1,4 +1,5 @@
 """In-memory дублёр VikunjaAPI для unit-тестов workflow/setup."""
+import copy
 import itertools
 
 from vikunja_mcp.api import VikunjaError
@@ -154,6 +155,30 @@ class FakeAPI:
         return self.me_user
 
     @staticmethod
+    def _snapshot(task):
+        """A read returns a SNAPSHOT — it must share NO mutable object with the store or with any
+        earlier read. `dict(t)` is not that: it copies the top level and leaves `labels` and
+        `assignees` ALIASED, so every snapshot this fake ever handed out was the same list, and
+        a later `add_label` was retro-visible on a board copy read before it.
+
+        1:1 with the real client is the reason, and it is structural rather than a preference:
+        `VikunjaAPI.get_task` is `self._req("GET", …)`, freshly parsed JSON per request, which
+        CANNOT share an object with a previous response. So the fake's aliasing was not "close
+        enough" — it made a state the real client produces routinely (snapshot A older than
+        snapshot B) UNREPRESENTABLE, and with it a whole class of defects unpinnable: any bug of
+        the form "this code read a stale snapshot" passed the suite green, and no negative pin
+        could be written for it. `Workflow.claim` hands `_clear_verdict_labels` the FRESH read and
+        not the board copy for exactly that reason; before this, swapping the two left the entire
+        suite green (measured on #693, filed as #786). What the deepening BUYS is pinned by
+        test_claim_clears_a_verdict_that_appeared_AFTER_the_board_read, which is green under that
+        swap until this method stops aliasing.
+
+        Deep rather than one level down: the containers are lists OF DICTS, so copying only the
+        list still shares every label/assignee dict, and `{**lb}` on read is what the real client
+        gives you for free. Cost measured on the full unit suite — see the card's worklog."""
+        return copy.deepcopy(task)
+
+    @staticmethod
     def _related_subdict(task):
         """Mirror real Vikunja 2.3.0: a task embedded inside another task's `related_tasks` is
         HOLLOWED — `labels`, `assignees` and nested `related_tasks` come back as None even when the
@@ -168,7 +193,7 @@ class FakeAPI:
         return {**task, "labels": None, "assignees": None, "related_tasks": None}
 
     def get_task(self, task_id):
-        t = dict(self.tasks[task_id])
+        t = self._snapshot(self.tasks[task_id])
         # related_tasks — дикт по kind, выведен из relations "на лету" (не хранится на таске) ->
         # add_relation сразу видно в get_task. Реальная 2.3.0 авто-создаёт ОБРАТНУЮ связь на другой
         # задаче (записали "P precedes S" — на S видно "follows: P"); add_relation не трогаем
@@ -218,7 +243,7 @@ class FakeAPI:
 
     def update_task(self, task_id, **fields):
         self.tasks[task_id].update(fields)
-        return dict(self.tasks[task_id])
+        return self._snapshot(self.tasks[task_id])
 
     def create_task(self, project_id, title, description="", priority=0):
         state = self._project_state(project_id)
@@ -230,7 +255,7 @@ class FakeAPI:
         }
         self.tasks[t["id"]] = t
         self.task_bucket[t["id"]] = state["buckets"][0]["id"]  # default = первый бакет ЦЕЛИ
-        return dict(t)
+        return self._snapshot(t)
 
     def comments(self, task_id):
         return list(self._comments.get(task_id, []))
@@ -317,7 +342,7 @@ class FakeAPI:
         out = []
         for b in self._project_state(project_id)["buckets"]:
             tasks = [
-                dict(t) for tid, t in self.tasks.items()
+                self._snapshot(t) for tid, t in self.tasks.items()
                 if self.task_bucket.get(tid) == b["id"]
             ]
             if require_titles is not None and b["title"] not in require_titles:
