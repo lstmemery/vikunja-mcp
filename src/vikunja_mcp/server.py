@@ -364,9 +364,13 @@ def next_task(exclude: list[int] | None = None) -> dict:
     and not your own (review_kind names the rubric: 'bug' or 'change'), (4) the top FREE
     task in Queue. Never hands out a task assigned to someone else — those are "for humans".
     Leaves Backlog, blocked, and epic containers (label epic — a container, not a unit of
-    work) alone. Up to wip.limit tasks at once — the repo toml's wip_limit where it sets one
-    (or 1 for the legacy enforce_single_wip = true), else THREE by default; the `wip` payload,
-    never a guess, says how many, and it is always a number (see PARALLEL DRAIN below).
+    work) alone. Do not CLAIM more than wip.limit at once — the repo toml's wip_limit where it
+    sets one (or 1 for the legacy enforce_single_wip = true), else THREE by default; the `wip`
+    payload, never a guess, says how many, and it is always a number (see PARALLEL DRAIN below).
+    "Claim", not "hold": that number gates the ONE transition `claim` and is NOT an invariant on
+    the active count, so wip.active may legitimately EXCEED wip.limit and this very call reports
+    it (4/3 is a real, correct state — rework re-enters Build without passing the gate). Read it
+    as rework to drain, never as board corruption; `claim`'s docstring has the paths.
     Among your active tasks, one that is a predecessor of another of your active tasks is
     handed back first (finish the unblocking rework before its successor), overriding priority.
     A free task whose predecessor

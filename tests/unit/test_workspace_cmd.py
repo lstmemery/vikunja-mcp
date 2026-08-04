@@ -1508,12 +1508,24 @@ def test_the_two_refusal_channels_are_not_interchangeable(repo, monkeypatch, cap
 
     CREATE refuses by RAISING; `run_workspace`'s catch-all renders that as one `{"error": …}` line
     and exit 1 — with NO `code` key. `--release`/`--gc` refuse by RETURNING: exit 0,
-    `released: false`, and a machine-readable `code` beside the prose `reason`. Three documents had
+    `released: false`, and a machine-readable `code` beside the prose `reason`. Several documents
+    had
     copied that second half out as the universal "every refusal carries a machine-readable `code`",
     which is simply false of the create half; 580 weighed making it uniform and re-ratified the
     split instead (see the CODE_* header in workspace_cmd.py for why a create-side code would have
     no consumer and could only ever be present-SOMETIMES). A re-ratified split needs a net in BOTH
     directions, so ONE state is driven through BOTH entry points here — same tree, same tick.
+
+    "Several" carries no digit ON PURPOSE, and dropping the digit is the repair rather than a
+    hedge. This sentence opened with "Three", the count 580 scoped, and VMCP-122 (597) then found a
+    FOURTH — inside a SUPERSEDED marker in the drain design record, contextually true and therefore
+    invisible to sweeps looking for the obvious shape. Bumping the digit is what VMCP-145 (634)
+    warned against and is why this repair does not: two passes before 597 had already ruled that
+    there was no further copy — 551's own round 3 about that same design record, then 584 about
+    the spec doc — so the total is the part of this sentence with a track record of being wrong,
+    and a docstring narrating history has no reader who ACTS on it. The running tally lives in the
+    drain design RECORD's banner, which is maintained per sweep and ends "Assume a fifth.";
+    attribution survives where a total does not.
 
     The create half is asserted as a WHOLE KEY SET on purpose. The existing create test
     (`test_run_workspace_error_is_one_json_line_exit_1`) only checks `"WorkspaceError" in

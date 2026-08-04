@@ -1226,7 +1226,15 @@ def test_a_page_filtered_down_to_nothing_still_ends_the_read(info_status):
 
 def _flat(pages, *, page_size=5, total_pages=None, info_status=200,
           harness_cap=3 * MAX_UNPROVEN_PAGES):
-    """A server that answers ONE list endpoint out of `pages`, and — when `total_pages` names one —
+    """A server that answers EVERY list endpoint out of `pages` — the handler branches on `/info`
+    and on nothing else, so `labels()`, `projects()`, `comments()` and `views()` are all served the
+    same page map (MEASURED: one such handler answered all four paths off one `pages`). It reads as
+    ONE endpoint only because each caller here drives one; if a test ever drives two, they share the
+    map. SERVED alike, not ANSWERED alike: the client's own post-filters still apply, and
+    `projects()` drops every row with `id <= 0` (measured — a map of `{"id": 1}` comes back from
+    both, a map of `{"id": -1}` comes back from `labels()` and EMPTY from `projects()`), so a
+    fixture built out of pseudo rows is not interchangeable between them.
+    And — when `total_pages` names one —
     with the x-pagination-total-pages header real Vikunja sends on these endpoints. That header is
     OPT-IN rather than a property of this helper: at the default `total_pages=None` the list
     response carries NO such header at all (measured off the live responses rather than read off
@@ -1237,9 +1245,19 @@ def _flat(pages, *, page_size=5, total_pages=None, info_status=200,
 
     WHY THE CALLABLE FORM EXISTS, and it is NOT that a mapping cannot reach the ceiling: it can. A
     mapping of N pages ends the read itself on page N+1 (`.get(page, [])` -> `[]` -> `if not items:
-    break`), so it reaches the ceiling only while N is at least what the ceiling COSTS on that shape
-    — the budget when no page is ever full, one MORE when the server fills its first page, which
-    buys a request the budget is never charged for. MEASURED with the budget edited in a scratch
+    break`), so it reaches the ceiling only while N is at least what the ceiling COSTS on that
+    shape, and that cost is `budget + the number of pages the shape FILLS`: a page that reaches the
+    stated size buys a request the budget is never charged for. The two shapes THIS FILE contains
+    are the K=0 and K=1 instances of that rule and NOT a case split — the em-dash pair here used to
+    name them as though they were, which is what VMCP-172 (697) is. MEASURED at a budget of 20 and
+    page_size 5, `_MAX_UNPROVEN_PAGES` rebound in the harness and every page carrying DISTINCT
+    rows, the smallest mapping that raises is N=20 when no page is ever full, 21 when only the
+    first is, 23 at K=3, 27 at K=7, and 40 when EVERY OTHER page is full — budget, budget+1,
+    budget+K, 2*budget, with requests issued equal to N in every row. (DISTINCT is load-bearing:
+    let the full pages repeat one window and the read exits on `added_new` instead and never
+    reaches the ceiling at all — measured, no raise at any N up to 4*budget. A table built without
+    that care reports "no ceiling on any full-page shape", which looks like a finding and is an
+    artefact.) MEASURED with the budget edited in a scratch
     copy and this harness otherwise untouched: on the never-fills-a-page shape, mappings of
     119 / 120 / 121 pages at budget 120 give NO RAISE (119 rows) / 508 / 508, and 499 / 500 / 501 at
     budget 500 give NO RAISE (499 rows) / 508 / 508; on the full-first-page shape, the 199-page

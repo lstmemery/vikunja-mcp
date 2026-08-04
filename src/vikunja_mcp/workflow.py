@@ -323,9 +323,10 @@ class Workflow:
         # server; None (default, URL unset) -> call_human behaves bit-for-bit as before.
         # Called strictly best-effort — see call_human.
         self.notifier = notifier
-        # parallel drain: how many tasks may be active (Design/Build) at once. None means the
-        # repo toml set no wip_limit — NOT "no gate": the fallback is the legacy flag (1) or
-        # DEFAULT_WIP_LIMIT. See _effective_wip_limit for the precedence.
+        # parallel drain: how many tasks may be CLAIMED into Design/Build. A gate on that one
+        # transition, not an invariant — the active count legitimately goes over it (#529). None
+        # means the repo toml set no wip_limit — NOT "no gate": the fallback is the legacy flag (1)
+        # or DEFAULT_WIP_LIMIT. See _effective_wip_limit for the precedence.
         self.wip_limit = wip_limit
         self._me_cache: dict | None = None
         self._view_cache: dict | None = None
@@ -467,7 +468,9 @@ class Workflow:
         )
 
     def _effective_wip_limit(self) -> int:
-        """How many active tasks this token may hold. ALWAYS a number — the gate is never off.
+        """How many active tasks this token may CLAIM its way into. ALWAYS a number — the gate is
+        never off. It bounds the `claim` transition and NOT the active count, which legitimately
+        exceeds it when a card re-enters Build past the gate (#529).
         Thin view over _wip_limit_with_origin, which owns the precedence."""
         return self._wip_limit_with_origin()[0]
 
@@ -1216,7 +1219,9 @@ class Workflow:
                 f"finish that one first"
             )
         # WIP slot gate (generalises the #38 single-WIP flag): refuse a claim that would put this
-        # token over its allowed number of simultaneously active tasks — always enforced, since
+        # token over its allowed number of simultaneously active tasks. It gates THIS transition
+        # only — the count itself is not bounded, and a card bounced back into Build takes it over
+        # the limit with no claim involved (#529) — always enforced, since
         # _effective_wip_limit always yields a number (an unset wip_limit means DEFAULT_WIP_LIMIT,
         # tracker #524). Reuse the board snapshot claim already fetched — the old code called
         # _my_active_tasks() with no board and paid for a SECOND full board fetch per gated claim.

@@ -33,8 +33,13 @@ docstring stops quoting it -> 1 failed; control after restore 0 failed.
 Round 3, after an independent re-measure added the misspelled-key case, selection = this file
 at 15 tests: control 0 failed; the refusal stops naming the misspelling cause -> 1 failed;
 control after restore 0 failed. That mutation targeted the PRE-#720 sentence, and both it and
-the pin that held it are gone now — see round 5. The three rounds have DIFFERENT selections and
-each carries its own control, which is why they are three paragraphs and not one table.
+the pin that held it are gone now — see round 5. EVERY round recorded in this docstring has its
+OWN selection and its OWN control, which is why they are separate paragraphs and not one table.
+This sentence used to open by COUNTING those rounds ("the three rounds..."), and two later cards
+appended a round each without touching it — #657 in `d60cdad` and #720 in `ce056ed`, taking the
+docstring to five while the tally stayed at three. VMCP-196 (733) reported that; the repair is to
+carry no tally at all, since it is one nobody is prompted to update while adding the round that
+falsifies it.
 
 The truncation round is the load-bearing one, and NOT because the others are all prose — an
 earlier version of this sentence said "every other mutation here damages prose the tests read",
@@ -196,7 +201,10 @@ def test_a_usable_report_still_advances_and_lands_verbatim(env):
     """The guard must keep passing what it always passed — including a large report."""
     api, wf, t = env
     wf.advance(t["id"], to="build", spec="s")
-    worklog = "проверено запуском\n" * 4096          # ~35 K chars, ~65 KB of UTF-8
+    # 77_824 chars / 147_456 bytes = 144.0 KiB. Counted, not estimated: the repeated unit is 19
+    # CHARACTERS and 36 BYTES, because 17 of the 19 are Cyrillic and cost two bytes each — the
+    # eyeball figure this comment used to carry (~35 K / ~65 KB) was low by 2.2x and 2.3x.
+    worklog = "проверено запуском\n" * 4096
     wf.advance(t["id"], to="review", worklog=worklog, evidence="a" * 40)
     assert api.stage_of(t["id"]) == "Review"
     landed = [c for c in api.comments_text(t["id"]) if c.startswith("[worklog]")][-1]

@@ -1194,7 +1194,7 @@ def _ceiling_derivation_section(text: str) -> str:
 
 
 def test_the_ceiling_numbers_in_both_files_re_derive_from_their_own_formula():
-    """VMCP-98 (556): the test above pins the rulebook's three OPERATIVE `2 × wip.limit` sites as
+    """VMCP-99 (556): the test above pins the rulebook's three OPERATIVE `2 × wip.limit` sites as
     STRINGS, which is all a string can do — it never evaluates them. Two gaps follow from that, and
     card 556 was filed for one of them: CLAUDE.md carries a SECOND, independent write-up of the same
     derivation (the release section's "that bump commit is also a racer" paragraph), and nothing in
@@ -1578,8 +1578,13 @@ def _drain_width_section(text: str) -> str:
 def test_the_wip_overshoot_the_rulebook_describes_is_one_the_code_produces():
     """VMCP-80 (529): `wip_limit` reads as an invariant on the active count everywhere it is
     written, but it is a gate on ONE transition — `claim`. `review_task(verdict='needs_work')`
-    moves a card Review→Build without passing it, so `next_task` can honestly report
-    `{"active": 4, "limit": 3}`. That behaviour is correct and deliberately unchanged (rework must
+    moves a card Review→Build without passing it, so `next_task` can honestly report an `active`
+    of 4 against a `limit` of 3. Described, not quoted: those two live inside the NESTED `wip`
+    sub-dict, never at the top level, and the third key there is `free` — which this sentence used
+    to drop while rendering the pair as a payload literal (VMCP-170 (694)). Dropping `free` is the
+    worst key to drop here, since `free = max(0, limit - active)` is exactly what collapses "full"
+    and "over budget" into one 0. Measured: `{"active": 4, "limit": 3, "free": 0}` under
+    `res["wip"]`. That behaviour is correct and deliberately unchanged (rework must
     be receivable at the limit or reviewed work strands); what shipped wrong was the documentation.
 
     So this pin does not compare strings alone — it DRIVES the real `Workflow` into the overshoot
@@ -3159,11 +3164,21 @@ def _return_task_bullet(text: str) -> str:
     rather than assumed unaffected, and TWICE, because the window was rebuilt once more after
     review: the `file_task` sentence still scores RED at bullet and GREEN at section, rule+list
     RED at both, `#649` RED at both. Closing it for the loop does not close it for the
-    file, and the size of what is left is measured rather than guessed at: of the 154
-    `assert "LIT" in <slice>` assertions in this file, 130 hold a needle that occurs EXACTLY ONCE
-    in its slice and 3 test a non-str container, so 133 cannot have this defect at all; the
-    remaining 21 are carried by #758, with 11 of them measured blind to the removal of any single
-    occurrence. NONE of the 21 is read from THIS helper: its three surviving needles — `file_task`
+    file, and the size of what is left is measured rather than guessed at — ANCHORED, because a
+    count over this file is a count over a file other cards edit, and this one has already gone
+    stale twice. At `6a3e644`, of the 157 `assert "LIT" in <slice>` assertions here, 133 hold a
+    needle that occurs EXACTLY ONCE in the slice the helper actually returned and 3 test a non-str
+    container, so 136 cannot have this defect at all; the remaining 21 are the class #758 screened
+    (now carried by the umbrella VMCP-227 (771)), with 11 of them measured blind to the removal of
+    any single occurrence. Re-run rather than quote: an AST transformer rewrites each such
+    assertion into a recording call that counts the needle in the container at RUNTIME, driven by
+    pytest so the fixture-taking tests execute too. Do not screen with a source regex — at the same
+    commit it says 169, over-counting inside docstrings — and do not screen without running: 16 of
+    the 157 sit in the six tests that take a fixture, so a bare `exec` of the module reaches 141.
+    The trajectory is the argument for the anchor, and it is ATTRIBUTED rather than re-derived:
+    154/130/133 is what #758's card reports for its own run at `5539eba`, and 155/131/134 what
+    VMCP-228 (772) reports at `dd81dde`; both trees are ancestors of this one.
+    NONE of the 21 is read from THIS helper: its three surviving needles — `file_task`
     in the test below, `#649` and «следующий мутирующий тул» in the decompose test — each occur
     EXACTLY ONCE in the bullet, so the loop was the only twin-blind assertion reading it. The
     nearest two belong to neighbours: `file_task` twice in `_decompose_bullet`, and `file_task`
@@ -3566,11 +3581,16 @@ def test_the_restart_rule_says_its_own_mechanism_is_build_only():
     перезапускается».
 
     MEASURED before the prose was written (real `Workflow` over FakeAPI, solo setup — the dogfood
-    one): a card driven to Review and still assigned to me makes `next_task()` answer
-    `{"task": null, "message": "the queue is empty — no work for the agent"}`, on every call; the
-    same identity with a card in Build gets `{"task": 107, "resume": true, "stage": "Build"}`. A
-    SECOND token sees the Review card as `{"review": true}` — so the blindness is a property of
-    the solo setup, which is the setup this rulebook is written for.
+    one), and DESCRIBED rather than transcribed, because none of the three is a payload any call
+    returns: a card driven to Review and still assigned to me makes `next_task()` answer with
+    `task` at None and the queue-is-empty message, on every call; the same identity with a card in
+    Build gets a resume result — `resume` true, `stage` "Build" — whose `task` is the `_summary`
+    DICT (`{id, ref, title, priority, description}`), never the bare id; a SECOND token sees the
+    Review card as a review offer, `review` true beside `review_kind`. So the blindness is a
+    property of the solo setup, which is the setup this rulebook is written for. Every one of the
+    three also carries `wip`, and the two task-bearing ones a `note` — the elision that made the
+    first spelling of this paragraph read as a transcript, VMCP-170 (694). Read the payloads off
+    the code or off a run, never off this docstring.
 
     Anchored in the branch that causes it: the review-offer loop must keep skipping cards assigned
     to the caller (delete that conjunct and a dead reviewer WOULD be reminded, making this

@@ -69,8 +69,10 @@
 > rather than false: Task 6's other numbers, above. FALSE BUT OUTSIDE THIS SLICE: the
 > Self-Review's "Type consistency" paragraph, which hits the swept token only inside
 > `_effective_wip_limit` and is wrong about which METHOD `claim` reads the limit through, not
-> about the width — a different contract, so it is FILED (#709) and deliberately left UNMARKED
-> here. Do not read that silence as a pass; an unmarked hit is not a cleared one. Task 6's
+> about the width — a different contract, so it was FILED (#709) and deliberately left UNMARKED
+> here. **That one is now marked too, by VMCP-184 (709) on 2026-08-03 — so the FIVE above stays
+> the count of what VMCP-79's sweep marked, and is no longer the number of prose markers in this
+> document.** Do not read an unmarked hit as a cleared one. Task 6's
 > `Expected: 2` carried NONE of the swept tokens and turned up only by reading around an
 > already-marked fence — evidence FOR the caveat below, not against it. The
 > fence count was re-measured the same day and still comes to 48 with none unbalanced, though
@@ -1796,4 +1798,4 @@ Write up what actually happened — especially anything the tests agreed on and 
 
 **Known gap, accepted:** the spec's error-handling row "push rejected repeatedly (>3 rounds) → `call_human`" is enforced by prose in SKILL.md, not by code — there is nothing in this codebase that runs the agent's git for it. Task 5 states the bound explicitly so it is at least reviewable.
 
-**Type consistency.** `_effective_wip_limit()` (Task 1) is the single limit resolver used by both `claim` and `next_task`. `wip` is `{"active", "limit", "free"}` everywhere. Workspace dicts use `task_id`/`role`/`path`/`branch`/`created` on create and `released`/`reason` on release, and `gc_workspaces` returns `_release_locked` results verbatim, so `kept[i]["reason"]` and `released[i]["task_id"]` are the same shapes the release tests already pin. `_repo_lock` is documented as non-reentrant at its definition and every in-lock caller uses the `_locked` cores.
+**Type consistency.** ~~`_effective_wip_limit()` (Task 1) is the single limit resolver used by both `claim` and `next_task`.~~ — **SUPERSEDED on 2026-07-30 by tracker #517 (`4a056f1`), which split the resolver so a refusal could name the KNOB and not just the number: the single resolver is now `Workflow._wip_limit_with_origin() -> (int, str)`, and `claim` reads THAT, unpacking `limit, limit_origin`. `_effective_wip_limit()` survives as a thin one-line view over it (`return self._wip_limit_with_origin()[0]`) and is what `next_task` still calls, so the statement's POINT — one resolver, one precedence, both callers — held then and holds now; what went false is the METHOD it names for `claim`. Live: `workflow._wip_limit_with_origin` and `workflow._effective_wip_limit`. Marked by VMCP-184 (709), 2026-08-03.** `wip` is `{"active", "limit", "free"}` everywhere. Workspace dicts use `task_id`/`role`/`path`/`branch`/`created` on create and `released`/`reason` on release, and `gc_workspaces` returns `_release_locked` results verbatim, so `kept[i]["reason"]` and `released[i]["task_id"]` are the same shapes the release tests already pin. `_repo_lock` is documented as non-reentrant at its definition and every in-lock caller uses the `_locked` cores.

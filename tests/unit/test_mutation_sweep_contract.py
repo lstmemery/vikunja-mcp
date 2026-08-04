@@ -368,14 +368,21 @@ _KEY_HEAD = 48
 # source of that cost, not the class: a card you FILE now names itself in `filed.ref`, but a card
 # you CITE, and a `decompose` child, still cost the deliberate fetch — VMCP-206 (749).)
 # Swept at this landing by resolving ids through the same call the tool makes
-# (`api.get_task(id)` -> `Workflow._ref`): of the 62 `VMCP-N (id)` pairs this repo held BEFORE this
-# commit, THREE disagreed. That 62 is pinned to the PRE-COMMIT tree on purpose — citing the filed
-# card below adds a 63rd, so a total stated here without its tree would be falsified by the
-# sentence that states it, which is the self-tally this file refuses. Two of the three are this
+# (`api.get_task(id)` -> `Workflow._ref`): of the 62 DISTINCT `VMCP-N (id)` pairs this repo held
+# at `da3640d`, the parent of the commit that swept them, THREE disagreed. That 62 is pinned to a
+# NAMED tree on purpose — citing the filed card below adds a 63rd, so a total stated here without
+# its tree would be falsified by the sentence that states it, which is the self-tally this file
+# refuses. It first said "BEFORE this commit", which names a tree only while "this commit" is
+# unambiguous, i.e. only until the next landing (VMCP-212 (755)); a sha survives that. Re-run it
+# DISTINCT, as the word now says: the raw OCCURRENCE count on that same tree is 187, not 62.
+# Two of the three are this
 # file's and are corrected here — `VMCP-181` -> VMCP-195 above, and VMCP-172 -> VMCP-187 at both of
-# its sites. THE THIRD IS STILL STANDING, deliberately: it is in test_skill_contract.py, another
-# card's slice, and is filed as VMCP-203 (745) — so do NOT read this paragraph as "the repo is
-# clean", which is exactly the over-reading a swept-and-reported class invites.
+# its sites. THE THIRD WAS LEFT STANDING here, deliberately: it was in test_skill_contract.py,
+# another card's slice at the time, and was filed as VMCP-203 (745) — its index was one off, so it
+# named a live UNRELATED card rather than reading as broken. VMCP-228 (772) has since corrected it
+# in that file. That does NOT make this paragraph "the repo is clean": the class it reports on is
+# bounded by the spelling its grep matched, which is the point the next paragraph makes and the
+# over-reading a swept-and-reported class always invites.
 # AND THE SWEEP COVERED ONE SPELLING, not the class. `VMCP-N (id)` is not the only form: this file
 # also writes `VMCP-N / id`, which that grep does not match, and a fourth instance was sitting FOUR
 # LINES above the first correction — the scope comment, which paired id 536 with `VMCP-91` where

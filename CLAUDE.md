@@ -123,7 +123,9 @@ assertion in `tests/unit/test_line_length_gate.py`, which pyproject must agree w
   `VIKUNJA_NOTIFY_WEBHOOK` (`notify.py` — best-effort Slack-shaped ping when `call_human`
   parks a card in Your Call) is a secret of the same class: env layers only, never the toml.
   Two parallel-drain keys sit on opposite sides of that split: `wip_limit` (how many
-  Design/Build tasks one token may hold at once; generalises `enforce_single_wip`, which is
+  Design/Build tasks one token may CLAIM into at once — not how many it may HOLD, and what the
+  difference costs is spelled out further down this same bullet, at "a gate on ONE transition";
+  generalises `enforce_single_wip`, which is
   exactly 1) is committed TEAM POLICY — repo toml ONLY, never env. **Unset means
   `DEFAULT_WIP_LIMIT` = 3, not "no gate"** (human decision, tracker #524 — the gate is always
   on, so every project drains 3-wide without a toml edit); precedence is explicit `wip_limit` →

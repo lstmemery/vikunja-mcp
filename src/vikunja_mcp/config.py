@@ -14,7 +14,10 @@ REPO_FILE = ".vikunja-mcp.toml"
 REPO_ENV_FILE = ".vikunja-mcp.env"
 USER_ENV_FILE = Path("~/.config/vikunja-mcp/env").expanduser()
 
-# How many Design/Build tasks one token may hold at once when the repo toml sets no wip_limit.
+# How many Design/Build tasks one token may CLAIM into when the repo toml sets no wip_limit.
+# "Claim into", not "hold": the number gates the `claim` transition and is not an invariant on the
+# active count — a card re-entering Build past the gate takes the active count OVER it, legitimately
+# (tracker #529; the paths are enumerated in `claim`'s tool docstring).
 # THE ONE definition of that number (workflow._effective_wip_limit and the < 1 refusal below
 # both read it) — human decision of 2026-07-30, tracker #524: an unset key means THREE, not
 # "no gate". It used to mean no gate in the code while the rulebook told the pump the drain was
@@ -39,8 +42,9 @@ class Config:
     # claim() refuses a new task while you already have an active Design/Build one.
     # Default off -> ships inert and reversible; opt in per team.
     enforce_single_wip: bool = False
-    # how many tasks this token may hold in Design/Build AT ONCE — the parallel-drain slot
+    # how many tasks this token may CLAIM into Design/Build — the parallel-drain slot
     # count, and the generalisation of enforce_single_wip (which is exactly wip_limit=1).
+    # A gate on `claim`, never an invariant on the active count (see DEFAULT_WIP_LIMIT above).
     # Committed TEAM POLICY of the same class: repo toml ONLY, never env, never a secret.
     # None means "the key is ABSENT from the toml" and nothing more — it is NOT "no gate".
     # The effective number is resolved one layer up, in workflow._effective_wip_limit:

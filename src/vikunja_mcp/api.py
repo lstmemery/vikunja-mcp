@@ -73,9 +73,17 @@ _MAX_UNPROVEN_PAGES = 120
 # server — not by an argument about page sizes this time (that is the argument 603 measured false)
 # but by monotonicity: the old rules were `added_new AND (maybe_full OR header_more)` and
 # `added_new_required OR (maybe_full_required AND added_new)`, and dropping a conjunct / weakening
-# a guard can only make a keep-going fire MORE often. It also makes /info's answer irrelevant to
-# WHERE a read stops, so healthy and degraded now execute the same stop rule by construction rather
-# than by a claim — which is what VMCP-103 was for and what 603 found broken.
+# a guard can only make a keep-going fire MORE often. It also takes /info out of the STOP RULE
+# itself, so healthy and degraded now execute the same stop rule by construction rather
+# than by a claim — which is what VMCP-103 was for and what 603 found broken. Read that as a
+# statement about the RULE and never as "/info cannot change where a read stops", which is the
+# stronger sentence this comment used to carry. `_MAX_UNPROVEN_PAGES` counts pages the STATED size
+# did not account for, so the two branches can diverge at the ceiling — the measured pair is in
+# the note above `_page_size`, under «ЗДЕСЬ ОН БЮДЖЕТ», where a degraded read 508s and a healthy
+# one reads on. "CAN", not "does", and the condition is the page LENGTH rather than the ceiling:
+# divergence needs at least one page the stated size ACCOUNTS FOR, so on a shape where no page
+# ever reaches it the two are identical at and ABOVE the ceiling too — measured, 120 one-row pages
+# raise a 508 on request 120 with /info up and with /info down alike.
 #
 # WHAT IT COSTS, measured rather than assumed. Three entries, and they are the costs AS MEASURED
 # rather than a point-by-point reply to the card's four bullets — so do not read the colon as a
@@ -446,8 +454,15 @@ class VikunjaAPI:
     # favourite, and got 3 pseudo rows that are not counted against the page size, so at
     # max_items_per_page=5 every page carrying a full window of real rows carried 8 while the real
     # ids paged honestly (the last page with real rows carried 7). "Over-serves" and "ignores
-    # `?page=`" are therefore INDEPENDENT properties of an endpoint, not two names for one set —
-    # see the note above `_page_size` for what that costs the degraded read.
+    # `?page=`" are therefore INDEPENDENT properties of an endpoint, not two names for one set.
+    # What over-serving COST the degraded read is history, and the past tense is the whole of this
+    # correction: it used to widen the degraded loss band (the w-table in the module-level
+    # «VMCP-127 (608) — THE FULLNESS INFERENCE IS GONE» block), and 608 deleted the inference both
+    # bands came from. MEASURED here (real httpx over MockTransport, real api.py, /info stating 5
+    # against a list of 19 rows served 8, 8, 3): 19 rows in 4 requests with /info up and 19 in 4
+    # with it down — identical, and the same pair the honest 5,5,2 shape gives (12 in 4 both ways).
+    # The note above `_page_size` is still where the /info split is written
+    # out, and what survives of it is the CEILING, not this.
     #
     # The four that paginate all fail in the WORSE direction — absence, which every caller acts
     # on. MEASURED end to end: `setup_cmd.reconcile` looks a project up by title over
@@ -811,8 +826,13 @@ class VikunjaAPI:
     # under-reads: dropping a guard from a keep-going can only make it fire
     # more often, so this rule is a strict superset of the one it
     # replaced on EVERY server. And it consults no page size at all, so /info being up or down
-    # can no longer change WHERE this read stops — the property VMCP-103 was for and VMCP-124 (603)
-    # found broken, now structural instead of argued.
+    # can no longer change where this read stops BELOW THE CEILING — the property VMCP-103 was for
+    # and VMCP-124 (603) found broken, now structural instead of argued. That qualifier carries the
+    # whole sentence and was missing from it: the stop RULE ignores the stated size,
+    # `_MAX_UNPROVEN_PAGES` does not, so a degraded read CAN raise where a healthy one reads on.
+    # Only can: the ceiling charges a page only when it is SHORT of the stated size, so a shape
+    # whose pages never reach that size spends the budget identically on both branches and 508s on
+    # the same request. The measured pair is a few paragraphs up, under «ЗДЕСЬ ОН БЮДЖЕТ».
     #
     # VMCP-103 — WHY THE TWO BRANCHES HAD TO BE UNIFIED, kept because a deleted threshold is not
     # the only way to re-split them. VMCP-89/92 spent two cards deleting "a short page proves the
