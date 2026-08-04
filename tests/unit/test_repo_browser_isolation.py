@@ -364,6 +364,51 @@ PRESCRIBED_OUTPUT_DIR_RE = re.compile(r"--output-dir(?:\s+|=)([^\s`]+)")
 # test_skill_contract.py.
 MIN_PRESCRIBED_OUTPUT_DIRS = 1
 
+# --- #751: the SAME directory again, set from a CONFIG FILE rather than from a flag -----------
+#
+# `--config <path>` reads a JSON file, and `{"outputDir": …}` in it sets exactly what
+# `--output-dir` sets. MEASURED for this card on the same 0.0.78 (own `--isolated --headless`
+# server, own stdio client, own throwaway origin on 127.0.0.1:20751, cwd = this worktree): with
+# an `"outputDir"` naming `cfg-out-751`, the three auto-named artifacts landed there, `git
+# status` showed `?? cfg-out-751/`, and `git add -A --dry-run` STAGED `page-*.yml` and
+# `console-*.log`. Their contents carried the probe markers — the aria text and a link's
+# `?token=` query string in the `.yml`, the console line and the same token in the `.log`. Only
+# the `.png` was covered, by #629's `*.png`. That is #736's leak arriving through a third door.
+#
+# TWO THINGS THE CARD'S OWN FRAMING GOT WRONG, both measured rather than reasoned, and both
+# shaping this pin instead of just its comment.
+#
+# FIRST, "the THIRD door" undercounts, which is the same overclaim-by-enumeration this file has
+# been bitten by before. Two ENV VARS set the same directory with no flag on the line at all:
+# `PLAYWRIGHT_MCP_OUTPUT_DIR=env-out-751` put the three artifacts in `env-out-751/`, and
+# `PLAYWRIGHT_MCP_CONFIG=<path>` picked up the very same config file. So enumerating FLAGS can
+# never close this; the axis is the DIRECTORY, which is why the prescription SKILL.md states —
+# and this pin checks — is a directory rather than a flag list.
+#
+# SECOND, and it is what keeps the exposure small: the EXPLICIT `--output-dir` flag BEATS all
+# three. Measured pairwise — the flag against the config, against `PLAYWRIGHT_MCP_OUTPUT_DIR`,
+# and against `PLAYWRIGHT_MCP_CONFIG` — every round put the three files in `.playwright-mcp/751`
+# and created the foreign directory NOT AT ALL. So the recipe is safe from a stray config and
+# from an inherited env var for as long as it keeps its flag, which is pinned inside the fence by
+# `test_the_browser_answer_leads_with_the_isolation_an_agent_can_launch_itself`. What is left
+# open is the agent that DROPS the flag and configures the server instead, and that is what
+# SKILL.md now names and this pattern now reads.
+#
+# The JSON spelling, because that is what an `--config` file holds and what SKILL.md prints:
+# `"outputDir": "<value>"`. The value stops at the closing quote, at a comma or at the closing
+# brace, so an inline one-key object reads correctly. A BARE `` `"outputDir"` `` in prose does
+# NOT match and must not: there is no colon after it, so the pattern never starts a value there —
+# which is what lets the paragraph above NAME the key without handing this pin a word to check.
+PRESCRIBED_CONFIG_OUTPUT_DIR_RE = re.compile(
+    r"""["'`]?\boutputDir\b["'`]?\s*:\s*["'`]([^"'`\s,}]+)"""
+)
+
+# Same shape of floor and same reason as its two neighbours: a pattern that matches nothing
+# passes everything. SKILL.md prints exactly ONE such value today — the prescription in the
+# `--config` bullet — and the floor sits at 1 because that is also the honest minimum: this is a
+# rule about where a config must point, not a demand that the rulebook carry N examples.
+MIN_PRESCRIBED_CONFIG_OUTPUT_DIRS = 1
+
 # What an `--output-dir` actually receives, so the pin asks git about a FILE rather than about a
 # directory name. Both are auto-named artifacts measured landing there in this card's runs, and
 # both are the case no other rule in this repo reaches: the `.yml` is the page's aria text, the
@@ -1501,6 +1546,72 @@ def test_every_filename_skill_md_prescribes_is_excluded_by_this_repos_gitignore(
     behaviour; `.playwright-mcp/` is ignored in THIS repo while SKILL.md self-heals onto consumers
     whose .gitignore no pin here can see; and a flag this rulebook never prints is a flag this
     pin never sees.
+
+    ============================== #751 ========================================================
+    #751: THE THIRD DOOR — a CONFIG FILE — gated by the third block of this test.
+
+    `--config <path>` with `{"outputDir": …}` sets the same directory the flag sets, and the same
+    two text artifacts spill from it. Reproduced before the fix rather than argued (the constant
+    PRESCRIBED_CONFIG_OUTPUT_DIR_RE carries the full measurement): `git status` showed
+    `?? cfg-out-751/` and `git add -A --dry-run` staged the `.yml` and the `.log`, the first
+    carrying the probe page's aria text and a link's `?token=` query string.
+
+    THE CARD'S OWN FRAME WAS THE FIRST THING TO GO, and re-measuring is what did it. It was filed
+    as "the THIRD door", and the doors number at least FIVE: beside the flag in both spellings and
+    the config file, `PLAYWRIGHT_MCP_OUTPUT_DIR` and `PLAYWRIGHT_MCP_CONFIG` set the same
+    directory with NO flag on the line — both measured spilling identically. Enumerating flags can
+    therefore never close this, which is why the
+    prescription and this pin are about a DIRECTORY. Against that, the fact that bounds the
+    exposure, also measured: the explicit `--output-dir` BEATS all three (pairwise, each round
+    put the files in `.playwright-mcp/751` and never created the foreign directory), so the
+    recipe is safe from a stray config and an inherited env var as long as it keeps its flag —
+    which the fence assertion in test_skill_contract.py holds. What is left is the agent that
+    drops the flag and configures instead.
+
+    MUTATION-CHECKED in a separate clone with this file's usual discipline (`git clone
+    --no-hardlinks`; `__pycache__` deleted each round AND `PYTHONDONTWRITEBYTECODE=1`;
+    `vikunja_mcp.__file__` printed and confirmed to be the CLONE's; every mutation asserted to
+    have LANDED before the round and the sources restored from a copy after it). Failed counts,
+    never pass totals, and the control is in this same paragraph rather than assumed:
+
+    READ THE ASSERTION, NOT THE COUNT, for the first three rounds — and that is a correction this
+    card made to its own first draft rather than a style note. All three blocks of this test are
+    assertions inside ONE test function, so pytest stops at the first one that fires and the
+    round count is 1 whichever of them did. Against control 0 failed, a draft of this list
+    predicted 2 failed for the first round below, reasoning that two assertions were violated;
+    both ARE, and the round still measures 1 failed. So every round here was re-run printing the
+    AssertionError, and what is recorded is which assertion spoke:
+
+    * control 0 failed
+    * point the prescribed `outputDir` at `cfg-out-751`, a plain directory in the tree -> 1
+      failed, on the GIT-BACKED assertion, naming both text probes under that directory
+    * point it at `dist/751` — ignored HERE, for an unrelated reason -> 1 failed, on the RULE
+      assertion, with the git-backed one reached and GREEN. The same measurement that made #703
+      and #736 each keep their two assertions separate, reproduced for this door not inherited
+    * break PRESCRIBED_CONFIG_OUTPUT_DIR_RE so it matches nothing -> 1 failed, on the floor
+    * delete the `.playwright-mcp/` line from .gitignore -> 2 failed, and here the count DOES
+      mean two: this test and #607's `test_the_playwright_output_dir_is_excluded`, which is a
+      different test function. This block reaches the ignore rules and not only the prose
+    * delete the whole `--config` bullet from SKILL.md -> 1 failed, on the floor: the rulebook
+      cannot drift back to silence about this door without going red
+    * control again 0 failed
+
+    FALSE REDS PRICED BEFORE LANDING, on the tree as it stands: the new pattern finds exactly one
+    value in SKILL.md (`.playwright-mcp/<id>`), which is the only file this pin reads, and the
+    existing `--output-dir` pattern still finds the same two values it found before — the
+    `--config` paragraph names the equals spelling as `` `--output-dir=` ``, where the closing
+    BACKTICK is the next character, so `[^\\s`]+` never starts a value there. Run over every
+    tracked file, the new pattern has exactly one other hit in the whole repository — the
+    `"<value>"` written in this file's own comment to show the spelling — and it costs nothing,
+    because no pin reads this file for prescriptions. That second half was checked rather than
+    assumed: a draft of this paragraph claimed the pattern matched nowhere else at all.
+    Whole unit suite 1004 passed, ruff clean, `uv sync --locked` clean.
+
+    BOUNDARY, and it is a real one rather than a hedge: the two ENV VARS are beyond ANY pin over
+    prose. They are not written on the launch line at all — they are inherited from whoever
+    started the agent — so nothing this file reads can see them, and the only defence against
+    them is the flag the recipe carries. SKILL.md says exactly that instead of implying coverage
+    it does not have.
     """
     text = SKILL_MD_PATH.read_text(encoding="utf-8")
     prescribed = sorted(set(PRESCRIBED_FILENAME_RE.findall(text)))
@@ -1525,8 +1636,12 @@ def test_every_filename_skill_md_prescribes_is_excluded_by_this_repos_gitignore(
         "as a browser tool's `filename`, and git would publish the result. That argument is " \
         "resolved against the MCP server's workspace, i.e. the MAIN CHECKOUT, so the file lands " \
         "in a PUBLIC repo carrying whatever page the browser had open — its text, and the query " \
-        "strings of the requests it made. Put the value back under `.playwright-mcp/`, which is " \
-        "the only place covered independently of what the file is called and what format it is in"
+        "strings of the requests it made. Put the value back under `.playwright-mcp/`: not the " \
+        "only directory this repo excludes regardless of filename (measured, eight rules do " \
+        "that — `dist/`, `.venv/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`, " \
+        "`.superpowers/`, `.auth/` and this one), but the only one that is ALSO where the " \
+        "`--output-dir` prescription sends the AUTO-named artifacts, which is what keeps it one " \
+        "directory to reason about"
 
     assert not foreign, \
         f"{foreign} — covered by somebody else's ignore file rather than by this repo's own " \
@@ -1598,6 +1713,43 @@ def test_every_filename_skill_md_prescribes_is_excluded_by_this_repos_gitignore(
         "gone. The rule is ONE place — the same `.playwright-mcp/` the `filename` prescription " \
         "names — so that an agent has one directory to reason about and this repo one line of " \
         ".gitignore to keep"
+
+    # --- #751: the same question a THIRD time, put to the CONFIG FILE ------------------------
+    cfg_dirs = sorted(set(PRESCRIBED_CONFIG_OUTPUT_DIR_RE.findall(text)))
+
+    assert len(cfg_dirs) >= MIN_PRESCRIBED_CONFIG_OUTPUT_DIRS, \
+        f"SKILL.md prints {len(cfg_dirs)} `outputDir` values ({cfg_dirs}), fewer than the " \
+        f"{MIN_PRESCRIBED_CONFIG_OUTPUT_DIRS} it is supposed to. A config file's `outputDir` " \
+        "sets the SAME directory `--output-dir` sets — measured — so the rulebook has to say " \
+        "where it must point for the agent that configures the server instead of flagging it. " \
+        "Either that prescription was deleted or this pin's regex stopped matching it, and a " \
+        "guard that matches nothing passes everything"
+
+    cfg_spilling = []
+    for value in cfg_dirs:
+        for probe in AUTO_NAMED_PROBES:
+            candidate = f"{value}/{probe}"
+            ignored, source, _pattern = _ignore_rule(candidate)
+            if not ignored:
+                cfg_spilling.append(candidate)
+            elif source != ".gitignore":
+                cfg_spilling.append(f"{candidate} (ignored by {source}, not by this repo)")
+
+    assert not cfg_spilling, \
+        f"{cfg_spilling} — SKILL.md tells an agent to put this in a `--config` file's " \
+        "`outputDir`, and git would publish what lands there. This is the SAME spill as the " \
+        "`--output-dir` assertion above, through a different door: measured for #751, a config " \
+        "whose `outputDir` named a plain directory in the tree left `?? cfg-out-751/` in `git " \
+        "status` while `git add -A --dry-run` staged the `.yml` and the `.log`, the first " \
+        "carrying the page's aria text and a link's `?token=` query string"
+
+    cfg_astray = [v for v in cfg_dirs if not v.startswith(f"{PLAYWRIGHT_OUTPUT_DIR}/")]
+    assert not cfg_astray, \
+        f"{cfg_astray} — prescribed outside `{PLAYWRIGHT_OUTPUT_DIR}/`. Separate from the " \
+        "git-backed check above for the reason its `--output-dir` twin records: git may happen " \
+        "not to publish a value that is ignored here for an unrelated reason, and the RULE " \
+        "SKILL.md states is ONE directory for every knob that sets it — the flag in either " \
+        "spelling, this config key, and the two env vars that need no flag at all"
 
 
 def _scan_for_storage_state_shape(root: Path) -> tuple[list[str], list[str]]:
