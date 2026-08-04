@@ -94,6 +94,27 @@ SEPARATE_MAIN_PUSH = 'if ! git push origin "HEAD:refs/heads/${MAIN_BRANCH}"; the
 STABLE_LOCAL_MOVE = 'git branch -f "${STABLE_BRANCH}" HEAD'
 SEPARATE_TAG_PUSH = 'git push origin "refs/tags/${VERSION}:refs/tags/${VERSION}"\n'
 
+# ДВЕ ЗАЩИТЫ `read_remote_ref` от «тега-омонима» (#750), и мутации у них РАЗНЫЕ, потому что
+# наблюдаются они на РАЗНЫХ вызовах — это и есть причина, по которой ОДИН тест их не разделял.
+#
+# ПОЛНЫЙ РЕФСПЕК держит чтения ВЕТОК: `git fetch origin main` резолвит имя по всем
+# пространствам имён, а `refs/tags/main` стоит в этом порядке РАНЬШЕ `refs/heads/main`, так что
+# аннотированный тег с именем ветки уводит fetch на себя. Мутация укорачивает рефспек у
+# `read_tip`; у `read_channel` то же самое держит #737.
+TIP_REFSPEC_LINE = (
+    'read_tip() { read_remote_ref "refs/heads/${MAIN_BRANCH}" && tip="$ref_head"; }\n'
+)
+SHORT_TIP_REFSPEC_LINE = 'read_tip() { read_remote_ref "${MAIN_BRANCH}" && tip="$ref_head"; }\n'
+
+# `^{commit}` держит чтение ТЕГА, и ТОЛЬКО его. На ветке peel — no-op (ветка не может
+# указывать на не-коммит), поэтому до #723, пока третьего чтения не было, эта мутация не
+# убивала ничего и выглядела «недостижимой защитой в глубину». `read_tag` сделал её
+# наблюдаемой: `git tag -a` создаёт АННОТИРОВАННЫЙ тег, а `fetch refs/tags/<имя>` кладёт в
+# FETCH_HEAD ОБЪЕКТ ТЕГА — измерено на git 2.50.1 и запинено прямо в
+# test_the_version_tag_is_read_as_a_commit_not_as_a_tag_object, чтобы премисса не жила на вере.
+PEEL_LINE = '    ref_head=$(git rev-parse "FETCH_HEAD^{commit}") || return 1\n'
+UNPEELED_LINE = '    ref_head=$(git rev-parse "FETCH_HEAD") || return 1\n'
+
 
 def _env() -> dict[str, str]:
     """Изолированный git: ни пользовательского конфига, ни подсказок терминала."""
@@ -184,6 +205,26 @@ def _release_sh_without_the_version_name_gate() -> str:
         "ничего не снимет, и тест мутации станет тавтологией"
     )
     return text.replace(VERSION_NAME_GATE, "if false; then\n")
+
+
+def _release_sh_with_a_short_tip_refspec() -> str:
+    """Снимает ПЕРВУЮ защиту от тега-омонима: чтение вершины по КОРОТКОМУ имени (#750)."""
+    text = RELEASE_SH.read_text()
+    assert text.count(TIP_REFSPEC_LINE) == 1, (
+        "чтение вершины main не найдено дословно ровно один раз в scripts/release.sh — "
+        "мутация ничего не снимет, и тест мутации станет тавтологией"
+    )
+    return text.replace(TIP_REFSPEC_LINE, SHORT_TIP_REFSPEC_LINE)
+
+
+def _release_sh_without_the_peel() -> str:
+    """Снимает ВТОРУЮ защиту: `rev-parse` больше не разыменовывает объект тега (#750)."""
+    text = RELEASE_SH.read_text()
+    assert text.count(PEEL_LINE) == 1, (
+        "разыменование `^{commit}` не найдено дословно ровно один раз в scripts/release.sh — "
+        "мутация ничего не снимет, и тест мутации станет тавтологией"
+    )
+    return text.replace(PEEL_LINE, UNPEELED_LINE)
 
 
 def _release_sh_with_a_forced_stable_push() -> str:
@@ -745,6 +786,136 @@ def test_a_tag_named_main_does_not_fake_a_supersession(stand):
     assert "release skipped" not in done.stdout
     assert NEXT_VERSION in stand.remote_tags()
     assert stand.remote_stable() == stand.remote_main()
+
+
+def _tag_named_main_on_a_decoy_above_the_tip(stand) -> str:
+    """Тег `main` на коммите, которого на ветке `main` НЕТ и который СОДЕРЖИТ вершину.
+
+    Оба свойства несущие. «Не на ветке» — чтобы полный рефспек и короткий давали РАЗНЫЙ
+    ответ (у соседнего теста тег висит на той же вершине, поэтому разница видна только через
+    объект тега, то есть требует снятия обеих защит сразу). «Содержит вершину» — чтобы
+    подменённый ответ прошёл ОБА конъюнкта `superseded_by_neighbour` и был принят за
+    накрытие: иначе короткий рефспек дал бы просто «не накрыли», и релиз состоялся бы
+    вопреки мутации.
+    """
+    _git(stand.seed, "commit", "-q", "--allow-empty", "-m", "decoy above the tip")
+    decoy = _git(stand.seed, "rev-parse", "HEAD").stdout.strip()
+    _git(stand.seed, "tag", "-a", "main", "-m", "tag named main", decoy)
+    _git(stand.seed, "push", "-q", "origin", "refs/tags/main")
+    _git(stand.seed, "reset", "-q", "--hard", stand.c0)   # ветку `main` на origin не двигаем
+    return decoy
+
+
+def test_a_tag_named_main_above_the_tip_does_not_fake_a_supersession(stand):
+    """ПОЛНЫЙ рефспек чтения вершины, запиненный ПООДИНОЧКЕ (tracker #750).
+
+    Соседний test_a_tag_named_main_does_not_fake_a_supersession держит обе защиты ТОЛЬКО В
+    ПАРЕ: там тег висит на ТОЙ ЖЕ вершине, поэтому уход fetch на тег наблюдаем лишь через
+    объект тега — а его разыменовывает `^{commit}`. Перемерено ЗДЕСЬ, а не унаследовано от
+    #737, потому что с тех пор #723 добавила третье чтение рефа: выборка = ровно тот тест,
+    control 0 failed, обе половины сняты сразу 1 failed, а каждая по отдельности его не
+    трогает (видно по спискам падений в свипе по всему файлу).
+
+    Здесь тег стоит на ДРУГОМ коммите, так что подменённый ответ отличается уже как КОММИТ,
+    и второй защите нечего маскировать: короткий рефспек убивает этот тест В ОДИНОЧКУ, а
+    снятый peel его не трогает (дельты — в
+    test_with_a_short_tip_refspec_a_tag_named_main_swallows_the_release и в worklog).
+
+    Цена промаха — не косметическая: гейт прочитал бы «меня накрыли» на доске, где вершина
+    РОВНО мой коммит, и релиз молча не состоялся бы.
+    """
+    decoy = _tag_named_main_on_a_decoy_above_the_tip(stand)
+    assert decoy != stand.c0
+
+    work = stand.checkout("w", stand.c0)
+    done = stand.release_job(work, stand.c0)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "release skipped" not in done.stdout
+    assert stand.remote_tags() == [NEXT_VERSION]
+    tip = stand.remote_main()
+    assert _git(stand.origin, "rev-parse", f"{tip}^").stdout.strip() == stand.c0
+    assert stand.remote_stable() == tip
+
+
+def test_with_a_short_tip_refspec_a_tag_named_main_swallows_the_release(stand):
+    """МУТАЦИЯ: чтение вершины по короткому имени — релиз обязан пропасть.
+
+    Дефект дословно: fetch уходит на тег, вершиной оказывается декой, он содержит мой sha,
+    предтеговой гейт честно говорит «накрыли», и job уходит в ЗЕЛЁНЫЙ skip. Гейт честности
+    #740 тут не спасает и не должен: тега `v*` на декое нет, значит P2 выполняется ЧЕСТНО —
+    вершину, которой не существует, действительно никто не выпускал.
+    """
+    _tag_named_main_on_a_decoy_above_the_tip(stand)
+
+    work = stand.checkout("w", stand.c0, release_sh=_release_sh_with_a_short_tip_refspec())
+    done = stand.release_job(work, stand.c0)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "release skipped" in done.stdout          # ...и это ЛОЖЬ: вершина — мой же sha
+    assert stand.remote_main() == stand.c0           # main не двинулся вовсе
+    assert stand.remote_tags() == []                 # версии не существует
+    assert stand.remote_stable() is None             # канал не двинулся
+
+
+def test_the_version_tag_is_read_as_a_commit_not_as_a_tag_object(stand):
+    """`^{commit}` в `read_remote_ref`, запиненный ПООДИНОЧКЕ (tracker #750).
+
+    Наблюдаем он ровно на ОДНОМ из трёх чтений — на `read_tag`, заведённом #723. На ветке
+    peel — no-op (ветка не может указывать на не-коммит: сервер отбивает такой push), и
+    именно поэтому свип #737 нашёл эту защиту «неубиваемой». `read_tag` спрашивает
+    `refs/tags/${VERSION}`, а `git tag -a` создаёт АННОТИРОВАННЫЙ тег — то есть единственное
+    место, где непропиленное чтение возвращает НЕ коммит.
+
+    Цена промаха — ЛОЖНАЯ ТРЕВОГА на здоровом релизе: сравнение `tag_commit != head`
+    становится истинным всегда, и job краснеет с «the push was accepted NON-atomically» на
+    push'е, который прошёл атомарно (мутационный сосед строит это дословно).
+    """
+    work = stand.checkout("w", stand.c0)
+    shim = stand.shim_push_lands_but_fails()
+    done = stand.release_job(work, stand.c0, path_prefix=shim)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "NON-atomically" not in done.stderr, "ложная тревога на здоровом атомарном push'е"
+    assert "but landed" in done.stdout
+    tip = stand.remote_main()
+    assert stand.remote_tags() == [NEXT_VERSION]
+    assert stand.remote_stable() == tip
+
+    # ПРЕМИССА пина мерится ЗДЕСЬ ЖЕ, а не принимается на веру: без неё peel был бы no-op и
+    # этот тест сертифицировал бы собственную зелень. Тег, который релиз только что нарезал,
+    # обязан быть аннотированным, а `fetch` по его ИМЕНИ — оставлять в FETCH_HEAD объект тега.
+    assert _git(stand.origin, "cat-file", "-t", NEXT_VERSION).stdout.strip() == "tag"
+    probe = stand.root / "peel-probe"
+    _git(stand.root, "clone", "-q", str(stand.origin), str(probe))
+    _git(probe, "fetch", "-q", "origin", f"refs/tags/{NEXT_VERSION}")
+    unpeeled = _git(probe, "rev-parse", "FETCH_HEAD").stdout.strip()
+    peeled = _git(probe, "rev-parse", "FETCH_HEAD^{commit}").stdout.strip()
+    assert peeled == tip
+    assert unpeeled != peeled, (
+        "FETCH_HEAD аннотированного тега перестал быть объектом тега: peel стал no-op, и "
+        "мутационный сосед ниже больше ничего не доказывает — перемерить #750, а не ослаблять"
+    )
+
+
+def test_without_the_peel_a_landed_push_is_falsely_called_non_atomic(stand):
+    """МУТАЦИЯ: снят `^{commit}` — здоровый релиз обязан покраснеть ЛОЖНО.
+
+    Тот же вход, что у соседа выше: push приземлился АТОМАРНО (тег на remote есть и стоит
+    ровно на bump'е), клиент соврал отказом. Без peel `read_tag` возвращает объект тега,
+    сравнение с `head` не сходится НИКОГДА, и скрипт объявляет атомарный push неатомарным —
+    после чего канал не двигается и релиз остаётся недособранным.
+    """
+    work = stand.checkout("w", stand.c0, release_sh=_release_sh_without_the_peel())
+    shim = stand.shim_push_lands_but_fails()
+    done = stand.release_job(work, stand.c0, path_prefix=shim)
+
+    assert done.returncode != 0, done.stdout + done.stderr
+    assert "NON-atomically" in done.stderr
+    assert stand.remote_stable() is None                       # канал не двинут...
+    assert stand.remote_tags() == [NEXT_VERSION]               # ...хотя тег НА МЕСТЕ
+    assert _git(stand.origin, "rev-list", "-n1", NEXT_VERSION).stdout.strip() \
+        == stand.remote_main()                                 # то есть тревога ложная
 
 
 def test_a_landed_push_that_reported_failure_still_releases(stand):
