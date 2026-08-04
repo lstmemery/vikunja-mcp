@@ -223,7 +223,12 @@ _MATCHES = (
 # there, and both halves were green. Named areas rather than named FILES because a file gets
 # renamed and an area does not; named at all rather than counted because a count moves with every
 # landing, which is this whole file's subject.
-_SCAN_MUST_REACH = ("CLAUDE.md", "src/", "tests/", "docs/")
+#   `pyproject.toml` is the exception that is named as a FILE, and deliberately — VMCP-233 (780).
+# It is the one anchor-bearing file the old `("*.py", "*.md")` corpus could not see, so it is the
+# single member of this tuple whose absence would mean the suffix filter had come back. An area
+# would not say that: `.toml` names no area, and every other entry here was already reachable
+# before 780. This is the floor that keeps the widening from being reverted in silence.
+_SCAN_MUST_REACH = ("CLAUDE.md", "src/", "tests/", "docs/", "pyproject.toml")
 
 _REFUSED = (
     "PNG `89504e470d0a1a0a`, JPEG `ffd8ffe0`, PDF `255044462d` (`%PDF-`)",
@@ -238,7 +243,37 @@ _REFUSED = (
 
 
 def _prose_files(publishable: set[str]):
-    """Every `.py` and `.md` file git would PUBLISH, as (relative path, text).
+    """Every file git would PUBLISH, as (relative path, text) — no suffix filter at all.
+
+    THE SUFFIX TUPLE IS GONE, and VMCP-233 (780) is the card. It read `("*.py", "*.md")`, so a
+    figure anchored inside `pyproject.toml` was never resolved: the sha need not exist and need
+    not be an ancestor. That file carries EIGHT anchors, three of them added by VMCP-186 (711) in
+    the same landing that corrected most of that card's figures, which is how the gap was noticed.
+      The card suggested adding `"*.toml"`. Measured before writing this, the wider fix costs the
+    same and closes more: `pyproject.toml` is the ONLY publishable file in this repo outside
+    `.py`/`.md` that holds an anchor at all, so a three-suffix tuple would have closed today's
+    exposure while leaving the SHAPE of the hole open — `scripts/release.sh`'s comment layer and
+    the workflow YAML are both prose an anchor can land in, and neither is a `.toml`.
+      Dropping the filter is also a step REMOVED rather than added: the publishable set already
+    IS the corpus, and the suffix tuple only ever drove an `rglob` walk whose results were then
+    filtered back against that set. Priced on the tree this landed on: 73 publishable files,
+    3.20 MB, read in 0.05 s, zero undecodable, and ZERO false reds — all 107 anchors across ten
+    files resolve and are ancestors. The `UnicodeDecodeError` guard below is what makes the
+    no-filter form safe for a future binary; there is none today, which is why it stays marked
+    as uncovered.
+
+    MUTATION-CHECKED, `__pycache__` deleted per round then `PYTHONDONTWRITEBYTECODE=1`, this file
+    as the selection, every round restored from a COPY with the restore confirmed by sha256, and
+    every mutation asserted to have APPLIED before the round ran — the card's own filing records
+    a first attempt that did NOT apply (a case mismatch) and returned a green that meant nothing.
+    Control round: 0 failed.
+      * plant a bogus anchor in `pyproject.toml` -> **1 failed**, naming the file and the sha
+      * the SAME plant against the pre-780 `("*.py", "*.md")` corpus -> **0 failed**. That is
+        the pair, and it is what makes this a fix rather than a tidy-up: one plant, one
+        selection, one control, and the only difference is which files got read
+      * revert the corpus alone, with NO plant anywhere -> **1 failed** on the floor assert,
+        because `_SCAN_MUST_REACH` names `pyproject.toml`. A widening whose removal is green is
+        a widening that gets removed; this is the round that says it cannot be
 
     Publishable, not "on disk outside dot-directories", and the difference is a decision rather
     than a tidy-up. The first version walked the filesystem with a dot-directory filter copied
@@ -256,15 +291,14 @@ def _prose_files(publishable: set[str]):
     residual: such a file is one `git add -A` away from being repository prose, which is the whole
     premise of the sibling test that watches the same boundary for credentials.
     """
-    for suffix in ("*.py", "*.md"):
-        for path in sorted(REPO_ROOT.rglob(suffix)):
-            relative = path.relative_to(REPO_ROOT).as_posix()
-            if relative not in publishable:
-                continue
-            try:
-                yield relative, path.read_text(encoding="utf-8")
-            except UnicodeDecodeError:  # pragma: no cover - no such file in this repo
-                continue
+    for relative in sorted(publishable):
+        path = REPO_ROOT / relative
+        if not path.is_file():  # pragma: no cover - a staged deletion, absent from disk
+            continue
+        try:
+            yield relative, path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:  # pragma: no cover - no such file in this repo
+            continue
 
 
 def _anchors(publishable: set[str]):
