@@ -1713,8 +1713,15 @@ class Workflow:
         # holds one way is not an invariant. Measured on a card driven the normal way (Queue ->
         # claim -> Design -> Build -> Review -> approve -> a human moves it to Done): return_task
         # did not refuse, and left the card in Backlog with NO assignee, carrying `reviewed` AND
-        # `blocked` at once — the same "approved and blocked" board state #590 documented for
-        # Review. The gate belongs HERE rather than in one shared stage rule because human-only
+        # `blocked` at once — the "approved and blocked" board state. That pair is #626'S OWN, and
+        # this line credited it to #590 until #693's sweep re-checked it: #590's repro adds a BARE
+        # card straight into Review, so what it measured is `blocked` landing ALONE, on a card with
+        # no label at all. The correction is not this comment's to argue — the decompose pin in
+        # tests/unit/test_workflow_gates.py settles it with git and exists to stop this exact
+        # collapse. The #693 block below names #626 correctly — but only as of `2d4d2cd`, the round
+        # that put the credit there; at `5389be0` it cited THIS refusal's own words instead, which
+        # #693 then rewrote. So the two blocks disagreed about one pair until this line was fixed.
+        # The gate belongs HERE rather than in one shared stage rule because human-only
         # Done is not expressed anywhere as a rule: every tool re-derives it from its own source
         # stage (advance from_stage, claim Queue, review_task Review, call_human Design/Build),
         # so a tool that moves a card without a stage check reproduces the hole. `decompose` was

@@ -4921,10 +4921,13 @@ def test_the_implementer_RECEIVING_a_needs_work_report_is_told_it_may_be_a_QUEST
     # Backlog branches by the NUMBER of labels. That distinction rested on `return_task` keeping a
     # verdict it had no business keeping: on the strong route (an APPROVED card a human hand-drags
     # back to Build) the same code produced `['blocked', 'reviewed']` — the board claiming accepted
-    # AND blocked at once, which this very tool's Done refusal forbids in so many words. So the
-    # branches are now told apart by WHICH label, not by how many, and the paragraph in SKILL.md
-    # says so. Asserting the exact list, not `"review-failed" not in`, so that a future edit
-    # restoring the pair reddens this rather than passing.
+    # AND blocked at once, which this very tool's Done refusal USED TO forbid in so many words. It
+    # does not any more, and the same call is the reason: with the verdict cleared first that pair
+    # is unreachable — lifting the Done gate today lands `['blocked']` alone (measured) — so the
+    # refusal now names the ERASED acceptance instead. Do not read the clause as a live citation.
+    # So the branches are now told apart by WHICH label, not by how many, and SKILL.md says so.
+    # Asserting the exact list, not `"review-failed" not in`, so that a future edit restoring the
+    # pair reddens this rather than passing.
     assert sorted(lb["title"] for lb in api3.tasks[stale["id"]]["labels"]) == ["blocked"], (
         "the external-block branch left something beside `blocked`. Since #693 both Backlog "
         "branches clear the verdict and carry exactly ONE label — `blocked` here, `epic` on the "

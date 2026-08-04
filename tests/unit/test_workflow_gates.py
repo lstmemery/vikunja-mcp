@@ -212,7 +212,12 @@ def test_return_task_refuses_from_done_the_human_only_transition_run_backwards(e
     payload of the ONE `return` this method has — three keys, `moved_to`, `task_id` and
     `labeled`, in that order, reporting moved_to=Backlog and labeled=blocked — and left the card
     in Backlog with NO assignee and BOTH labels — `reviewed` and `blocked` — the board claiming
-    "approved" and "blocked" at once. On that same card advance (build/review/done), call_human,
+    "approved" and "blocked" at once. THAT PAIR IS #626'S MEASUREMENT AND NO LONGER REPRODUCIBLE
+    HERE: #693 made `return_task` clear the verdict BEFORE it labels `blocked`, so lifting this
+    gate today lands `['blocked']` alone — measured, on this very route. The paragraph stays in
+    the past tense because it is what #626 ran; what changed is the after-state a reader gets by
+    re-running it, which is why the refusal below no longer names that pair either.
+    On that same card advance (build/review/done), call_human,
     claim and review_task (both verdicts) all refuse — the transition CLAUDE.md calls human-only,
     run BACKWARDS, and an invariant that holds in only one direction is not an invariant.
 
@@ -295,8 +300,11 @@ def test_return_task_refuses_from_done_the_human_only_transition_run_backwards(e
     assert api.stage_of(accepted["id"]) == "Done", "the refused return walked accepted work back"
     assert api.tasks[accepted["id"]]["assignees"], "the refused return still unassigned the card"
     labels = [lb["title"] for lb in api.tasks[accepted["id"]]["labels"]]
-    assert "blocked" not in labels, f"the board now says approved AND blocked at once: {labels}"
-    assert "reviewed" in labels, "the verdict label vanished"
+    # NOT "the board now says approved AND blocked at once": since #693 the verdict is cleared
+    # BEFORE `blocked` goes on, so the state this message fires in is `['blocked']` ALONE — the
+    # acceptance ERASED rather than contradicted, which is what the refusal itself now names.
+    assert "blocked" not in labels, f"the refused return labelled accepted work `blocked`: {labels}"
+    assert "reviewed" in labels, "the verdict label vanished — the human's acceptance with it"
     assert not any(c.startswith("[blocked]") for c in api.comments_text(accepted["id"]))
 
     # multi-identity: someone else's accepted card. THIS is the cell that pins the check ORDER —
@@ -2520,10 +2528,15 @@ def test_every_agent_tool_is_graded_for_what_it_does_to_a_stale_verdict(env):
     (5 catchers for `advance`, 2 for `decompose`, against 1 each if this test stood alone) are
     OVERLAP, and overlap alone is not a measure of what those tests add. What they add is ROUTES:
     they reach the same call sites through the needs_work cycle, the manual-bounce route and the
-    first-submit no-op, none of which this test walks. Two of the five also assert strictly more
+    first-submit no-op, none of which this test walks. THREE of the five assert strictly more
     than a label — `test_manual_bounce_of_approved_card_clears_reviewed_on_resubmit` checks the
-    card stops being OFFERED for review — but two others assert labels ONLY, so "they assert more"
-    would be the wrong reason to keep them. The routes are the reason.
+    card stops being OFFERED for review, and `test_advance_to_build_clears_stale_verdict_labels`
+    and the decompose test assert the STAGE — but the other TWO assert labels ONLY, so "they
+    assert more" would be the wrong reason to keep them. The routes are the reason. That count
+    said "two" until #693's third round re-derived it from the tests' own asserts: three and two
+    PARTITION the five, and the "two" it replaces did not. Under the narrower reading "more than
+    the board STATE" it is ONE (only the review-offering check), so the number moves with the
+    reading — which is why the reading is written beside it.
 
     The KEEPS row is not a weaker CLEARS. It is asserted in the POSITIVE direction — the label
     must SURVIVE `call_human` — so a future edit that "tidies up" by clearing everywhere reddens
@@ -2535,9 +2548,13 @@ def test_every_agent_tool_is_graded_for_what_it_does_to_a_stale_verdict(env):
     not per stage: five routes over four tools, since `advance` holds two calls and needs both.
     It is NOT claimed that a CLEARS tool is REACHABLE from every stage carrying a verdict — the
     stage gates that decide that are pinned by their own tests above. Nor is every ROW of the grid
-    driven: `review_task` (SETS) and the seven NO-MOVE rows are graded and never called here,
-    because what holds them is the COVERAGE sweep, not a route. This test is about the label,
-    never about the gate.
+    driven: `review_task` (SETS) and the SIX NO-MOVE rows are graded and never called here,
+    because what holds them is the COVERAGE sweep, not a route. Six, not the seven this sentence
+    claimed until #693's third round: the grid is 12 rows = 4 CLEARS + 1 KEEPS + 1 SETS + 6
+    NO-MOVE (re-derived twice, by regex over the literal and by importing the module, and 12
+    agrees with the live `@_mcp_tool` surface). Seven is the count of UNDRIVEN rows — 12 minus
+    the 5 driven — so naming `review_task` separately counted it twice. This test is about the
+    label, never about the gate.
 
     MUTATION-CHECKED, selection `tests/unit/test_workflow_gates.py`, `__pycache__` deleted and then
     PYTHONDONTWRITEBYTECODE=1, every round restored from a byte copy and the final file confirmed
@@ -2588,7 +2605,9 @@ def test_every_agent_tool_is_graded_for_what_it_does_to_a_stale_verdict(env):
     assert api.stage_of(task["id"]) == "Backlog"
     assert _label_titles(api, task["id"]) == ["blocked"], (
         "return_task left a stale verdict beside `blocked` — the board would claim approved AND "
-        "blocked at once, which is the very pair the Done refusal in this tool spells out"
+        "blocked at once, the pair #626's pin above measured coming out of Done. The Done refusal "
+        "no longer SPELLS THAT PAIR OUT, and this very call is why: with the verdict cleared "
+        "first it names the ERASED acceptance instead"
     )
 
     # CLEARS, route 2 — claim into Design off a hand-placed, verdict-carrying Queue card.
