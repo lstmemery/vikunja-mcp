@@ -2246,6 +2246,31 @@ _TOOL_COUNT_CLAIM = re.compile(
     r"десять|одиннадцать|двенадцать)\s+тул(?:ов|а|ы|зы|з)?\b",
     re.IGNORECASE,
 )
+# The SAME claim in English, for the two files outside the rulebook that make it — VMCP-222 (765).
+# A hyphen counts (`25-tool roster`), because that is how this repo writes an attributive one.
+_TOOL_COUNT_CLAIM_EN = re.compile(
+    r"\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|"
+    r"fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)[- ]tools?\b",
+    re.IGNORECASE,
+)
+# What puts an English count IN SCOPE: the package has to be named near it. `.gitignore` and
+# CLAUDE.md are not the rulebook — they count other things too — so the scope states the property
+# that actually distinguishes an in-scope count: it is ABOUT the external package.
+# IT KILLS NOTHING MEASURABLE TODAY, and saying so is the point rather than an apology: control
+# 0 failed, and dropping it so that language alone decides is 0 failed too. An
+# earlier version of this comment claimed CLAUDE.md's own `12 agent tools` as the false positive
+# it excludes, and that claim is FALSE for a reason worth knowing before loosening the pattern —
+# `_TOOL_COUNT_CLAIM_EN` requires the number ADJACENT to the noun, so `12 agent tools` is not
+# matched at all and the scope never gets asked about it. Widen the pattern to allow an
+# intervening word and the tracker's own count arrives immediately; this is the guard that would
+# then be doing the work, which is why it stays.
+# 600 characters rather than the stamp's 220, measured over the five in-scope counts these two
+# files hold: the farthest is `.gitignore`'s `(+11 tools)`, whose nearest `browser_` is 336
+# characters back (358 forward), so 220 misses it and 600 reaches every one with headroom. The
+# tracker's count is thousands of characters from any playwright mention, so nothing between 600
+# and 2000 would change a verdict even once the pattern could see it.
+_PACKAGE_NAMED = re.compile(r"playwright|browser_", re.IGNORECASE)
+_PACKAGE_SCOPE_WINDOW = 600
 # A released version of the npm package, e.g. `0.0.78`. `@latest` deliberately does NOT match:
 # a floating tag is the PROBLEM this pin exists for, not a stamp that answers it.
 _PACKAGE_VERSION = re.compile(r"\b\d+\.\d+\.\d+\b")
@@ -2319,6 +2344,70 @@ def test_a_playwright_tool_count_in_the_rulebook_names_the_version_it_was_measur
         f"an unstamped count silently becomes false on the next release of a package this "
         f"repo does not control — and the rulebook self-rolls-out to consumers. Name the "
         f"version beside the number (e.g. '`@playwright/mcp` 0.0.78')."
+    )
+
+
+@pytest.mark.parametrize("name", ["CLAUDE.md", ".gitignore"])
+def test_a_playwright_tool_count_outside_the_rulebook_names_its_version_too(name):
+    """VMCP-222 (765): the same rule, in the two other files that make the same claim.
+
+    The pin next door was SKILL.md-only and Russian-only, and the count it was written for is
+    not: `SEVEN tools taking a `filename`` is asserted in `.gitignore`'s browser block and again
+    in CLAUDE.md, in English, in prose an agent reads before it ever loads the skill. Measured on
+    the tree this landed on, both of those sat more than 2000 characters from the nearest
+    `0.0.78` — i.e. unstamped by the sibling's own 220-character yardstick — so the class the
+    sibling closes was fully open two files over. `.gitignore` matters as much as CLAUDE.md here
+    and not less: its comment block is the ARGUMENT for which extension rules exist, and that
+    argument reasons from exhaustiveness («six of which WRITE»), so a count going stale there
+    does not merely misinform, it turns a live rule's justification false.
+
+    WHY A PACKAGE-PROXIMITY SCOPE and not a section slicer. Neither file has a heading structure
+    to slice on — `.gitignore` is comment blocks, CLAUDE.md's playwright material is spread over
+    three sections — and the thing that actually distinguishes an in-scope count is that it is
+    ABOUT the external package. Asking the surrounding window to name it is that property, stated
+    directly. What it is NOT is a measured false-positive filter; the round below says 0, and the
+    comment beside `_PACKAGE_NAMED` says what it is guarding instead.
+
+    MUTATION-CHECKED, `__pycache__` deleted per round then `PYTHONDONTWRITEBYTECODE=1`, this test
+    as the selection, every round restored from a COPY with the restore confirmed by sha256 and
+    by returning to the control. Control round: 0 failed.
+      * strip the version from beside `.gitignore`'s `SEVEN tools` -> 1 failed
+      * strip it from beside CLAUDE.md's -> 1 failed
+      * drop `_PACKAGE_NAMED` from the scope test, so language alone decides -> **0 failed**, and
+        this is NOT a kill. It is written down because a round that kills nothing is the one
+        worth writing down — the same shape the sibling sweep's `(?<!/ )` row records. All five
+        in-scope counts these two files hold are playwright counts, and the one English count in
+        either file that is NOT (`12 agent tools`) is invisible to the pattern for an unrelated
+        reason: the number is not adjacent to the noun. So the scope's price today is zero and
+        its value is conditional on the pattern, which is where the argument for keeping it is
+      * delete every English tool count from a file -> 1 failed on the floor assert, the
+        "no tests ran looks like a pass" shape the sibling names
+    """
+    path = Path(__file__).resolve().parents[2] / name
+    assert path.is_file(), f"{name} is gone from the repo root — this pin has nothing to read"
+    text = path.read_text(encoding="utf-8")
+    claims = [
+        m for m in _TOOL_COUNT_CLAIM_EN.finditer(text)
+        if _PACKAGE_NAMED.search(
+            text[max(0, m.start() - _PACKAGE_SCOPE_WINDOW): m.end() + _PACKAGE_SCOPE_WINDOW]
+        )
+    ]
+    assert claims, (
+        f"no playwright tool count found in {name} — either it stopped making one (then narrow "
+        f"this pin to the file that still does) or the pattern stopped matching it (then fix "
+        f"the pattern). A pin that scans nothing passes for the wrong reason."
+    )
+    unstamped = [
+        m.group(0).strip() for m in claims
+        if not _PACKAGE_VERSION.search(
+            text[max(0, m.start() - _VERSION_WINDOW): m.end() + _VERSION_WINDOW]
+        )
+    ]
+    assert not unstamped, (
+        f"{name} quotes a count of `@playwright/mcp`'s tool surface without naming the version "
+        f"it was measured on: {unstamped}. This repo prescribes `@playwright/mcp@latest`, so the "
+        f"number is a fact about whatever shipped the day it was taken. Name the version within "
+        f"{_VERSION_WINDOW} characters of the count, as SKILL.md's browser section does."
     )
 
 
@@ -3032,6 +3121,59 @@ def test_exactly_ONE_agent_tool_walks_a_card_out_of_Review(tmp_path):
         "the reviewer's bullet no longer states the one-mover invariant it was rewritten around"
 
 
+_SHUT_STAGES = ("Review", "Done")
+
+
+def _top_level_parens(region: str) -> list[str]:
+    """Every OUTERMOST parenthesised span of `region`, brackets included."""
+    spans, depth, start = [], 0, 0
+    for i, ch in enumerate(region):
+        if ch == "(":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == ")" and depth:
+            depth -= 1
+            if depth == 0:
+                spans.append(region[start:i + 1])
+    return spans
+
+
+def _open_stage_promise(region: str) -> str:
+    """The ONE parenthesised span that enumerates the stages a gated tool still works from.
+
+    VMCP-216 (759). Both open-stage pins used to read the CONCATENATION of every parenthesised
+    span in their search region and ask only that each open stage APPEAR somewhere in it. That is
+    one direction, and the missing one is not symmetry for its own sake: a promise list that also
+    named a SHUT stage — «работает из пяти остальных (Backlog, Queue, Design, Build, Review)» —
+    passed green, i.e. the pin accepted a rulebook telling agents to call `return_task` from
+    exactly the stage the gate refuses. Measured before the fix, on the concatenation both pins
+    then used: «Review» and «Done» are absent from return_task's (so the naive reverse assert
+    would have been green there and proved nothing) and PRESENT in decompose's, because that
+    bullet has no `\\n  - **` sub-bullets, `head_end` comes back -1, and the search region becomes
+    the WHOLE bullet — eleven spans, among them `(#663)`, `(метка `reviewed`, ждёт человеческого
+    Done)` and `(пуш — часть перевода в Review)`. So the reverse direction is not addable to the
+    slice the pins had; it needs THIS one.
+
+    Selecting by CONTENT rather than by position is what makes that safe, and it is the same trap
+    the return_task comment already priced: a span ending at the first «)» after the rule reddens
+    on any bracket landing between the anchor and the list — a card ref, an inline-code aside, a
+    gloss on one stage, or the list simply being written first. Asking for the span that names all
+    five open stages survives every one of those, and its failure mode is the one worth having:
+    drop a stage from the promise and no span qualifies, which reddens with the missing stage
+    named by the caller's own per-stage assert rather than with a slicing error.
+    """
+    open_stages = [s for s in workflow.STAGES if s not in _SHUT_STAGES]
+    promise = [s for s in _top_level_parens(region) if all(st in s for st in open_stages)]
+    assert len(promise) == 1, (
+        f"the rulebook's promise that a gated tool still works from {open_stages} is no longer "
+        f"exactly ONE parenthesised list: {len(promise)} spans qualify. Either a stage was "
+        "dropped from it (then the per-stage assert next door names which) or the enumeration "
+        "was split, in which case the SHUT-stage check below has nothing to read"
+    )
+    return promise[0]
+
+
 def _return_task_bullet(text: str) -> str:
     """The `return_task` bullet inside the stuck section — where its shut stages are spelled out.
 
@@ -3314,15 +3456,25 @@ def test_the_rulebook_names_BOTH_stages_return_task_refuses_from():
         тоже НЕ работает (Backlog, Queue, Design, Build, Your Call)» scores 0 failed; so do
         «работает ТОЛЬКО из Build», a per-stage carve-out, a `force=True` qualifier, and
         demoting the list to an unimplemented PLAN.
-      * a list that also names a SHUT stage passes: «, Review» scores 0 failed, and so does
-        naming all seven.
+      * a list that also names a SHUT stage passed: «, Review» scored 0 failed, and so did
+        naming all seven. **CLOSED by VMCP-216 (759)** — re-run against the same control of
+        0 failed, «, Review» appended to the promise is now 1 failed, and so is «, Done» on the
+        decompose sibling. What made it addable is not a second `in` but a second SLICE: the
+        `_open_stage_promise` helper picks the ONE bracket group naming all five open stages, so
+        the question "is a shut stage in the promise" can be asked of the promise instead of of
+        every bracket in the head — which on the sibling would have read `(#663)` and
+        `(пуш — часть перевода в Review)` and answered yes about prose.
       * the live rule and promise can be DELETED outright if a historical quotation is left
         behind to satisfy both the anchor and the names: 0 failed. The uniqueness guard catches
         the variant that keeps the live rule, not this one.
       * deleting the promise list with nothing left in its place IS caught: 1 failed.
-    All of it is one class — the pin reads NAMES, never CLAIMS — and it is the same class the
-    sibling decompose pin has. Filed as #759 rather than widened here; the fix has to distinguish
-    a statement from a quotation of one, which no substring test does."""
+    What is LEFT of that class after 759 is the first bullet and only the first: the pin reads
+    NAMES, never CLAIMS, so the verb in front of the enumeration is still unread. That half is
+    not being widened by a substring test, and the reason is measured rather than deferred — the
+    enumeration is bare stage names, identical under «работает из» and «НЕ работает из», so
+    distinguishing them means pinning a wording in the one file whose whole design is that it
+    gets rewritten and self-heals onto every consumer. The SHUT-stage half needed no such
+    wording, which is why it could be closed and this cannot."""
     text = _skill_text()
     bullet = _return_task_bullet(text)
 
@@ -3338,9 +3490,15 @@ def test_the_rulebook_names_BOTH_stages_return_task_refuses_from():
     assert "file_task" in bullet, \
         "the bullet no longer routes unusable Done work to file_task, the one channel left"
     # ...and every stage that is NOT shut must be named in the promise, the complement coming
-    # straight out of the code. Only one direction: this asks that each open stage appear, never
-    # that a shut one is absent and never that the words around them still PROMISE anything —
-    # both measured, both left as findings (#759). Scoped to the parenthesised ENUMERATIONS above
+    # straight out of the code — and, since VMCP-216 (759), no stage that IS shut may be named in
+    # it. The second direction is the one that was missing: it is what refuses a promise reading
+    # «работает из пяти остальных (Backlog, Queue, Design, Build, Review)», i.e. a rulebook
+    # sending an agent to the exact stage the gate rejects. What is STILL only one direction is
+    # the third finding of #759 — that the words AROUND the enumeration still promise something —
+    # and it stays a finding: the enumeration is bare stage names, so nothing in the span itself
+    # distinguishes «работает из» from «отказывает из», and pinning the verb means pinning a
+    # wording in a file whose whole point is that it gets rewritten.
+    # Scoped to the parenthesised ENUMERATIONS above
     # the first sub-bullet, NOT the whole bullet (#700): «Backlog» occurs three more times in this
     # bullet's own prose — the opening «уходит в Backlog на ре-триаж» and, inside the «Из Done»
     # sub-bullet, #626's «уводил … в Backlog без ассайни» and the decompose caveat's «уводил
@@ -3353,21 +3511,20 @@ def test_the_rulebook_names_BOTH_stages_return_task_refuses_from():
     # list, or the list simply being written before the rule. All four measured; see the docstring.
     head_end = bullet.find("\n  - **", bullet.find("ОТКАЗЫВАЕТ из ДВУХ стадий"))
     assert head_end != -1, "the return_task bullet no longer has the sub-bullets naming its gates"
-    open_list, depth, start = "", 0, 0
-    for i, ch in enumerate(bullet[:head_end]):
-        if ch == "(":
-            if depth == 0:
-                start = i
-            depth += 1
-        elif ch == ")" and depth:
-            depth -= 1
-            if depth == 0:
-                open_list += bullet[start:i + 1] + "\n"
+    open_list = "\n".join(_top_level_parens(bullet[:head_end]))
     for stage in workflow.STAGES:
-        if stage in ("Review", "Done"):
+        if stage in _SHUT_STAGES:
             continue
         assert stage in open_list, \
             f"the bullet promises the OTHER stages keep working but never names {stage!r}"
+    promise = _open_stage_promise(bullet[:head_end])
+    for stage in _SHUT_STAGES:
+        assert stage not in promise, (
+            f"the bullet's promise of the stages return_task still works from names {stage!r}, "
+            f"which is one of the two the same sentence has just said it REFUSES from: {promise}. "
+            "One direction alone accepted that (VMCP-216 / 759) — an agent reading the promise "
+            "would call return_task from a stage the gate rejects, and the pin said nothing"
+        )
 
     # the code: both doors really are shut
     api = FakeAPI(buckets=workflow.STAGES)
@@ -3466,7 +3623,21 @@ def test_the_rulebook_names_BOTH_stages_decompose_refuses_from():
     own doing and is worth knowing before editing the prose again: before the Review half was
     written «Build» occurred 0 times outside the list, and the sentences routing a reviewer back to
     Build («принимается в Build», «вернётся ИМПЛЕМЕНТЕРУ в Build», «вернуть карточку в Build») put
-    it at 3."""
+    it at 3.
+
+    THE OTHER DIRECTION LANDED WITH VMCP-216 (759): a promise list may not name a stage the same
+    sentence has just called shut. It was the sibling pin that recorded this hole («a list that
+    also names a SHUT stage passes»), but the hole was HERE too and here it is the harder one,
+    which is why the fix is a helper and not a line. MUTATION-CHECKED, `__pycache__` deleted per
+    round then `PYTHONDONTWRITEBYTECODE=1`, this file as the selection, each round restored from
+    a COPY and the restore confirmed by sha256 and by returning to the control. Control round:
+    0 failed. Append «, Done» to this bullet's promise -> 1 failed; append «, Review» to the
+    return_task sibling's -> 1 failed. The naive form of the same assert — ask the SEARCH REGION
+    the forward loop reads — could not have been landed here at all: this bullet has no
+    `\\n  - **` sub-bullets, so that region is the whole bullet, and measured it holds eleven
+    top-level bracket groups including `(#663)`, `(пуш — часть перевода в Review)` and
+    `(метка `reviewed`, ждёт человеческого Done)`. Asking THOSE whether a shut stage is named
+    answers yes about prose and would have been red on arrival."""
     text = _skill_text()
     bullet = _decompose_bullet(text)
 
@@ -3493,10 +3664,24 @@ def test_the_rulebook_names_BOTH_stages_decompose_refuses_from():
     # nowhere else and would redden either way, so neither can demonstrate this.
     open_list = bullet[rule_at:bullet.find(")", rule_at) + 1]
     for stage in workflow.STAGES:
-        if stage in ("Review", "Done"):
+        if stage in _SHUT_STAGES:
             continue
         assert stage in open_list, \
             f"the bullet promises the OTHER stages keep working but never names {stage!r}"
+    # ...and no SHUT stage may be named in it — VMCP-216 (759), the direction both open-stage
+    # pins were missing. Read from `_open_stage_promise` over the WHOLE bullet rather than from
+    # `open_list` above, and the difference is measured rather than stylistic: this bullet has no
+    # `\n  - **` sub-bullets, so a search region cut the way the return_task pin cuts its own
+    # would be the whole bullet, whose eleven parenthesised spans include `(#663)` and
+    # `(пуш — часть перевода в Review)`. Selecting the span that names all five open stages is
+    # what makes the reverse question answerable at all here.
+    promise = _open_stage_promise(bullet)
+    for stage in _SHUT_STAGES:
+        assert stage not in promise, (
+            f"the bullet's promise of the stages decompose still works from names {stage!r}, "
+            f"one of the two the same sentence has just said it REFUSES from: {promise}. An "
+            "agent reading it would decompose from a stage the gate rejects (VMCP-216 / 759)"
+        )
 
     # the caveat next door must still carry the CLASS, not a counter-example #649 removed
     stuck = _return_task_bullet(text)
@@ -5272,12 +5457,37 @@ def test_skill_and_tool_docstring_tell_agents_to_echo_the_filed_ref_not_build_on
 
     Measured RED for each: delete the `filed.ref` sentence from SKILL.md -> first assert; delete
     the «СОБИРАТЬ его самому нельзя» bullet -> second; delete the NAMING paragraph from
-    server.file_task's docstring -> third."""
+    server.file_task's docstring -> third.
+
+    RE-SCOPED BY VMCP-213 (756): the first of those three was asked of the WHOLE FILE while the
+    other two were asked of a window, which is a pin narrower than its siblings in the direction
+    that matters — file-wide accepts any copy anywhere. MUTATION-CHECKED, `__pycache__` deleted
+    per round then `PYTHONDONTWRITEBYTECODE=1`, this file as the selection, restored from a COPY
+    with the restore confirmed by sha256 and by returning to the control. Control round: 0 failed.
+      * replace `filed.ref` inside the «Ссылайся» bullet with a paraphrase, leaving the token
+        nowhere in SKILL.md -> 1 failed. That is the round the file-wide form also caught
+      * what it did NOT catch is the reason for the count assert rather than a second `in`: a
+        SECOND copy of the token anywhere in the file satisfies `in text` while the live bullet
+        has lost it, which is #700's shape one file over. The bullet slice plus `count == 1`
+        refuses both directions at once"""
     text = _skill_text()
-    assert "filed.ref" in text, \
-        "SKILL.md no longer tells agents that a filed card comes back WITH its ref (#735) — " \
-        "without that, 'do not invent one' asks for a value the agent believes it lacks"
-    ref_rule = text[text.index("Ссылайся на задачу человекочитаемо"):][:2500]
+    # The three literals below are one rule, so they are read from ONE slice — VMCP-213 (756).
+    # `filed.ref` used to be asked of the WHOLE FILE while its two siblings were asked of a
+    # 2500-character window, which is the mismatch that card names: measured, the value sits 2697
+    # characters past the anchor, so it was OUTSIDE its siblings' window and could only ever have
+    # been a file-wide check. File-wide is the shape #700 was filed against — any copy anywhere,
+    # including a card quoting an older rule, satisfies it while the live bullet loses the value.
+    # The slice is the «Ссылайся» BULLET, from its heading to the next top-level `- `, chosen over
+    # widening the window because a character count is exactly what went stale here: measured,
+    # the bullet is 3504 characters today, holds all three literals, and holds `filed.ref` once —
+    # which is also the file's only occurrence, so the count assert costs nothing and refuses the
+    # second copy that would make the pin unable to tell the live rule from a quotation of it.
+    ref_rule = text[text.index("Ссылайся на задачу человекочитаемо"):]
+    ref_rule = ref_rule[:ref_rule.index("\n- ")]
+    assert ref_rule.count("filed.ref") == 1, \
+        "SKILL.md's «Ссылайся» bullet no longer names `filed.ref` exactly once (#735/#756) — " \
+        "at zero, 'do not invent one' asks for a value the agent believes it lacks; above one, " \
+        "the pin can no longer tell the live rule from a quotation of an older one"
     assert "СОБИРАТЬ его самому нельзя" in ref_rule, \
         "SKILL.md no longer forbids composing a ref by hand — the #660 failure mode"
     assert "ПОСТОРОННЮЮ" in ref_rule, \

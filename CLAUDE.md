@@ -519,6 +519,27 @@ whole records, and then one clause about an unrelated mutation immunised every
 other count in the docstring — which is not a hypothetical either: that is how
 the record card 668 was filed against passed.
 
+**And a control only helps if the ROUND was read right — so READ A ROUND BY COUNTING `FAILED`
+LINES, never by the first `N failed` in pytest's output.** This is the step before the arithmetic
+and it fails silently in the direction nobody checks: DOWNWARD. `pytest` prints a failing test's
+own DOCSTRING inside the traceback, and in this repo those docstrings are sweep records, so they
+say `control 0 failed` — which means the first `(\d+) failed` a naive parser finds in stdout is
+the MUTANT'S OWN PROSE, not the summary line. Measured on this card's own stand, over the sweep
+that landed tracker #763/#712/#754/#756/#759: control 0 failed, and in EVERY round that really
+went red — 1 failed, 1 failed, 2 failed, 1 failed — that naive read returned **0**. Card #716 hit
+the same parser on rounds that really failed 7, 2, 1 and 5 and shipped every one of them into a
+table as "0 failed". A sweep table that lies in MINUS is worse than one that lies in plus: it
+reads a live pin as BLIND, which is an invitation to delete the pin. What to read instead, both
+halves, because either alone is defeatable: count the lines beginning `FAILED ` (pytest prints one
+per failing test, in the short summary) and count the lines beginning `ERROR ` separately, since a
+collection error is not a failure and a round that could not even import is not a kill. Then
+CROSS-CHECK the selection size — pytest's `collected` line — against the control's: a round whose
+selection differs from the control's did not measure a delta at all, it measured two different
+things (tracker #767, which asked for exactly this and had no gate to hand it to). One gotcha,
+measured here rather than assumed: `-q` prints NO `collected` line, so a script that asks for it
+under `-q` gets nothing back and the cross-check quietly never runs — the same shape as the naive
+parser it is meant to catch. Drop `-q` in a scripted sweep and read the summary yourself.
+
 **And inflation is the friendlier half.** That stand was rebuilt on 2026-08-02:
 the same pre-622 sha exported twice, once with `.git` and once without, one
 mutation (drop `.playwright-mcp/` from `.gitignore`), one selection
@@ -1317,7 +1338,8 @@ set at all: measured, three different cap combinations reach 53, with 10 or 11 `
 acceptors depending which. Every capability on is 69. Cap names survive; tool counts belong to an
 npm package pulled at `@latest`, and the full measurement is in
 `tests/unit/test_repo_browser_isolation.py`. What NEITHER layer reaches, measured rather than
-assumed: `tools/list` shows SEVEN tools taking a `filename` on the default capability set — the
+assumed: on 0.0.78 `tools/list` shows SEVEN tools taking a `filename` on the default
+capability set — the
 one the shared session server runs, which its tool ROSTER says and the absence of a `--caps` flag
 does not, since `PLAYWRIGHT_MCP_CAPS` and `--config` carry capabilities too — six of which write,
 and `browser_snapshot`, `browser_console_messages`, `browser_network_requests` and

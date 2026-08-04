@@ -51,14 +51,16 @@ dist/
 # MAGIC BYTES of what `git add -A` could publish and fails on PNG/JPEG/PDF under ANY name.
 #
 # AND THOSE THREE ARE NOT THE WHOLE BINARY SURFACE — an earlier draft of this comment said they
-# were, and it was disproved by construction. With the DEFAULT capability set `tools/list` shows
+# were, and it was disproved by construction. With the DEFAULT capability set of 0.0.78
+# `tools/list` shows
 # SEVEN tools taking a `filename`, six of which WRITE, and one of them is
 # `browser_network_request`: with `part: "response-body"` it drops the RAW BODY of any request the
 # page made into the same root, in whatever format the server sent. Measured on a probe page — a
 # GIF (`47494638…`) and a ZIP (`504b0304…`) landed as `.bin` files, ignored by nothing and matched
 # by no signature here. One MORE format sits a single capability away, and the durable way to say
 # so is to name the CAP rather than count tools: `browser_start_video` is absent from the default
-# set and present with `PLAYWRIGHT_MCP_CAPS=devtools`. Two tools, and only the first takes the
+# set and present with `PLAYWRIGHT_MCP_CAPS=devtools` (0.0.78). Two tools, and only the
+# first takes the
 # name: `browser_start_video(filename="vmcp629-video.webm")` answers "Video recording started."
 # and — measured — leaves the cwd still empty; the WebM (`1a45dfa3…`) is there the moment
 # `browser_stop_video` answers `- [Video](./vmcp629-video.webm)`, in the server's cwd root, where
@@ -120,10 +122,12 @@ dist/
 # default 24 and present the moment that one cap is set. "Only" is measured rather than
 # assumed, and it is about the CAP, not the channel (#704): each of the OTHER ELEVEN members
 # of the `ToolCapability` union was set on its own and none of them brings the tool, while
-# `--caps=pdf` and `PLAYWRIGHT_MCP_CAPS=pdf` serve the identical 25-tool roster — so the env
+# `--caps=pdf` and `PLAYWRIGHT_MCP_CAPS=pdf` serve the identical 25-tool roster on 0.0.78 —
+# so the env
 # spelling here is an example, not the requirement. Do NOT generalise that last part into
 # "the two channels agree": measured, they do so for all twelve DECLARED caps and diverge on
-# the undeclared alias `tracing`, which the CLI rewrites to `devtools` (+11 tools) and the env
+# the undeclared alias `tracing`, which the 0.0.78 CLI rewrites to `devtools` (+11 tools)
+# and the env
 # path silently drops — the asymmetry is recorded with the rest of the measurement below.
 # So it is defence in depth, exactly
 # as the storage-state rules below are for their own capability-gated tool. What that clause

@@ -152,30 +152,51 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TESTS_DIR = REPO_ROOT / "tests"
+SRC_DIR = REPO_ROOT / "src"
+# BOTH halves of the package's python, since VMCP-187 (712) — see the SCOPE comment below for what
+# widening it cost and why the argument that kept it at `tests/` had expired.
+_SCANNED_DIRS = (SRC_DIR, TESTS_DIR)
 
-# SCOPE: sweep records live in the test suite's prose, and confining the scan there is MEASURED
-# rather than assumed — but measured PER SCOPE, because the two scopes answer differently and a
-# single "only hit outside tests/" would be false. Ran the trigger over both on 2026-08-02.
-# src/: ONE hit at `d3d9ea3`, taken at 09:22 that day — the sentence in server.py describing
-# the claimable check's EXIT CODES, not a pytest tally at all, and the row for it below shows the
-# trigger cannot tell the two apart — and the argument built on it was that a scanner whose sole
-# finding in the package is a false positive has no business reading there. RE-RUN for VMCP-167
-# (688) at `6dd2803`, 16:36 the SAME DAY, it is TWO, and the second is REAL: `claimable_cmd`'s
-# `_Trail._emit` docstring quotes a round as a failure count with no control in its paragraph (not
-# reproduced here — it is a number with no baseline), so it WOULD be an offender if src/ were in
-# scope. It landed at 16:08 (VMCP-85 / 536), between the two runs. The scope is left where it
-# stands, because widening it is a behaviour change rather than a prose fix, and VMCP-187 (712)
-# carries that decision — but the sole-false-positive argument no longer supports it, and note WHY
-# nobody caught this: the count carried a DATE, and it rotted inside its own date.
-# Repo markdown is in the SAME position now, and this line is where that was proved twice over.
+# SCOPE: `src/` AND `tests/`, and the widening is VMCP-187 (712) — the card the sentence that used
+# to stand here handed the decision to. What it decided is worth keeping in front of whoever
+# narrows it again, because the reasoning expired before the scope did.
+# Sweep records were assumed to live in the test suite's prose, and confining the scan there was
+# MEASURED rather than assumed — but measured PER SCOPE, because the two scopes answer differently
+# and a single "only hit outside tests/" would be false. src/: ONE hit at `d3d9ea3`, taken at 09:22
+# on 2026-08-02 — the sentence in server.py describing the claimable check's EXIT CODES, not a
+# pytest tally at all, and the trigger could not tell the two apart — and the argument built on it
+# was that a scanner whose sole finding in the package is a false positive has no business reading
+# there. RE-RUN for VMCP-167 (688) at `6dd2803`, 16:36 the SAME DAY, it was TWO, and the second is
+# REAL: `claimable_cmd`'s `_Trail._emit` docstring quotes a round as a failure count with no
+# control in its paragraph, so it WAS an offender the moment src/ came into scope, and it is the
+# list's one src/ entry now. It landed at 16:08 (VMCP-85 / 536), between the two runs. Note WHY
+# nobody caught the rot: the count carried a DATE, and it rotted inside its own date.
+# WHAT THE WIDENING COST, measured on this tree before it landed rather than argued: those same
+# two hits and nothing else — one real, one the known false positive. The false positive is why
+# this could not be a one-line scope change: it is cut by `_ROUND_COUNT`'s third exclusion, added
+# in the same commit, so the ratchet never sees it and the list never claims an exit status is a
+# number without a baseline. That is the honest shape of "a behaviour change rather than a prose
+# fix", which is what the old sentence called it while leaving the scan where it stood.
+# And it is LOAD-BEARING rather than cosmetic, which is a round and not a claim: same
+# `__pycache__`-cleared conditions and `PYTHONDONTWRITEBYTECODE=1`, the ratchet test alone,
+# control 0 failed — put `_SCANNED_DIRS` back to `(TESTS_DIR,)` and it is 1 failed, the src/ entry
+# in the list below no longer being an offender. So narrowing the scope again is red until the
+# entry goes with it, which is the only order that keeps the list honest.
+# Repo markdown is the THIRD scope and the only one still OUTSIDE, and this line is where that was
+# proved twice over.
 # At `6dd2803` it was five hits, every one inside a CLAUDE.md paragraph that stated its own
 # control, so markdown looked clean for the same reason src/ had. It was already false when it
 # shipped: `aadde71` (VMCP-166 / 687) landed a CLAUDE.md paragraph at 17:27 — between that 16:36
 # run and the 17:56 commit carrying the sentence — quoting round counts with NO control in its
 # paragraph, and `75a1e52` added another count to that same paragraph 49 minutes after that.
 # So repo
-# markdown holds a real offender too, and the sole-false-positive argument is gone on BOTH scopes,
-# leaving only the behaviour-change reason above. How many hits there are is deliberately not
+# markdown holds a real offender too, and the sole-false-positive argument was gone on BOTH scopes.
+# What is left for markdown alone is the behaviour-change reason — and READ THAT AS A PRICE STILL
+# UNPAID rather than as a decision, because the src/ half of the same sentence has now been paid
+# and the shape of the bill is on record two paragraphs up: measure the hits first, separate the
+# real from the false positive, exclude the false ones AT THE PATTERN and grandfather the real. The
+# markdown scope is bigger than src/ was and nobody has run that arithmetic; do it before widening,
+# not after. How many hits there are is deliberately not
 # written here any more: that number moved twice inside one afternoon, and what a reader needs
 # from it is asserted in the tree-wide test at the end of the file. WHAT it asserts is THIS
 # paragraph — the line-fed one, found by an anchor phrase — and no longer the weaker "markdown is
@@ -183,12 +204,21 @@ TESTS_DIR = REPO_ROOT / "tests"
 # paragraph of CLAUDE.md while the one named here was clean. The sentence you are reading could
 # therefore go false with the guard green, and that is the state 724 was filed against.
 
-# A ROUND COUNT: a number of failing tests. Two forms are excluded, both because they were
-# measured in this repo and both false positives. `(?<![:.\w])` drops a number that is part of an
+# A ROUND COUNT: a number of failing tests. THREE forms are excluded, every one of them measured
+# in this repo and every one a false positive. `(?<![:.\w])` drops a number that is part of an
 # address or a longer token — `Bind for 0.0.0.0:3456 failed` in test_skill_contract quotes a
 # docker error, not a round. `(?<!of )` drops a fraction-of-total — tests/integration/conftest's
-# "containers: 5 of 9 failed" counts containers.
-_ROUND_COUNT = re.compile(r"(?<![:.\w])(?<!of )\d+\s+failed\b", re.IGNORECASE)
+# "containers: 5 of 9 failed" counts containers. `(?<!ran / )` drops an EXIT-CODE gloss, and it is
+# the one VMCP-187 (712) had to add before `src/` could come into scope: server.py describes the
+# claimable check as "(one JSON line on stdout, exit 0 ran / 1 failed)", where the number is a
+# process exit status. That sentence is the FALSE POSITIVE the scope comment below has named since
+# `d3d9ea3`, so widening the scan without excluding it would have moved a known non-round into the
+# ratchet and called it a number without a baseline. Measured: `ran / <digits> failed` occurs
+# exactly twice in the whole tree — that site and the pattern row pinning it — so the exclusion is
+# as narrow as the two above it and reaches no shape this repo writes for a real round (`1 failed
+# / 47 passed`, `control 0 failed; mutation 2 failed` and the rest are untouched, which the row
+# added beside the flipped one asserts).
+_ROUND_COUNT = re.compile(r"(?<![:.\w])(?<!of )(?<!ran / )\d+\s+failed\b", re.IGNORECASE)
 
 # A CONTROL COUNT: the word `control` and a TALLY (`N failed` / `N passed`) close enough together
 # to be one statement, in either order — "control 0 failed", "control 2 passed", "2 failed
@@ -252,6 +282,12 @@ _ROUND_COUNT = re.compile(r"(?<![:.\w])(?<!of )\d+\s+failed\b", re.IGNORECASE)
 # flattens whitespace before matching, so a bullet list is one string to it. What the exclusion
 # really buys is 60 characters and a stop at `.`/`;`; a control and an unrelated number that sit
 # closer than that, in the same record, still vouch for each other.
+# Those five are pattern-ACCEPTANCE constructions, not mutation rounds, and the rounds that own
+# this pattern live in the pattern test below against a control of 0 failed, 1 passed — stated
+# here rather than left to be inferred because this paragraph is where VMCP-220 (763) landed: its
+# quoted `0 failed` wraps between the `0` and the word, and until `_flat` stripped the `#` the
+# scanner read it as `0 # failed` and saw no round here at all. Widening the reader made this the
+# one paragraph in the whole suite that changed answer, so it is also the demonstration.
 _CONTROL_COUNT = re.compile(
     r"control\b[^.;]{0,60}?\b\d+\s+(?:failed|passed)\b"
     r"|\b\d+\s+(?:failed|passed)\b[^.;]{0,60}?\bcontrol\b",
@@ -452,6 +488,17 @@ LEGACY_RECORDS_WITHOUT_A_CONTROL_COUNT = frozenset({
     "tests/unit/test_workflow_wip.py::comments-above:_clause_free_base"
     ":--- the free == 0 note is the base plus the ENUM"
     "::¶The base is READ from the other env rather than ",
+    # The list's ONE `src/` entry, and the whole cost of VMCP-187 (712) bringing that half of the
+    # package into scope. `_Trail._emit` records a real round — a binding mutation that turned the
+    # file RED — as a bare tally with no baseline in its paragraph, which is exactly what the scope
+    # comment at the top of this file has said about it since `6dd2803` while the scanner could not
+    # reach it. Grandfathered rather than "fixed" for the module docstring's standing reason: the
+    # control that belongs beside it is the one measured in THAT environment, and writing today's
+    # number there would fabricate a measurement. The OTHER src/ hit the scope comment counted is
+    # not here and never will be — it is server.py's exit-code gloss, a false positive that
+    # `_ROUND_COUNT`'s third exclusion now cuts before the ratchet ever sees it.
+    "src/vikunja_mcp/claimable_cmd.py::_Trail._emit"
+    "::¶(a) `sys.stderr` is resolved per WRITE, so a cal",
 })
 
 
@@ -691,7 +738,7 @@ def _records():
     so a merged pair is a grandfathered entry vouching for a paragraph nobody listed — this
     card's own bug one level further down.
     """
-    for path in sorted(TESTS_DIR.rglob("*.py")):
+    for path in sorted(p for d in _SCANNED_DIRS for p in d.rglob("*.py")):
         source = path.read_text(encoding="utf-8")
         relative = path.relative_to(REPO_ROOT).as_posix()
         seen: dict[str, int] = {}
@@ -702,12 +749,52 @@ def _records():
                 yield (full if seen[full] == 1 else f"{full}#{seen[full]}"), paragraph
 
 
+def _flat(prose: str) -> str:
+    """A paragraph as ONE line, each line's leading `#` dropped BEFORE the join — VMCP-220 (763).
+
+    The `#` strip is the whole of 763 and it is not cosmetic. `_paragraph_head` three functions
+    down has always stripped it; the two predicates below did not, so they joined a comment run's
+    lines with the marker still on them and a round whose digits and the word `failed` fell on
+    either side of a line break read as `102 # failed` — which `_ROUND_COUNT` cannot match. The
+    scanner was therefore blind to exactly the shape CLAUDE.md warns the OTHER sweep about one
+    section over ("a sweep must not be LINE-FED"), in the file that owns that warning's pin.
+
+    Measured over all of `tests/` before the change: 13 offending paragraphs with the old
+    flattener, 14 with this one, the difference being ONE paragraph — the `[^.;] NARROWS the
+    window` block of this file's own `_CONTROL_COUNT` comment, whose constructed example wraps
+    between its `0` and its `failed`. So the hole was real, was one wrap away from any comment
+    run in the suite, and its only live instance was here. That paragraph now names the control
+    those constructions belong to, which is why widening the reader cost no red.
+
+    Whitespace is collapsed AFTER the join for the reason test_repo_quotation_claims records
+    about its own pair: the bridging comes from joining STRIPPED lines with a single space, not
+    from collapsing runs of spaces, and the two are separable.
+
+    MUTATION-CHECKED, `__pycache__` deleted per round then `PYTHONDONTWRITEBYTECODE=1`, the
+    ratchet test alone as the selection, every round restored from a COPY and the restore
+    confirmed by sha256 and by returning to the control. Control round: 0 failed.
+      * REVERTING this function to the old `" ".join(prose.split())` -> 0 failed, and that is the
+        round to read first, because it says the widening has no live target left: the one
+        paragraph it newly reached now states its control, so both flatteners agree on today's
+        tree. A widening proved only by its own leftover offender proves nothing
+      * so the proof is CONSTRUCTED, and it is the pair that matters. Plant an uncontrolled round
+        in a comment run of test_workflow_wip.py with the digits and the word on either side of a
+        line break (`-> 2` ending one line, `failed` opening the next) -> **1 failed** with this
+        flattener and **0 failed** with the old one, same plant, same selection, same control.
+        That is the class becoming inexpressible: before 763 an author could wrap a comment run
+        anywhere and the ratchet went quiet
+    """
+    return " ".join(
+        " ".join(line.strip().lstrip("#").strip() for line in prose.splitlines()).split()
+    )
+
+
 def _quotes_a_round_count(prose: str) -> bool:
-    return bool(_ROUND_COUNT.search(" ".join(prose.split())))
+    return bool(_ROUND_COUNT.search(_flat(prose)))
 
 
 def _states_a_control_count(prose: str) -> bool:
-    return bool(_CONTROL_COUNT.search(" ".join(prose.split())))
+    return bool(_CONTROL_COUNT.search(_flat(prose)))
 
 
 def test_a_sweep_record_that_quotes_a_failure_count_states_its_control_count():
@@ -827,11 +914,14 @@ def test_the_scanner_tells_a_pytest_tally_from_the_other_numbers_in_this_repo():
     exclusions at all (which would then report a docker error message and an exit code as sweep
     records) and including one that never matches (which would report nothing, forever). The rows
     below are of two kinds, and saying which is the correction of an earlier version of this
-    sentence that called them all repo strings. Measured verbatim against every `.py` and `.md`
-    outside this file: 5 of the 13 occur word for word, two more are ADAPTATIONS of real ones
-    (test_api_kanban's "a positive control at the same call site" and "The control: page 1 serving
-    EXACTLY the stated 5"), and the rest are constructed to pin the pattern at its edges, which is
-    what a pattern test is for.
+    sentence that called them all repo strings. Some occur in this repo word for word, two more
+    are ADAPTATIONS of real ones (test_api_kanban's "a positive control at the same call site" and
+    "The control: page 1 serving EXACTLY the stated 5"), and the rest are constructed to pin the
+    pattern at its edges, which is what a pattern test is for. HOW MANY of each is deliberately no
+    longer written down, and that is this file's own rule rather than a shrug: the number counts
+    the rows of the table it sits above, so every card that pins one more edge falsifies it —
+    which is what VMCP-187 (712) did to the "5 of the 13" that stood here, adding a fourteenth row
+    without touching a word of the sentence counting them.
 
     MUTATION-CHECKED, `PYTHONDONTWRITEBYTECODE=1`, exactly 1 test selected per round, restores
     confirmed by re-running to the control. Control round: 0 failed, 1 passed.
@@ -849,12 +939,33 @@ def test_the_scanner_tells_a_pytest_tally_from_the_other_numbers_in_this_repo():
       * widen the 60-character window to 200 -> 1 failed on the long-clause row
       * delete either direction of the `_CONTROL_COUNT` alternation -> 1 failed, so both the
         "control first" and "count first" phrasings this repo actually uses stay covered
+
+    RE-MEASURED FOR VMCP-187 (712), which brought `src/` into the scan and had to add a third
+    exclusion to do it. A new selection means a new control, so these rounds do not share the one
+    above: exactly this test, `__pycache__` deleted per round and `PYTHONDONTWRITEBYTECODE=1`,
+    restores confirmed by returning to the control. Control round: 0 failed, 1 passed.
+      * drop `(?<!ran / )` from `_ROUND_COUNT` -> 1 failed on the exit-code row, which is the row
+        that flipped: it used to assert the trigger CANNOT tell a process exit status from a
+        round, and now asserts it can for this one spelling
+      * the same drop with the WHOLE FILE as the selection (its own control of 0 failed)
+        -> 2 failed — this row AND the ratchet, which then names server.py's claimable comment,
+        the false positive that widening the scope would otherwise have pushed into the legacy
+        list. Recorded as 2 because it was first written as 1 from reasoning and the round said
+        otherwise: the two tests fail on the same mutation for different reasons
+      * generalising `(?<!ran / )` into the plain `(?<!/ )` it invites -> **0 failed**, and this
+        is NOT a kill. It is recorded because a round that kills nothing is the one worth
+        writing down: no round count in this tree is preceded by `/ `, so the loose form would
+        have cost nothing MEASURABLE today and the reason to keep the narrow one is an argument
+        rather than a number — an exit-code gloss is a named shape, `/ ` is not. The row added
+        beside the flipped one (`1 failed / 47 passed`) pins the shape the loose form would
+        eventually reach, since this repo writes a round with its pass total AFTER the slash
     """
     # (prose, quotes a round count, states a control count)
     rows = [
         ("`Bind for 0.0.0.0:3456 failed: port is already allocated`", False, False),
         ("full-suite runs against FRESH containers: 5 of 9 failed", False, False),
-        ("the hub's idle check (exit 0 ran / 1 failed)", True, False),
+        ("the hub's idle check (exit 0 ran / 1 failed)", False, False),
+        ("the whole file went RED, 1 failed / 47 passed, on that one test", True, False),
         ("control PASS; drop the rule from SKILL.md -> FAIL", False, False),
         ("the control at the same call site (the threshold made 1 request)", False, False),
         ("control: page 1 of 2 served in full", False, False),
@@ -904,6 +1015,12 @@ def test_a_control_in_one_paragraph_does_not_vouch_for_the_next():
         written in: it first shipped as a measured pair, "four bullets, 47 lines", and the next
         three edits to that same block falsified it three times running (51, 54, 56) while every
         test stayed green. Asserted, it cannot rot; dated, it rotted within the hour
+      * insert that blank line INSIDE the last bullet instead, past both literal anchors
+        -> 1 failed WITH the extent assert and **0 failed** with it removed, same plant, same
+        selection, same control. That pair is VMCP-211 (754): the two literals are satisfied by
+        the block's HEAD, so every split after `It is a RATCHET` was invisible, and the bullet
+        went on claiming the block was one paragraph while the scanner had already stopped
+        treating it as one. Extent is what has no head to hide behind
     """
     docstring = (
         "Round A: control 0 failed; drop guard A -> 2 failed.\n"
@@ -965,6 +1082,20 @@ def test_a_control_in_one_paragraph_does_not_vouch_for_the_next():
         "heading, so a blank line appeared inside the block — which is exactly what the bullet " \
         "claiming they are all one paragraph denies. Anchored on the bullet's opening sentence " \
         "rather than on the block's last words, because the last words are edited far more often"
+    # ...and neither of those two anchors sees a blank line INSIDE the last bullet, which is the
+    # hole VMCP-211 (754) named: both are satisfied by the block's HEAD, so a split anywhere after
+    # `It is a RATCHET` leaves the claim false and the pin green (constructed: control 0 failed,
+    # a blank line inserted mid-bullet 0 failed). What has no head to hide behind is the block's
+    # EXTENT — it runs to the end of the docstring, so the paragraph hosting the heading must BE
+    # the last paragraph. Anchoring on extent rather than on one more literal is deliberate: a
+    # third literal would move the blind spot one sentence further down, and the bullet's own
+    # claim is about the whole block being one chunk, not about which sentences survive in it.
+    assert hosting[0] == list(_paragraphs(module_doc))[-1], \
+        "the `WHAT IT CANNOT ENFORCE` block no longer reaches the END of the module docstring, " \
+        "so a blank line appeared somewhere inside it — most likely inside its LAST bullet, " \
+        "where the two literal anchors above cannot see one. The bullet says the whole block is " \
+        "ONE paragraph and therefore that any control in any of it vouches for the rest; split " \
+        "it and that sentence is false while every other assert here stays green (VMCP-211 / 754)"
 
 
 # The measured counter-example of the line-fed rule, pinned as a CO-OCCURRENCE rather than as a
@@ -1082,6 +1213,23 @@ def test_claude_md_states_the_control_round_rule_and_its_limit():
     assert "rsync -a --exclude .venv" in section and "vikunja_mcp.__file__" in section, \
         "CLAUDE.md no longer names the form a control round CANNOT catch (#646) or the check " \
         "that does: copy without .venv, and print where the package was actually imported from"
+
+    # ...and the step BEFORE the arithmetic: how a round is READ. VMCP-205 (748) and VMCP-224
+    # (767). A control cannot rescue a mis-read round, and this repo's own docstrings are what
+    # make the obvious read wrong — pytest echoes a failing test's docstring in the traceback, so
+    # the first `N failed` in stdout is a sweep record's `control 0 failed`, not the summary.
+    assert "READ A ROUND BY COUNTING `FAILED`" in section, \
+        "CLAUDE.md no longer says HOW to read a round. The naive first-match read is measured " \
+        "to fail DOWNWARD in this repo specifically — every red round of #771's own sweep read " \
+        "as 0 — and a sweep table that lies in minus reads a live pin as blind (#748)"
+    assert "collected" in section, \
+        "CLAUDE.md no longer asks a round to cross-check its SELECTION SIZE against the " \
+        "control's. Without it a round that selected different tests is still written down as " \
+        "a delta against a control it never shared a selection with (#767)"
+    assert "prints NO `collected` line" in section, \
+        "CLAUDE.md no longer records that `-q` suppresses the very line the cross-check reads, " \
+        "so a scripted sweep asking for it under `-q` gets nothing and the check silently never " \
+        "runs — the same silent-downward shape as the parser it was added to catch"
 
 
 def test_claude_md_says_a_stale_figure_sweep_is_not_line_fed():
@@ -1235,7 +1383,7 @@ def _tree_records():
     around a paragraph as well, because "a bullet split severs a control" is a question about
     whether the control was anywhere in the record the chunk came from.
     """
-    for path in sorted(TESTS_DIR.rglob("*.py")):
+    for path in sorted(p for d in _SCANNED_DIRS for p in d.rglob("*.py")):
         source = path.read_text(encoding="utf-8")
         relative = path.relative_to(REPO_ROOT).as_posix()
         for key, text in itertools.chain(_docstrings(path, source), _comment_runs(source)):
@@ -1532,9 +1680,14 @@ def test_the_tree_wide_claims_in_this_file_are_asserted_rather_than_counted():
         f"{sorted(set(line_fed_offenders) - set(uncontrolled_markdown))}, "
         "which the assert above just read out of CLAUDE.md by hand. The two are separate asserts "
         "because they fail apart: the one above reads the file directly and says nothing about "
-        "`_repo_markdown`, so a scope narrowed to exclude CLAUDE.md — or a `_paragraphs` that "
-        "splits the file differently from the hand read — would leave it green while the markdown "
-        "half of this test measured nothing at all"
+        "`_repo_markdown`, so a scope narrowed to exclude CLAUDE.md — a dot-directory rule that "
+        "grew, a rename, a filter added for speed — would leave it green while the markdown half "
+        "of this test measured nothing at all. That is the WHOLE of what this asks. It used to "
+        "name a second mode, `a _paragraphs that splits the file differently from the hand read`, "
+        "and VMCP-218 (761) is the card that measured it CANNOT HAPPEN: both sides call the same "
+        "`_paragraphs` on the same bytes of the same file, so they cannot disagree about the "
+        "split — an assertion message naming a failure the code forbids teaches the next reader "
+        "to look for the wrong thing when it finally goes red"
     )
 
     assert "a DATE does not name a TREE" in _testing_philosophy(), (

@@ -1132,16 +1132,51 @@ def test_file_task_never_reads_back_the_card_it_just_created(env):
     of the new card in either branch, and PUT /projects/{id}/tasks carries `identifier` itself.
     This pins that property against a re-read that no value assertion can see: it is the one
     mutation that keeps every other test in this file green (verified — inserting a gratuitous
-    get_task before the result dict leaves the three ref tests passing and only this one RED)."""
+    get_task before the result dict leaves the three ref tests passing and only this one RED).
+
+    WIDENED BY VMCP-213 (756) FROM ONE METHOD TO EVERY READ PATH, because the name promised more
+    than the code asked. MUTATION-CHECKED, `__pycache__` deleted per round then
+    `PYTHONDONTWRITEBYTECODE=1`, this test alone as the selection, every round restored from a
+    COPY and the restore confirmed by sha256 and by returning to the control. Control round:
+    0 failed.
+      * insert a BOARD-SCAN re-read into `file_task` (`api.view_tasks` over the target's kanban
+        view, after the provenance comment) -> 1 failed with the widened hook and **0 failed**
+        with the pre-756 one, same mutation, same selection, same control. That pair is the
+        card: `view_tasks` is how the rest of this package reads cards at all — `_board`,
+        `next_task`, `--gc`'s liveness fetch — so the "simplification" this test exists to stop
+        had a second spelling the test could not see, and it is the spelling a refactor reaches
+        for first
+      * the widened hook is checked by CONTENT, not by call count, because a board read
+        legitimately returns many cards; the question is whether THIS one came back"""
     api, wf, _t = env
+    # EVERY read that could hand the new card back, not just `get_task` — VMCP-213 (756). The pin
+    # is named "never reads back" and counted exactly one method, so the re-read this test exists
+    # to forbid stayed available under another name: `view_tasks` is the board scan the rest of
+    # this package reads cards with (`_board`, `next_task`, `--gc`'s liveness fetch all go through
+    # it), so a later "simplification" that fetched the identifier by scanning the target project
+    # would have reintroduced the whole failure mode — a card that lands and then a raise, in the
+    # cross-project branch where the token is least likely to be able to read — with this test
+    # green. Hooking both is what makes the assert as wide as its own name; `view_tasks` is
+    # checked by CONTENT rather than by call count because a board scan legitimately returns many
+    # cards and the question is whether THIS one came back.
     reads = []
-    real_get = api.get_task
+    real_get, real_view = api.get_task, api.view_tasks
 
     def counting_get(task_id):
         reads.append(task_id)
         return real_get(task_id)
 
+    def counting_view(project_id, view_id, require_titles=None):
+        buckets = real_view(project_id, view_id, require_titles)
+        # a board read returns BUCKETS carrying tasks, so the ids to count are one level down —
+        # collecting the buckets' own ids instead makes the hook look installed and see nothing,
+        # which is how the first version of this widening measured a green round on a real
+        # read-back. A hook that reads the wrong field is indistinguishable from a passing test.
+        reads.extend(task["id"] for bucket in buckets for task in bucket.get("tasks", ()))
+        return buckets
+
     api.get_task = counting_get
+    api.view_tasks = counting_view
 
     res = wf.file_task(title="own-project finding")
     assert reads.count(res["filed"]["id"]) == 0, \
