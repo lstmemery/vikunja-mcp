@@ -789,6 +789,35 @@ heals itself" became "the channel stands until a human deletes the foreign tag".
 was taken knowingly: the half-state it replaces was QUIET and unrecoverable (the skipped
 version never exists), while this is loud and one human command away (#769).
 
+**#769 KEPT that trade and spent itself on LEGIBILITY instead — read it as a diagnosis, not a
+cure.** A gate before `git tag -a` (and strictly AFTER the supersession gate, or it would redden
+#716's lawful green skip) asks origin whether the version name is already taken, and — when origin
+says free OR cannot be asked — the job's OWN checkout. That second source is not decoration:
+`actions/checkout` pulls the
+tags as of checkout time, so from the second landing on the name is already local, which is
+exactly what makes `git tag -a` die 128 before the script can say anything. Taken either way, the
+job refuses NAMING the tag, the object under it, the fact that nothing was pushed, the mechanism
+(the version at the tip has not moved, so every later job computes the same name) and the one
+command that clears it. **Its price is ZERO because it changes no verdict — by an EXHAUSTIVE SPLIT
+rather than by enumerating states, which is the honest way to read it:** if the tag is already in
+the checkout, `git tag -a` dies 128 before either push; if it is not, the atomic push must set
+`refs/tags/V` to a NEW object, an un-forced push of that ref is refused, and under `--atomic`
+nothing lands at all. There is no third case, and both halves are measured on the stand. What it
+buys is that the FIRST red stops naming the wrong thing: that
+job, whose checkout predates the squatter, used to reach the push and land in the generic
+no-newer-landing branch, which reads like branch protection rather than a name collision. It
+covers the orphan-tag flavour above too, which wedges identically. **Recomputing the version onto
+the next free name was REJECTED, not overlooked**, and the reason is sharper than the general "no
+version is skipped" line: here the skipped name stays NAMEABLE and points at a FOREIGN commit, so
+the documented rollback would put the consumer channel on that commit while formally satisfying
+the tagged-and-CI-green rule — a booby trap where today there is none — and routing around it
+would silence the only signal that someone has put a foreign tag in this repo's version
+namespace. Whether to skip a number anyway is a card for a human, not a default. One asymmetry to
+keep straight: this read and `skip_or_refuse`'s tag-list read FAIL IN OPPOSITE DIRECTIONS on
+purpose — that one guards a GREEN skip, so an unanswerable read must be red; this one is
+diagnostics over a branch that is red at either answer, so an unanswerable read must NOT redden a
+healthy release, and a fail-closed variant of it is the mutation that pins that polarity.
+
 What this does not
 touch: the pre-tag gate's swallows — #740 later reddened (2) and (4) in the shape where
 the tip's bump carries its tag, and left the rest —

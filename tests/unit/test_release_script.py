@@ -84,6 +84,12 @@ ATOMIC_PUSH_BLOCK = (
 # skip первой же строкой тела, то есть возвращает поведение ДО #740 буквально, не трогая ни
 # одну строку решения самого накрытия. Переименуют функцию — тест упадёт на ассерте ниже.
 HONEST_SKIP_GATE = "skip_or_refuse() {\n"
+
+# ГЕЙТ ИМЕНИ ВЕРСИИ (#769): единственная строка решения «имя `vX.Y.Z` уже занято». Мутация
+# гасит её на `false`, то есть возвращает состояние, в котором про имя не спрашивают вовсе и
+# всё решает `git tag -a` — а он у КАЖДОГО следующего приземления падает кодом 128 раньше,
+# чем скрипт успевает сказать, что именно случилось и что это не зарастёт само.
+VERSION_NAME_GATE = "if version_name_taken; then\n"
 SEPARATE_MAIN_PUSH = 'if ! git push origin "HEAD:refs/heads/${MAIN_BRANCH}"; then\n'
 STABLE_LOCAL_MOVE = 'git branch -f "${STABLE_BRANCH}" HEAD'
 SEPARATE_TAG_PUSH = 'git push origin "refs/tags/${VERSION}:refs/tags/${VERSION}"\n'
@@ -168,6 +174,16 @@ def _release_sh_without_the_honest_skip_gate() -> str:
         "мутация ничего не снимет, и тест мутации станет тавтологией"
     )
     return text.replace(HONEST_SKIP_GATE, HONEST_SKIP_GATE + '    skip "$tip"\n    exit 0\n')
+
+
+def _release_sh_without_the_version_name_gate() -> str:
+    """Поведение ДО #769: имя версии у origin не спрашивается вовсе, решает `git tag -a`."""
+    text = RELEASE_SH.read_text()
+    assert text.count(VERSION_NAME_GATE) == 1, (
+        "гейт имени версии не найден дословно ровно один раз в scripts/release.sh — мутация "
+        "ничего не снимет, и тест мутации станет тавтологией"
+    )
+    return text.replace(VERSION_NAME_GATE, "if false; then\n")
 
 
 def _release_sh_with_a_forced_stable_push() -> str:
@@ -383,6 +399,23 @@ def stand(tmp_path: Path):
             assert tags == [NEXT_VERSION]                 # тег СИБЛИНГА уехал атомарно с bump'ом
             assert self.remote_stable() is None
             return orphan, tags
+
+        def squat_the_version_name(self, name: str = "squatter") -> str:
+            """Чужой тег с ИМЕНЕМ следующей версии — на коммите, которого в main нет (#769).
+
+            Пушится ОДИН реф, `refs/tags/vX.Y.Z`; коммит уезжает вместе с ним как объект,
+            достижимый только из тега. Это и есть форма, ради которой заведена карточка:
+            имя занято, а к истории main занявший его коммит отношения не имеет.
+            """
+            clone = self.root / name
+            _git(self.root, "clone", "-q", str(self.origin), str(clone))
+            (clone / "foreign.txt").write_text("foreign")
+            _git(clone, "add", "-A")
+            _git(clone, "commit", "-qm", "foreign commit")
+            _git(clone, "tag", "-a", NEXT_VERSION, "-m", NEXT_VERSION)
+            ref = f"refs/tags/{NEXT_VERSION}"
+            _git(clone, "push", "-q", "origin", f"{ref}:{ref}")
+            return _git(clone, "rev-parse", "HEAD").stdout.strip()
 
         def disable_atomic_push(self) -> None:
             """Сервер перестаёт advertise'ить возможность `atomic` (git ≥ 2.6)."""
@@ -608,7 +641,23 @@ def test_lost_race_after_the_pre_push_check_still_skips(stand):
 
 
 def test_without_the_guard_the_tag_collision_comes_back(stand):
-    """МУТАЦИЯ: снимаем строку решения — стенд обязан вернуть дословную ошибку прогона."""
+    """МУТАЦИЯ: снимаем строку решения — стенд обязан вернуть коллизию прогона 30754732335.
+
+    ЧТО ЗДЕСЬ «ДОСЛОВНО» — с #769 уже НЕ текст git'а, и это надо читать как перемещение
+    сигнала, а не как ослабление пина. Коллизия ровно та же (имя `v0.2.171` занял сосед,
+    зарелизившийся первым), но сообщает о ней теперь гейт имени версии: он стоит ДО
+    `git tag -a` и спрашивает origin раньше, чем тот успевает упасть своим
+    `fatal: tag … already exists`. Дословный текст git'а из суда не исчез — его пинит
+    `test_without_the_version_name_gate_the_squatter_is_cryptic`, где снят уже ГЕЙТ, то есть
+    литерал стал свойством «гейта нет», чем он и является. Несущее тут — что job КРАСНЫЙ, что
+    он называет занятое имя и что не двигается ни один реф.
+
+    Развилка в тексте гейта («тег чужой или осиротевший» / «законный релиз этого репозитория»)
+    к этому входу приложима второй половиной: тег законный, сосед выпустился честно. Дотянуться
+    сюда можно только мутацией — в живом скрипте накрытие ловится раньше и уходит в
+    `skip_or_refuse`, — и ровно поэтому сообщение сформулировано развилкой, а не утверждением
+    о происхождении тега.
+    """
     stand.land_sibling("sib", release=True)
     before = (stand.remote_main(), stand.remote_tags(), stand.remote_stable())
 
@@ -616,7 +665,13 @@ def test_without_the_guard_the_tag_collision_comes_back(stand):
     done = stand.release_job(work, stand.c0)
 
     assert done.returncode != 0
-    assert f"fatal: tag '{NEXT_VERSION}' already exists" in done.stderr
+    # ЧЕЙ текст — зависит от того, какой из двух гейтов увидит коллизию первым, и ЭТОМУ пину
+    # всё равно: он про то, что снятие строки решения возвращает КОЛЛИЗИЮ. Перечислены оба
+    # написания, чтобы пин не стал заодно сенсором ЧУЖОГО гейта — замерено, что с ассертом на
+    # один текст он краснел и от снятия гейта имени версии, раздувая чужой свип на единицу.
+    assert NEXT_VERSION in done.stderr and (
+        "already exists" in done.stderr or "ALREADY TAKEN" in done.stderr
+    ), done.stderr
     # Даже падая, шаг ничего не пушит: `git tag` стоит ДО ОБОИХ push'ей (их с #723 два —
     # атомарный bump+тег и канал; счёт «четыре» из прежней редакции включал локальный
     # `git branch -f`, который push'ем не является).
@@ -1052,6 +1107,13 @@ def test_without_atomic_a_lost_race_squats_the_version_name(stand):
     Тот же стенд, тот же шим, единственная разница — снят флаг. Сервер берёт тег (он новый)
     и отбивает main (он не-ff), перепроверка честно видит «меня накрыли» и выходит нулём:
     job зелёный, а имя версии занято навсегда. Ровно этот зелёный и делает дефект опасным.
+
+    КЛИН у следующего приземления с #769 ОЗВУЧЕН, а не убран: тег-сирота — вторая форма того
+    же класса, что и чужой тег-сквоттер, поэтому гейт имени версии ловит и его, и следующее
+    приземление краснеет уже со своим объяснением вместо голого `fatal: tag … already exists`
+    (тот литерал пинит `test_without_the_version_name_gate_the_squatter_is_cryptic`). Что
+    осталось прежним и здесь несущее: клин НИКУДА НЕ ДЕЛСЯ — версия на вершине main так и не
+    двинулась, поэтому каждое следующее приземление считает ТУ ЖЕ версию.
     """
     work = stand.checkout("w", stand.c0, release_sh=_release_sh_without_atomic())
     shim = stand.shim_sibling_lands_just_before_push()
@@ -1069,7 +1131,12 @@ def test_without_atomic_a_lost_race_squats_the_version_name(stand):
         stand.checkout("nxt-job", nxt, release_sh=_release_sh_without_atomic()), nxt
     )
     assert again.returncode != 0
-    assert f"fatal: tag '{NEXT_VERSION}' already exists" in again.stderr
+    # Как и у соседа выше: пин про КЛИН, а не про то, кто о нём сообщает (см. там же, почему
+    # ассерт на один текст сделал бы его сенсором гейта имени версии).
+    assert NEXT_VERSION in again.stderr and (
+        "already exists" in again.stderr or "ALREADY TAKEN" in again.stderr
+    ), again.stderr
+    assert '"0.2.170"' in stand.remote_file("refs/heads/main", "src/vikunja_mcp/__init__.py")
 
 
 def test_a_server_without_atomic_support_pushes_nothing(stand):
@@ -1100,6 +1167,169 @@ def test_a_server_without_atomic_support_pushes_nothing(stand):
     assert "does not support --atomic push" in done.stderr
     assert stand.remote_main() == stand.c0
     assert stand.remote_tags() == []
+    assert stand.remote_stable() is None
+
+
+def test_a_version_name_squatted_after_checkout_is_named_not_guessed_at(stand):
+    """ПЕРВЫЙ красный сквоттера перестаёт называть не тот предмет (tracker #769).
+
+    Чужой тег `v0.2.171` появляется на origin ПОСЛЕ чекаута job'а, поэтому в его клоне тега
+    нет, локальный `git tag -a` проходит, и всё решает push. До гейта этот job доезжал до
+    push'а и падал в ОБЩУЮ ветку перепроверки — «no newer landing containing …», — которая
+    читается как права или защита ветки, то есть как совсем другая беда (пин на это —
+    мутационный сосед ниже). Теперь он называет имя, объект и механику.
+
+    Вердикт при этом НЕ МЕНЯЕТСЯ и это здесь главное: до гейта job тоже был красным и тоже
+    ничего не пушил — проверяются все три рефа. Гейт покупает сообщение, а не исход.
+    """
+    work = stand.checkout("w", stand.c0)              # чекаут ДО появления сквоттера
+    foreign = stand.squat_the_version_name()
+    done = stand.release_job(work, stand.c0)
+
+    assert done.returncode != 0, done.stdout
+    assert f"the version name {NEXT_VERSION} is ALREADY TAKEN" in done.stderr
+    assert f"git push origin :refs/tags/{NEXT_VERSION}" in done.stderr
+    assert "no newer landing containing" not in done.stderr
+
+    assert stand.remote_main() == stand.c0
+    assert stand.remote_tags() == [NEXT_VERSION]
+    assert _git(stand.origin, "rev-list", "-n1", NEXT_VERSION).stdout.strip() == foreign
+    assert stand.remote_stable() is None
+
+
+def test_a_squatted_version_name_wedges_every_later_landing_the_same_way(stand):
+    """КЛИН: имя занято → не уезжает ничто → следующий job считает ТУ ЖЕ версию (#769).
+
+    Это измеренное состояние карточки: под `--atomic` не приземляется НИЧЕГО, поэтому версия
+    на вершине main не двигается, `bump_version.py` у каждого следующего приземления считает
+    то же самое имя, и так до вмешательства человека. Инвариант репозитория цел и до гейта —
+    каждый прогон КРАСНЫЙ, тихого зелёного тут нет ни одного, — а гейт меняет то, ЧТО эти
+    прогоны говорят: вместо голого `fatal: tag … already exists` (мутационный сосед ниже
+    возвращает его дословно) каждый называет причину, команду и то, что само не зарастёт.
+
+    Три приземления, а не одно, потому что «клин» — утверждение про ПОВТОРЯЕМОСТЬ: разовый
+    красный от вечного отличается только тем, что следующий такой же.
+    """
+    stand.squat_the_version_name()
+
+    for n in (1, 2, 3):
+        sha = stand.land_sibling(f"land{n}")
+        done = stand.release_job(stand.checkout(f"job{n}", sha), sha)
+
+        assert done.returncode != 0, done.stdout
+        assert f"the version name {NEXT_VERSION} is ALREADY TAKEN" in done.stderr
+        assert f"fatal: tag '{NEXT_VERSION}' already exists" not in done.stderr
+        assert stand.remote_main() == sha, "приземлился только таск-коммит, bump — нет"
+        # версия на вершине не двинулась, поэтому следующий круг посчитает ТО ЖЕ имя
+        assert '"0.2.170"' in stand.remote_file("refs/heads/main", "src/vikunja_mcp/__init__.py")
+
+    assert stand.remote_tags() == [NEXT_VERSION], "своих тегов релиз не нарезал ни одного"
+    assert stand.remote_stable() is None
+
+
+def test_without_the_version_name_gate_the_squatter_is_cryptic(stand):
+    """МУТАЦИЯ к двум предыдущим: снять гейт — и оба текста возвращаются дословно (#769).
+
+    Одна мутация на два теста, потому что дефект один, а форм у него две, и обе надо вернуть:
+    у job'а, чей чекаут ПРЕДШЕСТВУЕТ сквоттеру, тега локально нет и он падает уже на push'е,
+    в ветку про «никакого более нового приземления не видно»; у КАЖДОГО следующего тег в
+    чекауте есть, и он падает на `git tag -a` кодом 128, ничего не сказав.
+
+    Свип, выборка `tests/unit/test_release_script.py`, collected 40 во всех раундах,
+    возмущался МИР (`scripts/release.sh`), перед каждым раундом чистился `__pycache__` и
+    стоял `PYTHONDONTWRITEBYTECODE=1`, применение мутации сверялось поиском обеих строк на
+    диске, а восстановление — по sha256: control 0 failed; снять гейт целиком
+    (`if version_name_taken` -> `if false`) 4 failed; снять ТОЛЬКО локальный источник (ветвь
+    `elif` с `git rev-parse --verify`) 1 failed — ровно
+    `..._still_names_a_squatter_in_the_checkout`, потому что у первого job'а имя читается с
+    origin, а клин ловится тем же чтением; снять ТОЛЬКО чтение origin (`if false` на
+    `ls-remote`) 1 failed — ровно `..._is_named_not_guessed_at`, потому что у всех
+    последующих имя лежит в собственном чекауте; сделать чтение origin FAIL-CLOSED («спросить
+    не смог» = «занято») 2 failed — `..._never_reds_a_healthy_release`, ради которого этот
+    раунд и заводился, И `..._still_names_a_squatter_in_the_checkout`, потому что fail-closed
+    отвечает «занято на origin» ещё до того, как локальный источник вообще спрашивают, и
+    ассерт про `this checkout` перестаёт выполняться; control повторно 0 failed.
+
+    ДВЕ вещи в этом свипе стоит прочитать, а не пролистать. ЭТОТ тест в раунде «снять гейт
+    целиком» падает не поведением, а ассертом своей же мутации-хелпера (`if
+    version_name_taken` в файле уже нет, значит подменять нечего) — это тот самый гард
+    «переименуют — тест упадёт на мутации, а не тихо перестанет мутировать», и в четвёрку он
+    входит как раз им. И четвёрка стала четвёркой ПОСЛЕ починки: с ассертом на один текст
+    мутационные пины #716 и #723 краснели тоже, давая 6, — они наблюдают ту же коллизию, о
+    которой теперь сообщает этот гейт, и оба ослаблены до «коллизия названа кем угодно»,
+    чтобы не быть сенсорами чужого гейта.
+    """
+    mutated = _release_sh_without_the_version_name_gate()
+
+    work = stand.checkout("w", stand.c0, release_sh=mutated)
+    stand.squat_the_version_name()
+    first = stand.release_job(work, stand.c0)
+    assert first.returncode != 0, first.stdout
+    assert "no newer landing containing" in first.stderr
+    assert "ALREADY TAKEN" not in first.stderr
+
+    sha = stand.land_sibling("nxt")
+    again = stand.release_job(stand.checkout("nxt-job", sha, release_sh=mutated), sha)
+    assert again.returncode != 0, again.stdout
+    assert f"fatal: tag '{NEXT_VERSION}' already exists" in again.stderr
+    assert "ALREADY TAKEN" not in again.stderr
+
+    assert stand.remote_tags() == [NEXT_VERSION]
+    assert stand.remote_stable() is None
+
+
+def test_an_unanswerable_version_name_read_never_reds_a_healthy_release(stand):
+    """ПОЛЯРНОСТЬ: у ЭТОГО чтения «спросить не смог» — зелёное, и это не рассогласование.
+
+    Соседний `test_an_unanswerable_tag_read_is_never_a_skip` требует обратного, и оба верны,
+    потому что вопросы разные. Там чтение тегов держит ЗЕЛЁНУЮ ветку (skip), поэтому молчание
+    origin обязано быть красным. Здесь чтение держит ДИАГНОСТИКУ поверх ветки, которая красна
+    при любом ответе, поэтому fail-closed купил бы ровно сообщение, а стоил бы ложного
+    красного на каждом релизе, где флакнул один `ls-remote` — то есть ЗАМОРОЗКИ КАНАЛА ценой
+    сетевого дребезга, при том что чинит гейт как раз замороженный канал.
+
+    Молчание origin при этом не слепит гейт целиком: источников два, и второй — собственный
+    чекаут job'а. Поэтому один и тот же сломанный `ls-remote` оставляет здоровый релиз
+    зелёным и всё равно называет клин там, где тег в чекауте уже есть.
+
+    ЭТОТ ПИН ПРИШЛОСЬ ДОКАЗЫВАТЬ ОТДЕЛЬНОЙ МУТАЦИЕЙ, и это ровно та ловушка, про которую
+    репозиторий предупреждает: тест вида «такого быть НЕ должно» бывает зелен и с гардом, и
+    без него. Замерено — в раунде «снять гейт целиком» он остаётся ЗЕЛЁНЫМ (без гейта
+    здоровый релиз тем более зелен), то есть отсутствие гейта он не ловит и ловить не обязан.
+    Ловит он ПОЛЯРНОСТЬ, поэтому мутация к нему своя: сделать чтение origin fail-closed
+    («спросить не смог» = «занято»). Свип записан у соседа
+    `test_without_the_version_name_gate_the_squatter_is_cryptic`; в том раунде control
+    0 failed, мутация 2 failed, и ЭТОТ тест — первый из двух (второй, `..._in_the_checkout`,
+    падает попутно: fail-closed отвечает раньше, чем спросят локальный источник).
+    """
+    shim = stand.shim_ls_remote_fails()
+
+    done = stand.release_job(stand.checkout("healthy", stand.c0), stand.c0, path_prefix=shim)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    tip = stand.remote_main()
+    assert stand.remote_tags() == [NEXT_VERSION]
+    assert stand.remote_stable() == tip
+
+
+def test_an_unanswerable_version_name_read_still_names_a_squatter_in_the_checkout(stand):
+    """Вторая половина той же полярности: локальный источник ловит клин без origin (#769).
+
+    Тег сквоттера уже лежит в чекауте job'а (actions/checkout тянет теги на момент чекаута),
+    и это ровно то, на чём `git tag -a` падает кодом 128. Читается он локально, поэтому
+    сломанный `ls-remote` диагностику не гасит.
+    """
+    stand.squat_the_version_name()
+    sha = stand.land_sibling("land")
+    shim = stand.shim_ls_remote_fails()
+
+    done = stand.release_job(stand.checkout("job", sha), sha, path_prefix=shim)
+
+    assert done.returncode != 0, done.stdout
+    assert f"the version name {NEXT_VERSION} is ALREADY TAKEN" in done.stderr
+    assert "this checkout" in done.stderr
+    assert f"fatal: tag '{NEXT_VERSION}' already exists" not in done.stderr
+    assert stand.remote_main() == sha
     assert stand.remote_stable() is None
 
 
