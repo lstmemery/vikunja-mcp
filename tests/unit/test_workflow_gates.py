@@ -1014,7 +1014,7 @@ def test_file_task_queue_cross_project_refused_nothing_created(env):
 
 
 def test_file_task_returns_the_ref_and_its_index_is_the_servers_not_the_id(env):
-    """#735: the card file_task just created comes back with `ref` — its human-searchable
+    """#735: the card file_task just created comes back with `ref` — its readable
     name — so an agent told by SKILL.md to echo one is not left to invent it.
 
     What the exact-equality assertion buys over "ref is a non-empty string" is the ANTI-
@@ -1213,9 +1213,11 @@ def test_get_task_related_defaults_to_empty_dict_without_relations(env):
     assert dossier["related"] == {}
 
 
-def test_ref_composes_human_searchable_identifier():
-    """#82: agents must echo the human-searchable ref "<identifier> (<id>)" — exactly the
-    "VMCP-27 (82)" shape the human asked for — not the bare, unsearchable global id."""
+def test_ref_composes_readable_identifier():
+    """#82: agents must echo the ref "<identifier> (<id>)" — exactly the "VMCP-27 (82)"
+    shape the human asked for — not the bare global id on its own. #757 measured what
+    each half is FOR: the identifier is the readable name (the UI prints it as the task
+    page h1), the id is what addresses the card (/tasks/82); NEITHER is a search key."""
     assert Workflow._ref({"id": 82, "identifier": "VMCP-27"}) == "VMCP-27 (82)"
     # project with no identifier prefix -> Vikunja returns "#<index>", which we keep
     assert Workflow._ref({"id": 82, "identifier": "#27"}) == "#27 (82)"
@@ -1224,8 +1226,8 @@ def test_ref_composes_human_searchable_identifier():
     assert Workflow._ref({"id": 82}) == "#82"
 
 
-def test_get_task_surfaces_searchable_ref(env):
-    """get_task dossier carries the human-searchable ref alongside the raw id."""
+def test_get_task_surfaces_readable_ref(env):
+    """get_task dossier carries the readable ref alongside the raw id."""
     api, wf, t = env
     dossier = wf.get_task(t["id"])
     assert dossier["ref"] == f"{api.tasks[t['id']]['identifier']} ({t['id']})"

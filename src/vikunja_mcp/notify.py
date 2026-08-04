@@ -43,8 +43,10 @@ class WebhookNotifier:
         return f"{base}/tasks/{task_id}"
 
     def your_call(self, ref: str, title: str, question: str, task_id: int) -> None:
-        """POST the one-message ping: what a human needs at a glance — the searchable ref,
-        the title, the question itself, and the deep-link to answer on. Raises on any
-        failure; the CALLER (call_human) is the best-effort boundary that swallows it."""
+        """POST the one-message ping: what a human needs at a glance — the readable ref,
+        the title, the question itself, and the deep-link to answer on (the ref names the
+        card, the LINK is what reaches it — the identifier is not searchable, see _ref).
+        Raises on any failure; the CALLER (call_human) is the best-effort boundary that
+        swallows it."""
         text = f"[Your Call] {ref} — {title}\n{question}\n{self.task_link(task_id)}"
         self._client.post(self.webhook_url, json={"text": text}).raise_for_status()

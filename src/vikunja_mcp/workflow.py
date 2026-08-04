@@ -656,12 +656,35 @@ class Workflow:
 
     @staticmethod
     def _ref(task: dict) -> str:
-        """Human-searchable task reference for agents to echo: the Vikunja identifier
+        """Readable task reference for agents to echo: the Vikunja identifier
         (project prefix + per-project index, e.g. 'VMCP-27') plus the global id in
-        parens -> 'VMCP-27 (82)'. A human searches the tracker by the identifier; the
-        bare global id (#82) is not searchable. Vikunja already returns `identifier` on
-        every task read (a project with no prefix yields '#<index>', which we keep);
-        falls back to '#<id>' only if it's absent."""
+        parens -> 'VMCP-27 (82)'.
+
+        NEITHER HALF IS A SEARCH KEY. The wording that used to stand here — "a human
+        searches the tracker by the identifier; the bare global id (#82) is not
+        searchable" — was the whole justification for this feature and for SKILL.md's
+        "echo the ref, never fabricate one", and it was never measured; #735 then copied
+        it into three more surfaces. Measured on a real 2.3.0 (#757) on BOTH surfaces,
+        because the API is not the one the claim is about: `?s=TGT-3` returns 0 hits
+        from REST *and* from the web UI's quick-action search, while a word from the
+        title returns hits in both — same session, same technique — and
+        `filter=identifier` is a 400, "The task field 'identifier' is invalid". What
+        `s=` does honour is the INDEX — and NOT project-scoped, which is what makes it
+        useless as a reference: measured on two projects holding three tasks each, `s=#3`
+        returns TWO cards, one per project ('TGT-3' and 'SEC-3'). Scoping it needs a
+        second term the reader does not have (`filter=index = 3 && project = 4`).
+
+        So the two halves earn their places in DIFFERENT ways, which is why the ref is
+        echoed as a pair. The identifier is READABLE: the UI prints 'TGT-3' as the task
+        page's h1, so a human reads the project and the ordinal off the card itself and
+        can eyeball whether a quoted ref matches the card in front of them. The global
+        id is ADDRESSABLE: `/tasks/82` opens the card, and that is the link the UI's own
+        task lists carry. That also SHARPENS the anti-fabrication rule rather than
+        weakening it — a made-up identifier cannot be checked by searching for it, so
+        the id beside it is the reader's only cheap check.
+
+        Vikunja already returns `identifier` on every task read (a project with no
+        prefix yields '#<index>', which we keep); falls back to '#<id>' if absent."""
         ident = (task.get("identifier") or "").strip()
         return f"{ident} ({task['id']})" if ident else f"#{task['id']}"
 
@@ -1954,8 +1977,9 @@ class Workflow:
         deliberately OWN-PROJECT-ONLY: injecting ready-for-pickup work into ANOTHER
         project's Queue would bypass that project's human (and wake their fleet loop
         with work nobody there sanctioned), so queue+cross is refused before anything
-        is created. The result's filed.ref (#735) is the card's human-searchable name —
-        echo it VERBATIM, never reconstruct one from the id."""
+        is created. The result's filed.ref (#735) is the card's readable name — echo it
+        VERBATIM, never reconstruct one from the id (it is not searchable, so nobody
+        downstream can check a fabricated one; see _ref)."""
         if not (title or "").strip():
             raise WorkflowError("a non-empty title is required for the new task")
         target = self.project_id if project_id is None else int(project_id)
@@ -2004,7 +2028,7 @@ class Workflow:
         if related_task_id is not None:
             marker += f" (по ходу работы над #{related_task_id})"
         self.api.add_comment(new_id, marker)
-        # `ref` (#735): the human-searchable name of the card THIS tool just created. The tools
+        # `ref` (#735): the readable name of the card THIS tool just created. The tools
         # that HAND BACK a task already carry one (_summary for next_task/claim, get_task), so an
         # agent told by SKILL.md to echo a ref, having only `filed.id`, had to invent the half no
         # tool gave it — and #660 shipped exactly that: "Filed as VMCP-181 (732)", where 732 is
@@ -2054,7 +2078,8 @@ class Workflow:
                 f"board: your other tools (get_task/comment/next_task) are bound to your "
                 f"own project and won't see it — the 'related' link is the cross-reference. "
                 f"`ref` carries the TARGET project's identifier prefix, not yours: that is "
-                f"the name their humans search by, so echo it verbatim"
+                f"the name their humans READ the card by on their own board, so echo it "
+                f"verbatim (it is not a search key — the id in parens is what opens it)"
             )
         if related_task_id is not None:
             result["related_to"] = related_task_id

@@ -49,8 +49,8 @@ def test_next_task_free_queue_note_overrides_steward_default(env):
     assert "stop" in note         # ...и НЕ останавливать /loop (собственно косяк DOGE)
 
 
-def test_next_task_surfaces_searchable_ref(env):
-    """#82: the task next_task hands out carries a human-searchable ref (identifier + id,
+def test_next_task_surfaces_readable_ref(env):
+    """#82: the task next_task hands out carries a readable ref (identifier + id,
     "HGI-1 (107)"-shaped like the human's "VMCP-27 (82)"), not just the raw global id."""
     api, wf = env
     t = api.add_task("free", "Queue", priority=3)
@@ -59,8 +59,8 @@ def test_next_task_surfaces_searchable_ref(env):
     assert re.fullmatch(rf"HGI-\d+ \({t['id']}\)", ref)
 
 
-def test_claim_surfaces_searchable_ref(env):
-    """claim echoes the same human-searchable ref for the task it just moved to Design."""
+def test_claim_surfaces_readable_ref(env):
+    """claim echoes the same readable ref for the task it just moved to Design."""
     api, wf = env
     t = api.add_task("job", "Queue")
     ref = wf.claim(t["id"])["task"]["ref"]
