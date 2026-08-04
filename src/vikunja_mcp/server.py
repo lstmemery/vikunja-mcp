@@ -91,6 +91,34 @@ def _forbid_unknown_tool_arguments(server) -> None:
     and the reassignment does reach `list_tools()`. Setting only the first would refuse calls
     that the advertised schema still says are legal.
 
+    WHAT A PART-WAY FAILURE ACTUALLY LEAVES BEHIND (#778), because the loop is not atomic and an
+    earlier draft of the stderr line below described a state that CANNOT HAPPEN. Measured by
+    injecting the failure into the 3rd tool of a freshly registered 12-tool server and reading
+    BOTH objects rather than one — `test_a_part_way_forbid_failure_leaves_a_REACHABLE_state`
+    constructs both modes against THIS function, so the rows below are pinned, not recorded:
+
+      failed at `model_rebuild`    the tool it was ON still ACCEPTS extras, and its
+                                   `tool.parameters` has no `additionalProperties` at all — so
+                                   the published schema still ALLOWS them too. Both ends
+                                   permissive: consistent, and exactly pre-#720 for that tool.
+      failed at `tool.parameters`  the tool it was ON already REFUSES extras while its
+                                   `tool.parameters` still ALLOWS them — the MIRROR of the
+                                   sentence that used to stand here, and the asymmetry WHY BOTH
+                                   LINES warns about, pointing the other way.
+
+    Neither mode produces the retired state — accepting extras while ADVERTISING a refusal —
+    and the reason is structural rather than lucky: the assignment is the LAST statement, so
+    `tool.parameters` can only ever lag the validator, never lead it. Tools the loop had already
+    FINISHED keep refusing (measured); tools it never reached are fully pre-#720 on both ends.
+
+    AND THE ROOT OF THE RETRACTED CLAIM IS A REFERENT SWAP WORTH NAMING, since three readings in
+    a row went the same way. On the tool that failed at `model_rebuild`,
+    `arg_model.model_json_schema()` ALREADY reports `additionalProperties: false` — step 1 set
+    `model_config`, and schema generation reads it — while `tool.parameters`, the schema this
+    server PUBLISHES, is untouched. So the retired clause was true of the object nobody publishes
+    and false of the one that is. Measure `tool.parameters`; `model_json_schema()` answers a
+    different question.
+
     BEST-EFFORT BY DESIGN. `_tool_manager` is private and `mcp` is pinned `>=2,<3`, while the
     `stable` channel re-resolves dependencies and ignores the lock — so a minor SDK release can
     move this. A failure here degrades to the OLD behaviour (a silent drop) and writes one line
@@ -127,8 +155,11 @@ def _forbid_unknown_tool_arguments(server) -> None:
                 "vikunja-mcp: could not forbid unknown tool arguments "
                 f"({exc.__class__.__name__}: {exc}); a misspelled parameter name will be "
                 "dropped silently, as before #720 — on every tool, or, if this failed "
-                "part-way, on every tool it had not FINISHED: the one it was ON can be left "
-                "accepting extras while its published schema already denies them",
+                "part-way, on every tool it had not FINISHED. The one it was ON is left in "
+                "one of two states (#778, measured): it still accepts extras AND its "
+                "published schema still allows them, or it already REFUSES them while its "
+                "published schema still allows them. Never the reverse — the published "
+                "schema is assigned last, so it cannot deny ahead of validation",
                 file=sys.stderr,
             )
         except Exception:
@@ -510,7 +541,11 @@ def advance(
     no longer one of the possibilities: since #720 an unknown argument is refused at the boundary
     BY NAME, before this tool runs, so reading 'arrived as null' rules that cause out instead of
     leaving it first in line — best-effort, like the gate itself, which reaches into the SDK and
-    restores the old silent drop when it cannot be installed. What still arrives as null — an
+    restores the old silent drop on the tools it did NOT FINISH. That last clause used to read
+    'when it cannot be installed', and #778 measured why the narrower one is the true one: after
+    a part-way failure the tools already done keep refusing, so the drop returns on the tail and
+    not across the whole surface (of that tail, the single tool it died ON may already be
+    refusing too — the server's own log line says which). What still arrives as null — an
     explicit null, a dropped key and an omitted argument — the tool can report as a STATE but
     never tell apart as a cause. Advance
     with a SHORT worklog and post the full

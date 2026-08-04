@@ -499,6 +499,187 @@ def test_the_forbid_gate_degrades_instead_of_killing_the_server():
     )
 
 
+def _ungated_server():
+    """A server registered exactly as `_server()` registers one, but WITHOUT the gate applied.
+
+    `_server()` caches a module-level singleton and runs `_forbid_unknown_tool_arguments` on it,
+    so the shipped server can never show a part-way state. Registering the same `_DEFERRED_TOOLS`
+    onto a fresh `MCPServer` gives FRESH argument models rather than the singleton's, and the
+    never-reached row of the caller is what checks that: a sibling test earlier in this file
+    gates the singleton's twelve models, so if the models were shared per function rather than
+    per registration that row would read `refuses` and fail. It reads `accepts`.
+    """
+    from mcp.server import MCPServer
+
+    from vikunja_mcp import __version__, server
+
+    s = MCPServer("vikunja-tracker", version=__version__)
+    for fn in server._DEFERRED_TOOLS:
+        s.tool()(fn)
+    return s
+
+
+def _accepts_an_unknown_key(tool) -> bool:
+    """What the server ENFORCES, asked of the validator rather than of `model_config`."""
+    try:
+        tool.fn_metadata.arg_model.model_validate({"zzz_unknown_778": 1})
+    except Exception as exc:                       # noqa: BLE001 — any refusal is a refusal
+        return "Extra inputs are not permitted" not in str(exc)
+    return True
+
+
+def _publishes_a_refusal(tool) -> bool:
+    """What the server ADVERTISES — `tool.parameters`, NOT `arg_model.model_json_schema()`."""
+    return tool.parameters.get("additionalProperties") is False
+
+
+@pytest.mark.parametrize(
+    "failing_step, target_still_accepts_extras",
+    [("model_rebuild", True), ("model_json_schema", False)],
+)
+def test_a_part_way_forbid_failure_leaves_a_REACHABLE_state(
+    failing_step, target_still_accepts_extras,
+):
+    """#778: the degradation notice used to describe a state the loop CANNOT produce.
+
+    The retired clause said the tool the loop was ON "can be left accepting extras while its
+    published schema already denies them". That cannot happen, and the reason is structural
+    rather than incidental: `tool.parameters = arg_model.model_json_schema()` is the LAST
+    statement of the body, so the published schema can only ever lag the validator, never lead
+    it. The two states that ARE reachable are the two rows this test builds.
+
+    THIS PINS THE FACT, NOT ONLY THE PROSE, which is why it injects the failure into the REAL
+    `_forbid_unknown_tool_arguments` instead of re-running a copy of its body. A copy would go on
+    passing after the shipped loop was reordered — which is exactly the reordering that would
+    make the retired sentence true again.
+
+    Measured for #778 on a freshly registered 12-tool server, failure injected into the 3rd tool:
+
+      failed at `model_rebuild`     the tool it was ON accepts extras, and `tool.parameters` has
+                                    no `additionalProperties` — both ends permissive, consistent
+      failed at `model_json_schema` the tool it was ON refuses extras, and `tool.parameters`
+                                    still has none — the MIRROR of the retired claim
+      tools already FINISHED        keep refusing, and keep advertising the refusal
+      tools never REACHED           fully pre-#720 on both ends
+
+    The assertion that fails if the retired sentence ever becomes true is the accepting-extras-
+    while-advertising-a-refusal sweep, asked of EVERY tool. It is written FIRST on purpose, and
+    that placement is a measured correction rather than a preference: behind the narrower rows it
+    was SHADOWED — the reordering round below killed the specific `tool.parameters` row and never
+    reached the sweep at all, so the negative this card owes was passing by never being asked.
+
+    MUTATION-CHECKED in a separate clone (`git clone --no-hardlinks`, the uncommitted work
+    carried in with `git diff HEAD --binary`, caches deleted each round and then
+    PYTHONDONTWRITEBYTECODE=1, `vikunja_mcp.__file__` printed and confirmed to be the clone's,
+    each mutation asserted to have landed and the source restored and byte-compared after).
+    Failed counts, never pass totals, and the control is in this same paragraph:
+
+    * control 0 failed
+    * restore the retired clause in the stderr notice -> 1 failed, on the sibling prose test
+      below. Nothing else moves: the clause is prose, and no behaviour depends on it
+    * move `tool.parameters = …` ABOVE `model_rebuild`, which is precisely what would make the
+      retired sentence describe reality -> 2 failed, and here the count DOES mean two, because
+      the two parametrizations are separate test items rather than two assertions in one
+      function. They die for DIFFERENT reasons, which is the useful part: `[model_rebuild]` on
+      the sweep, naming `get_task` as accepting extras while advertising a refusal — the retired
+      state, now actually constructed — and `[model_json_schema]` on the enforcement row,
+      because with the statements swapped the schema call raises before the rebuild and the tool
+      is left accepting extras where the unmutated order leaves it refusing them
+    * control again 0 failed
+
+    Against that same control 0 failed, a draft of this list predicted 1 failed for the
+    reordering round, reasoning from which assertion looked most specific rather than running it.
+    Both parametrizations fire, and the sweep only fires at all because it was moved up; the
+    rounds were re-run printing the AssertionError and what is recorded is which one spoke.
+    """
+    from unittest import mock
+
+    from vikunja_mcp import server
+
+    s = _ungated_server()
+    tools = s._tool_manager._tools
+    names = list(tools)
+    assert len(names) == 12, f"the tool surface moved: {sorted(names)}"
+    finished, target, never_reached = names[1], names[2], names[3]
+
+    captured = io.StringIO()
+    stderr, sys.stderr = sys.stderr, captured
+    try:
+        with mock.patch.object(
+            tools[target].fn_metadata.arg_model, failing_step,
+            side_effect=RuntimeError("injected by #778"),
+        ):
+            server._forbid_unknown_tool_arguments(s)   # must not raise
+    finally:
+        sys.stderr = stderr
+    assert "could not forbid unknown tool arguments" in captured.getvalue()
+
+    # The NEGATIVE this card owes, and it is deliberately FIRST: asked of every tool rather than
+    # of the injected one, and placed ahead of the narrower rows below so that it is the
+    # assertion that actually fires when the retired state becomes reachable. Behind them it was
+    # shadowed — measured, the reordering round killed a narrower row and never reached here.
+    liars = sorted(
+        name for name, tool in tools.items()
+        if _accepts_an_unknown_key(tool) and _publishes_a_refusal(tool)
+    )
+    assert not liars, (
+        f"{liars} — accepting extras while advertising a refusal, the state the retired clause "
+        "claimed and #778 measured to be unreachable. Either the loop was reordered so the "
+        "published schema now leads the validator, or a client can be refused for a call its "
+        "own copy of the schema calls legal"
+    )
+
+    assert _accepts_an_unknown_key(tools[target]) is target_still_accepts_extras, (
+        f"failing at {failing_step} left {target!r} enforcing something else than measured — "
+        "the two reachable states are the whole subject of the notice this path prints"
+    )
+    assert not _publishes_a_refusal(tools[target]), (
+        f"{target!r} advertises `additionalProperties: false` although the assignment that "
+        "publishes it never ran — the published schema cannot lead the validator"
+    )
+    assert not _accepts_an_unknown_key(tools[finished]), (
+        f"a tool the loop had already FINISHED ({finished!r}) stopped refusing extras — the "
+        "notice, and `advance`'s docstring, both say the drop returns only on the unfinished tail"
+    )
+    assert _publishes_a_refusal(tools[finished])
+    assert _accepts_an_unknown_key(tools[never_reached])
+    assert not _publishes_a_refusal(tools[never_reached])
+
+
+def test_the_degradation_notice_does_not_describe_the_unreachable_state():
+    """#778's prose half: the stderr line must not resurrect the state the sibling above measures
+    to be impossible.
+
+    The NEGATIVE assertion is the durable one — a phrase that is gone stays gone whatever else
+    the sentence grows. The POSITIVE one is an EXACT substring with no rewording slack, and this
+    docstring says so rather than repeating the mistake #778 also fixed one test down, where a
+    claim that "the positive phrasing could be reworded honestly" was measured false. A card that
+    rewords this notice edits the expected substring here in the same commit, deliberately.
+    """
+    from vikunja_mcp import server
+
+    class Broken:
+        @property
+        def _tool_manager(self):
+            raise AttributeError("the SDK moved this")
+
+    captured = io.StringIO()
+    stderr, sys.stderr = sys.stderr, captured
+    try:
+        server._forbid_unknown_tool_arguments(Broken())
+    finally:
+        sys.stderr = stderr
+    msg = captured.getvalue()
+
+    assert "published schema already denies them" not in msg, (
+        "the degradation notice describes a state the loop cannot reach again: the published "
+        f"schema is assigned LAST, so it never denies ahead of the validator: {msg}"
+    )
+    assert "published schema still allows them" in msg, (
+        f"the notice must name the direction the asymmetry actually runs in: {msg}"
+    )
+
+
 def test_the_refusal_RULES_OUT_the_misspelling_cause():
     """The mirror of the sibling above, on the agent-facing side, and it was INVERTED with it.
 
@@ -517,8 +698,19 @@ def test_the_refusal_RULES_OUT_the_misspelling_cause():
     with the key OMITTED reaches the body with `worklog_len == -1`. So a typo cannot produce this
     text, and an agent who reads it has already ruled that cause out by reading it.
 
-    The negative assertion is the load-bearing one: the positive phrasing could be reworded
-    honestly by a later card, but the pre-#720 imperative reappearing means the prose regressed.
+    THE NEGATIVE ASSERTION IS THE LOAD-BEARING ONE, but the reason given for that used to be
+    false and #778 measured it so. It read "the positive phrasing could be reworded honestly by a
+    later card": there is no such freedom here — both positive assertions are EXACT substring
+    matches, so any honest rewording of the refusal reddens this test. Measured in a separate
+    clone, selection `tests/unit/test_advance_report_arguments.py`, control in this same
+    paragraph: control 0 failed; replacing `so a misspelling cannot reach this text` with the
+    equivalent `so a typo in the name cannot get here` -> 1 failed, dying on the POSITIVE
+    assertion, not the negative one; control again 0 failed.
+
+    So what actually makes the negative one load-bearing is the DIRECTION it guards, not any
+    slack in its neighbours: the pre-#720 imperative reappearing means the prose regressed, while
+    the positives merely freeze today's wording. A card that does want to reword the refusal has
+    to edit the expected substrings here in the same commit — deliberately, which is the point.
     """
     msg = _refusal_text(evidence="a" * 40)
     assert "CHECK THE PARAMETER NAME FIRST" not in msg, (
