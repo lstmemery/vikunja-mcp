@@ -586,6 +586,75 @@ def test_decompose_refuses_from_done_the_other_half_of_the_same_bypass(env):
         assert any(lb["title"] == "epic" for lb in api.tasks[open_task["id"]]["labels"])
 
 
+def test_decompose_refusals_describe_the_verdict_they_would_actually_clear(env):
+    """#777: both `decompose` refusals explained themselves through a counterfactual that #673
+    had already made unreachable — "stack `epic` on top of `reviewed`" / "on the verdict label".
+
+    THE FORM, and it is the reason this is a pin and not a typo fix. A refusal says why-not by
+    naming what you WOULD get. #673 taught `decompose` to CLEAR the verdict on its way out, so
+    the promised pair stopped being producible — but the text stayed, and it teaches the reader
+    the opposite of the truth: that `decompose` PRESERVES a verdict. #693 fixed exactly this
+    shape for `return_task` and this is the sibling. Nothing caught either: no test read these
+    strings, so the whole suite was green with the false clause in place and is green without it.
+
+    WHAT THIS ASSERTS is the pairing, not the wording. A counterfactual is checkable in exactly
+    one honest way — remove the gate and look — so this test does BOTH halves in one run: it
+    measures what the ungated tool does to a verdict-carrying card (the tool's own clearing path,
+    reached from an OPEN stage, which is the same code the refusal is speculating about), and
+    then requires each refusal's text to agree with that measurement rather than contradict it.
+    Reworded prose stays green; prose that re-promises a surviving verdict does not.
+
+    MEASURED before this test was written, on a live `Workflow` over `FakeAPI`, by neutralising
+    both stage gates and running the tool from Review and from Done: the parent lands in Backlog,
+    unassigned, `['bug', 'epic']` — the VERDICT gone and a non-verdict label untouched — with two
+    children in Queue. So the new clause ("CLEAR the verdict label", "the human's acceptance
+    would vanish") describes the run, and the old one did not.
+
+    MUTATION-CHECKED, selection `tests/unit/test_workflow_gates.py`; control 0 failed:
+      * restore the Review refusal's pre-#777 clause ("stack `epic` on top of the verdict
+        label") -> 1 failed, here, on the survives-clause assert.
+      * restore the Done refusal's pre-#777 clause ("stack `epic` on top of `reviewed`") ->
+        1 failed, here, same assert.
+      * delete `_clear_verdict_labels` from `decompose`'s body -> 3 failed, of which THIS test
+        is one, on the behaviour assert — so the text half cannot pass while the behaviour half
+        rots. The count is 3 and not 1 on purpose: #673's own pin and the verdict grid fire too,
+        which is what makes this half a CONTROL on them rather than a fourth copy of them.
+      * control again 0 failed, sources restored and sha256-verified against the pre-round copy.
+    """
+    api, wf, _t = env
+
+    # HALF ONE — behaviour: the clearing the refusals speculate about is real, and it takes the
+    # VERDICT only. Reached from an open stage, which is the same body a Review/Done card would
+    # run through if its gate were lifted.
+    carrier = api.add_task("carries a verdict and a kind label", "Build", assignee=api.me_user)
+    api.tasks[carrier["id"]]["labels"] = [
+        {"id": 901, "title": "reviewed"}, {"id": 902, "title": "bug"},
+    ]
+    wf.decompose(carrier["id"], [{"title": "A"}, {"title": "B"}])
+    assert _label_titles(api, carrier["id"]) == ["bug", "epic"], (
+        "decompose no longer clears the verdict, so both refusals below have gone back to "
+        f"describing a state this tool does produce: {_label_titles(api, carrier['id'])}"
+    )
+
+    # HALF TWO — text: neither refusal may promise the verdict SURVIVES the split.
+    survives = ("stack `epic` on top of", "stack `epic` on the verdict", "on top of `reviewed`")
+    for stage in ("Review", "Done"):
+        card = api.add_task(f"verdict-carrying card in {stage}", stage, assignee=api.me_user)
+        api.tasks[card["id"]]["labels"] = [{"id": 903, "title": "reviewed"}]
+        with pytest.raises(WorkflowError) as ei:
+            wf.decompose(card["id"], [{"title": "A"}, {"title": "B"}])
+        msg = str(ei.value)
+        for phrase in survives:
+            assert phrase not in msg, (
+                f"the {stage} refusal explains itself with a state #673 made unreachable — it "
+                f"promises the verdict rides out under `epic`, while the tool CLEARS it: {msg}"
+            )
+        assert "CLEAR" in msg, (
+            f"the {stage} refusal no longer names the real consequence (the verdict is erased), "
+            f"which is the whole point of rewording it rather than deleting the clause: {msg}"
+        )
+
+
 def test_call_human_refuses_from_review_and_the_stage_check_precedes_ownership(env):
     """#590: the second half of the reviewer's dead end. `call_human` was already gated to
     Design/Build, but its refusal only said WHERE it doesn't work, and `_require_mine` ran FIRST —

@@ -1813,10 +1813,11 @@ class Workflow:
         # given (you never claim work you are reviewing).
         if stage == "Review":
             raise WorkflowError(
-                "decompose is not available from Review: it would unassign the card, stack `epic` "
-                "on top of the verdict label and drop fresh children into Queue, so work that is "
-                "under review (or already approved) would be pulled out of the pipeline and "
-                "re-declared an unfinished container before anyone ruled on it. Deciding that work "
+                "decompose is not available from Review: it would unassign the card, CLEAR the "
+                "verdict label on the way out and drop fresh children into Queue, so work that is "
+                "under review would be pulled out of the pipeline and re-declared an unfinished "
+                "container before anyone ruled on it — and on a card already APPROVED, the "
+                "reviewer's verdict would vanish from the board along with it. Deciding that work "
                 "needs splitting is a Build-time call, so the card has to come back to Build "
                 "first: a reviewer sends it there with review_task(task_id, verdict='needs_work', "
                 "report=<why it should be split>), and its implementer, who owns it in Build, "
@@ -1854,9 +1855,10 @@ class Workflow:
             raise WorkflowError(
                 "decompose is not available from Done: a human accepted this card, and splitting "
                 "accepted work back out into Backlog is the human's call too — the Done "
-                "transition is human-only in BOTH directions. It would also unassign the card, "
-                "stack `epic` on top of `reviewed` and drop fresh children into Queue, so the "
-                "board would claim work a human accepted is an unfinished container. Work that a "
+                "transition is human-only in BOTH directions. It would also unassign the card and "
+                "CLEAR the `reviewed` label on the way out, so the human's acceptance would vanish "
+                "from the board altogether — leaving an `epic` container and fresh children in "
+                "Queue where accepted work used to be. Work that a "
                 "Done card revealed is NEW work, not a split of this one: file_task the "
                 "follow-ups (related_task_id=<this task>) for a human to triage — call_human "
                 "refuses from Done as well; a human can also move this card back themselves."

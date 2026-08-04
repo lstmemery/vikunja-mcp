@@ -603,8 +603,10 @@ def call_human(task_id: int, question: str) -> dict:
 @_tool
 def return_task(task_id: int, reason: str) -> dict:
     """Return a task because of an EXTERNAL block (no access/dependency/someone else's
-    service): unassigns you, adds label 'blocked', moves it to Backlog for human
-    re-triage. REFUSES from TWO stages. From Review — never use it to get rid of a card you
+    service): unassigns you, adds label 'blocked', CLEARS any VERDICT label the card was
+    carrying (#693 — a card leaving the pipeline unassigned has no live assessment; only
+    'reviewed'/'review-failed' go, other labels like 'bug' stay) and moves it to Backlog for
+    human re-triage. REFUSES from TWO stages. From Review — never use it to get rid of a card you
     are reviewing; a reviewer's block or question goes in review_task(verdict='needs_work'),
     and a finding outside that card's slice goes in file_task. From Done — a human accepted
     that card, and moving accepted work back out is the human's call too (the Done transition
@@ -618,15 +620,19 @@ def return_task(task_id: int, reason: str) -> dict:
 def decompose(task_id: int, subtasks: list[dict], ordered: bool = False) -> dict:
     """Break up YOUR large task (>~half a day of work) into >=2 subtasks:
     [{'title': ..., 'description'?: ..., 'priority'?: 0-5}]. Subtasks go into Queue with
-    a relation to the parent; the parent moves to Backlog with label 'epic'.
+    a relation to the parent; the parent moves to Backlog with label 'epic', and any VERDICT
+    label it was carrying is CLEARED (#673 — a container holds no code of its own, so an
+    assessment of the work it used to be no longer applies; only 'reviewed'/'review-failed'
+    go, other labels like 'bug' stay).
     Pass ordered=True when the subtasks MUST run in sequence (each builds on the previous):
     they are chained in ARRAY ORDER so only the head is claimable immediately and each later
     child unlocks when its predecessor reaches Review. Leave ordered=False (default) when the
     subtasks are independent and may be worked in parallel.
     REFUSES from TWO stages. From Review (#663) — never split a card that is under review (or
-    already approved): it would unassign it, stack `epic` on the verdict label and drop children
-    into Queue, i.e. pull work out of the pipeline before anyone ruled on it. Splitting is a
-    Build-time call, so the card goes back to Build first — a reviewer sends it there with
+    already approved): it would unassign it, CLEAR the verdict label and drop children into
+    Queue, i.e. pull work out of the pipeline before anyone ruled on it — and on an approved
+    card erase the ruling somebody already made. Splitting is a Build-time call, so the card
+    goes back to Build first — a reviewer sends it there with
     review_task(verdict='needs_work', report=<why it should be split>) and its implementer
     decomposes from there; a finding outside that card's slice goes in file_task. From Done
     (#649) — a human accepted that card, and splitting accepted work back out to Backlog is the
