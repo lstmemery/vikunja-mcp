@@ -680,6 +680,50 @@ def test_the_degradation_notice_does_not_describe_the_unreachable_state():
     )
 
 
+def test_advance_does_not_promise_that_the_log_line_resolves_the_partial_failure():
+    """#778 round 2: the copy that ships IN THE PUBLISHED SCHEMA must not send agents to a
+    stream for an answer that stream declines to give.
+
+    The retired clause told them the server's own log line said WHICH of the two states the
+    tool it died on was left in. The notice it pointed at landed in the same commit, one
+    function up, and sets those two out as a disjunction without resolving it — so the promise
+    was false about text sitting in the same file, which is the class #778 exists to retire.
+    It also ran the other way from the agent-facing hint in `workflow.py`, which calls that
+    stderr a residual risk to know about rather than a stream to go reading.
+
+    WHY THE PIN LIVES HERE rather than growing the sibling above: that one reads the NOTICE,
+    and this class is invisible to it by construction — the false sentence sat in a different
+    object's docstring while the notice it misdescribed was correct throughout. So the negative
+    assertion is on `server.advance.__doc__`, and the positive one reads the notice's own
+    disjunction marker, which is precisely what the docstring must not claim to see through.
+    Both are exact substrings with no rewording slack; a card that rewords either edits this
+    test in the same commit, deliberately.
+    """
+    from vikunja_mcp import server
+
+    doc = server.advance.__doc__ or ""
+    assert "log line says which" not in doc, (
+        "advance's docstring promises the startup log resolves a part-way forbid-gate failure, "
+        "and the notice it points at states the pair as a disjunction instead of resolving it"
+    )
+
+    class Broken:
+        @property
+        def _tool_manager(self):
+            raise AttributeError("the SDK moved this")
+
+    captured = io.StringIO()
+    stderr, sys.stderr = sys.stderr, captured
+    try:
+        server._forbid_unknown_tool_arguments(Broken())
+    finally:
+        sys.stderr = stderr
+    assert "one of two states" in captured.getvalue(), (
+        "the notice must keep stating the pair as a disjunction — that is exactly what the "
+        f"docstring next door is forbidden from claiming to see through: {captured.getvalue()}"
+    )
+
+
 def test_the_refusal_RULES_OUT_the_misspelling_cause():
     """The mirror of the sibling above, on the agent-facing side, and it was INVERTED with it.
 

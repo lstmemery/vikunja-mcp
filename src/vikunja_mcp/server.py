@@ -545,7 +545,10 @@ def advance(
     'when it cannot be installed', and #778 measured why the narrower one is the true one: after
     a part-way failure the tools already done keep refusing, so the drop returns on the tail and
     not across the whole surface (of that tail, the single tool it died ON may already be
-    refusing too — the server's own log line says which). What still arrives as null — an
+    refusing too, and nothing here tells you which: the server's log line sets those two states
+    side by side as a disjunction and stops there. Read it as a residual risk, not as a stream
+    to go looking in — it is the SERVER's startup stderr, which no tool here shows you). What
+    still arrives as null — an
     explicit null, a dropped key and an omitted argument — the tool can report as a STATE but
     never tell apart as a cause. Advance
     with a SHORT worklog and post the full
