@@ -1419,7 +1419,14 @@ the real repository, where the two copies never disagree. Reusing that walk UNCH
 measured and rejected: it blanks anything over `SHAPE_SCAN_MAX_BYTES`, which is right for a
 `json.loads` and would have turned "that is a PNG" into "too large to look at" — so it grew a
 `prefix` mode that reads eight bytes with no ceiling, and the default mode is byte-identical to
-before. **It is complete
+before. **The fix's own second independent pass then found a regression IN the fix, which is why
+that pass is a rule here and not a courtesy:** the shared walk asks `cat-file -s` before reading a
+blob, and an index entry that does not resolve failed that too and fell down a pre-existing
+conflicted-entry skip — so a tracked candidate with no worktree copy and no object left went from
+REPORTED to invisible, where the loop being replaced had read the blob directly and reported it.
+Measured on a clone with the loose object deleted: pre-#819 `['asset.bin']`, the new walk `[]`.
+Both that and the index-side ceiling guard are pinned now; the one branch that is NOT is named as
+unpinned in the sweep record rather than counted as covered. **It is complete
 about NAMES and about the three formats it names — NOT about formats.** That distinction was the
 card's own first defect: an earlier draft called those three "the entire binary surface", and the
 second pass disproved it by construction. `browser_network_request` — in the DEFAULT capability
