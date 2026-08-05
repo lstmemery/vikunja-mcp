@@ -368,7 +368,22 @@ assertion in `tests/unit/test_line_length_gate.py`, which pyproject must agree w
   (shallowest first, walking through real directories: the first ancestor that is a symlink or a
   non-directory is the victim, since git must delete it to make room), and only if no ancestor is
   doomed does it ask about the path itself — which displaces itself, or, when it is a local
-  DIRECTORY, the files inside it. **Do not write "and that is all the shapes", in any wording.**
+  DIRECTORY, the things inside it that can DIE — its files AND its symlinks, one name each. That
+  read "the files inside it" here for one round (it APPEARED in `a0ab63e`, while the code wording it
+  inherited APPEARED two commits earlier in `fcabff0`) and #836 measured the difference: `os.walk`
+  puts a symlink-to-a-DIRECTORY in `dirnames`, and since the LOOP read only `filenames` it was
+  named ZERO times. Not descending is NOT what hid it — `dirnames` is a list `os.walk` produces;
+  the loop simply ignored it. Result: `overwritten_ignored` PRESENT and INCOMPLETE. Do not
+  over-correct to "the PATHS inside it" either — measured, that is wider than what the code returns,
+  which omits real subdirectories (their contents are named instead) and empty ones (no bytes to
+  lose). A symlink to a FILE and a DANGLING one were always named (`os.walk` splits by `isdir`,
+  which FOLLOWS), so among entries that can carry BYTES the hole was one shape wide, which is how it
+  got through round one's review; round two's found it by measuring the four shapes rather than by
+  reading the diff. That PRESENT-and-short state is the second reading direction spelled out further
+  down this bullet, where #837's mechanism for it also lives — read the two together, they are one
+  bound. What it is NOT is "the one failure this key cannot afford" — the bounds list next to the
+  code names another, present under the INCOMING spelling on a case-insensitive filesystem.
+  **Do not write "and that is all the shapes", in any wording.**
   Round one wrote "the ONE channel that has no path in the diff at all" and that sentence has now
   been falsified THREE times in two rounds, each time by construction and each time by a different
   reader: this card's independent reviewer (an incoming `out/x.txt` over a local ignored FILE
@@ -405,11 +420,16 @@ assertion in `tests/unit/test_line_length_gate.py`, which pyproject must agree w
   directory walk cut off at its bound) are not the only ones: a displacement shape the probe does
   not model reaches the same empty answer, and by EITHER road — the ordinary "nothing at risk"
   branch (measured on the ancestor shape) or a mechanical give-up (measured on the symlink one,
-  where it also erased a name already found). Both look exactly like good news. **And since #837 a
-  PRESENT key is not a proof that its list is COMPLETE either** — a new bound, not a restatement:
-  the batch-wide give-up meant a non-empty list at least implied no path had failed, whereas the
-  bisect reports the askable paths and drops the unaskable ones beside them. Strictly more
-  information than the `[]` it replaced, and a fresh way to be wrong. And
+  where it also erased a name already found). Both look exactly like good news. **A PRESENT key is
+  not a proof that its list is COMPLETE either** — a second direction, not a restatement. #837 added
+  a mechanism for it (the bisect reports the askable paths and drops the unaskable ones beside them,
+  strictly more information than the `[]` it replaced), but the DIRECTION is older than #837 and its
+  first draft dated it wrongly: "a non-empty list at least implied no path had failed" is true of
+  check-ignore failures and false of completeness. #836 measured two older roads — the
+  regenerable-name filter, which drops a hand-written file under `out/.venv/` with NO companion key
+  at all, and the expansion bound, which surfaces as `overwritten_ignored_truncated` while
+  understating it (505 dead files report 500) — plus its own defect as a third. So the list bounds
+  the loss from BELOW and never sizes it. And
   deliberately NOT the same NAME: there a file was DELETED with its tree, here a path was WRITTEN
   OVER and still exists holding somebody else's bytes. Same class as #710 either way — neither
   `git status --porcelain` nor checkout's own guards see ignored paths. The `main_checkout` key

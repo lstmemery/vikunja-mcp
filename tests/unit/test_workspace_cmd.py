@@ -4231,6 +4231,196 @@ def test_the_directory_expansion_does_not_walk_through_a_symlink(repo, tracker, 
     assert (outside / "precious.txt").read_text() == "not in the checkout\n"
 
 
+def test_a_NESTED_symlink_to_a_directory_inside_the_expansion_is_named_ONCE(repo, tracker,
+                                                                            tmp_path):
+    """The test above pins the guard on `rel` ITSELF; this one pins the SECOND guard, which was
+    missing for two rounds — VMCP-245 (836), filed by the round-two independent review of
+    VMCP-240 (806) and reproduced twice before it was fixed.
+
+    `os.walk` classifies a symlink-to-a-DIRECTORY under `dirnames` and does not descend into it.
+    Both halves of that are correct and intended; the defect is that such a path is then in
+    NEITHER list the loop read, so it was named ZERO times rather than once. The top-level `islink`
+    guard does not reach it — that guard is about `rel`, not about what is inside `rel`.
+
+    TWO STANDS, KEPT APART. The one that ISOLATES the defect has four entries in an ignored `out/`:
+    `git check-ignore -z --stdin` answered rc=0 and echoed ALL FOUR of `a.txt`, `to_dir` (-> a
+    directory), `to_file` (-> a file) and a DANGLING symlink (git 2.50.1), while
+    `_expand_if_directory` returned three, omitting `to_dir` alone — a symlink to a FILE and a
+    dangling one land in `filenames`, because `os.walk` splits by `isdir`, which FOLLOWS. THIS test
+    is the other, TWO-entry stand (`a.txt` plus `to_dir`), and end to end there the pre-fix probe
+    answered `['out/a.txt']`, the fast-forward was rc=0, and `out/to_dir` was destroyed unnamed.
+    Those two answers belong to different trees: the four-entry stand's pre-fix answer has THREE
+    entries, so quoting `['out/a.txt']` as "the same stand" would describe a tree that never
+    existed. An earlier draft of this docstring did exactly that.
+
+    PRESENT and INCOMPLETE is the failure this card is about — not "the one way this key must not
+    fail", which `_ignored_paths_the_ff_will_overwrite`'s BOUNDS list contradicts twice over.
+
+    THIS TEST PINS "NAMED", NOT "NOT FOLLOWED", and the split is a measurement rather than a
+    preference. Before VMCP-246 (837) it pinned both: `followlinks=True` produced
+    `out/to_dir/precious.txt`, which is BEYOND a symlink, so `check-ignore` exited 128, the WHOLE
+    batch was discarded and the key vanished. 837 made that give-up LOCAL — it bisects, so an
+    unaskable path costs only itself — and the walked-through path is now dropped on its own while
+    its neighbours are still reported. Re-measured after the rebase, control 0 failed throughout: the
+    `followlinks=True` round fell from 1 failed to 0 failed against this file with the assertions
+    unchanged, i.e. 837 DISARMED the half of this pin that watched for following, silently and
+    without touching this file. The property did not stop mattering, so it moved
+    to `test_the_walk_names_a_nested_symlinked_directory_and_returns_nothing_beneath_it`, which asks
+    the walk directly and cannot be masked downstream. A `"outside-nested" not in ...` assert was
+    also tried here and removed as decoration: `relpath` is taken against the repo root, so a
+    followed symlink yields `out/to_dir/precious.txt` and the outside directory's NAME never appears
+    at all — it would pass on a walked-through answer. The target is still placed OUTSIDE the
+    checkout, because that is what makes "the merge cannot touch it" true; naming it would be a
+    different defect of the same key, claiming a loss that never happened."""
+    _api, wf = tracker
+    _ignoring(repo, "out/")
+    outside = tmp_path / "outside-nested"
+    outside.mkdir()
+    (outside / "precious.txt").write_text("not in the checkout\n")
+    (repo / "out").mkdir()
+    (repo / "out" / "a.txt").write_text("the human's own scratch\n")
+    (repo / "out" / "to_dir").symlink_to(outside)
+    assert _git(repo, "status", "--porcelain") == "", "invisible before, as ever"
+
+    _land_on_origin(tmp_path, "nested-link", {"out": "upstream puts a file at that name\n"})
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["updated"] is True, state
+    assert sorted(state["overwritten_ignored"]) == ["out/a.txt", "out/to_dir"], state
+    assert (repo / "out").is_file(), "the directory really was replaced"
+    assert (outside / "precious.txt").read_text() == "not in the checkout\n"
+
+
+def test_the_expansion_names_a_symlink_to_a_file_and_a_dangling_one_too(repo, tracker, tmp_path):
+    """The CONTRAST that makes the defect above one shape wide rather than "symlinks are lost".
+
+    These two were named all along — both versions of this function ever committed name them — and
+    the MECHANISM is incidental rather than chosen: `os.walk` splits its entries with `isdir`, which
+    FOLLOWS, so a symlink whose target is a file, and one whose target does not exist at all, fall
+    into `filenames` and were already reported. (A FIFO does too, so it was never part of the hole.)
+    Whether that was intended is not knowable from the tree and is not claimed here — round one's
+    docstring did state the one-path-per-symlink rule, though only for `rel` itself. Without this
+    test the fix next door reads as "handle symlinks" rather than "handle the one shape `os.walk`
+    hides from the loop".
+
+    It does NOT pin the `islink` FILTER on `dirnames` — the test below this one does, and the
+    distinction is a sweep result rather than a guess: dropping the filter (naming EVERY entry of
+    `dirnames`) measured control 0 failed / mutation 0 failed until that third test existed."""
+    _api, wf = tracker
+    _ignoring(repo, "out/")
+    (repo / "realfile.txt").write_text("a real file, tracked by nobody\n")
+    (repo / "out").mkdir()
+    (repo / "out" / "to_file").symlink_to(Path("..") / "realfile.txt")
+    (repo / "out" / "dangling").symlink_to(Path("..") / "no-such-thing")
+
+    _land_on_origin(tmp_path, "link-kinds", {"out": "upstream puts a file at that name\n"})
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert sorted(state["overwritten_ignored"]) == ["out/dangling", "out/to_file"], state
+    assert (repo / "realfile.txt").exists(), "the symlink died, its target did not"
+
+
+def test_a_REAL_subdirectory_inside_the_expansion_is_not_named_only_its_files_are(repo, tracker,
+                                                                                  tmp_path):
+    """The OTHER half of the `dirnames` read, and it exists because the mutation sweep said so.
+
+    The fix above reads `dirnames` for one reason — a symlink-to-a-directory is in no other list —
+    and filters it with `islink`. Dropping that FILTER, so that every entry of `dirnames` is named,
+    was a sweep round that KILLED NOTHING: control 0 failed, mutation 0 failed, on an identical
+    selection, because every other test here that expands an ignored directory has a FLAT one. With
+    this test the same round is control 0 failed, mutation 1 failed. (The selection SIZE is not
+    recorded: adding this test is what changed it, so any number written here would name the tree
+    before or after itself. What the cross-check needs is that control and round agree, which they
+    did in both sweeps.) So the claim "one name per symlink" was unpinned in the direction of
+    over-reporting, and that direction is not cosmetic for THIS key: `overwritten_ignored` is read
+    as the size of a loss, and a real subdirectory is not a path that dies — its FILES are, and
+    they are named individually. Naming both would double-count the same bytes.
+
+    `out/sub` is genuinely ignored here (the rule is `out/`, so `check-ignore` echoes it), which is
+    what makes the mutation's output plausible rather than an obvious error, and is why nothing
+    downstream would have caught it either."""
+    _api, wf = tracker
+    _ignoring(repo, "out/")
+    (repo / "out").mkdir()
+    (repo / "out" / "a.txt").write_text("the human's own scratch\n")
+    (repo / "out" / "sub").mkdir()
+    (repo / "out" / "sub" / "f.txt").write_text("one level down\n")
+
+    _land_on_origin(tmp_path, "realsub", {"out": "upstream puts a file at that name\n"})
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert sorted(state["overwritten_ignored"]) == ["out/a.txt", "out/sub/f.txt"], state
+    assert "out/sub" not in state["overwritten_ignored"], \
+        "the directory itself is not a path that dies; its files are, and they are named"
+
+
+def test_the_walk_names_a_nested_symlinked_directory_and_returns_nothing_beneath_it(tmp_path):
+    """NAMED once, never FOLLOWED — pinned on the WALK itself, because end to end it is invisible.
+
+    This assertion used to live in the end-to-end test next door, where `followlinks=True` killed it:
+    the walked-through `out/to_dir/precious.txt` is BEYOND a symlink, `check-ignore` exited 128, the
+    whole batch was discarded and the key vanished. VMCP-246 (837) then made that give-up LOCAL — it
+    bisects, so an unaskable path now costs only ITSELF — and the walked-through path is dropped
+    individually while its neighbours are still reported. Measured on the rebased tree, control 0
+    failed on both sides of the change: the `followlinks=True` round went from 1 failed (pre-rebase)
+    to 0 failed (post-rebase) with the end-to-end assertion unchanged, and back to 1 failed once
+    this test existed. That is a DISARMED pin, not a fixed bug, and it is exactly the trap 837's own
+    card was flagged for. So the property is asserted where 837 cannot mask it — on the return value
+    of the walk, which names the symlink once and nothing underneath it whatever `_ignored_of` does.
+
+    The target is OUTSIDE the checkout, so a followed walk would report paths the merge never
+    touches; `os.walk`'s `followlinks` default of False is what holds, and this is what says so."""
+    root = tmp_path / "checkout"
+    (root / "out").mkdir(parents=True)
+    (root / "out" / "a.txt").write_text("the human's own scratch\n")
+    outside = tmp_path / "outside-walk"
+    outside.mkdir()
+    (outside / "precious.txt").write_text("not in the checkout\n")
+    (root / "out" / "to_dir").symlink_to(outside)
+
+    got = workspace_cmd._expand_if_directory(root, "out")
+
+    assert sorted(got) == ["out/a.txt", "out/to_dir"], got
+    assert not any(p.startswith("out/to_dir/") for p in got), \
+        "the symlink is one name, not a doorway — nothing beneath it may be reported"
+
+
+def test_the_symlink_pick_reads_dirnames_AFTER_the_gitlink_prune_not_before(tmp_path):
+    """The ORDER of the two `dirnames` reads inside the walk — VMCP-246 (837)'s gitlink prune, then
+    VMCP-245 (836)'s symlink pick. This is the seam where the two cards meet, so it gets its own pin.
+
+    The order is IRRELEVANT for an ordinary submodule and load-bearing in exactly one shape, and
+    both halves were measured rather than argued. Ordinarily a gitlink is a REAL directory, so the
+    `islink` pick skips it on either side of the prune — measured on a real submodule, both orders
+    answer `['vendor']`. It matters when the gitlink PATH ITSELF is a symlink-to-a-directory on disk
+    (a deinitialised submodule someone replaced with a link): prune-then-pick answers `['vendor']`,
+    pick-then-prune answers `['vendor/sub']` — a path inside a live gitlink, which 837 established
+    must never be handed to `check-ignore` in the form this code uses.
+
+    `gitlinks` is an ordinary parameter, so this pins the seam with NO submodule, no origin and no
+    merge: hand it the set directly. Swapping the two statements in the loop is a round of its own —
+    control 0 failed, swapped 1 failed, and the failure is this test."""
+    root = tmp_path / "checkout"
+    (root / "vendor").mkdir(parents=True)
+    (root / "vendor" / "keep.txt").write_text("an ordinary ignored file beside the gitlink\n")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "inner.txt").write_text("inside the link's target\n")
+    (root / "vendor" / "sub").symlink_to(elsewhere)
+
+    got = workspace_cmd._expand_if_directory(root, "vendor", frozenset({"vendor/sub"}))
+
+    assert sorted(got) == ["vendor/keep.txt"], got
+    assert "vendor/sub" not in got, "a gitlink path is pruned even when it is a symlink on disk"
+    assert not any(p.startswith("vendor/sub/") for p in got), "and never walked into"
+
+
 def test_a_local_ignored_FILE_whose_name_upstream_turns_into_a_DIRECTORY_is_named(
         repo, tracker, tmp_path):
     """THE SECOND CHANNEL WITH NO PATH IN THE DIFF, and the exact input the card's independent

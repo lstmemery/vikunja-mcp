@@ -1642,7 +1642,10 @@ def _index_gitlink_paths(root: Path, pathspecs: list[str]) -> frozenset[str]:
 
 
 def _expand_if_directory(root: Path, rel: str, gitlinks: frozenset[str] = frozenset()) -> list[str]:
-    """`rel` for an ordinary path; the FILES INSIDE IT when the checkout has a directory there.
+    # `r"""` is load-bearing, not style: the measurement below quotes a NUL-separated `printf`, and
+    # in a plain docstring `\0` is a real NUL character — measured, two of them landed in
+    # `__doc__` before this prefix went on, invisible in the file and in any diff of it.
+    r"""`rel` for an ordinary path; when the checkout has a DIRECTORY there, what can DIE inside it.
 
     THE CASE THIS EXISTS FOR was built by the independent second pass and disproved a sentence
     this function's own docstring used to carry ("git removes only TRACKED files"). Upstream
@@ -1652,13 +1655,62 @@ def _expand_if_directory(root: Path, rel: str, gitlinks: frozenset[str] = frozen
     (deleted, so filtered), while the path that actually died, `out/shot.png`, is in neither.
     Asking `check-ignore` about `out` answers rc=1, because the DIRECTORY is not ignored.
 
-    So a present path that is a DIRECTORY is replaced by its contents, which is also what makes
-    the report finer-grained than `removed_ignored`'s in the mirror case (a locally IGNORED
+    So a present path that is a DIRECTORY is replaced by what can DIE inside it, which is also what
+    makes the report finer-grained than `removed_ignored`'s in the mirror case (a locally IGNORED
     directory replaced by an incoming file): that used to yield the single entry `out` for any
-    number of dead files inside it.
+    number of dead files inside it. "The FILES inside it" was the wording for two rounds and
+    VMCP-245 (836) disproved it, since one kind of entry is neither a file nor walked into. Do NOT
+    over-correct that to "the PATHS inside it", which 836's own second pass measured as wider than
+    the return value in the other direction: of five paths git calls ignored under `out/`, this
+    answers three, omitting the REAL subdirectory `out/inside_real` — whose content
+    `out/inside_real/f.txt` is named instead, and that is the finer answer, not a worse one — and
+    the EMPTY `out/emptydir`, named nowhere. An empty directory carries no bytes, so that second
+    omission is a gap in the LISTING and not in the loss.
 
-    Symlinks are NOT followed (`islink` first): a symlinked directory is one path to git and one
-    path to delete, and walking through it would name files that live outside the checkout.
+    SYMLINKS ARE NAMED, NEVER FOLLOWED, AND THAT IS TWO GUARDS RATHER THAN ONE. `islink` before
+    `isdir` at the top covers `rel` ITSELF: a symlinked directory is one path to git and one path
+    to delete, and walking through it would name files that live outside the checkout. NESTED ones
+    need their own line in the loop, and for two rounds they did not have it — `os.walk` classifies
+    a symlink-to-a-DIRECTORY under `dirnames`, which is correct, and does not descend into it
+    (`followlinks` defaults to False, and that default is what keeps the target's files out of this
+    answer). NOT DESCENDING IS NOT WHAT HID IT, and the distinction is worth keeping straight:
+    `dirnames` IS a list `os.walk` produces, and what left the path unnamed is that the LOOP read
+    only `filenames`. So it was named ZERO times rather than once.
+
+    TWO STANDS, AND THEY MUST NOT BE WELDED — an earlier draft of this docstring welded them and
+    836's second pass caught it. The shape that ISOLATES the defect has FOUR entries under `out/`
+    (`a.txt`, `to_dir` -> a directory, `to_file` -> a file, and a DANGLING one): `git check-ignore`
+    (2.50.1) answers rc=0 and echoes all four, while the walk returned three, omitting `to_dir`
+    alone. The END-TO-END run is a SEPARATE, TWO-entry stand (`a.txt` plus `to_dir`) — there the
+    pre-fix probe answered `['out/a.txt']`, `merge --ff-only` was rc=0, and `out/to_dir` died
+    unnamed. `['out/a.txt']` is the TWO-entry answer; the four-entry stand's pre-fix answer is
+    three entries, so quoting the one beside the other describes a tree that never existed.
+
+    A symlink-to-a-FILE and a DANGLING one were already named — a FIFO too — because `os.walk`
+    splits by `isdir`, which FOLLOWS. So among entries that can carry BYTES the symlink-to-a-
+    directory was the only one unnamed, and say it THAT way rather than "exactly and only the
+    hole": the sample above is four hand-picked entries, and widening it to fifteen leaves a
+    residue this fix still does not name — real subdirectories, whose contents are named instead,
+    and empty ones, which have no bytes to lose. That made `overwritten_ignored` PRESENT AND
+    INCOMPLETE, which is the failure THIS card is about; it is NOT "the one way this key must not
+    fail", a universal the BOUNDS list below contradicts twice over — present-and-FILTERED under
+    `.venv/` with no companion key at all, and present under the INCOMING spelling on a
+    case-insensitive filesystem. Its ABSENCE is documented everywhere as proving nothing, which is
+    the CARD's reason for expecting a reader to take the printed list for the size of the loss;
+    that last step is about readers and was measured on neither side.
+
+    NAMING IS SAFE AND DESCENDING WOULD BE WORSE THAN NOISY, which is a sharper reason than the
+    "files outside the checkout" one above and was measured rather than reasoned. `check-ignore` is
+    rc=0 on the symlink ITSELF (`out/to_dir`) and rc=0 on one nested under a real subdirectory
+    (`out/sub/deep_link`) — the symlink is the LEAF, and only a symlinked ANCESTOR is fatal. Feed it
+    a path BEYOND the symlink and it is `fatal: pathspec 'out/to_dir/inner.txt' is beyond a symbolic
+    link`, rc=128 — the same fatal the SUBMODULE paragraphs below are about, reached by the other
+    road. Measured, `printf 'out/a.txt\0out/to_dir/inner.txt\0'` exits 128 with `out/a.txt` already
+    on stdout. So walking in would not merely name paths the merge never touches, it would feed
+    `_ignored_of` paths it must throw away. Checked in the OTHER direction too, by 836's second
+    pass: every symlink this now names is a LEAF, so no path it produces carries a symlinked
+    ANCESTOR, and `check-ignore` over fifteen shapes — including symlink-to-symlink-to-directory, a
+    `-> .` self-loop and a dangling one — is rc=0 with empty stderr and all fifteen echoed.
 
     ITS PREMISE — that a directory named by the incoming diff is a directory the merge REPLACES —
     IS FALSE FOR A SUBMODULE, and it is handled at TWO different places, neither of them this
@@ -1678,6 +1730,34 @@ def _expand_if_directory(root: Path, rel: str, gitlinks: frozenset[str] = frozen
     gitlink can be put to `check-ignore` in the form this code must use. What the pruning does NOT
     do is stop those files from dying: on a typechange they really are deleted, and naming them is
     VMCP-247 (838).
+
+    SO `dirnames` IS READ TWICE: the gitlink PRUNE (837) mutates the list in place, then the
+    `islink` pick (836) reads what SURVIVED. The order matters in exactly ONE shape, and saying
+    which is the difference between a rule and a slogan — measured both ways rather than argued.
+    For an ORDINARY submodule the order is IRRELEVANT: the gitlink is a real directory, so the
+    `islink` pick skips it whichever side of the prune it runs on, and both orders answer
+    `['vendor']`. It becomes load-bearing when the gitlink PATH ITSELF is a symlink-to-a-directory
+    on disk — a deinitialised submodule someone replaced by a link — where prune-then-pick answers
+    `['vendor']` and pick-then-prune answers `['vendor/sub']`, naming a path inside a live gitlink,
+    which is the one thing 837 established must not be handed on. Pinned by a test that passes
+    `gitlinks` directly, so it needs no submodule. The pick is
+    also a FILTER rather than a wholesale read: a REAL subdirectory is not a path that dies, its
+    files are, and they are named individually by this same walk. Both properties have their own
+    test, the filter's added because the sweep round that removed it killed nothing. Note WHY that
+    round was killable at all: naming every `dirname` ADDS a name, and the caller de-dupes only
+    exact repeats (`if candidate not in seen`), so a genuine DUPLICATE from in here would be
+    invisible end to end — measured by the second pass — while an EXTRA one is not.
+
+    ONE GAP MEASURED HERE THAT IS, END TO END, NOT A LOSS CHANNEL — and the correction matters more
+    than the gap. `os.walk` defaults to `onerror=None`, so an UNREADABLE subdirectory is skipped in
+    silence: `out/` holding `a.txt` plus a `chmod 000` `locked/` expands to `['out/a.txt']`, naming
+    neither `out/locked` nor its content. An earlier draft of this paragraph called that a second
+    route to a silent present-and-incomplete report; the second pass refuted it and the refutation
+    reproduces — `sync_main_checkout` on that tree answers `{'updated': False, 'code': 'blocked'}`
+    with `fatal: cannot opendir 'out/locked': Permission denied`, `out` is still a directory,
+    nothing is destroyed and NO key is emitted. Git cannot delete what it cannot read, so the
+    refusal branch catches it. The expansion gap is real and reaches no report through this shape;
+    whether EVERY permission shape refuses was not established, which is why it stays written down.
     """
     full = os.path.join(root, rel)
     if os.path.islink(full) or not os.path.isdir(full) or rel in gitlinks:
@@ -1688,7 +1768,11 @@ def _expand_if_directory(root: Path, rel: str, gitlinks: frozenset[str] = frozen
         # walking in costs bisect calls and yields no name (`_index_gitlink_paths`).
         dirnames[:] = [d for d in dirnames
                        if os.path.relpath(os.path.join(dirpath, d), root) not in gitlinks]
-        for name in filenames:
+        # THEN read what survived: a symlink-to-a-directory is in `dirnames` and in no other list,
+        # so it is named here or nowhere. One name per symlink, never its contents. AFTER the prune
+        # on purpose — a pruned gitlink must stay unnamed (its files are VMCP-247 (838)'s).
+        links = [d for d in dirnames if os.path.islink(os.path.join(dirpath, d))]
+        for name in filenames + links:
             inside.append(os.path.relpath(os.path.join(dirpath, name), root))
             if len(inside) >= _MAX_DIR_EXPANSION:
                 return inside
@@ -1939,7 +2023,11 @@ def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str) -> list[str]:
     it. Then each incoming path is mapped, in python, onto what it DISPLACES on this disk, which
     is two questions and not one. Present (`lexists`, so a broken symlink still counts as
     something being written over) — it displaces itself, or, when it is a local directory, the
-    files inside it. ABSENT — `_doomed_ancestor`, because "not on this disk has nothing to lose"
+    things inside it that can DIE — its files AND its symlinks, one name each. Not "the FILES
+    inside it", the wording that stood for two rounds and lost every nested symlink-to-a-directory,
+    and not "the PATHS inside it" either, which over-corrects: see `_expand_if_directory`, where
+    both bounds are measured. ABSENT — `_doomed_ancestor`, because "not on this disk has nothing to
+    lose"
     is FALSE and was shipped here for one round: an incoming `out/x.txt` over a local ignored
     FILE `out` kills `out`, which is in no diff entry at all.
 
@@ -2009,6 +2097,19 @@ def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str) -> list[str]:
         `core.ignorecase=true`) a local ignored `out.png` under an incoming `out.PNG` IS
         reported — but under the INCOMING spelling, so the string handed to the human is not the
         name their file had;
+      * A PRESENT KEY IS NOT A PROOF THAT THE LIST IS COMPLETE, and that is a SECOND reading
+        direction rather than a restatement of the next entry. VMCP-246 (837) added a mechanism for
+        it — the bisect above reports the askable paths and drops the unaskable ones beside them, so
+        partial is a state the key can be in, which is strictly more information than the `[]` it
+        replaced. But do NOT date the DIRECTION to 837, which its own first draft did ("before it, a
+        non-empty list at least meant no path had failed"): true of check-ignore FAILURES, false of
+        completeness, and VMCP-245 (836) measured two older roads to a present-and-short list. The
+        `_is_reproducible_ignored` filter above is one, and it is the worst kind — a hand-written
+        file under `out/.venv/` is dropped, the key is present naming only its neighbour, and NO
+        companion key appears, so there is no signal whatever. `_MAX_DIR_EXPANSION` is the other,
+        and it at least surfaces as `overwritten_ignored_truncated`, though understating: measured,
+        505 dead files report 500. 836's own defect was a third, present and short with no signal.
+        So the list bounds the loss from BELOW and never sizes it;
       * and so AN ABSENT KEY IS NEVER A PROOF THAT NOTHING DIED — the same one-way reading
         `removed_ignored` has. The mechanical routes to absent-with-a-loss are the filter above,
         each `return []` in this function and in the two it calls, the caller's `except`, a
@@ -2021,14 +2122,9 @@ def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str) -> list[str]:
         through the rc grade above, a MECHANICAL give-up, and took an unrelated name with it.
         Two shapes, two roads, and that is why the count came off this list — both were live in
         shipped code, and neither had a place to be written down here.
-        The rulebook states the one-way direction to agents rather than leaving it here;
-      * AND SINCE VMCP-246 (837) A PRESENT KEY IS NOT A PROOF THAT ITS LIST IS COMPLETE, which
-        is a NEW bound and the price of the bisect above rather than a restatement of the last
-        one. Before it, one unaskable path emptied the list, so a non-empty list at least meant
-        no path had failed; now the askable paths are reported and the unaskable ones are
-        dropped beside them, so partial is a state the key can actually be in. That is strictly
-        more information than the `[]` it replaces — and it is the direction a reader can be
-        wrong in, so it is written here rather than inferred from the bullet above.
+        The rulebook states the one-way direction to agents rather than leaving it here. Both
+        directions are now stated, and 836 merged what used to be a second present-key bullet here
+        into the one above rather than leave the tree asserting two provenances for one bound.
     """
     changed = _incoming_displacing_paths(root, remote)
     # GIT_OPTIONAL_LOCKS=0 there is the module's standing rule (see `_git_inspect`) applied by
