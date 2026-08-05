@@ -312,13 +312,30 @@ assertion in `tests/unit/test_line_length_gate.py`, which pyproject must agree w
   the SILENCE and not the loss: a SUCCESSFUL sync now carries `overwritten_ignored` (filtered by
   the same regenerable-name list as `removed_ignored`, capped the same way, with
   `overwritten_ignored_truncated` past the cap), computed BEFORE the merge as the incoming path
-  list ∩ what exists on disk ∩ `git check-ignore` — with any incoming path that is a local
-  DIRECTORY expanded into the files inside it first, which is the one channel that has no path in
-  the diff at all: a directory replaced upstream by a FILE takes its ignored contents with it,
-  measured, and the first version of this feature reported nothing at all for it. Same one-way
-  reading as `removed_ignored` — and read it in that ONE direction, because absent has four ways
-  to be wrong (the filter, either give-up branch of the probe, the caller's `except`, and a
-  directory walk cut off at its bound) — and
+  list MAPPED onto what each entry DISPLACES on this disk, then ∩ `git check-ignore`. **Mapping,
+  not intersecting, and that is the whole of round two:** an incoming path can kill something at a
+  DIFFERENT path, which is in no diff entry at all. Today the mapping asks the ANCESTORS first
+  (shallowest first, walking through real directories: the first ancestor that is a symlink or a
+  non-directory is the victim, since git must delete it to make room), and only if no ancestor is
+  doomed does it ask about the path itself — which displaces itself, or, when it is a local
+  DIRECTORY, the files inside it. **Do not write "and that is all the shapes", in any wording.**
+  Round one wrote "the ONE channel that has no path in the diff at all" and that sentence has now
+  been falsified THREE times in two rounds, each time by construction and each time by a different
+  reader: this card's independent reviewer (an incoming `out/x.txt` over a local ignored FILE
+  `out`); its implementer, while writing the sentence meant to close the class again (a bottom-up
+  walk resolves THROUGH a local ignored symlink and calls the resolved directory safe); and its
+  second independent pass (`lexists` follows every component but the last, so an incoming
+  `linkdir/y.txt` "exists" whenever the symlink's target already holds a `y.txt` — which took the
+  present branch, named a path that displaces nothing, and, because that name is beyond a symbolic
+  link, made `check-ignore` exit 128 and threw away an unrelated ignored `shot.png` dying in the
+  same commit). Three falsifications, no round without one, is the argument — the count that
+  matters is of REFUTATIONS, not of channels. Same one-way
+  reading as `removed_ignored` — and read it in that ONE direction, because the mechanical routes
+  to absent-with-a-loss (the filter, each give-up branch of the probe, the caller's `except`, a
+  directory walk cut off at its bound) are not the only ones: a displacement shape the probe does
+  not model reaches the same empty answer, and by EITHER road — the ordinary "nothing at risk"
+  branch (measured on the ancestor shape) or a mechanical give-up (measured on the symlink one,
+  where it also erased a name already found). Both look exactly like good news. And
   deliberately NOT the same NAME: there a file was DELETED with its tree, here a path was WRITTEN
   OVER and still exists holding somebody else's bytes. Same class as #710 either way — neither
   `git status --porcelain` nor checkout's own guards see ignored paths. The `main_checkout` key

@@ -330,7 +330,7 @@ def _run_git(
     args: tuple[str, ...], cwd: Path | None, timeout: float | None,
     env_extra: dict[str, str] | None = None, stdin_text: str | None = None,
 ) -> subprocess.CompletedProcess:
-    """`stdin_text` REPLACES the standing `stdin=DEVNULL`, and only one caller wants it.
+    r"""`stdin_text` REPLACES the standing `stdin=DEVNULL`, and only one caller wants it.
 
     DEVNULL is the default for a reason worth keeping: a git subcommand that decides to ask a
     question would otherwise inherit this process's stdin, which for the MCP server is the
@@ -338,9 +338,23 @@ def _run_git(
     it is fed this way rather than through argv because the alternative has two edges this one
     does not — ARG_MAX on a large incoming diff, and `-z`, which git refuses without `--stdin`
     (measured: `fatal: -z only makes sense with --stdin`). What `-z` buys is narrower than an
-    earlier draft of this sentence claimed, and the second pass measured the difference: without
-    it a SPACE in a filename survives fine, a non-ASCII byte comes back C-quoted (and un-quoted
-    again under `core.quotePath=false`), and only a NEWLINE has no unquoted spelling at all.
+    earlier draft of this sentence claimed, and has now been narrowed TWICE. Round one: a SPACE
+    in a filename survives without it. Round two, because the sentence that replaced it — "only
+    a NEWLINE has no unquoted spelling at all" — was still wider than its proof, and the second
+    pass narrowed it in two different directions at once.
+
+    On OUTPUT, measured at this call site with five files (`ta<TAB>b.q`, `q"uote.q`,
+    `back\slash.q`, `new<NEWLINE>line.q`, `кир.q`): a TAB, a `"` and a `\` come back C-quoted
+    just as a non-ASCII byte does, and `core.quotePath=false` un-quotes ONLY the non-ASCII one.
+    So `-z` earns its place for four spellings, not one. Say `core.quotePath` and not "any
+    quoting setting" — the config space was not exhausted and cannot be from here; what was
+    measured is that the one knob anybody reaches for rescues none of the four.
+
+    On INPUT the newline is a different problem entirely, and the more serious one: without `-z`
+    the batch is newline-separated, so `new<NEWLINE>line.q` is TORN IN TWO and git answers, rc=0
+    and unquoted, about `line.q` — a path nobody asked about. That is why `"new\nline.q"` does
+    not appear in the output above at all: it never arrived. None of this reaches the code, which
+    passes `-z` always.
     """
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", **(env_extra or {})}
     limit = _GIT_TIMEOUT if timeout is None else timeout
@@ -1614,8 +1628,69 @@ def _expand_if_directory(root: Path, rel: str) -> list[str]:
     return inside or [rel]
 
 
+def _doomed_ancestor(root: Path, rel: str) -> str | None:
+    """For an incoming path that is NOT on this disk, the ANCESTOR the merge must delete, or None.
+
+    THE MIRROR of `_expand_if_directory`, and the input that disproved a sentence this module
+    shipped one round earlier — "a path that is not on this disk has nothing to lose". Built by
+    the independent review of VMCP-240 (806), reproduced here before it was fixed. Upstream turns
+    a NAME into a DIRECTORY (`out/x.txt` arrives) while the checkout holds its own IGNORED FILE
+    at `out`. Measured on real git 2.50.1: `git status --porcelain` empty before AND after, the
+    incoming diff naming ONLY `out/x.txt` — the path that dies, `out`, appears in no entry of it
+    — `lexists` dropping that incoming child, the probe answering `[]`, and the sync reporting
+    `updated: true` with no key while the human's bytes were gone. Depth is not the point: a
+    local ignored file `deep` under an incoming `deep/a/b/y.txt` dies the same way three levels
+    up, which is why this WALKS instead of asking about one parent.
+
+    WHAT IT ANSWERS, every branch run rather than reasoned: the SHALLOWEST ancestor that is not a
+    real directory. A real DIRECTORY is walked THROUGH — the incoming path merely does not exist
+    inside it yet, and nothing is displaced. Anything else is what git removes to make room: a
+    file, or a SYMLINK, INCLUDING one that points at a directory. That last is what `isdir` alone
+    gets wrong, so `islink` comes first for the same reason it does in `_expand_if_directory`:
+    measured, a local ignored `linkdir -> realdir` under an incoming `linkdir/y.txt` leaves
+    `realdir/inside.txt` untouched and replaces the SYMLINK with a real directory, i.e. `isdir`
+    (which follows) answers True about a path that dies.
+
+    SHALLOWEST-FIRST AND WALK-THROUGH ARE TWO SEPARATE PROPERTIES, and the first draft of this
+    walk had NEITHER — it went bottom-up and stopped at the first ancestor that existed. Both
+    come from `os.path.lexists` following every component EXCEPT the last, so asking about `a/b`
+    when `a` is a symlink silently answers about `realdir/b`. The mutation sweep is what forced
+    this paragraph apart: a round that only flipped the ORDER killed no test, because on the
+    input that started this the other property already covers it. Measured over all four
+    combinations on three shapes — `A` = ignored symlink `a -> realdir` with `realdir/b` a
+    DIRECTORY, `B` = the same with `realdir/b` a FILE, `C` = a real directory `keep` holding an
+    ignored FILE `keep/sub`, incoming `a/b/c.txt`, `a/b/c.txt` and `keep/sub/new.txt`:
+        shape   truth      top+through   top+STOP   bottom+through   bottom+STOP
+        A       a          a             a          a                None
+        B       a          a             a          a/b              a/b
+        C       keep/sub   keep/sub      None       keep/sub         keep/sub
+    So `top+through` is the only column right on all three, and each defect owns a shape: STOP
+    misses `C` outright, bottom-up mis-NAMES `B` (it reports a path inside the symlink's target,
+    which the merge does not touch), and `A` — the shape actually built on real git, where the
+    merge is rc=0, `git status --porcelain` says `?? realdir/` and nothing else before AND after,
+    `realdir/b/keep.txt` survives and the ignored symlink `a` is replaced by a real directory —
+    is missed only by the combination the first draft shipped. Do not "simplify" this back: two
+    of those three columns look correct on whichever single shape you happen to try.
+
+    At most ONE name comes back per incoming path, so this adds nothing unbounded to the sweep;
+    several incoming paths under one dead ancestor name it repeatedly, and the caller de-dupes.
+    """
+    parts = rel.split("/")
+    for cut in range(1, len(parts)):
+        ancestor = "/".join(parts[:cut])
+        full = os.path.join(root, ancestor)
+        if not os.path.lexists(full):
+            continue
+        if os.path.islink(full) or not os.path.isdir(full):
+            return ancestor
+    # Nothing displaced, and this is the ORDINARY answer rather than an edge — most incoming
+    # paths are simply new files. Two ways to arrive: every ancestor is a real directory (the
+    # walk fell through), or `rel` has no "/" at all, so there was no ancestor to ask about.
+    return None
+
+
 def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str) -> list[str]:
-    """Name the IGNORED files a fast-forward onto `remote` is about to overwrite — VMCP-240 (806).
+    r"""Name the IGNORED files a fast-forward onto `remote` is about to overwrite — VMCP-240 (806).
 
     THE HOLE THIS EXISTS FOR, measured on real git (2.50.1) rather than reasoned about, three
     branches on one stand — a bare origin, a main checkout, a sibling landing with `git push
@@ -1650,9 +1725,14 @@ def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str) -> list[str]:
     the second pass disproved it by building one (a directory replaced by a file takes the
     ignored files inside it with it, rc=0); what makes THAT case invisible is not the `D` filter
     but the path never being in the diff at all, and it is `_expand_if_directory` that answers
-    it. Existence is checked in python (`lexists`, so a broken symlink still counts as something
-    being written over) — the incoming set is about the COMMITS, and a path that is not on this
-    disk has nothing to lose. Then ONE `git check-ignore`, whose default does the index
+    it. Then each incoming path is mapped, in python, onto what it DISPLACES on this disk, which
+    is two questions and not one. Present (`lexists`, so a broken symlink still counts as
+    something being written over) — it displaces itself, or, when it is a local directory, the
+    files inside it. ABSENT — `_doomed_ancestor`, because "not on this disk has nothing to lose"
+    is FALSE and was shipped here for one round: an incoming `out/x.txt` over a local ignored
+    FILE `out` kills `out`, which is in no diff entry at all.
+
+    Then ONE `git check-ignore`, whose default does the index
     filtering for free — measured, without `--no-index` it does NOT report a TRACKED path
     (`tracked.png` absent from its output while `untracked.png` is there), which is exactly the
     split that matters, since a tracked file is protected by git's own refusal. It also names the
@@ -1660,8 +1740,11 @@ def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str) -> list[str]:
     collapses the directory into one entry.
 
     THE BOUNDS, and the list is the point: a key that means one thing needs its silences written
-    down, and an EARLIER version of this list called itself complete at three while missing the
-    one that mattered.
+    down. Do not read the list as a CATALOGUE OF EVERY SILENCE, and do not put a count on it —
+    both mistakes have been made here already. An earlier version called itself complete at
+    three; the version after it named four MECHANICAL give-ups and was read, by its own author,
+    as covering the ground — while the silence that mattered was of a different kind entirely
+    (see the last entry).
       * it says these paths were WRITTEN, not that their bytes differed — an incoming file
         byte-identical to the local ignored one is still named;
       * `_is_reproducible_ignored` filters it, exactly as on `released`, so this can be silent
@@ -1670,15 +1753,46 @@ def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str) -> list[str]:
         filter is inherited for one-word-one-meaning rather than because it is load-bearing;
       * the `rc not in (0, 1)` grade is DOCUMENTATION and pins nothing, measured: check-ignore
         answers 1 for "none of these are ignored", which is the ordinary case and not an error,
-        but every non-zero exit leaves stdout EMPTY, so `!= 0` — or no check at all — computes
-        the same empty list. It is written out so that nobody later "fixes" rc=1 into a failure.
-        What is real is that the probe gives up SILENTLY on anything it cannot read: a diagnostic
-        must never be what breaks the operation it describes;
+        and `!= 0` computes the same empty list on every input measured. Only that much — an
+        earlier draft added "or no check at all" and that half is DISPROVEN: a fatal path in the
+        batch exits 128 with stdout carrying the answers git had already printed, so
+        `printf 'a.png\0/etc/hosts\0'` in a repo ignoring `*.png` gives rc=128 with `a.png` on
+        stdout, and skipping the grade would return `['a.png']` rather than `[]`. It is
+        order-dependent: the same two paths the other way round leave stdout empty. A LATER
+        draft then added "and it cannot arise on the live path, where every path comes from a
+        diff of this repo", and the second pass disproved THAT too, by building it out of a
+        diff of this repo — see the next entry. The grade is written out so that nobody later
+        "fixes" rc=1 into a failure;
+      * that give-up is NOT LOCAL, which is worth stating beside "gives up silently": one
+        unreadable path returns `[]` for the WHOLE batch, discarding names already found and
+        genuinely dying. The trigger measured on real git is `fatal: pathspec '<p>' is beyond a
+        symbolic link` (rc=128) — reachable whenever a path fed to `check-ignore` has a SYMLINK
+        among its ancestors, and it cost an unrelated ignored `shot.png` in the same commit its
+        entire report. The known route to it is now closed at the source rather than graded
+        here: `_doomed_ancestor` is asked FIRST, so a path with a doomed ancestor is replaced by
+        that ancestor and never fed, and `_expand_if_directory` runs only under real directories
+        and does not follow symlinks. Closed is not the same as impossible — that is an argument
+        about the two producers, not a measurement over all inputs — so the grade stays, and
+        losing the batch stays the right trade, because a diagnostic must never be what breaks
+        the operation it describes. "Silent" still understates it: it is silent about MORE than
+        the path that failed;
+      * the name reported is the one on THIS disk only where the two can differ and git agrees
+        they are the same path. On a case-insensitive filesystem (measured on macOS with
+        `core.ignorecase=true`) a local ignored `out.png` under an incoming `out.PNG` IS
+        reported — but under the INCOMING spelling, so the string handed to the human is not the
+        name their file had;
       * and so AN ABSENT KEY IS NEVER A PROOF THAT NOTHING DIED — the same one-way reading
-        `removed_ignored` has. Four routes to absent-with-a-loss: the filter above, either
-        `return []` in this function, the caller's `except`, and a directory walk stopped at
-        `_MAX_DIR_EXPANSION`. The rulebook states that direction to agents rather than leaving
-        it here.
+        `removed_ignored` has. The mechanical routes to absent-with-a-loss are the filter above,
+        each `return []` in this function, the caller's `except`, and a directory walk stopped at
+        `_MAX_DIR_EXPANSION`. The route that is NOT mechanical is a displacement SHAPE this
+        function does not model, and it can arrive by EITHER road — do not restate it as "the
+        ordinary branch", which an earlier draft did on the strength of the one instance it had.
+        Both are built: the shape `_doomed_ancestor` answers reached `[]` through the ordinary
+        "nothing at risk" branch, while the shape the walk-first ordering answers reached it
+        through the rc grade above, a MECHANICAL give-up, and took an unrelated name with it.
+        Two shapes, two roads, and that is why the count came off this list — both were live in
+        shipped code, and neither had a place to be written down here.
+        The rulebook states the one-way direction to agents rather than leaving it here.
     """
     changed = _run_git(
         ("diff", "--name-only", "-z", "--no-renames", "--diff-filter=ACMT",
@@ -1696,10 +1810,33 @@ def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str) -> list[str]:
     # `check-ignore`, while `git status --porcelain` moves it. The sweep agrees — dropping this
     # env_extra kills no test (see the section header in tests/unit/test_workspace_cmd.py).
     present: list[str] = []
+    seen: set[str] = set()
     for p in changed.stdout.split("\0"):
-        if not p or not os.path.lexists(os.path.join(root, p)):
+        if not p:
             continue
-        present.extend(_expand_if_directory(root, p))
+        # THE ANCESTOR QUESTION COMES FIRST, and asking it only when `lexists` said "absent" was
+        # a bug — the independent second pass built it. `os.path.lexists` follows every component
+        # but the last, so an incoming `linkdir/y.txt` "exists" whenever the local ignored symlink
+        # `linkdir -> realdir` has a `realdir/y.txt` in it, taking the PRESENT branch and naming a
+        # path that displaces nothing while the symlink itself dies unnamed. Worse, that name is
+        # then beyond a symbolic link, which makes `check-ignore` exit 128 and discards the WHOLE
+        # batch: measured, an ordinary ignored `shot.png` in the same commit died unreported too.
+        # Asking the walk first cannot regress the present case — it answers None unless some
+        # ancestor is a symlink or a non-directory, and then that ancestor is the real victim.
+        ancestor = _doomed_ancestor(root, p)
+        if ancestor is not None:
+            candidates = [ancestor]
+        elif os.path.lexists(os.path.join(root, p)):
+            candidates = _expand_if_directory(root, p)
+        else:
+            candidates = []
+        # De-duplicated because `_doomed_ancestor` MAKES collisions by construction: every
+        # incoming path under one dead ancestor names that same ancestor. Without this a commit
+        # adding twenty files under `out/` would report `out` twenty times.
+        for candidate in candidates:
+            if candidate not in seen:
+                seen.add(candidate)
+                present.append(candidate)
     if not present:
         return []
     checked = _run_git(("check-ignore", "-z", "--stdin"), root, None,

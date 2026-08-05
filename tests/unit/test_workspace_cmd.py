@@ -3960,6 +3960,33 @@ def test_the_merge_stays_ff_only_even_when_the_ancestor_check_lies(repo, tracker
 # "no paths at risk" for a path that exists. The last round is the second pass's own M13, replayed
 # on this tree: it is what says the index test has teeth against index WRITES even though it does
 # not pin the env var — a distinction that took a mutation in each direction to establish.
+#
+# ROUND THREE, VMCP-240 (806) round two, after the card's independent reviewer disproved "the ONE
+# channel that has no path in the diff at all" and `_doomed_ancestor` was added for the shape it
+# built. Same file, same `-p no:randomly`, no `-q`; every round read by COUNTING `FAILED `- and
+# `ERROR `-prefixed lines separately, with `collected` cross-checked against the control's;
+# `collected 170` and `0 errors` in every round including the control, control 0 failed:
+#   * no ancestor walk at all ................................... control 0 failed; 8 failed
+#   * ask the walk ONLY when `lexists` says ABSENT ............... control 0 failed; 1 failed
+#   * `isdir` without `islink` first ............................ control 0 failed; 4 failed
+#   * the first-draft walk: bottom-up AND stop at the first
+#     ancestor that exists ...................................... control 0 failed; 2 failed
+#   * ORDER only: bottom-up, still walking through .............. control 0 failed; 1 failed
+#   * STOP only: top-down, but a real directory ends the walk .... control 0 failed; 1 failed
+#   * report EVERY existing ancestor, real directories included .. control 0 failed; 3 failed
+#   * drop the de-duplication ................................... control 0 failed; 1 failed
+# NO ZEROS THIS ROUND, which is the first time in this file, and it took two discarded sweeps to
+# get there — both worth knowing about, because each is a way to be fooled rather than a mishap.
+# The FIRST recorded `bottom-up 0 failed` and would have shipped "top-down is pinned" as a lie:
+# that round flipped only the RANGE, and by then the walk had already stopped returning None on a
+# real directory, so the two halves of one edit had to be mutated SEPARATELY before either could
+# be measured (rounds four through six above are that split, and the grid in `_doomed_ancestor`
+# says which shape owns which). The SECOND was killed mid-round by an infrastructure failure, and
+# its restore did not run: the mutant sat in the tree looking exactly like ordinary uncommitted
+# work — `git status` cannot tell them apart — and was caught only by grepping for the mutant
+# text. The sweep script now restores from a SIGTERM/SIGINT handler and re-checks the file's
+# sha256 at the end. That is the same "concurrent writer" failure SKILL.md describes, with the
+# sweep and its own killer as the two writers.
 
 
 def test_the_fast_forward_names_the_ignored_file_it_destroys(repo, tracker, tmp_path):
@@ -4107,8 +4134,13 @@ def test_a_path_RENAMED_into_an_ignored_name_is_still_seen(repo, tracker, tmp_pa
 
 def test_a_DIRECTORY_replaced_upstream_by_a_file_names_what_died_inside_it(repo, tracker,
                                                                             tmp_path):
-    """THE CHANNEL WITH NO PATH IN THE DIFF, built by this card's independent second pass and the
-    reason `_expand_if_directory` exists.
+    """A CHANNEL WITH NO PATH IN THE DIFF — the FIRST of two now measured, built by this card's
+    independent second pass and the reason `_expand_if_directory` exists.
+
+    "The one channel" is what this docstring and CLAUDE.md both said for one shipped round, and
+    the card's independent reviewer disproved it with the mirror input; that one is next door, in
+    `test_a_local_ignored_FILE_whose_name_upstream_turns_into_a_DIRECTORY_is_named`. Two is a
+    count of what has been BUILT, not of what exists.
 
     Upstream turns the tracked directory `out/` into a FILE; the checkout holds its own ignored
     `out/shot.png`. The incoming diff names `out` (added) and `out/bar.txt` (deleted, so filtered)
@@ -4190,6 +4222,293 @@ def test_the_directory_expansion_does_not_walk_through_a_symlink(repo, tracker, 
     state = res["main_checkout"]
     assert state["overwritten_ignored"] == ["link"], state
     assert (outside / "precious.txt").read_text() == "not in the checkout\n"
+
+
+def test_a_local_ignored_FILE_whose_name_upstream_turns_into_a_DIRECTORY_is_named(
+        repo, tracker, tmp_path):
+    """THE SECOND CHANNEL WITH NO PATH IN THE DIFF, and the exact input the card's independent
+    reviewer built to disprove "the one channel" — VMCP-240 (806), round two.
+
+    The mirror of the test above: there the LOCAL path was a directory, here the INCOMING one is.
+    Upstream sends `out/x.txt`; the checkout holds the human's own ignored FILE at `out`. The
+    incoming diff names ONLY `out/x.txt` — the path that dies, `out`, is in no entry of it — and
+    `lexists` answers False for the incoming child, because `out` is a file and nothing can live
+    inside it. Measured on the shipped round-one code: the probe returned `[]` and the sync
+    reported `updated: true` with NO key while the bytes went, which is the same silence #806
+    was filed to remove, in a shape #806 itself then left open.
+
+    It also disproves, on this same input, the justification the existence filter carried:
+    "a path that is not on this disk has nothing to lose". `out/x.txt` is not on this disk. Its
+    ANCESTOR is, and that is what dies."""
+    _api, wf = tracker
+    _ignoring(repo, "/out")
+    (repo / "out").write_text("the human's own scratch file\n")
+    assert _git(repo, "status", "--porcelain") == "", "invisible before, as ever"
+
+    _land_on_origin(tmp_path, "name2dir", {"out/x.txt": "upstream\n"}, force=True)
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["updated"] is True, state
+    assert state["overwritten_ignored"] == ["out"], state
+    assert (repo / "out").is_dir(), "the file really was replaced by a directory"
+    assert _git(repo, "status", "--porcelain") == "", "and git says nothing about it afterwards"
+
+
+def test_the_doomed_ancestor_is_found_more_than_one_level_up(repo, tracker, tmp_path):
+    """Depth is why `_doomed_ancestor` WALKS instead of asking about the immediate parent.
+
+    Upstream sends `deep/a/b/y.txt` over a local ignored FILE `deep`: neither `deep/a/b` nor
+    `deep/a` is on this disk, and the first ancestor that is, three levels up, is the one the
+    merge deletes."""
+    _api, wf = tracker
+    _ignoring(repo, "/deep")
+    (repo / "deep").write_text("the human's own notes\n")
+
+    _land_on_origin(tmp_path, "deepdir", {"deep/a/b/y.txt": "upstream\n"}, force=True)
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["overwritten_ignored"] == ["deep"], state
+    assert (repo / "deep" / "a" / "b" / "y.txt").exists(), "the fast-forward really happened"
+
+
+def test_a_doomed_ancestor_that_is_a_SYMLINK_to_a_directory_is_still_named(repo, tracker,
+                                                                           tmp_path):
+    """`islink` BEFORE `isdir` in the ancestor walk, and this is the input that makes the order
+    load-bearing rather than copied from `_expand_if_directory`.
+
+    A local ignored `linkdir -> realdir` with `linkdir/y.txt` incoming: `os.path.isdir` FOLLOWS
+    the symlink and answers True, i.e. an `isdir`-only walk would conclude "a real directory, the
+    incoming path merely does not exist inside it yet, nothing displaced" — and be wrong.
+    Measured: the merge removes the SYMLINK and puts a real directory there, while the target
+    directory's own file is untouched. So the thing destroyed is the ignored symlink itself,
+    which is exactly one path, and the report says so."""
+    _api, wf = tracker
+    _ignoring(repo, "/linkdir")
+    (repo / "realdir").mkdir()
+    (repo / "realdir" / "inside.txt").write_text("not what the merge is aiming at\n")
+    (repo / "linkdir").symlink_to("realdir")
+
+    _land_on_origin(tmp_path, "linkdir", {"linkdir/y.txt": "upstream\n"}, force=True)
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["overwritten_ignored"] == ["linkdir"], state
+    assert not (repo / "linkdir").is_symlink(), "the symlink really was replaced"
+    assert (repo / "realdir" / "inside.txt").read_text() == "not what the merge is aiming at\n"
+
+
+def test_the_ancestor_walk_goes_TOP_DOWN_so_a_symlink_is_not_resolved_through(repo, tracker,
+                                                                              tmp_path):
+    """THE THIRD displacement shape, found while writing `_doomed_ancestor`'s own docstring and
+    the reason that walk runs SHALLOWEST-FIRST.
+
+    `os.path.lexists` declines to follow only the LAST component of the path it is handed, so a
+    BOTTOM-UP walk asking about `a/b` — when `a` is a symlink — silently gets an answer about
+    `realdir/b`. Here `realdir/b` exists as a real directory, so the original walk (bottom-up AND
+    stopping at the first ancestor that exists) concluded "a real directory, nothing displaced"
+    and returned None. Measured on that input: the merge is rc=0, `git status --porcelain` says
+    `?? realdir/` and nothing else BOTH before and after, `realdir/b/keep.txt` survives, and the
+    human's ignored SYMLINK `a` is replaced by a real directory with nothing reported.
+
+    This is shape `A` of the grid in `_doomed_ancestor`'s docstring, and it is killed only by the
+    two defects TOGETHER — which is why the sweep needed a mutation that restores both, and why
+    the two neighbouring tests exist: shape `B` pins the ORDER on its own and shape `C` pins the
+    walk-through on its own. One shape cannot pin two properties, and trying to was this test's
+    own first defect: the round that flipped only the order killed nothing at all."""
+    _api, wf = tracker
+    _ignoring(repo, "/a")
+    (repo / "realdir" / "b").mkdir(parents=True)
+    (repo / "realdir" / "b" / "keep.txt").write_text("the symlink's target, not the victim\n")
+    (repo / "a").symlink_to("realdir")
+    assert (repo / "a" / "b").is_dir(), "the shape only exists because this resolves"
+
+    _land_on_origin(tmp_path, "symthru", {"a/b/c.txt": "upstream\n"}, force=True)
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["updated"] is True, state
+    assert state["overwritten_ignored"] == ["a"], state
+    assert not (repo / "a").is_symlink(), "the ignored symlink really was destroyed"
+    assert (repo / "realdir" / "b" / "keep.txt").exists(), "and its target was not"
+
+
+def test_the_ancestor_walk_names_the_SYMLINK_and_not_a_path_inside_its_target(repo, tracker,
+                                                                              tmp_path):
+    """Shape `B` of the grid in `_doomed_ancestor`'s docstring, and it pins the ORDER on its own
+    — this is the one a bottom-up walk gets wrong even if it walks THROUGH real directories.
+
+    Same ignored symlink `a -> realdir`, but `realdir/b` is a FILE this time. Bottom-up asks
+    about `a/b` first, `lexists` resolves through the symlink and finds that file, and the walk
+    answers `a/b` — a path that does not exist as such and that the merge does not touch, while
+    the thing that really dies, the symlink `a`, goes unnamed. So the failure here is a WRONG
+    NAME rather than a missing one, which is worse for a post-mortem: the human is sent to look
+    at the wrong file and finds it intact.
+
+    Top-down reaches `a` before anything can be resolved through it."""
+    _api, wf = tracker
+    _ignoring(repo, "/a")
+    (repo / "realdir").mkdir()
+    (repo / "realdir" / "b").write_text("a FILE inside the symlink's target\n")
+    (repo / "a").symlink_to("realdir")
+
+    _land_on_origin(tmp_path, "symfile", {"a/b/c.txt": "upstream\n"}, force=True)
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["overwritten_ignored"] == ["a"], state
+    assert not (repo / "a").is_symlink(), "the ignored symlink really was destroyed"
+    assert (repo / "realdir" / "b").read_text() == "a FILE inside the symlink's target\n", (
+        "and the path a bottom-up walk would have named is untouched"
+    )
+
+
+def test_the_ancestor_walk_goes_THROUGH_a_real_directory_to_the_victim_below_it(repo, tracker,
+                                                                                tmp_path):
+    """Shape `C` of the grid in `_doomed_ancestor`'s docstring, and it pins WALK-THROUGH on its
+    own — the property a walk that stops at the first ancestor that exists gets wrong.
+
+    `keep/` is an ordinary tracked directory and `keep/sub` is the human's own ignored FILE;
+    upstream sends `keep/sub/new.txt`. The shallowest ancestor, `keep`, exists and is a real
+    directory — so a walk that returns None there reports nothing, while the file one level down
+    is what the merge deletes."""
+    _api, wf = tracker
+    _ignoring(repo, "keep/sub")
+    (repo / "keep").mkdir()
+    (repo / "keep" / "tracked.txt").write_text("makes `keep` a real, tracked directory\n")
+    _git(repo, "add", "keep")
+    _git(repo, "commit", "-m", "a real directory above the victim")
+    _git(repo, "push", "origin", "main")
+    (repo / "keep" / "sub").write_text("the human's own notes\n")
+    assert _git(repo, "status", "--porcelain") == "", "invisible before, as ever"
+
+    _land_on_origin(tmp_path, "under-real-dir", {"keep/sub/new.txt": "upstream\n"}, force=True)
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["overwritten_ignored"] == ["keep/sub"], state
+    assert (repo / "keep" / "sub").is_dir(), "the file really was replaced by a directory"
+
+
+def test_a_symlink_whose_target_already_holds_the_incoming_name_is_still_named(repo, tracker,
+                                                                               tmp_path):
+    """THE FOURTH displacement shape, built by this card's independent second pass, and the
+    reason `_doomed_ancestor` is asked BEFORE `lexists` rather than only when `lexists` says
+    "absent".
+
+    Same ignored symlink `linkdir -> realdir`, but this time the target ALREADY holds a file of
+    the incoming name. `os.path.lexists("linkdir/y.txt")` therefore answers TRUE — it follows
+    every component but the last — so the incoming path took the PRESENT branch, was reported as
+    displacing ITSELF, and the ancestor question was never asked at all.
+
+    Two things then went wrong at once, and the second is why this is not a cosmetic mis-naming.
+    The victim (`linkdir`, the symlink) went unnamed. And the name that WAS produced is beyond a
+    symbolic link, which makes `check-ignore` exit 128 — so the whole batch was discarded and the
+    ordinary ignored `shot.png` landing in the SAME commit died unreported too. Measured before
+    the fix: probe `[]`, sync `updated: true` with no key, both files gone. After: both named,
+    and no path beyond a symlink is ever fed to `check-ignore`, because the walk returns the
+    symlink itself instead."""
+    _api, wf = tracker
+    _ignoring(repo, "/linkdir", "*.png")
+    (repo / "realdir").mkdir()
+    (repo / "realdir" / "y.txt").write_text("the target already holds this name\n")
+    (repo / "linkdir").symlink_to("realdir")
+    (repo / "shot.png").write_bytes(b"\x89PNG an ordinary victim in the same batch")
+
+    _land_on_origin(tmp_path, "symtarget",
+                    {"linkdir/y.txt": "upstream\n", "shot.png": "UPSTREAM\n"}, force=True)
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert sorted(state["overwritten_ignored"]) == ["linkdir", "shot.png"], state
+    assert not (repo / "linkdir").is_symlink(), "the ignored symlink really was destroyed"
+
+
+def test_an_incoming_file_INSIDE_a_locally_ignored_directory_names_nothing(repo, tracker,
+                                                                           tmp_path):
+    """The over-reporting half of "a real DIRECTORY is walked THROUGH", and the reason that
+    branch cannot simply name every ancestor it finds.
+
+    `out/` is the human's own ignored directory and upstream adds `out/new.txt` into it. Nothing
+    is displaced — git creates one more file in a directory that stays — so the key must be
+    ABSENT. A walk that reported its ancestors regardless would answer `out`, `check-ignore`
+    would confirm `out` IS ignored, and the sync would announce a loss that did not happen. A key
+    that cries wolf is read exactly as long as a key that never fires."""
+    _api, wf = tracker
+    _ignoring(repo, "out/")
+    (repo / "out").mkdir()
+    (repo / "out" / "mine.txt").write_text("the human's own scratch, and it survives\n")
+
+    _land_on_origin(tmp_path, "into-ignored-dir", {"out/new.txt": "upstream\n"}, force=True)
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["updated"] is True, state
+    assert "overwritten_ignored" not in state, state
+    assert (repo / "out" / "mine.txt").exists(), "and nothing of the human's was touched"
+
+
+def test_an_incoming_path_under_a_real_local_directory_names_nothing(repo, tracker, tmp_path):
+    """The other branch of the same walk, and the one that keeps the key meaning something: an
+    ordinary commit adding an ordinary new file must report NOTHING.
+
+    `keep/` really is a directory here, so `keep/new.txt` displaces nothing at all — it is simply
+    a path that does not exist yet.
+
+    What this test does NOT pin is the `islink`/`isdir` branch itself, and the second pass
+    measured that rather than letting the docstring claim it: strip the branch so every existing
+    ancestor is called doomed, and the walk answers `keep` — but `keep` is TRACKED, so
+    `check-ignore` drops it and the key is absent anyway (control 0 failed; that round 0 failed).
+    An earlier version of this docstring said the key would then "be present on every sync",
+    which is false for exactly that reason. The branch is pinned next door, by
+    `test_an_incoming_file_INSIDE_a_locally_ignored_directory_names_nothing`, where the ancestor
+    IS ignored and the mutant therefore reports a loss that never happened."""
+    _api, wf = tracker
+    _ignoring(repo, "*.png")
+    (repo / "keep").mkdir()
+    (repo / "keep" / "already.txt").write_text("nothing to do with the merge\n")
+    _git(repo, "add", "keep")
+    _git(repo, "commit", "-m", "a real directory")
+    _git(repo, "push", "origin", "main")
+
+    _land_on_origin(tmp_path, "ordinary", {"keep/new.txt": "an ordinary new file\n"})
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["updated"] is True, state
+    assert "overwritten_ignored" not in state, state
+    assert (repo / "keep" / "already.txt").exists()
+
+
+def test_one_doomed_ancestor_is_named_ONCE_however_many_children_arrive(repo, tracker, tmp_path):
+    """De-duplication, and it is not tidiness: `_doomed_ancestor` MAKES collisions by
+    construction, because every incoming path under one dead ancestor names that same ancestor.
+
+    Three incoming files under `out/` over one local ignored FILE `out`. Without the dedup the
+    report is `out` three times — and, on a commit that adds twenty files there, twenty times
+    against a cap of 50, which turns the truncation count into noise as well."""
+    _api, wf = tracker
+    _ignoring(repo, "/out")
+    (repo / "out").write_text("the human's own scratch file\n")
+
+    _land_on_origin(tmp_path, "manychildren",
+                    {"out/x.txt": "u1\n", "out/y.txt": "u2\n", "out/deeper/z.txt": "u3\n"},
+                    force=True)
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["overwritten_ignored"] == ["out"], state
 
 
 def test_the_overwrite_report_skips_reproducible_detritus(repo, tracker, tmp_path):
