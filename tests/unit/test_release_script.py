@@ -2059,3 +2059,83 @@ def test_ci_serialises_release_jobs():
         # «bump без тега». Само состояние никуда не делось — не делись и пин.
         "отмена идущего релиза оставит полу-состояние: bump и тег на main без канала"
     )
+
+
+# --- VMCP-217 (760): the comment layer of release.sh, which nothing read ------------------------
+#
+# 81% of `scripts/release.sh` is prose — 627 comment lines of 772 — and until this pin NOTHING
+# gated a byte of it. Measured on this tree, control 0 failed on the whole stand (44 selected):
+# delete EVERY comment line and the same 44 are still 0 failed. The card filed against this
+# measured a 96-line subset; the whole layer is the same answer, and a stronger one.
+#   WHY THE EXISTING PINS CANNOT REACH IT. The stand next door mutates the script and RUNS it, so
+# it reads exactly what the shell reads, and a comment is not that. `_mutated_release_sh` and its
+# siblings deliberately assert their needles occur once so a mutation cannot go quiet — that is a
+# guard on the CODE lines they rewrite. And the one text-shaped pin above it drops `#` lines BY
+# DESIGN, because its subject is what the script does.
+#   WHAT THIS PINS AND WHAT IT CANNOT. It is a PRESENCE check on five decisions a future editor
+# could reverse in silence, chosen because each one is cross-referenced from CLAUDE.md's Releases
+# section and each answers "why is it not written the obvious way?" — the questions whose answers
+# get deleted first, precisely because the code looks fine without them. It cannot check that the
+# prose is TRUE, or that it still matches the code beside it; a comment that goes stale in place
+# passes this untouched. That bound is the same one test_repo_quotation_claims states about
+# itself, and it is worth saying rather than leaving to be discovered: this closes "the layer can
+# vanish", not "the layer is right".
+#   NO LINE COUNT, deliberately. A floor like "at least N comment lines" is the shape this repo
+# has been burned by twice — it moves with every landing and it is satisfied by 627 lines of
+# anything. Naming the decisions is what cannot be satisfied by filler.
+_RELEASE_PROSE_DECISIONS = (
+    ("КАНАЛ ДВИГАЕТСЯ ТОЛЬКО ВПЕРЁД",
+     "why the channel push carries no `-f` (#737). Without this, `-f` reads like an omission "
+     "and the next editor restores it — which is the rollback the card was filed for"),
+    ("fast-forward-only",
+     "the MECHANISM behind the forward-only channel: git itself refuses, the check is the "
+     "server's. Heading without mechanism is a slogan"),
+    ("АТОМАРНОСТЬ — СВОЙСТВО СЕРВЕРА",
+     "that `--atomic` is a dependency on receive-pack, not a client-side guarantee (#723)"),
+    ("the receiving end does not support",
+     "the MEASURED refusal proving that dependency fails safe — git pushes nothing rather than "
+     "silently downgrading to a non-atomic push"),
+    ("ПОЧЕМУ ДВА РЕФА В ОДНОМ PUSH'Е",
+     "why bump and tag are one transaction and why `stable` is deliberately NOT a third refspec "
+     "(#723/#737) — the paragraph that stops a well-meaning three-ref push"),
+    ("ГЕЙТ ЧЕСТНОСТИ SKIP",
+     "why being superseded is not by itself a reason to exit green (#740)"),
+    ("ГЕЙТ ИМЕНИ ВЕРСИИ",
+     "why the taken-tag check sits where it sits, wedged between two gates that both need it "
+     "on their own side (#769)"),
+)
+
+
+def test_the_release_script_still_carries_the_decisions_only_its_comments_record():
+    """The prose layer of `scripts/release.sh`, which no other pin reads — VMCP-217 (760).
+
+    MUTATION-CHECKED, `__pycache__` deleted per round then `PYTHONDONTWRITEBYTECODE=1`, the whole
+    release stand as the selection so the numbers are comparable with the round that motivated
+    this, every round restored from a COPY with the restore confirmed by sha256 and every mutation
+    asserted to have APPLIED. Control round: 0 failed.
+      * delete every comment line in the script (627 of 772) -> 0 failed BEFORE this pin existed,
+        which is the hole; with it, the same deletion is 1 failed and names the first decision
+        that went missing
+      * delete any ONE of the pinned decisions -> 1 failed, naming that decision and why it was
+        written down. Checked for each of the seven rather than argued from the first
+      * the literals are asserted to occur EXACTLY once, so a pin cannot be satisfied by a second
+        copy left behind in a retraction — the failure mode #700 names and the sibling ref gate
+        at the foot of test_repo_quotation_claims runs into from the other side
+    """
+    text = RELEASE_SH.read_text(encoding="utf-8")
+    flat = " ".join(
+        " ".join(line.strip().lstrip("#").strip() for line in text.splitlines()).split()
+    )
+    missing = [(needle, why) for needle, why in _RELEASE_PROSE_DECISIONS if needle not in flat]
+    assert not missing, (
+        "scripts/release.sh no longer records decisions that live NOWHERE else — not in the code, "
+        f"which reads the same with or without them, and not in any other pin: {missing}. "
+        "81% of that file is prose and this is the only thing that reads it; a measured round "
+        "showed all 627 comment lines could be deleted with the whole release stand still green."
+    )
+    duplicated = [needle for needle, _ in _RELEASE_PROSE_DECISIONS if flat.count(needle) != 1]
+    assert not duplicated, (
+        f"these anchors no longer occur exactly once in scripts/release.sh: {duplicated}. Above "
+        "one, this pin can no longer tell the live decision from a quotation of it — a second "
+        "copy left behind by a retraction satisfies the check while the real paragraph is gone."
+    )
