@@ -1938,13 +1938,30 @@ def _publishable_copies(root: Path, *, prefix: int | None = None):
 
     for rel in sorted(tracked | untracked):
         if rel in tracked:
-            sized = _git("--no-pager", "cat-file", "-s", f":{rel}", cwd=root)
+            # `:./` and NOT `:` — VMCP-243 (820). `:<rel>` is a REVSPEC, so when a path's FIRST
+            # COMPONENT begins with a digit 0-3 and a colon, git reads `:2:cred.json` as "merge
+            # stage 2 of the path `cred.json`" — and it goes wrong TWO ways, not one. No such
+            # stage: exit 128, the read skipped, the credential never looked at. Stage there
+            # (stage 0 is what an UNCONFLICTED index has, and 1-3 exist under a conflict): exit
+            # 0 with ANOTHER path's bytes classified under this name, which both hides this file
+            # and can name it falsely. The digits are 0-3 because git knows four stages; the
+            # component is the FIRST one, file or DIRECTORY, and `sub/2:x` is unaffected because
+            # its first component is `sub`. `./` makes the remainder a PATH, so nothing in it can
+            # be read as a stage. Both reads take it — a bare SIZE read exits 128 here and skips
+            # the path; a bare BLOB read exits 128 into `if blob.returncode == 0` one line down.
+            # `./` is relative to CWD, and so is `ls-files`'s output, so the two agree here for
+            # the reason they already had to: `root` is a repository TOP in both call sites.
+            sized = _git("--no-pager", "cat-file", "-s", f":./{rel}", cwd=root)
             if sized.returncode != 0:
-                # `:rel` did not resolve — a conflicted entry has no single size, and neither has
+                # `:./rel` did not resolve — a conflicted entry has no single size, and neither has
                 # one whose object is gone. The default mode has always skipped this in silence;
                 # prefix mode REPORTS it, because the loop it replaced read the blob DIRECTLY and
                 # so reported exactly this state. Leaving it out was a regression, measured on a
                 # clone with the loose object deleted: pre-#819 `['asset.bin']`, this walk `[]`.
+                # And the BRANCH ITSELF is load-bearing, not tidy-up: at `UU` stdout is EMPTY, so
+                # without it `int("")` RAISES out of this generator and takes down all three gates
+                # on this walk — pinned by `test_a_conflicted_entry_leaves_the_SCAN_STANDING`
+                # (VMCP-243 / 820) in the DEFAULT mode, where nothing is yielded at all.
                 if prefix is not None:
                     yield rel, None, None
             else:
@@ -1952,7 +1969,7 @@ def _publishable_copies(root: Path, *, prefix: int | None = None):
                 if prefix is None and size > SHAPE_SCAN_MAX_BYTES:
                     yield rel, size, b""
                 elif size:
-                    blob = _git_bytes("--no-pager", "cat-file", "blob", f":{rel}", cwd=root)
+                    blob = _git_bytes("--no-pager", "cat-file", "blob", f":./{rel}", cwd=root)
                     if blob.returncode == 0:
                         yield rel, size, blob.stdout if prefix is None else blob.stdout[:prefix]
                     elif prefix is not None:
@@ -3172,3 +3189,262 @@ def test_a_candidate_the_binary_gate_cannot_read_is_reported_and_not_skipped(clo
 #     to succeed on an object `cat-file blob` then refuses, and both read the same object — the
 #     second pass tried to build it and could not either. It is a backstop for a state this suite
 #     cannot construct, not coverage anyone should read as tested.
+
+
+# --- VMCP-243 (820): `:<rel>` is a REVSPEC, so a leading `<0-3>:` component parses as a stage ---
+
+
+@pytest.mark.parametrize("name", ["0:cred.json", "1:cred.json", "2:cred.json", "3:cred.json",
+                                  "2:dir/cred.json", "0:d/deep/cred.json", "2:"])
+def test_a_path_whose_FIRST_COMPONENT_looks_like_a_merge_stage_is_not_a_silent_miss(clone, name):
+    """`f":{rel}"` is not a path — it is a REVSPEC, and git parses `:2:cred.json` as "merge stage 2
+    of the path `cred.json`", not as the path `2:cred.json`.
+
+    Measured on synthetic repos in the INDEX-ONLY state (`git add -f`, worktree copy deleted), with
+    the pre-fix `f":{rel}"`; every row rc=128 with `does not exist` on stderr, `offenders=[]`, a
+    SILENT MISS, and every row caught under `:./`:
+
+        '0:cred.json'         '1:cred.json'         '2:cred.json'      '3:cred.json'
+        '2:dir/cred.json'     '0:d/deep/cred.json'  '2:'
+
+    The digits are 0-3 because git knows four stages. What the colon has to lead is the FIRST
+    PATH COMPONENT, file or DIRECTORY — the last three rows are the half an earlier draft of this
+    docstring got wrong, having reasoned that "a `/` before the colon makes the leading component a
+    directory" and concluded the defect was confined to files in the ROOT. In `2:dir/cred.json` the
+    `/` comes AFTER the colon, the file is two levels down, and it misses exactly the same way; a
+    file literally named `2:` misses too, on `fatal: path '' does not exist`. The control test
+    below carries `sub/2:cred.json`, which is unaffected because its FIRST component is `sub` — so
+    it never bounded this row at all, it merely looked as if it did.
+
+    REACHABILITY IS LOW and this is filed as hardening rather than a leak: it needs a path whose
+    first component is literally `2:something`, in a state where the worktree half of the union
+    does not already catch it. It is STRICTLY SMALLER than the hole #630 closed, which swallowed
+    EVERY index-only state under every name. It is pinned anyway because a `continue` that goes
+    quiet on a credential is the class this file grades by what it could hide.
+
+    The fix is one path segment — `f":./{rel}"` — and it is a fix rather than a workaround: `./`
+    makes the rest of the string a PATH, so nothing in it can be read as a stage. That resolution
+    is relative to CWD, which is also what `ls-files` prints against, so the two halves agree for
+    the reason they already had to: `root` is a repository TOP at both call sites. Measured from a
+    SUBDIRECTORY, the bare form misses EVERY tracked file (`:x.json` rc=128 against `:./x.json`
+    rc=0) — unreachable here, and recorded because the fix now depends on that precondition where
+    the bare form depended on the opposite one.
+    """
+    (clone / name).parent.mkdir(parents=True, exist_ok=True)
+    _stage(clone, name, _SHAPE)
+    (clone / name).unlink()
+
+    offenders, _ = _scan_for_storage_state_shape(clone)
+    assert offenders == [name], (
+        f"{name!r}: the index holds a storage state and `git add -A` would publish it, but the "
+        f"scan reported {offenders}. git read `:{name}` as merge stage {name[0]} of the path "
+        f"{name[2:]!r} — ask it for `:./{name}` instead"
+    )
+
+
+@pytest.mark.parametrize("state", ["hidden", "named-falsely"])
+def test_a_merge_stage_THAT_EXISTS_hands_over_ANOTHER_PATHS_BYTES(clone, state):
+    """The sharper half of the same defect, and the one no rc=128 row can reach.
+
+    "There is no such stage in an unconflicted index" was the first draft's reasoning, and it is
+    FALSE: stage 0 is precisely the stage an unconflicted index has. So when the remainder after
+    `0:` is ITSELF a tracked path, `cat-file` exits 0 and hands over THAT path's bytes under THIS
+    path's name — no error, nothing skipped, a wrong answer. Measured, `cat-file -s :0:README.md`
+    in a clone holding an index-only `0:README.md` returns 3, README.md's size, not the 62-byte
+    credential's.
+
+    Both directions are wrong, and they are wrong in opposite ways, which is why this is
+    parametrised rather than asserted once:
+
+    * `hidden` — a shaped `0:cred.json` beside a BENIGN tracked `cred.json`: the read returns
+      `b'{"just": "a file"}'`, so the credential is never classified and the pre-fix scan says
+      `[]`. A silent miss that never touched the 128 branch.
+    * `named-falsely` — a benign `0:cred.json` beside a SHAPED tracked `cred.json`: the read
+      returns the credential, and the pre-fix scan reports BOTH, naming a file whose own bytes are
+      harmless. A gate that names the wrong file teaches its reader to distrust it.
+
+    NOT limited to stage 0, and this part is measured but deliberately UNPINNED: under a live `UU`
+    on `cred.json`, `:1:`, `:2:` and `:3:cred.json` all return rc=0 (size 34, the three conflict
+    stages). Constructing a scan stand for it needs a merge whose BASE is a storage state, and the
+    fix is identical for all four stages, so the cost of that stand buys no coverage the two rows
+    here do not already carry.
+    """
+    (clone / "cred.json").write_bytes(b'{"just": "a file"}' if state == "hidden" else _SHAPE)
+    subprocess.run(["git", "add", "cred.json"], cwd=clone, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "cred"], cwd=clone, check=True, capture_output=True)
+    _stage(clone, "0:cred.json", _SHAPE if state == "hidden" else b'{"just": "a file"}')
+    (clone / "0:cred.json").unlink()
+
+    offenders, _ = _scan_for_storage_state_shape(clone)
+    expected = ["0:cred.json"] if state == "hidden" else ["cred.json"]
+    assert offenders == expected, (
+        f"state {state!r}: `:0:cred.json` resolves to stage 0 of `cred.json`, so the pre-fix read "
+        f"classified the WRONG path's bytes under this name; the scan reported {offenders} where "
+        f"{expected} is what `git add -A` would publish"
+    )
+
+
+@pytest.mark.parametrize("name", ["4:cred.json", "9:cred.json", "10:cred.json", "cred.json",
+                                  "sub/2:cred.json", "sub/2:dir/cred.json"])
+def test_the_names_that_never_parsed_as_a_stage_are_the_control(clone, name):
+    """The other half of the measurement: that `./` did not buy the rows above at the cost of the
+    ordinary case. Every one of these was ALREADY caught before the fix (measured: rc=0, offender
+    named), so it is not new coverage.
+
+    `4:` is the first digit past git's four stages and `9:` the last single digit — NOT "just
+    outside", which an earlier draft called both of them; `10:` is the two-digit form; `cred.json`
+    is the plain case. The last two rows are the ones worth keeping straight: `sub/2:cred.json` and
+    `sub/2:dir/cred.json` put the stage-shaped component SECOND, which is what makes them
+    unaffected — they are the boundary of the row above, not a weaker version of it.
+
+    No counterexample was found on the ordinary side: an independent pass compared the bare and
+    dotted forms across 15 adversarial names (`a@{0}.json`, `x^.json`, `y~1.json`, `-dash.json`,
+    `..dots.json`, `HEAD`, a space, a tab, Cyrillic, `a:b:c.json`, `sub/-x.json`, `!bang.json`,
+    `*star.json`, `[br].json`, a backslash) plus a symlink and a gitlink, and they agree on all of
+    them. That is a search that came back empty, not a proof.
+    """
+    (clone / name).parent.mkdir(parents=True, exist_ok=True)
+    _stage(clone, name, _SHAPE)
+    (clone / name).unlink()
+
+    offenders, _ = _scan_for_storage_state_shape(clone)
+    assert offenders == [name], (
+        f"{name!r} was caught by the index half BEFORE VMCP-243 (820) and must still be: the scan "
+        f"reported {offenders}"
+    )
+
+
+def _conflict_on(clone: Path, name: str) -> None:
+    """Leave `name` at `UU` — a REAL merge conflict, not a hand-built index.
+
+    Built rather than simulated because the property under test is git's own answer: at `UU` the
+    path has no stage 0, so `cat-file -s :<path>` exits 128 with `is in the index, but not at
+    stage 0` and an EMPTY stdout. A fake would have had to assume that.
+    """
+    def run(*args):
+        return subprocess.run(["git", *args], cwd=clone, check=True, capture_output=True)
+
+    (clone / name).write_bytes(b'{"cookies": "base", "origins": []}')
+    run("add", name)
+    run("commit", "-m", "base")
+    run("checkout", "-b", "side")
+    (clone / name).write_bytes(b'{"cookies": "side", "origins": []}')
+    run("commit", "-am", "side")
+    run("checkout", "main")
+    (clone / name).write_bytes(b'{"cookies": "main", "origins": []}')
+    run("commit", "-am", "main")
+    subprocess.run(["git", "merge", "side"], cwd=clone, capture_output=True)  # expected to fail
+
+    status = subprocess.run(["git", "status", "--porcelain"], cwd=clone, check=True,
+                            capture_output=True, text=True).stdout
+    assert status.strip() == f"UU {name}", f"the stand did not build a conflict: {status!r}"
+
+
+def test_a_conflicted_entry_leaves_the_SCAN_STANDING(clone):
+    """The `if sized.returncode != 0` branch is what keeps a rebase from breaking this gate.
+
+    Without it the scan does not degrade, it RAISES: `cat-file -s` writes NOTHING to stdout at a
+    conflicted path, so `int(sized.stdout.strip())` is `int("")` -> `ValueError: invalid literal
+    for int() with base 10: ''`, thrown out of the generator ALL THREE gates on this walk drive —
+    storage-state, text-artifact and, since VMCP-242 (819), magic-bytes.
+
+    The state is REACHABLE rather than exotic, and the argument for that is weaker than an earlier
+    draft's, which an independent pass disproved by reading the rulebook it cited. SKILL.md does
+    mandate `git fetch origin && git rebase origin/main` before every push, and this repo's
+    readiness criteria are `uv run pytest tests/unit` plus `ruff` — but the `&&` chain is NOT how a
+    live conflict meets this suite, because SKILL.md says in as many words that a rebase conflict
+    breaks the chain at `rebase`, so the gate never runs. What reaches it is the agent who then
+    stands IN the conflict and runs the suite by hand while resolving — the ordinary thing to do
+    while working out whether the merged tree is still correct. Narrower than "the gate crashes on
+    every conflicted rebase", and enough: an agent debugging a conflict would meet a `ValueError`
+    from a browser-isolation test with no relation to their card.
+
+    It shipped correct and UNPINNED — and that is a claim about a TREE, so read the sha, not the
+    date. RE-DERIVED here rather than taken from the card that filed it: on a throwaway clone at
+    `653abb8`, the pre-VMCP-242 (819) shape of this walk, selection this file, `__pycache__` cleared
+    and PYTHONDONTWRITEBYTECODE=1 — control collected=94, 0 failed; the guard replaced by `if True`
+    collected=94, 0 failed. Nothing in the file caught it. It is no longer the
+    only thing standing there: VMCP-242 (819) landed while this card was in flight, restructured the
+    guard into the branch it is today and put its own pin,
+    `test_a_tracked_candidate_whose_index_object_is_gone_is_reported`, across it — so on the current
+    tree the branch's removal takes THREE rows, not two. That pin covers PREFIX mode and a deleted
+    OBJECT; these two cover DEFAULT mode and a real `UU`, where nothing is yielded at all, which is
+    the path all three shape gates take. Neither subsumes the other, and the honest reading is that
+    the branch went from unpinned to redundantly pinned within one session.
+    """
+    _conflict_on(clone, "f.json")
+
+    assert _scan_for_storage_state_shape(clone) == ([], []), (
+        "a conflicted path has no single index blob to classify, so it contributes nothing from "
+        "the index half — but it must not take the scan down with it"
+    )
+
+
+def test_a_conflicted_path_with_a_SHAPED_worktree_copy_is_still_caught(clone):
+    """The bound on the row above: skipping the index half of a conflicted path is not a hole.
+
+    `git add -A` stages the WORKTREE bytes, so what a conflict would publish is the file on disk —
+    and the worktree half of the union reads it whatever the index says. Measured: with the
+    conflict left unresolved in the index and a storage state written over the working copy,
+    `git status` still says `UU f.json` and the scan reports `(['f.json'], [])`.
+
+    Without this row, "the index half stays silent at `UU`" reads like a second silent miss beside
+    the one this card fixes. It is not: the union covers it.
+    """
+    _conflict_on(clone, "f.json")
+    (clone / "f.json").write_bytes(_SHAPE)
+
+    offenders, _ = _scan_for_storage_state_shape(clone)
+    assert offenders == ["f.json"], (
+        "the conflict is unresolved in the index, but `git add -A` would publish this worktree "
+        f"copy, and the scan reported {offenders}"
+    )
+
+
+# MUTATION-CHECKED for VMCP-243 (820), selection `tests/unit/test_repo_browser_isolation.py`,
+# `__pycache__` cleared and PYTHONDONTWRITEBYTECODE=1, every round restored from a byte copy and
+# the file confirmed sha256-identical; each round read by COUNTING `FAILED ` lines and `ERROR `
+# lines separately, with `collected` cross-checked against the control every time (120, all five
+# rounds — so `-q` is not used, since it prints no `collected` line). Run four times over: on the
+# first draft; after the second independent pass added the rc=0 rows; and twice more across the two
+# rebases onto VMCP-242 (819), which rewrote the walk these reads live in and moved `collected`
+# 105 -> 112 -> 118 -> 120. Only the numbers below are current; the earlier runs are named because
+# a figure here belongs to a tree, and these ones moved.
+# Control round: 0 failed, 0 errors.
+#   * both reads back to `f":{rel}"` (the pre-820 body) -> 9 failed, 0 errors: the seven
+#     first-component rows and both `THAT_EXISTS` rows
+#   * only the SIZE read fixed, blob back to `f":{rel}"` -> 9 failed, the same nine
+#   * only the BLOB read fixed, size back to `f":{rel}"` -> 7 failed: the seven, NOT the two
+#   * the unresolvable-entry branch removed (`if sized.returncode != 0` -> `if False`) -> 3 failed:
+#     the two conflict rows plus 819's `test_a_tracked_candidate_whose_index_object_is_gone_is_
+#     reported`, which crosses the same branch from prefix mode
+#
+# That 9-against-7 is the measurement saying WHICH read matters WHERE, and an earlier draft of this
+# record asserted the opposite — that the two half-fixes "cannot tell each other apart" — which was
+# true only while the rc=0 rows did not exist yet. The `THAT_EXISTS` rows are the discriminator. On
+# the rc=128 branch either bare read is fatal: a bare size read exits 128 and skips the path, a bare
+# blob read exits 128 into `if blob.returncode == 0`, so all seven rows fall to both halves. On the
+# rc=0 branch a bare size read merely reports ANOTHER path's SIZE, which changed no verdict on these
+# two rows because the classifier reads the blob WHOLE — a bare size of 0, or one above
+# `SHAPE_SCAN_MAX_BYTES`, would change it, and neither occurs on this stand. So those two fall only
+# to a bare BLOB read. Both reads are fixed because between them they cover both branches.
+#
+# BOTH conflict rows die to the branch mutation, and that is stated rather than dressed up: the
+# raise happens INSIDE the index half — `int("")` on the line right after it — so the WORKTREE half
+# is never reached and the shaped row is not an independent detector of that mutation. ("Before
+# either half" is what an earlier draft said, and the traceback disproves it.) It earns its place as
+# a BOUND — without it, "the index half stays silent at `UU`" would read as a second silent miss
+# beside the one this card fixes, and nothing in the file would say otherwise.
+#
+# THE REACHABILITY CLAIM GOT DEMONSTRATED BY ACCIDENT, and the accident is worth more than the
+# argument it supports, so it is recorded with its inflation named. The `if False` round was first
+# run in this worktree WHILE IT HELD AN UNRESOLVED CONFLICT of its own — the rebase onto 819 left
+# `UU tests/unit/test_repo_browser_isolation.py` — and it came back **7 failed** rather than 3. The
+# four extra rows are the ones that scan the REAL repository (`test_no_file_of_storage_state_shape_
+# is_reachable_by_git` and its two siblings, plus the naive-grep comparison): with the branch gone,
+# the tree's own conflicted path made `cat-file -s` fail and `int("")` took them all down. Control
+# was 0 failed in that same tree, so the branch handled it — which is precisely the sentence
+# `test_a_conflicted_entry_leaves_the_SCAN_STANDING` argues for, arrived at without being asked.
+# It is NOT the number this record quotes: 7 belongs to a conflicted tree, 3 to a clean one, and
+# the clean one is what ships. The lesson for the next sweep here is the mundane half — a round run
+# mid-rebase measures the rebase too.
