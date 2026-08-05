@@ -3297,10 +3297,25 @@ def test_an_index_entry_whose_OBJECT_IS_NOT_A_BLOB_is_reported(clone, oid):
 #     candidate too and survives this cut, because the answer it expects is carried by a shaped
 #     WORKTREE copy. THAT pair is what says the halves are independent rather than one traded for
 #     the other: 5 and 24, with no row in both — checked BY NAME over all 29, not inferred from the
-#     two totals. The PROPERTY is the durable half and the totals are not: both moved under #820
-#     (4 -> 5 and 8 -> 24) while the mutations and the disjointness stayed put. And #820 did touch
-#     this walk — it rewrote the index half's revspec (`:{rel}` -> `:./{rel}`, two lines) — just
-#     not WHICH copies are read, which is the only thing these two rounds are about.
+#     two totals. The PROPERTY is the durable half and the totals are not — and ONE OF THEM MOVED
+#     TWICE, which is what round 2 of this record missed when it handed both shifts to #820.
+#     Re-measured for VMCP-251 (849) on one stand across three revisions, control 0 failed at
+#     every one of them: the index and worktree cuts are 4 and 8 failed at `972ca81` (#819 round 1,
+#     `collected` 103), 5 and 22 failed at `a1b80a6` (#820, 120), and 5 and 24 failed at `9b3a253`
+#     (round 2, 122) — the only commits touching this file from the first of those three through
+#     the last, so each delta belongs to exactly ONE landing. `4 -> 5` is #820's alone and stopped
+#     there. The worktree cut went `8 -> 22` under #820 — the fourteen rows this bullet already
+#     accounts for, and the two kill sets differ by exactly those fourteen names — and `22 -> 24`
+#     under THIS RECORD'S OWN non-blob pin, whose two rows the decomposition at the head of this
+#     bullet already counts inside the 24. Nothing needed running to catch that, and the record
+#     held BOTH halves of the disproof: that decomposition puts the pin's two rows inside the 24,
+#     and the header calls the pin "this card's own". NEITHER HALF DOES IT ALONE — a pin round 2
+#     merely ADDED need not fall to THIS mutation, so the header on its own leaves the attribution
+#     unchecked rather than wrong — but together they say the 24 holds rows #820 cannot have
+#     contributed, and the two were never read against each other. What DID stay put across all
+#     three revisions: the mutations themselves, and the disjointness. And #820 did touch this
+#     walk — it rewrote the index half's revspec (`:{rel}` -> `:./{rel}`, two lines) — just not
+#     WHICH copies are read, which is the only thing these two rounds are about.
 #   * `SHAPE_SCAN_MAX_BYTES` applied in prefix mode on the WORKTREE side -> 1 failed, the
 #     `[worktree]` row; on the INDEX side -> 1 failed, the `[index]` row. TWO rounds because the
 #     guard is written twice and one probe reaches one site: the second pass over this text
