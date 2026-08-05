@@ -74,10 +74,13 @@ test_the_refusal_RULES_OUT_the_misspelling_cause alone; drop the `sys.stderr is 
 the degradation path -> 1 failed, test_the_forbid_gate_degrades_instead_of_killing_the_server
 alone; control after restore 0 failed. Both deaths are on-name. What that does NOT cover is
 worth writing down rather than leaving to be discovered: the pin reads `_LOST_ARGUMENT_HINT` and
-nothing else, so the same retired advice reinstated in SKILL.md or in `advance`'s docstring dies
-to no test here — those two are pinned for QUOTING `arrived as null`, never for what they say
-its cause might be. The gap is the reason this card was bounced in the first place, so it is a
-known hole, not a fixed one. An independent second pass replayed both rounds in its own clone,
+nothing else, so the same retired advice reinstated in SKILL.md or in `advance`'s docstring died
+to no test here — those two were pinned for QUOTING `arrived as null`, never for what they say
+its cause might be. The gap is the reason this card was bounced in the first place, so #720 left
+it named-and-open rather than fixed; VMCP-230 (776) closed it, and the round measuring how wide
+it really was — the whole suite, not this file — is in
+test_the_retired_name_checking_advice_stays_retired_on_both_doc_surfaces below. An
+independent second pass replayed both rounds in its own clone,
 same selection, and got the same numbers: control 0 failed, each mutation 1 failed, each
 on-name, control after restore 0 failed. That replicates the ROUNDS and says nothing about the
 PROSE — the same pass disproved two claims made around them, and both corrections are written
@@ -373,6 +376,110 @@ def test_docs_quote_the_state_phrase_the_tool_actually_emits(surface):
     assert phrase in text, f"{surface} must quote the phrase the refusal emits"
     # ...and both must carry the workaround, not just the diagnosis.
     assert "comment(" in text and "[worklog]" in text
+
+
+def _doc_surface(surface: str) -> str:
+    """One of the two agent-facing copies, whitespace-flattened. The neighbour above reads the
+    same pair inline; this exists for the pin below, which cannot match raw wrapped prose."""
+    from importlib.resources import files
+
+    from vikunja_mcp import server
+
+    if surface == "skill":
+        raw = files("vikunja_mcp").joinpath("skills/tracker/SKILL.md").read_text("utf-8")
+    else:
+        raw = server.advance.__doc__ or ""
+    return " ".join(raw.split())
+
+
+# Per surface: (the ruling-out claim that must be PRESENT, the pre-#720 spelling that must not
+# come back). A table rather than one expected string because the three surfaces retired three
+# different spellings, in two languages and two grammatical moods — see the pin below.
+_RETIRED_NAME_ADVICE = {
+    "skill": ("ИМЯ ПАРАМЕТРА ПРОВЕРЯТЬ НЕ НАДО", "ПРОВЕРЬ ИМЯ ПАРАМЕТРА"),
+    "docstring": ("no longer one of the possibilities", "a misspelled parameter name"),
+}
+
+
+@pytest.mark.parametrize("surface", ["skill", "docstring"])
+def test_the_retired_name_checking_advice_stays_retired_on_both_doc_surfaces(surface):
+    """VMCP-230 (776): the pin holding the retired "check the parameter name first" advice read
+    `_LOST_ARGUMENT_HINT` and nothing else, so the same advice put back into either AGENT-FACING
+    DOC died to nothing. #720 named that hole in the round-5 paragraph above and scoped it to
+    "no test HERE"; re-measured against the WHOLE suite rather than inherited, selection
+    `tests/unit`, each round restored from a byte copy and the file confirmed sha256-identical:
+    control 0 failed; the pre-#720 SKILL.md bullet put back -> 0 failed; the pre-#720 `advance`
+    docstring clause put back -> 0 failed; the pre-#720 `_LOST_ARGUMENT_HINT` put back, as a
+    positive control -> 1 failed, test_the_refusal_RULES_OUT_the_misspelling_cause alone. So the
+    SCOPING was the understatement and not the finding: no test anywhere held either doc. Three
+    surfaces is also all there are — searched whitespace-flattened over every tracked file, the
+    retired IMPERATIVE survives in no source file, only in this one. Its docstring counterpart
+    is a clause rather than an imperative and does have one further, legitimate home; that is
+    the subject of IT READS THE SURFACE below, and the two statements must be read together.
+
+    WHY A NEW TEST rather than growing a neighbour. The one directly above already holds BOTH
+    texts, but pins a different claim — that each quotes the state phrase the refusal emits —
+    and #778's log-line pin is single-surface. A third property under either name would make the
+    name lie about what died; #778 made the same call one test up, for a reason of its own (the
+    class it guards is invisible to its sibling by construction, which is not the case here).
+
+    WHY A TABLE rather than one expected string. The three surfaces retired three different
+    spellings, in two languages and two grammatical moods: `workflow.py` and SKILL.md dropped an
+    IMPERATIVE, while `advance`'s docstring dropped a factual list clause that named a
+    misspelling among the causes of an arrived-as-null. The filing card predicted the docstring
+    had carried "CHECK THE PARAMETER NAME FIRST"; case-sensitively, `git log -S --all` finds that
+    spelling in `workflow.py` and in no commit touching `server.py` — the surface already
+    covered, so the card's own repair hypothesis would have pinned the wrong string.
+
+    TWO ASSERTIONS PER SURFACE, catching different regressions, and one is much the stronger. The
+    POSITIVE half — the ruling-out claim is still there — catches the realistic shape, an edit
+    that rewrites the bullet and loses the retirement with it, whatever wording it lands on. The
+    NEGATIVE half catches an additive restoration that leaves the retirement standing beside its
+    own contradiction. Selection `tests/unit/test_advance_report_arguments.py`, control in this
+    paragraph: control 0 failed; the pre-#720 SKILL.md bullet -> 1 failed; the pre-#720 docstring
+    clause -> 1 failed; the imperative APPENDED to today's SKILL.md bullet with the retirement
+    left intact -> 1 failed, on the NEGATIVE half; a fresh PARAPHRASE of the retired advice
+    replacing that retirement -> 1 failed, on the POSITIVE half; control after restore 0 failed.
+    Each death is on the surface mutated and on the half named — read off the raised message,
+    since both SKILL.md rows carry the same test id and differ only in which assertion went.
+
+    IT READS THE SURFACE, NOT THE FILE, which is a measurement rather than a preference:
+    `server.py` carries the docstring's negative anchor a SECOND time, in the stderr notice the
+    forbid gate prints when it degrades — where saying a misspelling is dropped in silence is
+    exactly right, because on that path it is. A pin widened to the file is red on arrival.
+
+    THE PRICE IN FALSE REDS is what fixes how wide the negative half may be, measured over the
+    two surfaces as they stand: case-insensitively, `parameter name` hits once, `misspell` hits
+    once, and `провер\\w+ имя` hits once. Every obvious widening is red on arrival, and for one
+    reason — today's correct prose quotes the retired advice in order to retire it. The two
+    negative anchors below hit zero on their own surface; the two positive ones hit once.
+
+    FLATTENING BOTH SIDES IS PROPHYLACTIC, not load-bearing today, and that distinction is
+    measured rather than assumed. Same selection: control 0 failed; `_doc_surface` returning raw
+    text -> 0 failed, so on this tree it changes no verdict at all. What it buys appears only
+    under a reflow — raw, with one line break moved inside the SKILL.md positive anchor and not
+    a word touched -> 1 failed, a false red on prose that is still correct; flattened, that same
+    reflow -> 0 failed. Both surfaces are hand-wrapped, so the reflow is an ordinary edit.
+
+    WHAT THIS DOES NOT REACH: a fresh paraphrase that reinstates the advice while KEEPING the
+    ruling-out claim beside it. That escapes both halves, and no pattern over prose closes it.
+    Nor does it pin the BEHAVIOUR the two claims describe — that lives next door, and the docs
+    cannot go on denying a class that has quietly re-opened: same selection plus test_server.py,
+    control 0 failed; the forbid-gate call dropped from `_server()` -> 2 failed. So a card that
+    re-opens it is stopped there rather than here, which is why this pin does not duplicate it.
+    """
+    text = _doc_surface(surface)
+    holds, retired = _RETIRED_NAME_ADVICE[surface]
+    assert holds in text, (
+        f"{surface} no longer says a misspelled parameter name is RULED OUT by this refusal. "
+        f"Since #720 an unknown argument is refused at the boundary by name, so the cause an "
+        f"agent reading 'arrived as null' has already excluded must not go unnamed: {holds!r}"
+    )
+    assert retired not in text, (
+        f"the pre-#720 advice is back in {surface}, which self-heals onto consumers with no "
+        f"review gate of its own: it sends agents to check the one cause that reading the "
+        f"refusal excludes: {retired!r}"
+    )
 
 
 def test_a_misspelled_parameter_name_is_now_refused_BY_NAME():
