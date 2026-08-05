@@ -232,6 +232,23 @@ _SCANNED_DIRS = (SRC_DIR, TESTS_DIR)
 # added beside the flipped one asserts).
 _ROUND_COUNT = re.compile(r"(?<![:.\w])(?<!of )(?<!ran / )\d+\s+failed\b", re.IGNORECASE)
 
+# WHY THERE IS NO SIBLING RATCHET ON PASS TOTALS, priced rather than shrugged at — VMCP-189 (714).
+# CLAUDE.md's rule is "record the FAILED count, never the pass total", and this scanner enforces
+# only the control half of it. A `\d{2,} passed` trigger over the publishable tree, read WHOLE and
+# whitespace-flattened so wrapped ones are reached, finds 47 sites. Twenty-one sit within sixty
+# characters of a `failed` count, i.e. they are rounds stated as a pair and perfectly correct.
+# Of the 26 that are bare — the class the card is actually about — a large share are legitimate on
+# inspection: a total QUOTED inside a retraction of itself («stated its controls as PASS TOTALS
+# "at baseline 716 passed"»), a total inside an assertion MESSAGE reporting a measured mutation,
+# and a genuine `11 passed, 30 skipped` observation about a skip branch. None of those is
+# separable from a live stale total by any lexical rule, which is the same wall VMCP-210 (753)
+# hits one comment up and the quotation ratchet hits in its own file.
+# So the gate is buildable and its ratchet would have to list over half its own hits on arrival.
+# That ratio is what this card's discipline refuses to land: a gate whose false reds outnumber
+# its catches is switched off by the next human, and then the rule has nothing behind it at all.
+# Re-measure both numbers before revisiting — they move with every landing, and the 47/21/26 split
+# is a fact about the tree that carried this comment, not about the rule.
+
 # A CONTROL COUNT: the word `control` and a TALLY (`N failed` / `N passed`) close enough together
 # to be one statement, in either order — "control 0 failed", "control 2 passed", "2 failed
 # against an unmutated control round of 0". The tally is the load-bearing half. What it is chosen

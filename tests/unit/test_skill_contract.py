@@ -71,6 +71,15 @@ def _freshness_section(text: str) -> str:
     end = text.find("\n## ", start + 1)
     assert end != -1, "the freshness section no longer ends where the next section begins"
     section = text[start:end]
+    # `0 < len(...)` really is dead — VMCP-109 (579) is right about that half, and it is right at
+    # every site of this idiom (30 today, not the 9 the card counted): both bounds are asserted
+    # `!= -1` above and `end > start`, so the slice cannot be empty. But the card's conclusion —
+    # that the whole assert is structurally dead and can go — is DISPROVED by measurement, and the
+    # measurement is the reason this comment exists instead of a deletion. Control round 0 failed;
+    # make this slicer return `text` itself and the round is **2 failed**, both of them THIS
+    # assertion by its own message. So `< len(text)` is live protection against exactly the bug
+    # the message names, and the round the card's premise invites — delete it, see green — proves
+    # nothing at all: deleting an assert from a green tree is green whatever the assert did.
     assert 0 < len(section) < len(text), "the freshness slice is not a proper subset of SKILL.md"
     return section
 
