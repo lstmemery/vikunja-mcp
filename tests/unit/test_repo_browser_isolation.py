@@ -474,6 +474,20 @@ STORAGE_STATE_SHAPE_KEYS = ("cookies", "origins")
 #   console  (explicit filename): Total messages: 3 (Errors: 1, Warnings: 1) / [LOG] … @ …
 #   network  (explicit filename): 2. [GET] http://…?token=… => [404] Not Found
 #
+# TWO PROPERTIES OF THE CONSOLE FORM WERE NOT PROBED, and VMCP-237 (798) found both by driving
+# its own server against a page built to STRESS the grammar rather than demonstrate it. A
+# transcription is only as wide as the run it came from, and the run above emitted three tidy
+# single-line messages with no level filter:
+#   * a MULTI-LINE message is not flattened the way aria content is — `console.log("a\nb")`
+#     writes `[LOG] a`, then `b`, then the location — so its continuation lines match no console
+#     pattern at all. Present in BOTH forms.
+#   * a FILTERED export writes a second header line, `Returning 12 messages for level "info"`.
+# Either one alone was enough to make a real console export classify as NOTHING, which is what
+# the shipped grammar did to both of the exports 798 captured. The lesson is the one the aria
+# side already learnt two bullets down and the console side had not: a matcher requiring EVERY
+# line to match is only as good as its worst input, and the worst input is not the one you
+# reached for when you wrote it.
+#
 # Two properties of the aria form were probed rather than assumed, because a matcher requiring
 # EVERY line to match is only as good as its worst input. Multi-line page content — `<pre>`,
 # `<textarea>`, `<blockquote>` — is FLATTENED onto one line, and embedded quotes are escaped, so
@@ -490,7 +504,38 @@ ARIA_MIN_REF_LINES = 2
 _CONSOLE_TIMED_LINE = re.compile(r"^\[\s*\d+ms\]\s\[[A-Z]+\]\s")
 _CONSOLE_PLAIN_LINE = re.compile(r"^\[[A-Z]+\]\s")
 _CONSOLE_TOTALS_HEADER = re.compile(r"^Total messages: \d+")
+# The SECOND header line, and it is the reason VMCP-237 (798) exists rather than a detail. 752
+# transcribed the explicit-`filename` export from a run whose console held only three messages
+# and no level filter, so it saw one header. A run of fourteen emits two:
+#   Total messages: 14 (Errors: 3, Warnings: 1)
+#   Returning 12 messages for level "info"
+# and the shipped code stripped exactly one, after which the second read as a MESSAGE line and
+# matched neither form. Measured on my own server: that alone was enough to make a real console
+# export classify as nothing.
+_CONSOLE_LEVEL_HEADER = re.compile(r'^Returning \d+ messages? for level ')
+# The EVIDENCE token this grammar floors on, and it is the source location the tool appends to
+# every message: ` @ http://host/path:12`. Measured on the RUN the fixtures below are excerpted
+# from — both forms, 12 messages apiece — it is on 12 of 12, including the two emitted from
+# `eval` and the `Function` constructor, which come back as ` @ :0` and ` @ :2` with the url
+# EMPTY. (The fixtures are excerpts, so counting THEM gives 11 and 4; the 12 belongs to the run.)
+# The empty url is why the pattern is `\S*` and not `\S+`: written the obvious way it would have
+# dropped exactly the messages a page can produce without a script file behind them, which is
+# what an injected payload looks like.
+_CONSOLE_LOCATION = re.compile(r"\s@\s\S*:\d+\s*$")
+# The floor. TWO, for the reason `ARIA_MIN_REF_LINES` is two: one ` @ http://…:9` inside prose is
+# somebody quoting a console line, exactly as one `[ref=e1]` is somebody quoting a snapshot. Both
+# neighbouring values are PRICED, each round asserting the constant the module actually saw:
+# at 1 no real artifact is missed but three pieces of constructed prose classify; at 3 one real
+# artifact is missed (752's two-message export) and at 4 two are. Two is the only value that is
+# zero on both sides. The adversarial half lives with the frontier rows, which are its witnesses.
+CONSOLE_MIN_LOCATION_LINES = 2
 _NETWORK_REQUEST_LINE = re.compile(r"^\d+\.\s\[[A-Z]+\]\s\S+\s=>\s\[\d+\]\s")
+# The network grammar's evidence floor, added by the same card and of the same kind: the request
+# TARGET must carry a scheme. A real export names the absolute url — that is where the query
+# string this gate exists to catch actually lives — while a numbered list of bare paths
+# (`1. [GET] /api/v1/tasks => [200] OK`) is how a repository writes API documentation.
+_NETWORK_ABSOLUTE_TARGET = re.compile(r"^\d+\.\s\[[A-Z]+\]\s\S+://\S*\s=>\s\[\d+\]\s")
+NETWORK_MIN_ABSOLUTE_TARGETS = 1
 _NETWORK_NOTE_LINE = re.compile(r"^Note: ")
 
 # The scan has to READ a candidate to classify it, so it needs a ceiling on a single read. What
@@ -1910,22 +1955,39 @@ def _classify_browser_text_artifact(raw: bytes) -> str | None:
             and sum(1 for ln in body if _ARIA_REF_TOKEN.search(ln)) >= ARIA_MIN_REF_LINES):
         return "aria snapshot (the page's own text, and its links' query strings)"
 
-    # The explicit-`filename` console export opens with a totals header and drops the per-line
-    # timing; the auto-named `console-*.log` keeps the timing and has no header. Accept either,
-    # and require at least one MESSAGE line: a header on its own is what an empty console
-    # produces (measured: `Total messages: 0 (Errors: 0, Warnings: 0)`), and an artifact with no
-    # messages has no page content in it to leak.
-    messages = body[1:] if _CONSOLE_TOTALS_HEADER.match(body[0]) else body
-    if messages and (all(_CONSOLE_TIMED_LINE.match(ln) for ln in messages)
-                     or all(_CONSOLE_PLAIN_LINE.match(ln) for ln in messages)):
-        return "console log (page console output, and the URLs it names)"
+    # The explicit-`filename` console export opens with a HEADER BLOCK and drops the per-line
+    # timing; the auto-named `console-*.log` keeps the timing and has no header. Accept either.
+    # The block is a WHILE and not a single `body[1:]`, because a filtered export writes two
+    # lines (see `_CONSOLE_LEVEL_HEADER`) and the shipped version consumed one.
+    head = 0
+    while head < len(body) and (_CONSOLE_TOTALS_HEADER.match(body[head])
+                                or _CONSOLE_LEVEL_HEADER.match(body[head])):
+        head += 1
+    messages = body[head:]
+    if messages:
+        # A message is not a line. `console.log("multi\nline")` writes its continuation lines
+        # BARE, so the shipped `all(...)` refused every real export carrying one. A line matching
+        # neither form continues the previous message; a line matching the OTHER form is still
+        # refused, so the two spellings cannot be interleaved.
+        form = _CONSOLE_TIMED_LINE if _CONSOLE_TIMED_LINE.match(messages[0]) \
+            else _CONSOLE_PLAIN_LINE
+        other = _CONSOLE_PLAIN_LINE if form is _CONSOLE_TIMED_LINE else _CONSOLE_TIMED_LINE
+        # That leaves a grammar weak enough to read "the first line starts with [TAG]", which is
+        # why the floor below is what does the work rather than the line shapes.
+        if (form.match(messages[0])
+                and not any(other.match(ln) and not form.match(ln) for ln in messages)
+                and (sum(1 for ln in messages if _CONSOLE_LOCATION.search(ln))
+                     >= CONSOLE_MIN_LOCATION_LINES)):
+            return "console log (page console output, and the URLs it names)"
 
     # The weakest of the three grammars, and the reason is worth stating rather than hiding: it
     # has to tolerate a trailing PROSE line ("Note: 1 static request not shown, …") whose wording
-    # belongs to one version of the tool, where the other two are machine formats throughout. It
-    # still requires at least one request line, so the note alone — an empty network log — is not
-    # classified, for the same reason the bare console header is not.
-    if (any(_NETWORK_REQUEST_LINE.match(ln) for ln in body)
+    # belongs to one version of the tool, where the other two are machine formats throughout. Its
+    # floor is `NETWORK_MIN_ABSOLUTE_TARGETS`, so the note alone — an empty network log — is not
+    # classified, for the same reason a bare console header is not, and neither is a numbered
+    # list of bare paths.
+    if (sum(1 for ln in body if _NETWORK_ABSOLUTE_TARGET.match(ln))
+            >= NETWORK_MIN_ABSOLUTE_TARGETS
             and all(_NETWORK_REQUEST_LINE.match(ln) or _NETWORK_NOTE_LINE.match(ln)
                     for ln in body)):
         return "network log (every URL the page requested, query strings included)"
@@ -2112,6 +2174,34 @@ _NETWORK_EXPLICIT = (
     b"2. [GET] http://127.0.0.1:20752/api?token=VMCP752-NETWORK-MARKER => [404] Not Found\n\n"
     b'Note: 1 static request not shown, run with "static" option to see it.\n'
 )
+# VMCP-237 (798): the same two writers, driven again against a page built to STRESS the grammar
+# rather than to demonstrate it — a multi-line message, an object, an empty message, a level
+# filter, and two messages emitted from `eval` and the `Function` constructor so their source
+# location comes back with an EMPTY url. Both came back UNCLASSIFIED under the shipped grammar,
+# so these two are not extra coverage of a working lock; they are the artifacts it did not hold.
+# Byte-faithful, port and markers included, from a run of my own `--isolated --headless` server.
+_CONSOLE_AUTO_NAMED_MULTILINE = (
+    b"[      58ms] [LOG] VMCP798-CONSOLE-MARKER plain log @ http://127.0.0.1:20798/:5\n"
+    b"[      58ms] [WARNING] a warning line @ http://127.0.0.1:20798/:6\n"
+    b"[      58ms] [INFO] an info line @ http://127.0.0.1:20798/:7\n"
+    b"[      58ms] [ERROR] an error line @ http://127.0.0.1:20798/:10\n"
+    b"[      58ms] [LOG] multi\nline\nmessage @ http://127.0.0.1:20798/:11\n"
+    b"[      58ms] [LOG] {a: 1, b: Array(2)} @ http://127.0.0.1:20798/:12\n"
+    b"[      58ms] [LOG]  @ http://127.0.0.1:20798/:13\n"
+    b"[      67ms] [ERROR] Failed to load resource: the server responded with a status of 404 "
+    b"(File not found) @ http://127.0.0.1:20798/api?token=VMCP798-NETWORK-MARKER:0\n"
+    b"[     110ms] [LOG] late line, no obvious source @ http://127.0.0.1:20798/:15\n"
+    b"[     119ms] [LOG] from a Function ctor @ :2\n"
+    b"[     129ms] [LOG] from eval @ :0\n"
+)
+_CONSOLE_EXPLICIT_FILTERED = (
+    b"Total messages: 14 (Errors: 3, Warnings: 1)\n"
+    b'Returning 12 messages for level "info"\n\n'
+    b"[LOG] VMCP798-CONSOLE-MARKER plain log @ http://127.0.0.1:20798/:5\n"
+    b"[WARNING] a warning line @ http://127.0.0.1:20798/:6\n"
+    b"[LOG] multi\nline\nmessage @ http://127.0.0.1:20798/:11\n"
+    b"[LOG] from eval @ :0\n"
+)
 # The two EMPTY forms and the evaluate dump: measured outputs that carry no page content, and
 # therefore correctly classify as nothing. Named here so "not classified" stays a decision.
 _CONSOLE_EMPTY = b"Total messages: 0 (Errors: 0, Warnings: 0)\n"
@@ -2125,6 +2215,8 @@ _REAL_TEXT_ARTIFACTS = {
     "aria snapshot, frame-qualified refs": _ARIA_ARTIFACT_FRAME_QUALIFIED,
     "console log, auto-named": _CONSOLE_AUTO_NAMED,
     "console log, explicit filename": _CONSOLE_EXPLICIT,
+    "console log, auto-named, multi-line message": _CONSOLE_AUTO_NAMED_MULTILINE,
+    "console log, explicit filename, level-filtered": _CONSOLE_EXPLICIT_FILTERED,
     "network log, explicit filename": _NETWORK_EXPLICIT,
 }
 
@@ -2155,6 +2247,17 @@ def test_no_file_of_browser_text_artifact_shape_is_reachable_by_git():
     writing, `.github/workflows/ci.yml` being the only `.yml` and this file the densest quoter
     of the shapes). That number is what made the lock landable rather than a nuisance, and it is
     re-derived on every run by the pin below rather than trusted from this sentence.
+
+    STILL ZERO AFTER VMCP-237 (798), which is the half of that card that had to be checked and
+    not the half that motivated it: 73 tracked + 0 untracked, 139 copies, zero classified. The
+    card was filed as HEADROOM — console had no evidence floor at all and neither console nor
+    network had a false-red frontier row — and 798 found a live false NEGATIVE underneath it, so
+    both grammars moved in BOTH directions at once. What that means for this number is worth
+    saying plainly, because "we widened it and false reds stayed at zero" is the sentence a gate
+    dies of: the widening (continuation lines, a two-line header block) really does make the
+    console grammar weaker, and what holds the zero is not the line shapes but
+    `CONSOLE_MIN_LOCATION_LINES`. Priced against prose built to attack it rather than against
+    this tree alone — see the frontier rows.
 
     WHAT IT DOES NOT REACH, measured rather than conceded. `browser_evaluate` writes whatever
     the evaluated JS returned — its measured output is a JSON string literal — so it has no
@@ -2264,27 +2367,59 @@ def test_a_real_browser_text_artifact_is_caught_under_an_innocuous_name(clone, l
                                          b"- fixed the [ref=e1] token handling\n"),
                                         ("a two-line aria excerpt quoted in prose",
                                          b'- heading "Title" [ref=e1]\n'
-                                         b'- paragraph [ref=e2]: body text\n')])
+                                         b'- paragraph [ref=e2]: body text\n'),
+                                        ("a changelog of bracketed tags, no source locations",
+                                         b"[ADDED] shape gate\n[FIXED] pagination\n"
+                                         b"[REMOVED] the old copy of the walk\n"),
+                                        ("two tagged lines, ONE carrying a source location",
+                                         b"[TODO] wire the floor\n"
+                                         b"[DONE] measured it @ tests/unit/x.py:2260\n"),
+                                        ("a numbered request list of BARE paths",
+                                         b"1. [GET] /api/v1/tasks => [200] OK\n"
+                                         b"2. [POST] /api/v1/tasks => [201] Created\n")])
 def test_the_shapes_that_are_deliberately_not_classified(label, body):
     """The negative half, and every row is a decision rather than an oversight.
 
     The two EMPTY forms and the `browser_evaluate` dump are measured outputs of the real tool
     that carry no page content — nothing to leak, so classifying them would be pure false-red
-    surface. The last three rows are the false-red frontier from the other side, and each pins
+    surface. The remaining rows are the false-red frontier from the other side, and each pins
     a DIFFERENT threshold — which is a correction, not a flourish: an earlier version of this
     test claimed the changelog row was held by the line floor, and the sweep disproved it.
     Dropping `ARIA_MIN_ITEM_LINES` from 3 to 1 measured 0 failed, because that row has only ONE
     ref and the REF floor was catching it either way, i.e. the line floor was pinned by nothing.
     Measured after adding the two-line excerpt (selection this file, control 0 failed):
     `ARIA_MIN_REF_LINES` 2 -> 0 kills the bullet-list row, and `ARIA_MIN_ITEM_LINES` 3 -> 1
-    kills the excerpt row. Both floors are now load-bearing and each has its own witness.
+    kills the excerpt row. Both floors are load-bearing and each has its own witness.
 
-    The excerpt row also names this gate's one deliberate false NEGATIVE: a genuine snapshot of
-    fewer than three lines walks past. Measured, the smallest real one produced here was six
-    lines with six refs (a snapshot carries the root node and its children, not a fragment), and
-    a two-line excerpt in prose is the commoner object by far — this file, `.gitignore` and
-    CLAUDE.md all contain one. The trade is taken knowingly and in that direction: a missed
-    two-line artifact leaks two lines, while a false red on documentation gets the whole gate
+    VMCP-237 (798) gave console and network the same treatment, because they had NEITHER — no
+    console floor at all, and not one frontier row between them: their two rows here were both
+    false-NEGATIVE decisions. Same selection, `collected 94 items` cross-checked against the
+    control on every round, each mutation asserted to have applied, control 0 failed:
+    `CONSOLE_MIN_LOCATION_LINES` 2 -> 0 is 2 failed, BOTH console rows at once; 2 -> 1 is 1
+    failed, the two-tagged-lines row alone; `NETWORK_MIN_ABSOLUTE_TARGETS` relaxed back to the
+    bare `_NETWORK_REQUEST_LINE` is 1 failed, the bare-path row. Three rows for two floors is
+    not one spare: the console floor's EXISTENCE and its VALUE are separate claims, and the
+    changelog row (no source location at all) survives 2 -> 1 while the two-tagged-lines row
+    (exactly one) does not. A single row would have pinned "some floor" and left 1 free.
+
+    THE ROUNDS ARE THE WHOLE ARGUMENT FOR THE VALUE, because both neighbours were built and run
+    rather than reasoned about, and they fail in opposite directions. At 1, no real artifact is
+    missed and three pieces of constructed prose classify as console — notes opening with a tag
+    that quote one console line, a changelog whose last line carries a `@ path:12`, and the
+    two-tagged-lines row here. At 3, one real artifact is missed, and at 4, two. A cleverer
+    grammar was tried too and lost on the same numbers: requiring every message to CLOSE at a
+    location line (which the real output does) still classifies two of those three, because a
+    changelog whose final line carries a location closes just as tidily.
+
+    Two deliberate false NEGATIVES, both constructed rather than conceded, and both taken in the
+    same direction for the same reason. The aria excerpt row names the first: a genuine snapshot
+    of fewer than three lines walks past — the smallest real one produced here was six lines
+    with six refs (a snapshot carries the root node and its children, not a fragment), while a
+    two-line excerpt in prose is the commoner object by far, and this file, `.gitignore` and
+    CLAUDE.md all contain one. The console floor names the second: a real export holding exactly
+    ONE message walks past, built and measured in both spellings — timed and header-plus-plain —
+    with a two-message one beside it that classifies, so the boundary is the floor and not the
+    shape. A missed artifact leaks its lines; a false red on documentation gets the whole gate
     deleted by whoever hits it.
     """
     assert _classify_browser_text_artifact(body) is None, \
@@ -2602,6 +2737,21 @@ def test_the_shape_gate_reads_the_INDEX_for_a_tracked_candidate(clone, state):
 #   * read the WORKTREE for tracked candidates too (the pre-#630 body) -> 3 failed, the three
 #     index rows above
 #   * `json.loads(raw.decode("utf-8"))` (the pre-#630 call) -> 3 failed, the three encoding rows
+#
+# A THIRD ROUND ABOUT THIS PIN LIVES IN A COMMIT MESSAGE AND IS ONE TOO HIGH, corrected here
+# because a message cannot be edited and this is the pin it is about. `9750be7`, which landed
+# VMCP-209 (752), records "the shared walk reduced to the index alone -> 2 failed, one of them
+# #630's own pre-existing worktree pin, so the refactor did not weaken it". Re-measured for
+# VMCP-237 (798) on this tree, selection this file, control 0 failed and `collected` cross-checked
+# against the control every round: cutting the walk to the index alone is **1 failed**, and it is
+# exactly `test_the_shape_gate_reads_the_WORKTREE_too_for_a_tracked_candidate[False]`. The `[True]`
+# row cannot fall to that mutation by construction — it STAGES the file, so the index copy is the
+# credential either way. 752's reviewer measured the same 1 with TWO constructions (cut the
+# worktree read; and additionally drop untracked candidates); 798's round is the first of those
+# two, not a third one, so what agrees here is three runs of two constructions, and the
+# disagreement is with the record rather than between the rounds. The
+# LOAD-BEARING half of that sentence — that lifting the walk into `_publishable_copies` did not
+# weaken #630's pin — is TRUE; only the count is wrong, and history is not rewritten for a message.
 #
 # THE FIRST VERSION OF THESE PINS MEASURED NOTHING, and that is recorded because the failure is
 # invisible from a green run. They were written against a COPY of the scan loop living in this
