@@ -1898,9 +1898,33 @@ def _publishable_copies(root: Path, *, prefix: int | None = None):
     Measured, on a real repo, with the index-only version: a committed benign `package.json`
     whose worktree copy was overwritten with a credential and NOT staged — `git status` says
     ` M`, `git add -A --dry-run` says `add 'package.json'`, and the scan reported NOTHING,
-    while the ORIGINAL worktree-only scan caught it. That state is also more reachable than
-    the three above: those need a deliberate `git add -f`, this needs only an overwrite of a
-    tracked file.
+    while the ORIGINAL worktree-only scan caught it. That state is also more reachable than the
+    three above — but the reason this docstring gave for it, that those "need a deliberate
+    `git add -f`", was false, and VMCP-241 (817) replaced it with the measured one. It is the
+    INDEX that separates them, not a flag: what the three need is the shaped file STAGED — one
+    plain `git add`, plus a `git commit` for the committed-then-deleted row — against ZERO git
+    commands for an overwrite of a file the repo already tracks. Built on a fresh repository
+    carrying this repo's real `.gitignore`: `git add tracker-login.json` is rc 0 and all three
+    states assemble from it and are caught. `-f` is what an IGNORED name costs, and only for a
+    path git does not YET track — `git add auth.json` there is rc 1 with git's own "Use -f"
+    hint, while that same name once TRACKED takes a plain `git add` at rc 0, ignore rules
+    having no say over a path git already carries. And that state the gate CATCHES rather than
+    lets past: force-added on the same stand and then blanked in the worktree, a shaped
+    `auth.json` comes back as an offender, the index half being immune to ignore rules. It is
+    just not the state these rows are built from — `git check-ignore --no-index` exits non-zero
+    on `tracker-login.json` and on `package.json` alike, and `--no-index` is load-bearing: a
+    bare one answers rc 1 for ANY tracked path, so it cannot tell "no pattern" from "tracked".
+
+    The `-f` in `_stage` below is therefore carrying no weight for these rows. Measured on this
+    file as the selection, with `collected` cross-checked against the control every round:
+    control 0 failed, and dropping `-f` from `_stage` is also 0 failed. Do NOT read the
+    fixture's missing `.gitignore` as the REASON, which is the shape a first draft of this
+    paragraph had and the second independent pass broke: `git add` refuses on ANY ignore source,
+    and a `core.excludesFile` or a `.git/info/exclude` naming one of these paths makes it refuse
+    in a repo holding no `.gitignore` at all — both built. So what the round establishes is that
+    no ignore rule reaches these names on the machines this suite runs on, which is a property
+    of the MACHINE and not of the fixture. The flag is cheap insurance, not dead weight:
+    deleting it would move this file's greenness onto whoever's global git config.
     """
     tracked, untracked = set(), set()
     for args, into in ((("ls-files", "-z"), tracked),
@@ -2880,8 +2904,12 @@ def test_the_shape_gate_reads_the_WORKTREE_too_for_a_tracked_candidate(clone, st
     `git add -A --dry-run` says `add 'package.json'`, the ORIGINAL worktree-only scan caught it,
     and the index-only version reported nothing.
 
-    That state is also MORE reachable than the three it was traded for: those need a deliberate
-    `git add -f`, this needs only an overwrite of a file the repo already tracks.
+    That state is also MORE reachable than the three it was traded for — this one needs no git
+    command at all, while they need the shaped file STAGED (one `git add`; the
+    committed-then-deleted row also commits). That those "need a deliberate `git add -f`" is
+    what this docstring gave as the reason until VMCP-241 (817), and it is false: `-f` is what
+    an IGNORED name costs on a path git does not yet track, and neither `tracker-login.json` nor
+    `package.json` is such a name here. The built measurement is in `_publishable_copies`.
 
     Both parametrisations are the same file with the credential in a different place — unstaged
     (only the worktree has it) and staged (both do) — so the row also pins that a union names the

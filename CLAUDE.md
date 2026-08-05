@@ -367,10 +367,9 @@ assertion in `tests/unit/test_line_length_gate.py`, which pyproject must agree w
   widening question below** — the guard already claimed `??`, and measured at the default setting
   the prefix changes no verdict, no entry count and no `removed_ignored`; a CLEAN tree still
   releases under the knob, so nobody who set it deliberately is paralysed. Otherwise the hole is
-exactly the ignored ones — and it is
-  this repo's own
-  rulebook that puts them there, since SKILL.md's browser recipes write both INTO the agent's
-  worktree. Closing it by widening the guard to `--porcelain --ignored` was measured and rejected:
+  exactly the ignored ones — and it is this repo's own rulebook that puts them there, since
+  SKILL.md's browser recipes write both INTO the agent's worktree. Closing it by widening the
+  guard to `--porcelain --ignored` was measured and rejected:
   the mandated gate (`uv run pytest`) creates `.venv` on its first invocation, so a build tree that
   ran the gates holds ignored paths from then on — sampled 2026-08-03, 3 of 3 live build trees did
   (7, 6 and 2 entries, every one of them `.venv/`/`__pycache__/`/a tool cache; the one review tree,
@@ -1351,13 +1350,29 @@ came from the worktree, so a shaped file that was staged and then deleted from d
 worktree copy was overwritten with `{}`, or that was committed and then removed locally without
 committing the removal, read as clean — three states, all built, all `1 passed`, while
 `git cat-file -p :<path>` still handed out the cookie. CI never saw any of it (a fresh checkout
-has no divergence to have), which is why this was a hardening and not a leak. The scan now reads BOTH copies of a tracked candidate — the index blob and the worktree
-bytes — and that UNION is #630's own correction: its first version read the index INSTEAD of
-the worktree, and its reviewer measured the trade. A committed, benign `package.json` whose
-worktree copy is overwritten with a credential and left unstaged is published by `git add -A`,
-was caught by the ORIGINAL scan, and went silent under the index-only one — a state more
-reachable than the three above, which need a deliberate `git add -f`. Neither source alone is
-"what git would publish": `git add -A` stages the worktree, `git commit` publishes the index. The same change
+has no divergence to have), which is why this was a hardening and not a leak. The scan now reads
+BOTH copies of a tracked candidate — the index blob and the worktree bytes — and that UNION is
+#630's own correction: its first version read the index INSTEAD of the worktree, and its
+reviewer measured the trade. A committed, benign `package.json` whose worktree copy is
+overwritten with a credential and left unstaged is published by `git add -A`, was caught by the
+ORIGINAL scan, and went silent under the index-only one — a state more reachable than the three
+above. **What makes it more reachable is the INDEX, not a flag: the reason this paragraph gave
+until #817 — that the three "need a deliberate `git add -f`" — is measurably false.** Built
+rather than reasoned about, on a fresh repository carrying this repo's real `.gitignore`: a
+plain `git add tracker-login.json` is rc 0, and all three states assemble from it and are
+caught. What the three need is the shaped file IN THE INDEX — one `git add`, plus a
+`git commit` for the committed-then-deleted row — against ZERO for an overwrite of a file the
+repo already tracks. The conclusion survives; only its reason changes, and that COUNT is the
+whole of what "more reachable" is operationalised as here — it does not price the inverse
+state's own precondition, a credential landing on an ALREADY-TRACKED path. `-f` is what an
+IGNORED name costs, and only for a path git does not YET track: `git add auth.json` on that
+stand is rc 1 with git's own "Use -f" hint, while the same name once TRACKED takes a plain
+`git add` at rc 0, ignore rules having no say over a path git already carries. And that case
+the shape gate COVERS rather than excuses — force-add a shaped `auth.json`, blank the worktree
+copy, and it is reported, the index half being immune to ignore rules. It is simply not what
+these three states are built from: `git check-ignore --no-index` exits non-zero on
+`tracker-login.json` and on `package.json` alike. Neither source alone is "what git would
+publish": `git add -A` stages the worktree, `git commit` publishes the index. The same change
 reads BYTES rather than utf-8 text, closing three encodings that used to be skipped in silence —
 `UnicodeDecodeError` is a `ValueError`, so a BOM'd or UTF-16 export fell into the same `continue`
 as "not JSON at all". Not an encoding cure-all: a genuinely invalid byte is still refused, and
