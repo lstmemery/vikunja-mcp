@@ -5036,3 +5036,408 @@ def test_the_rulebook_names_every_main_checkout_code_the_sweep_can_emit():
     assert not missing, f"the rulebook names no such main_checkout code: {missing}"
     for key in ("half_applied", "half_applied_truncated", "overwritten_ignored"):
         assert f"`{key}`" in skill, f"the rulebook never mentions the key {key}"
+
+
+# --- VMCP-246 (837): a SUBMODULE is the second spelling of `check-ignore`'s fatal --------------
+#
+# Filed by the round-2 independent review of VMCP-240 (806) and reproduced here on real git 2.50.1
+# before anything was changed. `git check-ignore` has a fatal beyond the "beyond a symbolic link"
+# one the probe's docstring named:
+#
+#     $ printf 'sub/x.png\0' | git check-ignore -z --stdin
+#     fatal: Pathspec 'sub/x.png' is in submodule 'sub'      rc=128
+#
+# Both producers named as closing the symlink route miss it, and that is the point of the card:
+# neither is looking for a submodule. `_doomed_ancestor` answers None, and `_expand_if_directory`
+# walks INTO the submodule's working directory — a REAL directory — handing back the files inside.
+# Be exact about the FIRST of those, because the obvious reading is wrong and would mislead anyone
+# simplifying that walk: for the bare name `sub` the loop body never runs at all (`'sub'.split("/")`
+# has length 1, so `range(1, 1)` is empty) — the "no `/` at all" branch its own docstring names, NOT
+# the walk-through branch. Walk-through is what answers None for a path INSIDE the submodule
+# (`_doomed_ancestor(root, 'sub/x.txt')`). Measured on a SHELL stand outside this suite (bare origin
+# + a checkout with a populated submodule `sub` holding `x.png` and `inside.txt` + the human's
+# ignored `shot.png`; a sibling bumps the gitlink AND force-adds its own `shot.png`) — the names
+# below are that stand's, not the ones `_with_submodule` builds, so do not read them as quotations
+# of anything in this tree:
+#   * incoming ACMT diff ............ ['shot.png', 'sub']
+#   * _doomed_ancestor('sub') ....... None
+#   * _expand_if_directory('sub') ... ['sub/x.png', 'sub/inside.txt', 'sub/.git']
+#   * check-ignore over the batch ... rc=128, stdout the ignored answers it had already printed,
+#                                     stderr the fatal above
+#   * probe ......................... []
+#   * sync .......................... {'updated': True, ...} with NO `overwritten_ignored`
+#   * the human's shot.png .......... overwritten by the sibling's bytes
+# i.e. byte for byte the batch-wipe the symlink round closed, with an unrelated file that really
+# died erased from a report that had already found it.
+#
+# THE SECOND DEFECT, and it is a premise rather than a symptom: a gitlink entry in the diff
+# DISPLACES NOTHING. Measured on the same stand after the merge — `git status --porcelain` says
+# ` M sub`, `git submodule status` still names the OLD commit, and `sub/inside.txt` still holds the
+# old bytes. So the three paths `_expand_if_directory` named were FALSE VICTIMS. Today that
+# is invisible: `check-ignore` refuses to answer about them at all, which is what masks it.
+#
+# MUTATION SWEEP, VMCP-246 (837). One selection throughout —
+# `tests/unit/test_workspace_cmd.py -p no:randomly`, no `-q` — read by COUNTING `FAILED `- and
+# `ERROR `-prefixed lines separately, with `collected` cross-checked; `collected 175` and `0 errors`
+# in every round including both controls. Two sittings, and which round came from which is written
+# out because the tree moved between them (see the note under the table):
+#   * drop the pure-gitlink filter entirely ....... control 0 failed; 1 failed
+#   * filter on EITHER mode instead of both ....... control 0 failed; 1 failed
+#   * no bisect: pre-837 whole-batch `return []` .. control 0 failed; 1 failed
+#   * keep the fatal call's stdout PREFIX instead
+#     of splitting the batch ...................... control 0 failed; 1 failed
+#   * no gitlink pruning (always an empty set) .... control 0 failed; 1 failed
+#   * DROP an unrecognised `--raw` field instead
+#     of keeping it as a path .................... control 0 failed; 0 failed
+# THE ZERO IS DECLARED, not discovered here: nothing in this suite emits `--raw` output that fails
+# the pair-wise shape, so the keep-it branch is defensive and is named in its own docstring rather
+# than pretended to be pinned. The second pass built the adversarial input it wants (files literally
+# named `:colon.png` and `:160000 160000 dead beef M`) and measured no desync, which is evidence for
+# the branch being CORRECT and none at all for it being pinned.
+#
+# THE TWO SITTINGS, because the first one is itself a finding. Rounds 1-2 and 5-6 come from the
+# 7-round sitting; rounds 3-4 were RE-RUN afterwards, and they had to be: in the 7-round sitting
+# both read `control 0 failed; 0 failed`, i.e. THE BISECT WAS PINNED BY NOTHING — because the
+# gitlink pruning that landed in the same card had removed the only shape whose batch still held an
+# unaskable path. One fix quietly disarmed the other's test. The pin was restored by forcing
+# `_index_gitlink_paths`'s own best-effort branch (a failing `git ls-files`) in
+# `test_one_unaskable_path_costs_only_itself_and_not_the_paths_around_it`, and only that test's
+# SETUP changed between the sittings; both controls are 0 over the same 175. This is the hazard
+# CLAUDE.md's memory note calls a negative pin, arriving from an unexpected direction: not a guard
+# whose test never had teeth, but a guard whose test LOST them to a sibling change in the same diff.
+#
+# WHAT NO ROUND HERE PINS, said plainly because the sweep cannot say it: `_MAX_CHECK_IGNORE_CALLS`
+# and `_MAX_DIR_EXPANSION` are 15x apart, so a batch can still exhaust the call budget and drop
+# askable names. The second pass measured that live (30 files inside one submodule lost `z.png`; 25
+# did not) and the pruning is what keeps the bulk producer from arriving — but no test in this file
+# constructs a budget exhaustion, and none is claimed to.
+#
+# WHAT IS NOT TRUE OF THIS REPOSITORY IS NOT THE SAME AS WHAT IS NOT TRUE OF THE CODE. There are
+# no submodules here (`git ls-files -s | awk '$1=="160000"'` is empty — `.gitmodules` is the wrong
+# evidence, since a gitlink lives in the INDEX), so the defect is latent HERE. But `--gc` ships to
+# consumers on the moving `stable` channel and `sync_main_checkout` runs in THEIR main checkout,
+# where a submodule is an ordinary thing to have.
+
+
+def _with_submodule(repo, tmp_path, name="sub", inner=None):
+    """Give `repo` a real, POPULATED submodule pinned at its FIRST commit, committed and pushed.
+
+    Returns the LATER submodule sha — the one a sibling bumps the superproject's gitlink to.
+    `-c protocol.file.allow=always` is required for a `file://`-ish local submodule source on
+    git 2.50.1 and is the test harness's business, not the module's."""
+    src = tmp_path / f"{name}src.git"
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(src)],
+                   check=True, capture_output=True)
+    work = tmp_path / f"{name}work"
+    subprocess.run(["git", "clone", "-q", str(src), str(work)], check=True, capture_output=True)
+    _git(work, "config", "user.email", "sub@example.com")
+    _git(work, "config", "user.name", "Sub")
+    for rel, content in (inner or {"inner.txt": "the submodule's first state\n"}).items():
+        (work / rel).write_text(content)
+    _git(work, "add", "-A")
+    _git(work, "commit", "-m", "s1")
+    _git(work, "push", "-q", "origin", "HEAD:main")
+    first = _git(work, "rev-parse", "HEAD")
+    (work / "later.txt").write_text("the submodule's second state\n")
+    _git(work, "add", "-A")
+    _git(work, "commit", "-m", "s2")
+    _git(work, "push", "-q", "origin", "HEAD:main")
+    later = _git(work, "rev-parse", "HEAD")
+    _git(repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q",
+         "--branch", "main", str(src), name)
+    _git(repo, "-C", name, "checkout", "-q", first)
+    _git(repo, "add", ".gitmodules", name)
+    _git(repo, "commit", "-m", f"add submodule {name} pinned at its first commit")
+    _git(repo, "push", "origin", "main")
+    return later
+
+
+def _bump_gitlink_on_origin(tmp_path, name, sub_sha, extra=None, path="sub"):
+    """Land a commit that moves the superproject's GITLINK — the everyday trigger of this card.
+
+    Plumbing (`update-index --cacheinfo`) rather than `submodule update`: the sibling never needs
+    the submodule populated to move the pointer, and this keeps the local-protocol config out of
+    the shape under test."""
+    other = tmp_path / f"sibling-{name}"
+    subprocess.run(["git", "clone", str(tmp_path / "origin.git"), str(other)],
+                   check=True, capture_output=True)
+    _git(other, "config", "user.email", "sibling@example.com")
+    _git(other, "config", "user.name", "Sibling")
+    for rel, content in (extra or {}).items():
+        (other / rel).parent.mkdir(parents=True, exist_ok=True)
+        (other / rel).write_text(content)
+        _git(other, "add", "-f", rel)
+    _git(other, "update-index", "--cacheinfo", f"160000,{sub_sha},{path}")
+    _git(other, "commit", "-m", f"sibling: {name}")
+    _git(other, "push", "origin", "HEAD:main")
+    return _git(other, "rev-parse", "HEAD")
+
+
+def test_a_submodule_pointer_bump_no_longer_wipes_the_whole_report(repo, tracker, tmp_path):
+    """THE CARD'S OWN INPUT. The unrelated ignored file that really dies must still be named.
+
+    One commit does two things a sibling routinely does together: it bumps the submodule pointer
+    and it force-adds a `shot.png` at a path this checkout ignores. The human's own `shot.png` is
+    destroyed either way — that is git, and this module does not fight it — but before the fix the
+    submodule-internal paths made `check-ignore` exit 128, the probe returned `[]` for the WHOLE
+    batch, and the file died unreported."""
+    _api, wf = tracker
+    _ignoring(repo, "*.png")
+    later = _with_submodule(repo, tmp_path)
+    (repo / "shot.png").write_bytes(b"\x89PNG the human's own evidence screenshot")
+
+    _bump_gitlink_on_origin(tmp_path, "bump", later, extra={"shot.png": "UPSTREAM\n"})
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["updated"] is True, state
+    assert state["overwritten_ignored"] == ["shot.png"], state
+    assert (repo / "shot.png").read_text() == "UPSTREAM\n", "the loss is real; the report is new"
+
+
+def test_a_pure_gitlink_move_is_not_a_displacement_and_names_nothing_inside_it(repo, tracker,
+                                                                              tmp_path):
+    """THE SECOND DEFECT, at the level of the candidate set rather than the report.
+
+    A gitlink entry in the ACMT diff is `:160000 160000 <old> <new> M` — git moves the POINTER and
+    leaves the submodule's working directory exactly where it was. Measured after the merge:
+    ` M sub` in `git status`, the submodule still at its old commit, and the file inside untouched.
+    So the incoming path must not reach the batch at all, and `_incoming_displacing_paths` is
+    where that is decided — asserted directly, because the report is the same either way (an
+    unaskable path is dropped by the bisect too, so a pin on the payload alone would stay green
+    with the filter deleted and pin nothing)."""
+    _api, wf = tracker
+    _ignoring(repo, "*.png")
+    later = _with_submodule(repo, tmp_path)
+    (repo / "sub" / "keep.png").write_bytes(b"\x89PNG the human's own, INSIDE the submodule")
+
+    _bump_gitlink_on_origin(tmp_path, "purebump", later)
+
+    # THE FETCH IS LOAD-BEARING, and leaving it out made this assertion VACUOUS — caught by this
+    # card's independent second pass and reproduced by its own mutation sweep (delete the filter:
+    # control 0 failed; that round 0 failed, i.e. this test's only reason for existing was pinning
+    # nothing). The sibling pushes from a clone of its own, so `origin/main` HERE is stale until
+    # something fetches; `HEAD..origin/main` was empty, and an empty diff has no gitlink entry to
+    # drop. `gc_workspaces` below fetches for itself — a direct call ahead of it must not borrow
+    # that. With the fetch, deleting the filter fails this line with `['sub']`.
+    _git(repo, "fetch", "--no-recurse-submodules", "origin")
+    incoming = workspace_cmd._incoming_displacing_paths(repo, "origin/main")
+    assert incoming == [], (
+        "a pure pointer move displaces nothing, so it must not be offered as a candidate", incoming
+    )
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["updated"] is True, state
+    assert "overwritten_ignored" not in state, state
+    # The truth the filter rests on, asserted rather than described. `_git` strips, so the
+    # porcelain ` M sub` arrives here as `M sub`: git moved the POINTER in the index and the
+    # submodule's working directory did not follow it — it is still on the commit it was pinned to.
+    assert (repo / "sub" / "keep.png").exists(), "the file inside the submodule is untouched"
+    assert _git(repo, "status", "--porcelain") == "M sub", "the pointer moved, the tree did not"
+    assert _git(repo, "-C", "sub", "rev-parse", "HEAD") != later, "and it did not move to `later`"
+
+
+def test_an_incoming_SUBMODULE_over_a_local_ignored_file_is_still_named(repo, tracker, tmp_path):
+    """WHY THE FILTER TESTS BOTH MODES AND NOT EITHER — and this shape, not the typechange, is
+    what discriminates. The author's first draft justified "both, not either" with the typechange
+    below, and that was wider than its proof: the typechange's victims live INSIDE a live gitlink,
+    so `check-ignore` cannot answer about them and the report is silent either way. Here it is not.
+
+    Upstream ADDS a submodule at `sub` (`:000000 160000 … A`, so the SOURCE mode is not a gitlink)
+    while the main checkout holds the human's own IGNORED file at that name. Measured on real git:
+    `git status --porcelain` is EMPTY beforehand, `merge --ff-only` returns rc=0, and the file is
+    replaced by an empty directory — the invisible loss this whole feature exists for. The local
+    path is an ordinary file, so `check-ignore` answers about it perfectly well; dropping the entry
+    because its DESTINATION is a gitlink would swallow exactly that."""
+    _api, wf = tracker
+    _ignoring(repo, "*.png", "/sub")
+    (repo / "sub").write_text("the human's own scratch, at a name upstream is about to claim\n")
+    assert _git(repo, "status", "--porcelain") == "", "invisible before, as ever"
+
+    src = tmp_path / "incomingsub.git"
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(src)],
+                   check=True, capture_output=True)
+    seed = tmp_path / "incomingsubwork"
+    subprocess.run(["git", "clone", "-q", str(src), str(seed)], check=True, capture_output=True)
+    _git(seed, "config", "user.email", "sub@example.com")
+    _git(seed, "config", "user.name", "Sub")
+    (seed / "inner.txt").write_text("the incoming submodule's own content\n")
+    _git(seed, "add", "-A")
+    _git(seed, "commit", "-m", "s1")
+    _git(seed, "push", "-q", "origin", "HEAD:main")
+
+    other = tmp_path / "sibling-addsub"
+    subprocess.run(["git", "clone", str(tmp_path / "origin.git"), str(other)],
+                   check=True, capture_output=True)
+    _git(other, "config", "user.email", "sibling@example.com")
+    _git(other, "config", "user.name", "Sibling")
+    # `-f` because the sibling shares the committed `/sub` rule; that is the harness's problem,
+    # not the shape's — upstream adding a submodule at an ignored name is ordinary.
+    _git(other, "-c", "protocol.file.allow=always", "submodule", "add", "-f", "-q",
+         "--branch", "main", str(src), "sub")
+    _git(other, "add", "-A", "-f")
+    _git(other, "commit", "-m", "sibling: adds a submodule at sub")
+    _git(other, "push", "origin", "HEAD:main")
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["updated"] is True, state
+    assert state["overwritten_ignored"] == ["sub"], state
+    assert (repo / "sub").is_dir(), "the human's file really was replaced by the submodule's dir"
+
+
+def test_the_expansion_does_not_walk_into_a_NESTED_gitlink(repo, tracker, tmp_path, monkeypatch):
+    """A SUBMODULE UNDER AN INCOMING DIRECTORY, built by this card's independent second pass — and
+    it refuted the claim that a typechange is the only shape reaching the walk with a submodule on
+    disk. `vendor/` is an ordinary tracked directory that happens to CONTAIN a submodule; upstream
+    replaces `vendor` with a file, so the ACMT entry is a plain ADD with no gitlink on either side
+    and the mode filter rightly keeps it. The walk then goes straight into `vendor/sub`.
+
+    WHY THAT COSTS SOMETHING, measured by that pass on real git: every path inside a live gitlink is
+    unaskable, so expanding one yields one unaskable path per file and the bisect pays to isolate
+    each. A submodule of THIRTY files exhausted `_MAX_CHECK_IGNORE_CALLS` and dropped `z.png`, an
+    askable path that really died; 25 files did not. Pruning removes the cost at its source and can
+    lose no name, since none of those paths could ever be answered.
+
+    IT IS PINNED BY THE CALL COUNT, NOT THE PAYLOAD, and that is the lesson of this card's own
+    vacuous assertion next door: the bisect recovers `vendor/shot.png` either way, so the report is
+    identical with the pruning and without it (measured), and only the number of `check-ignore`
+    invocations tells them apart — 1 against several."""
+    _api, wf = tracker
+    _ignoring(repo, "*.png")
+    src = tmp_path / "nestedsub.git"
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(src)],
+                   check=True, capture_output=True)
+    seed = tmp_path / "nestedsubwork"
+    subprocess.run(["git", "clone", "-q", str(src), str(seed)], check=True, capture_output=True)
+    _git(seed, "config", "user.email", "sub@example.com")
+    _git(seed, "config", "user.name", "Sub")
+    for n in range(6):
+        (seed / f"f{n}.txt").write_text("inside the nested submodule\n")
+    _git(seed, "add", "-A")
+    _git(seed, "commit", "-m", "s1")
+    _git(seed, "push", "-q", "origin", "HEAD:main")
+
+    (repo / "vendor").mkdir()
+    (repo / "vendor" / "note.txt").write_text("makes `vendor` a real tracked directory\n")
+    _git(repo, "add", "vendor")
+    _git(repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q",
+         "--branch", "main", str(src), "vendor/sub")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "a tracked directory holding a submodule")
+    _git(repo, "push", "origin", "main")
+    (repo / "vendor" / "shot.png").write_bytes(b"\x89PNG the human's own, beside the submodule")
+
+    other = tmp_path / "sibling-nested"
+    subprocess.run(["git", "clone", str(tmp_path / "origin.git"), str(other)],
+                   check=True, capture_output=True)
+    _git(other, "config", "user.email", "sibling@example.com")
+    _git(other, "config", "user.name", "Sibling")
+    _git(other, "rm", "-r", "-q", "--cached", "vendor")
+    shutil.rmtree(other / "vendor", ignore_errors=True)
+    (other / "vendor").write_text("upstream made this an ordinary file\n")
+    _git(other, "rm", "-q", "-f", ".gitmodules")
+    _git(other, "add", "vendor")
+    _git(other, "commit", "-m", "sibling: vendor becomes a file")
+    _git(other, "push", "origin", "HEAD:main")
+
+    _git(repo, "fetch", "--no-recurse-submodules", "origin")
+    gitlinks = workspace_cmd._index_gitlink_paths(repo, ["vendor"])
+    assert gitlinks == frozenset({"vendor/sub"}), ("the index is what names a gitlink", gitlinks)
+    expanded = workspace_cmd._expand_if_directory(repo, "vendor", gitlinks)
+    assert "vendor/shot.png" in expanded, expanded
+    assert not [p for p in expanded if p.startswith("vendor/sub/")], (
+        "the walk went into a live gitlink, whose paths `check-ignore` can never answer", expanded
+    )
+
+    calls = []
+    real = workspace_cmd._run_git
+
+    def counting(args, *a, **k):
+        if args and args[0] == "check-ignore":
+            calls.append(args)
+        return real(args, *a, **k)
+    monkeypatch.setattr(workspace_cmd, "_run_git", counting)
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["updated"] is True, state
+    assert state["overwritten_ignored"] == ["vendor/shot.png"], state
+    assert len(calls) == 1, ("no path in the batch is unaskable, so one call answers it", calls)
+    assert (repo / "vendor").is_file(), "the directory really was replaced by a file"
+
+
+def test_one_unaskable_path_costs_only_itself_and_not_the_paths_around_it(repo, tracker, tmp_path,
+                                                                          monkeypatch):
+    """THE BISECT, and it is what covers the OTHER producer — `_expand_if_directory`.
+
+    The gitlink filter closes the everyday route; this shape gets past it, which is why both
+    halves of the fix are here. Upstream turns the submodule into an ordinary FILE at the same
+    path (`:160000 100644 … T`), so the entry is NOT a pure pointer move, is kept, and the walk
+    hands back the files inside the submodule — which `check-ignore` still refuses to answer
+    about. Measured: that merge is rc=0 and really does delete the submodule's working directory.
+
+    `a.png` and `z.png` sit either side of `sub` in the diff's path order, and asserting BOTH is
+    the point: `check-ignore` prints the answers it reached before dying (measured — stdout
+    carries a complete, NUL-terminated `a.png\\0`), so keeping that prefix alone would recover
+    `a.png` and still lose `z.png`. Only asking the halves separately recovers both.
+
+    THE HONEST RESIDUE, measured and deliberately not claimed away: `sub/keep.png` really does die
+    here and is NOT named, because no path inside a live gitlink can be asked about in the FORM this
+    code must use — `--no-index` answers about them perfectly well (measured, rc=0), it just throws
+    away the tracked-path filtering the report depends on. A reason, not an impossibility.
+
+    So this pins "an unaskable path no longer costs the askable ones beside it", NOT "nothing is
+    missed" — the present key is now incomplete in the same one-way sense the absent key already
+    was. Filed as VMCP-247 (838) rather than guessed at, because naming those paths needs
+    `--no-index` and that is a widening of the probe's surface, plus a product call about
+    NON-ignored content, which is not an implementer's to make."""
+    _api, wf = tracker
+    _ignoring(repo, "*.png")
+    _with_submodule(repo, tmp_path)
+    for name in ("a.png", "z.png"):
+        (repo / name).write_bytes(b"\x89PNG the human's own")
+    (repo / "sub" / "keep.png").write_bytes(b"\x89PNG dies with the submodule, unnamed")
+
+    # THE PRUNING WOULD OTHERWISE REMOVE THIS SHAPE, and saying so is the honest way to keep the
+    # pin: `_index_gitlink_paths` keeps the walk out of `sub` on the shipped code, so this batch
+    # would hold no unaskable path and the bisect would never be reached — measured, deleting the
+    # bisect stopped failing anything the moment the pruning landed. What is forced here is that
+    # read's own documented BEST-EFFORT branch, a failing `git ls-files`, which yields an empty set
+    # and lets the walk back in. That is the real branch and not a stub: the bisect exists for the
+    # fatal nobody has enumerated yet, and a backstop with no test is what this repo will not ship.
+    real_run_git = workspace_cmd._run_git
+
+    def ls_files_fails(args, *a, **k):
+        if args and args[0] == "ls-files":
+            return subprocess.CompletedProcess(args, 128, "", "forced: could not read the index")
+        return real_run_git(args, *a, **k)
+    monkeypatch.setattr(workspace_cmd, "_run_git", ls_files_fails)
+
+    other = tmp_path / "sibling-sub2file"
+    subprocess.run(["git", "clone", str(tmp_path / "origin.git"), str(other)],
+                   check=True, capture_output=True)
+    _git(other, "config", "user.email", "sibling@example.com")
+    _git(other, "config", "user.name", "Sibling")
+    _git(other, "rm", "-q", "--cached", "sub")
+    shutil.rmtree(other / "sub", ignore_errors=True)
+    (other / "sub").write_text("upstream made this an ordinary file\n")
+    _git(other, "rm", "-q", "-f", ".gitmodules")
+    for name in ("a.png", "z.png"):
+        (other / name).write_text("UPSTREAM\n")
+        _git(other, "add", "-f", name)
+    _git(other, "add", "sub")
+    _git(other, "commit", "-m", "sibling: the submodule becomes a file")
+    _git(other, "push", "origin", "HEAD:main")
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["updated"] is True, state
+    assert state["overwritten_ignored"] == ["a.png", "z.png"], state
+    assert (repo / "sub").is_file(), "the submodule really was replaced by a file"

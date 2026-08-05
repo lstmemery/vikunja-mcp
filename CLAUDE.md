@@ -359,7 +359,10 @@ assertion in `tests/unit/test_line_length_gate.py`, which pyproject must agree w
   the SILENCE and not the loss: a SUCCESSFUL sync now carries `overwritten_ignored` (filtered by
   the same regenerable-name list as `removed_ignored`, capped the same way, with
   `overwritten_ignored_truncated` past the cap), computed BEFORE the merge as the incoming path
-  list MAPPED onto what each entry DISPLACES on this disk, then ∩ `git check-ignore`. **Mapping,
+  list MAPPED onto what each entry DISPLACES on this disk, then ∩ `git check-ignore` — the diff now
+  read through `--raw`, so the mode bits can drop a SUBMODULE POINTER move (an ACMT entry git
+  satisfies in the index alone, displacing nothing on disk), and the `check-ignore` ask BISECTED,
+  so one path git cannot resolve costs one name instead of the batch (both #837, below). **Mapping,
   not intersecting, and that is the whole of round two:** an incoming path can kill something at a
   DIFFERENT path, which is in no diff entry at all. Today the mapping asks the ANCESTORS first
   (shallowest first, walking through real directories: the first ancestor that is a symlink or a
@@ -376,13 +379,37 @@ assertion in `tests/unit/test_line_length_gate.py`, which pyproject must agree w
   present branch, named a path that displaces nothing, and, because that name is beyond a symbolic
   link, made `check-ignore` exit 128 and threw away an unrelated ignored `shot.png` dying in the
   same commit). Three falsifications, no round without one, is the argument — the count that
-  matters is of REFUTATIONS, not of channels. Same one-way
+  matters is of REFUTATIONS, not of channels, and #837 is the FOURTH, by a fourth reader: a
+  SUBMODULE working directory is a REAL directory, so the ancestor walk goes through it and the
+  expansion goes INTO it, and `check-ignore` answers neither — `fatal: Pathspec 'sub/x.png' is in
+  submodule 'sub'`, rc=128, a SECOND spelling of the fatal beside "beyond a symbolic link", wiping
+  the batch and an unrelated `shot.png` with it. **That one refutes a claim of a different kind,
+  and it is the kind to be most careful with here:** the symlink round closed its route "at the
+  source" and said so — closed by an argument about the two producers, not a measurement over all
+  inputs — and #837 is that qualifier coming true in one round. So the batch no longer rides on
+  the argument at all, and the two producers were BOTH covered rather than the named one: the
+  gitlink filter closes the everyday route, and the bisect covers `_expand_if_directory`, which
+  still reaches a submodule on a TYPECHANGE. It also disproved a PREMISE rather than a shape —
+  "a directory in the diff is a directory the merge REPLACES" — since a pointer bump leaves the
+  submodule's files untouched (measured: ` M sub`, still the old commit), so every path named from
+  inside one was a FALSE victim, masked only by the fatal. Two more measured cautions from it, both
+  the sort that reads as settled and is not. The filter must test BOTH modes and not either, and
+  the proof is NOT the typechange (whose victims are inside a live gitlink and unnameable either
+  way, filed as #838) but an incoming submodule ADD over the human's own ignored FILE, which git
+  destroys at rc=0 with `status` empty and which IS nameable. And "no submodules here" is a fact
+  about this REPOSITORY, never about the code — `--gc` ships on `stable` and this runs in the
+  CONSUMER's main checkout; the evidence for it is `git ls-files -s | awk '$1=="160000"'`, not
+  `.gitmodules`, because a gitlink lives in the INDEX. Same one-way
   reading as `removed_ignored` — and read it in that ONE direction, because the mechanical routes
   to absent-with-a-loss (the filter, each give-up branch of the probe, the caller's `except`, a
   directory walk cut off at its bound) are not the only ones: a displacement shape the probe does
   not model reaches the same empty answer, and by EITHER road — the ordinary "nothing at risk"
   branch (measured on the ancestor shape) or a mechanical give-up (measured on the symlink one,
-  where it also erased a name already found). Both look exactly like good news. And
+  where it also erased a name already found). Both look exactly like good news. **And since #837 a
+  PRESENT key is not a proof that its list is COMPLETE either** — a new bound, not a restatement:
+  the batch-wide give-up meant a non-empty list at least implied no path had failed, whereas the
+  bisect reports the askable paths and drops the unaskable ones beside them. Strictly more
+  information than the `[]` it replaced, and a fresh way to be wrong. And
   deliberately NOT the same NAME: there a file was DELETED with its tree, here a path was WRITTEN
   OVER and still exists holding somebody else's bytes. Same class as #710 either way — neither
   `git status --porcelain` nor checkout's own guards see ignored paths. The `main_checkout` key

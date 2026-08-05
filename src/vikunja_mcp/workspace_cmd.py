@@ -1600,7 +1600,48 @@ _MAIN_SYNC_OPT_OUT = "VIKUNJA_MCP_NO_MAIN_SYNC"
 _MAX_DIR_EXPANSION = 500
 
 
-def _expand_if_directory(root: Path, rel: str) -> list[str]:
+def _index_gitlink_paths(root: Path, pathspecs: list[str]) -> frozenset[str]:
+    """Every path the INDEX holds as a GITLINK under `pathspecs` — the subtrees not to walk into.
+
+    `check-ignore` refuses every path inside a live gitlink, so expanding a submodule yields ONE
+    UNASKABLE PATH PER FILE IN IT and buys nothing at all. That is not free once the ask bisects:
+    measured by the independent second pass on real git, a submodule of THIRTY files in a batch
+    whose only other members were two ignored files spent the entire `_MAX_CHECK_IGNORE_CALLS`
+    budget isolating them and lost `z.png` — an askable path, a real casualty of that merge — while
+    a submodule of 25 files did not. So the cost was a real one and its threshold was small.
+
+    Pruning them is the fix at the source, and it cannot lose a name: every path it removes is one
+    `check-ignore` could never have answered about anyway. Naming those paths is a different
+    question, filed as VMCP-247 (838), and it needs `--no-index` rather than a wider walk.
+
+    THE TEST IS THE INDEX, NOT `.git` ON DISK, and that distinction is the whole reason this asks
+    git instead of calling `os.path.isdir(d / ".git")`. The fatal is driven by the index — measured,
+    a path inside a DEINITIALISED submodule (an empty directory, no `.git` anywhere) still fatals —
+    while a stray nested clone that no gitlink points at is answered perfectly normally, and its
+    files really do die with the directory that holds them. A `.git` test would prune exactly the
+    wrong set on both counts.
+
+    Scoped to `pathspecs` rather than the whole index on purpose: a consumer's checkout can hold
+    tens of thousands of tracked files, and this runs on every sweep tick. Best-effort like
+    everything on this path — a failed read returns an empty set, i.e. the pre-838 behaviour.
+    """
+    if not pathspecs:
+        return frozenset()
+    proc = _run_git(("ls-files", "-s", "-z", "--", *pathspecs), root, None,
+                    env_extra={"GIT_OPTIONAL_LOCKS": "0"})
+    if proc.returncode != 0:
+        return frozenset()
+    found: set[str] = set()
+    for record in proc.stdout.split("\0"):
+        # `<mode> <object> <stage>\t<path>`; the TAB is what separates them, and a path may
+        # itself contain spaces, so partition on the tab rather than splitting on whitespace.
+        meta, tab, path = record.partition("\t")
+        if tab and path and meta.startswith(_GITLINK_MODE + " "):
+            found.add(path)
+    return frozenset(found)
+
+
+def _expand_if_directory(root: Path, rel: str, gitlinks: frozenset[str] = frozenset()) -> list[str]:
     """`rel` for an ordinary path; the FILES INSIDE IT when the checkout has a directory there.
 
     THE CASE THIS EXISTS FOR was built by the independent second pass and disproved a sentence
@@ -1618,12 +1659,35 @@ def _expand_if_directory(root: Path, rel: str) -> list[str]:
 
     Symlinks are NOT followed (`islink` first): a symlinked directory is one path to git and one
     path to delete, and walking through it would name files that live outside the checkout.
+
+    ITS PREMISE — that a directory named by the incoming diff is a directory the merge REPLACES —
+    IS FALSE FOR A SUBMODULE, and it is handled at TWO different places, neither of them this
+    walk's own body. A pointer-bump entry is satisfied in the index alone (measured: ` M sub`, the
+    submodule still at its old commit, its files untouched — with the ONE exception
+    `_incoming_displacing_paths` names, a human's plain file at the gitlink path, which the bump
+    does destroy), so `_incoming_displacing_paths` drops those entries before they arrive.
+
+    OTHER SHAPES DO STILL ARRIVE WITH A SUBMODULE ON DISK, and an earlier draft of this paragraph
+    claimed the typechange was the only one. The independent second pass refuted that by building
+    another: an ordinary tracked directory `vendor/` that merely CONTAINS a submodule, replaced
+    upstream by a file — a plain ADD with no gitlink on either side, so the mode filter rightly
+    keeps it, and the walk goes straight into `vendor/sub`. The general statement is that ANY
+    incoming path landing on an ancestor of a gitlink reaches here. So the walk PRUNES gitlink
+    subtrees (`gitlinks`, from `_index_gitlink_paths`) rather than pretending they cannot occur —
+    and pruning is not a guess about what dies, it is the observation that no path inside a live
+    gitlink can be put to `check-ignore` in the form this code must use. What the pruning does NOT
+    do is stop those files from dying: on a typechange they really are deleted, and naming them is
+    VMCP-247 (838).
     """
     full = os.path.join(root, rel)
-    if os.path.islink(full) or not os.path.isdir(full):
+    if os.path.islink(full) or not os.path.isdir(full) or rel in gitlinks:
         return [rel]
     inside: list[str] = []
-    for dirpath, _dirnames, filenames in os.walk(full):
+    for dirpath, dirnames, filenames in os.walk(full):
+        # Prune nested GITLINKS in place: nothing inside one can be put to `check-ignore`, so
+        # walking in costs bisect calls and yields no name (`_index_gitlink_paths`).
+        dirnames[:] = [d for d in dirnames
+                       if os.path.relpath(os.path.join(dirpath, d), root) not in gitlinks]
         for name in filenames:
             inside.append(os.path.relpath(os.path.join(dirpath, name), root))
             if len(inside) >= _MAX_DIR_EXPANSION:
@@ -1696,6 +1760,143 @@ def _doomed_ancestor(root: Path, rel: str) -> str | None:
     return None
 
 
+_GITLINK_MODE = "160000"
+
+# A bisect over `check-ignore`, so an unaskable path costs itself rather than the batch. The bound
+# is real and its arithmetic is worth writing down, because the second pass measured this cap
+# BITING. Isolating `k` unaskable paths among `n` costs O(k·log n) calls: 13 at n=100, 15 at 231 and
+# 17 at 500 for a single one (replayed), but `2k−1` when the whole batch is unaskable, so 64 covers
+# only about 32 such paths. `_MAX_DIR_EXPANSION` = 500 admits batches needing far more, and those
+# two numbers are deliberately NOT reconciled — what closed the gap is `_index_gitlink_paths`
+# pruning the one producer that generated unaskable paths in BULK (a submodule, one per file:
+# measured, 30 files inside one exhausted this budget and lost an askable `z.png`, while 25 did
+# not). Hitting the bound returns FEWER names, never a wrong one — measured, the short answer is a
+# SUBSET — which is the same one-way reading the key already has.
+_MAX_CHECK_IGNORE_CALLS = 64
+
+
+def _incoming_displacing_paths(root: Path, remote: str) -> list[str]:
+    """The incoming path set, minus the entries that DISPLACE NOTHING in the working tree.
+
+    WHY THIS IS NOT JUST `--name-only`, and it is VMCP-246 (837): a SUBMODULE pointer move is an
+    ACMT diff entry (`M` at the submodule's path) that git satisfies entirely in the INDEX. The
+    working directory is left alone — measured on real git 2.50.1 after such a merge:
+    `git status --porcelain` says ` M sub`, `git submodule status` still names the OLD commit, and
+    a file inside the submodule still holds its old bytes. So the premise `_expand_if_directory`
+    rests on — a directory in the diff is a directory the merge REPLACES — is FALSE for a gitlink,
+    and every path it hands back from inside one is a FALSE VICTIM. `--raw` carries the mode bits
+    that say so at no extra cost: one call, same filters, `:<srcmode> <dstmode> <src> <dst> <st>`
+    then the path, both NUL-terminated.
+
+    NO CONFIG KNOB TURNS THAT INTO A LOSS, which is asked because #766 is this repo's standing
+    lesson that one performance setting can switch a whole guard off. The knob to suspect is
+    `submodule.recurse`, and it was MEASURED rather than reasoned about: with `submodule.recurse =
+    true` set in the checkout, the same pointer bump still leaves the submodule at its OLD commit,
+    an ignored file inside it alive, and `git status` at ` M sub`. That is a fact about
+    `merge --ff-only`, which is the only command this module runs here — it never types `pull`.
+
+    THE TEST IS BOTH MODES, NOT EITHER, and the shape that proves it is an incoming submodule ADD
+    (`:000000 160000 … A`) over the human's own IGNORED FILE at that name: `git status --porcelain`
+    empty beforehand, `merge --ff-only` rc=0, the file replaced by an empty directory — and the
+    local path is an ordinary file, so `check-ignore` answers about it and the report NAMES it.
+    Dropping that entry because its DESTINATION is a gitlink would swallow the exact loss this
+    feature exists for.
+    THE TYPECHANGE IS NOT THAT PROOF, and this draft's first version said it was. `160000` on the
+    source side only (upstream replacing the submodule with a file) does destroy far more — rc=0,
+    the whole submodule working directory, ignored and NOT-ignored content alike — but every one of
+    those victims lives INSIDE a live gitlink, where `check-ignore` cannot be asked at all, so the
+    report is silent about them with this filter and without it. Keeping the entry is still right
+    (the walk under it is correct, and a future answer for those paths would need it), but it buys
+    no name today. Filed as VMCP-247 (838).
+
+    THE ONE INPUT WHERE A PURE POINTER MOVE DOES DESTROY SOMETHING was built before this filter
+    was trusted, and it is outside this probe's remit for a reason that predates the filter: if the
+    human has replaced the submodule's directory with a plain file, the pointer bump wipes it
+    (measured — rc=0, an empty directory in its place). But that path is TRACKED (index mode
+    `160000`), so `check-ignore` never reports it with or without this filter — the index filtering
+    the next step relies on drops it — and unlike an ignored file it is VISIBLE to the human's own
+    `git status`, as ` T sub`. Nothing that used to be reportable stopped being reportable here.
+
+    UNRECOGNISED OUTPUT IS KEPT, NOT DROPPED. The pair-wise walk is what `--raw -z` promises, and
+    a field that does not open with `:` where metadata is due is passed through as a path instead
+    of being discarded. That direction is deliberate for a diagnostic: an extra candidate costs
+    one `check-ignore` answer ("not ignored") and a dropped one costs a silence.
+    """
+    changed = _run_git(
+        ("diff", "--raw", "-z", "--no-renames", "--diff-filter=ACMT", f"HEAD..{remote}"),
+        root, None, env_extra={"GIT_OPTIONAL_LOCKS": "0"},
+    )
+    if changed.returncode != 0:
+        return []
+    fields = [field for field in changed.stdout.split("\0") if field]
+    paths: list[str] = []
+    at = 0
+    while at < len(fields):
+        meta = fields[at]
+        if not meta.startswith(":") or at + 1 >= len(fields):
+            paths.append(meta)
+            at += 1
+            continue
+        path = fields[at + 1]
+        at += 2
+        if meta[1:].split(" ")[:2] == [_GITLINK_MODE, _GITLINK_MODE]:
+            continue
+        paths.append(path)
+    return paths
+
+
+def _ignored_of(root: Path, paths: list[str]) -> list[str]:
+    """Which of `paths` this checkout IGNORES — asked so an unaskable path costs itself, not the batch.
+
+    `git check-ignore` does not answer path-by-path: a path it cannot resolve is a FATAL for the
+    whole invocation, and it exits 128 having printed only the answers it had already reached. So
+    a single bad path used to discard the report for every path beside it — VMCP-240 (806) paid
+    that for a path beyond a symlink, and VMCP-246 (837) for a path inside a submodule
+    (`fatal: Pathspec 'sub/x.png' is in submodule 'sub'`). Both were then closed at their
+    producers, and BOTH TIMES the closure was an argument about the producers rather than a
+    measurement over all inputs. This makes the give-up LOCAL instead, so the next unknown
+    spelling costs one name.
+
+    KEEPING THE FATAL CALL'S OWN STDOUT WOULD NOT DO, and that is why this bisects rather than
+    salvages: git prints a complete, NUL-terminated record for each answer it reached, so the
+    prefix IS trustworthy as far as it goes — measured, `printf 'a.png\\0sub/x.png\\0'` in a
+    checkout ignoring `*.png` leaves `a.png\\0` on stdout at rc=128. But it stops at the first
+    bad path, so everything after it is simply never examined; asking the halves separately is
+    what reaches those. The order of the report is preserved because the halves are concatenated
+    in order.
+
+    rc=1 IS NOT AN ERROR — it means "none of these are ignored", the ordinary case — so only
+    `not in (0, 1)` triggers the split. Grading it `== 0` instead changes no LIST at all, only the
+    cost (measured: 31 calls against 1 on a 16-path batch), which is why no test can see it.
+
+    TWO LOSSES REMAIN, and the second is the one the title understates — named here because the
+    second pass measured it rather than deduced it. A single path that still cannot be answered
+    yields nothing. And exhausting `_MAX_CHECK_IGNORE_CALLS` drops whatever the split had not
+    reached yet, which CAN include askable paths: an unaskable path then does cost the paths around
+    it. `_index_gitlink_paths` is what keeps that from arriving in bulk, and it is why the honest
+    unit is "an unaskable path" and not "one name". Both are why the key's one-way reading now
+    covers a PRESENT key as well as an absent one.
+    """
+    budget = _MAX_CHECK_IGNORE_CALLS
+
+    def ask(batch: list[str]) -> list[str]:
+        nonlocal budget
+        if not batch or budget <= 0:
+            return []
+        budget -= 1
+        proc = _run_git(("check-ignore", "-z", "--stdin"), root, None,
+                        env_extra={"GIT_OPTIONAL_LOCKS": "0"},
+                        stdin_text="\0".join(batch) + "\0")
+        if proc.returncode in (0, 1):
+            return [path for path in proc.stdout.split("\0") if path]
+        if len(batch) == 1:
+            return []
+        half = len(batch) // 2
+        return ask(batch[:half]) + ask(batch[half:])
+
+    return ask(paths)
+
+
 def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str) -> list[str]:
     r"""Name the IGNORED files a fast-forward onto `remote` is about to overwrite — VMCP-240 (806).
 
@@ -1721,8 +1922,11 @@ def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str) -> list[str]:
     ignored paths would refuse in a repo whose rulebook TELLS agents to write `shot-<id>.png` and
     `.playwright-mcp/<id>/`, i.e. would stop the sync from ever firing.
 
-    HOW, and why each step is the cheap one. `git diff --name-only` over `HEAD..remote` is the
-    incoming path set. `--no-renames` is LOAD-BEARING BESIDE `--diff-filter=ACMT` and not tidiness
+    HOW, and why each step is the cheap one. `_incoming_displacing_paths` reads `HEAD..remote` and
+    is where the diff's own flags live: it uses `--raw` so the mode bits can drop a SUBMODULE
+    POINTER move, which is an ACMT entry that displaces nothing on disk (VMCP-246 (837); the
+    measurements and the both-modes test are there). `--no-renames` is LOAD-BEARING BESIDE
+    `--diff-filter=ACMT` and not tidiness
     — measured: a rename is status `R`, which `ACMT` filters OUT, so with detection left on the
     pair answers NOTHING for a commit that renamed a file INTO a path this checkout ignores; with
     `--no-renames` the same commit arrives as an add plus a delete and the destination is kept.
@@ -1739,7 +1943,7 @@ def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str) -> list[str]:
     is FALSE and was shipped here for one round: an incoming `out/x.txt` over a local ignored
     FILE `out` kills `out`, which is in no diff entry at all.
 
-    Then ONE `git check-ignore`, whose default does the index
+    Then `_ignored_of`, whose default does the index
     filtering for free — measured, without `--no-index` it does NOT report a TRACKED path
     (`tracked.png` absent from its output while `untracked.png` is there), which is exactly the
     split that matters, since a tracked file is protected by git's own refusal. It also names the
@@ -1758,31 +1962,48 @@ def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str) -> list[str]:
         about a file parked under `.venv/`. The noise argument is WEAKER here than there (an
         incoming commit would have to add a path under `.venv/` for it to fire at all), so the
         filter is inherited for one-word-one-meaning rather than because it is load-bearing;
-      * the `rc not in (0, 1)` grade is DOCUMENTATION and pins nothing, measured: check-ignore
-        answers 1 for "none of these are ignored", which is the ordinary case and not an error,
-        and `!= 0` computes the same empty list on every input measured. Only that much — an
-        earlier draft added "or no check at all" and that half is DISPROVEN: a fatal path in the
-        batch exits 128 with stdout carrying the answers git had already printed, so
-        `printf 'a.png\0/etc/hosts\0'` in a repo ignoring `*.png` gives rc=128 with `a.png` on
-        stdout, and skipping the grade would return `['a.png']` rather than `[]`. It is
-        order-dependent: the same two paths the other way round leave stdout empty. A LATER
-        draft then added "and it cannot arise on the live path, where every path comes from a
-        diff of this repo", and the second pass disproved THAT too, by building it out of a
-        diff of this repo — see the next entry. The grade is written out so that nobody later
-        "fixes" rc=1 into a failure;
-      * that give-up is NOT LOCAL, which is worth stating beside "gives up silently": one
-        unreadable path returns `[]` for the WHOLE batch, discarding names already found and
-        genuinely dying. The trigger measured on real git is `fatal: pathspec '<p>' is beyond a
-        symbolic link` (rc=128) — reachable whenever a path fed to `check-ignore` has a SYMLINK
-        among its ancestors, and it cost an unrelated ignored `shot.png` in the same commit its
-        entire report. The known route to it is now closed at the source rather than graded
-        here: `_doomed_ancestor` is asked FIRST, so a path with a doomed ancestor is replaced by
-        that ancestor and never fed, and `_expand_if_directory` runs only under real directories
-        and does not follow symlinks. Closed is not the same as impossible — that is an argument
-        about the two producers, not a measurement over all inputs — so the grade stays, and
-        losing the batch stays the right trade, because a diagnostic must never be what breaks
-        the operation it describes. "Silent" still understates it: it is silent about MORE than
-        the path that failed;
+      * `rc == 1` IS NOT AN ERROR — it means "none of these are ignored", the ordinary case — so
+        the grade `not in (0, 1)` is written out to stop anyone "fixing" it into a failure. What
+        it does with a fatal has MOVED: it used to `return []` for the whole batch, and since
+        VMCP-246 (837) it splits the batch instead (`_ignored_of`), so a path git cannot answer
+        costs ONE name and not the report. **It still pins nothing, and saying otherwise was a
+        round-two overclaim of this very bullet** — re-measured by the second pass on the shipped
+        code: grading `== 0` instead is control 0 failed; that round 0 failed, and the LISTS are
+        identical on every shape tried (rc=1 means no path is ignored, so every half is rc=1 and
+        every leaf returns nothing). What the bisect changed is the COST, not the answer: `== 0`
+        turns the ordinary "nothing here is ignored" reply into a full subdivision, measured at
+        31 calls against 1 on a 16-path batch. That is a better reason to keep the grade than the
+        one this bullet briefly claimed, and it is also why no test can see the difference;
+      * THAT GIVE-UP IS NOW LOCAL, AND IT WAS NOT — this is the one bound in the list that got
+        better rather than better-described, and both cards that paid for it are worth naming
+        because they are the same defect twice. One unreadable path used to return `[]` for the
+        WHOLE batch, discarding names already found and genuinely dying. TWO spellings of the
+        fatal are measured on real git, and the second is why the first's fix was not enough:
+        `fatal: pathspec '<p>' is beyond a symbolic link` (VMCP-240 (806)) and
+        `fatal: Pathspec '<p>' is in submodule '<s>'` (VMCP-246 (837)). Each cost an unrelated
+        ignored `shot.png` landing in the SAME commit its entire report. Each was then closed at
+        its producer — the symlink one by asking `_doomed_ancestor` FIRST, the submodule one by
+        dropping pure gitlink entries in `_incoming_displacing_paths` — and the second one is
+        the standing proof of what this file said about the first: "closed is not the same as
+        impossible — that is an argument about the two producers, not a measurement over all
+        inputs". A third spelling would land the same way, so the batch no longer rides on the
+        argument. What DOES still ride on it, and must be read as the residue rather than as
+        nothing: the unaskable path ITSELF is still dropped, so where such a path is the victim
+        the report names its neighbours and not it. Measured live — upstream replacing a
+        submodule with a file merges rc=0, deletes the submodule's working directory, and the
+        ignored file inside it cannot be asked about IN THE FORM THIS CODE MUST USE, so it dies
+        unnamed while the ignored files beside it are now reported. Say it that way and not
+        "cannot be asked at all", which is what an earlier draft said in three places and which
+        the second pass refuted with one command: `--no-index` answers about those paths quite
+        happily, rc=0. It is unusable HERE because it also throws away the tracked-path filtering
+        this report depends on — a REASON, not an impossibility, and the difference matters
+        because it leaves VMCP-247 (838) a route instead of declaring the residue closed.
+        How many names that costs is bounded by pruning rather than by hope: `_index_gitlink_paths`
+        keeps a submodule from contributing one unaskable path per file, which is what used to
+        exhaust `_MAX_CHECK_IGNORE_CALLS` and take an askable neighbour down with it (measured at
+        30 files inside one submodule, and not at 25). Losing a name stays the right trade, for
+        the reason losing the batch was: a diagnostic must never be what breaks the operation it
+        describes;
       * the name reported is the one on THIS disk only where the two can differ and git agrees
         they are the same path. On a case-insensitive filesystem (measured on macOS with
         `core.ignorecase=true`) a local ignored `out.png` under an incoming `out.PNG` IS
@@ -1790,8 +2011,9 @@ def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str) -> list[str]:
         name their file had;
       * and so AN ABSENT KEY IS NEVER A PROOF THAT NOTHING DIED — the same one-way reading
         `removed_ignored` has. The mechanical routes to absent-with-a-loss are the filter above,
-        each `return []` in this function, the caller's `except`, and a directory walk stopped at
-        `_MAX_DIR_EXPANSION`. The route that is NOT mechanical is a displacement SHAPE this
+        each `return []` in this function and in the two it calls, the caller's `except`, a
+        directory walk stopped at `_MAX_DIR_EXPANSION`, and `_ignored_of` exhausting
+        `_MAX_CHECK_IGNORE_CALLS`. The route that is NOT mechanical is a displacement SHAPE this
         function does not model, and it can arrive by EITHER road — do not restate it as "the
         ordinary branch", which an earlier draft did on the strength of the one instance it had.
         Both are built: the shape `_doomed_ancestor` answers reached `[]` through the ordinary
@@ -1799,16 +2021,17 @@ def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str) -> list[str]:
         through the rc grade above, a MECHANICAL give-up, and took an unrelated name with it.
         Two shapes, two roads, and that is why the count came off this list — both were live in
         shipped code, and neither had a place to be written down here.
-        The rulebook states the one-way direction to agents rather than leaving it here.
+        The rulebook states the one-way direction to agents rather than leaving it here;
+      * AND SINCE VMCP-246 (837) A PRESENT KEY IS NOT A PROOF THAT ITS LIST IS COMPLETE, which
+        is a NEW bound and the price of the bisect above rather than a restatement of the last
+        one. Before it, one unaskable path emptied the list, so a non-empty list at least meant
+        no path had failed; now the askable paths are reported and the unaskable ones are
+        dropped beside them, so partial is a state the key can actually be in. That is strictly
+        more information than the `[]` it replaces — and it is the direction a reader can be
+        wrong in, so it is written here rather than inferred from the bullet above.
     """
-    changed = _run_git(
-        ("diff", "--name-only", "-z", "--no-renames", "--diff-filter=ACMT",
-         f"HEAD..{remote}"),
-        root, None, env_extra={"GIT_OPTIONAL_LOCKS": "0"},
-    )
-    if changed.returncode != 0:
-        return []
-    # GIT_OPTIONAL_LOCKS=0 above is the module's standing rule (see `_git_inspect`) applied by
+    changed = _incoming_displacing_paths(root, remote)
+    # GIT_OPTIONAL_LOCKS=0 there is the module's standing rule (see `_git_inspect`) applied by
     # habit, and it is BELT — say so rather than let a reader think it is doing the work. This
     # probe runs BEFORE the merge, including on the run where the merge is then REFUSED, where
     # nothing of ours should have written in a human's checkout at all; what actually keeps that
@@ -1816,11 +2039,15 @@ def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str) -> list[str]:
     # comparison and leaves the index mtime alone with or without the variable, as does
     # `check-ignore`, while `git status --porcelain` moves it. The sweep agrees — dropping this
     # env_extra kills no test (see the section header in tests/unit/test_workspace_cmd.py).
+    # Asked ONCE, and only about the incoming paths that are local directories — the only ones the
+    # expansion can walk into. Empty when there are none, which is the ordinary case.
+    gitlinks = _index_gitlink_paths(root, [
+        p for p in changed
+        if os.path.isdir(os.path.join(root, p)) and not os.path.islink(os.path.join(root, p))
+    ])
     present: list[str] = []
     seen: set[str] = set()
-    for p in changed.stdout.split("\0"):
-        if not p:
-            continue
+    for p in changed:
         # THE ANCESTOR QUESTION COMES FIRST, and asking it only when `lexists` said "absent" was
         # a bug — the independent second pass built it. `os.path.lexists` follows every component
         # but the last, so an incoming `linkdir/y.txt` "exists" whenever the local ignored symlink
@@ -1834,7 +2061,7 @@ def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str) -> list[str]:
         if ancestor is not None:
             candidates = [ancestor]
         elif os.path.lexists(os.path.join(root, p)):
-            candidates = _expand_if_directory(root, p)
+            candidates = _expand_if_directory(root, p, gitlinks)
         else:
             candidates = []
         # De-duplicated because `_doomed_ancestor` MAKES collisions by construction: every
@@ -1844,15 +2071,7 @@ def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str) -> list[str]:
             if candidate not in seen:
                 seen.add(candidate)
                 present.append(candidate)
-    if not present:
-        return []
-    checked = _run_git(("check-ignore", "-z", "--stdin"), root, None,
-                       env_extra={"GIT_OPTIONAL_LOCKS": "0"},
-                       stdin_text="\0".join(present) + "\0")
-    if checked.returncode not in (0, 1):
-        return []
-    return [p for p in checked.stdout.split("\0")
-            if p and not _is_reproducible_ignored(p)]
+    return [p for p in _ignored_of(root, present) if not _is_reproducible_ignored(p)]
 
 
 def _tracked_changes(root: Path) -> set[str] | None:
@@ -2096,10 +2315,12 @@ def sync_main_checkout(root: Path) -> dict | None:
         doomed = []
     # The two partial-apply snapshots (VMCP-244), taken here for the same reason as the probe
     # above — afterwards the answer is unrecoverable — and caught SEPARATELY on purpose: one of
-    # them failing must not discard what the other already knows, which is the mistake
-    # `_ignored_paths_the_ff_will_overwrite` documents in itself ("one unreadable path returns []
-    # for the WHOLE batch"). Both stay best-effort: a diagnostic may cost the report, never the
-    # fast-forward.
+    # them failing must not discard what the other already knows. The mistake that shape avoids
+    # used to have a live example one function over, where a single unreadable path returned `[]`
+    # for the WHOLE batch; VMCP-246 (837) closed that by splitting the batch instead, so the
+    # example is now HISTORY rather than a thing to point at — the reasoning it taught is why
+    # these are two `try` blocks and not one. Both stay best-effort: a diagnostic may cost the
+    # report, never the fast-forward.
     try:
         tracked_before = _tracked_changes(root)
     except Exception:                               # noqa: BLE001 — a diagnostic, never a gate
