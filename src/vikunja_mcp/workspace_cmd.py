@@ -1576,6 +1576,13 @@ MAIN_SYNC_DETACHED = "detached"
 MAIN_SYNC_OFF_BRANCH = "off-branch"
 MAIN_SYNC_DIVERGED = "diverged"
 MAIN_SYNC_BLOCKED = "blocked"
+# VMCP-244 (835): `blocked` used to cover this state too, and asserted "NOTHING was discarded"
+# while doing so. `merge --ff-only` is NOT ATOMIC: it attempts every entry and writes everything
+# it can, so ONE path it cannot write leaves the checkout holding PART of the update with HEAD
+# still on the old commit. Named apart from `blocked` because the ACTION differs — `blocked` is
+# "nothing happened, the next sweep retries", this is "your checkout now mixes two commits and
+# `git status` attributes upstream's content to you".
+MAIN_SYNC_PARTIAL = "half-applied"
 MAIN_SYNC_ERROR = "error"          # the best-effort wrapper in gc: anything unforeseen
 
 # Same idiom as VIKUNJA_MCP_NO_SKILL_SYNC and VIKUNJA_MCP_NO_TRACE — a thing that happens to a
@@ -1848,6 +1855,114 @@ def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str) -> list[str]:
             if p and not _is_reproducible_ignored(p)]
 
 
+def _tracked_changes(root: Path) -> set[str] | None:
+    """The TRACKED paths where the working tree differs from HEAD, or None if git could not say.
+
+    HALF of VMCP-244 (835)'s partial-apply detector: taken once BEFORE the merge and once after a
+    refusal, the set DIFFERENCE is the best available reading of what the failed fast-forward
+    managed to write — "best available" and not "is", because this runs in somebody ELSE's working
+    directory and a human or an agent saving a file during those milliseconds is a race it cannot
+    distinguish, exactly as `_fingerprints` says of its own half. The difference is
+    the point — the most ordinary refusal there is happens BECAUSE the human has a tracked file
+    modified, so an after-only reading would report their own in-flight edit as something this tool
+    wrote (`test_the_humans_own_pre_existing_edit_is_never_called_half_applied`).
+
+    PLUMBING (`diff-index`) AND NOT `git diff`, because `git diff HEAD` REFRESHES A HUMAN'S INDEX
+    AND WRITES IT — and this ran in their checkout on a run where nothing of ours may write at all.
+    That was this function's first shipped shape and the independent second pass caught it, so the
+    reasoning is written out rather than left as a flag nobody dares remove. Measured, git 2.50.1,
+    on a stat-dirty-but-content-CLEAN entry whose mtime is in the PAST (git can then trust its own
+    re-read and record the fresh stat): `git diff --name-only HEAD` moves the index mtime, and
+    `GIT_OPTIONAL_LOCKS=0` DOES NOT STOP IT — nor does `git --no-optional-locks`. The variable is
+    INERT here, which is the opposite of what this docstring first claimed; it is not belt, it is
+    decoration, and it is kept only for uniformity with its neighbours. End to end, the same input
+    through `sync_main_checkout` moved the index under the `git diff` form and left it alone under
+    HEAD's pre-835 code, i.e. that shape was a REGRESSION against a property #806 had measured.
+    THE RACE CONDITION IS WHY AN EARLIER PROBE OF MINE SAW NOTHING: with the file merely `touch`ed
+    to NOW, git treats the entry as racily clean and deliberately does not record the stat, so the
+    index stays put and `git diff` looks innocent. The discriminating stand needs an mtime in the
+    past — which is the ordinary state of a checkout somebody stopped editing an hour ago.
+    `GIT_OPTIONAL_LOCKS=0 git status --porcelain` also preserves the index (plain `status` does
+    not — there the variable IS load-bearing) and was the other candidate; it lost on OUTPUT, not
+    on writes, because it needs rename records and untracked filtering parsed out of porcelain,
+    where `--name-only -z` is already the list this function returns.
+
+    WHAT `diff-index` COSTS, and why it is harmless HERE specifically: without a refresh it reports
+    a stat-dirty-but-content-clean entry as changed — measured, both `a.txt` and `b.txt` above.
+    Those are FALSE POSITIVES, and the SET DIFFERENCE is what disarms them: such an entry is in the
+    before set as well, so it cancels. The direction is what matters and it holds both ways — an
+    entry the merge refreshed out of the after set only SHRINKS the answer, and an entry that
+    became stat-dirty DURING the merge is one git wrote, which is a true positive. So the
+    imprecision can never invent a half-applied path; at worst it hides one.
+
+    WHAT IT CANNOT SEE: a path that is UNTRACKED locally — which is every ignored casualty, and the
+    whole reason the ignored half is fingerprinted separately rather than derived from this. A
+    MODE-only incoming change is NOT in that list: an earlier draft named it and the second pass
+    measured the opposite, `half_applied == ['m.txt']` for a 644->755 change. None means "no
+    answer", never "no changes": the caller must not read a failed read as a clean tree.
+    """
+    proc = _run_git(("diff-index", "--name-only", "-z", "--no-renames", "HEAD"), root, None,
+                    env_extra={"GIT_OPTIONAL_LOCKS": "0"})
+    if proc.returncode != 0:
+        return None
+    return {p for p in proc.stdout.split("\0") if p}
+
+
+def _fingerprints(root: Path, rels: list[str]) -> dict[str, tuple | None]:
+    """`(mode, size, mtime_ns, inode)` per path, `None` for one that is not there.
+
+    THE OTHER HALF of the partial-apply detector, and the half without which the whole thing is
+    blind to its most important case: a failing merge whose ONLY casualty is an IGNORED file
+    changes nothing git will report — measured, `git diff --name-only HEAD` and `git status
+    --porcelain` are both EMPTY before and after — so `_tracked_changes` returns the same set
+    twice while the human's bytes are gone.
+
+    The INODE is in there on purpose and it is what makes the fingerprint strong: git UNLINKS and
+    recreates, so overwriting an ignored file moves its inode as well as its size and `mtime_ns`
+    (measured; the exact numbers are a per-run artifact and are deliberately not written down here,
+    the PROPERTY is what re-measures). That matters because mtime resolution belongs to the
+    FILESYSTEM, not to git — on a one-second-granularity filesystem a same-size overwrite inside
+    one second moves neither size nor mtime. The independent second pass built exactly that case on
+    a FAT32 image and the inode moved in both halves of it, so this is measured rather than
+    reasoned. The direction it is NOT measured in, and cannot be from here: a filesystem that
+    REUSES an inode number immediately after an unlink.
+
+    Read one-way, like everything else on this path. A CHANGE here is evidence; equality is not
+    proof of survival (a rewrite that reproduced mode, size, mtime_ns AND inode), and a change is
+    not proof that the MERGE made it — a human or an agent writing that same ignored path during
+    the merge is a race this cannot distinguish and does not claim to. `os.lstat`, so a symlink is
+    fingerprinted as itself: `_doomed_ancestor` names symlinks, and following one would fingerprint
+    a file outside the checkout.
+    """
+    out: dict[str, tuple | None] = {}
+    for rel in rels:
+        try:
+            st = os.lstat(os.path.join(root, rel))
+        except OSError:
+            out[rel] = None
+        else:
+            out[rel] = (st.st_mode, st.st_size, st.st_mtime_ns, st.st_ino)
+    return out
+
+
+def _add_capped(state: dict, key: str, paths: list[str]) -> None:
+    """Attach `paths` under `key`, capped, with a `<key>_truncated` sibling — or attach NOTHING.
+
+    ABSENCE IS THE LOAD-BEARING PART, and it is why this is a function rather than three copies of
+    two lines: every report on this path is read one-way, so a key present with an empty list is
+    the never-read field VMCP-68 had to split `kept` in two to rescue.
+
+    `<key>_truncated` is the length of the list BEFORE the cap and AFTER every filter and give-up
+    that produced it, so it inherits exactly the blindness of the key it sits beside — it is not a
+    measure of the loss. Read the way SKILL.md states it to agents.
+    """
+    if not paths:
+        return
+    state[key] = paths[:_MAX_REPORTED_IGNORED]
+    if len(paths) > _MAX_REPORTED_IGNORED:
+        state[f"{key}_truncated"] = len(paths)
+
+
 def sync_main_checkout(root: Path) -> dict | None:
     """Fast-forward the MAIN checkout onto `origin/<default branch>`, or REFUSE and say why.
 
@@ -1878,11 +1993,34 @@ def sync_main_checkout(root: Path) -> dict | None:
     `git status --porcelain` (empty before and after) — the second needs a local ignore rule, so
     status shows the `.gitignore` itself as `??` or ` M` while saying nothing about the file that
     dies. See `_ignored_paths_the_ff_will_overwrite`, which is what now NAMES the loss in
-    `overwritten_ignored`. Naming is not preventing, and the wording matters in both directions:
-    the REFUSAL branches still discard nothing (that half of the claim was always sound), while
-    `updated: true` is where a file can have died. The same overclaim rode out in the commit body
+    `overwritten_ignored`. Naming is not preventing. The same overclaim rode out in the commit body
     of 27666c2a, which cannot be rewritten (a force-push to `main` over a message is not worth
     it), so the correction lives here, in CLAUDE.md and in SKILL.md instead.
+
+    AND THE OTHER HALF OF THAT SENTENCE — "the REFUSAL branches still discard nothing (that half of
+    the claim was always sound)" — WAS FALSE TOO, which is VMCP-244 (835), filed by the round-2
+    review of the card that wrote it. `merge --ff-only` is NOT ATOMIC. It attempts every entry and
+    writes everything it can, so ONE path it cannot write leaves the rest written and HEAD where it
+    was: measured on real git 2.50.1, `chmod 500` on a directory and `chflags uchg` (Finder's
+    "Locked" checkbox) on a tracked file both give `error: unable to unlink old '<p>'` with
+    `aaa.txt` gone v1->v2 and an ignored `shot.png` replaced by upstream's bytes. That was the ONE
+    branch where the probe's answer was deliberately thrown away — so the branch promising safety
+    was the branch that could destroy an ignored file leaving no trace whatever.
+    NOT bounded by index order, which is the natural guess and was measured false: a tracked
+    `zzz.txt` sorting AFTER the failing path is written too, so what survives is exactly what git
+    could not write. Hence `MAIN_SYNC_PARTIAL`, and hence the detector asks the WORKING TREE what
+    moved (`_tracked_changes`, `_fingerprints`) rather than deriving a prefix of the index.
+    `blocked` keeps its name for the refusal where the two probes FOUND nothing, and the three
+    up-front refusals really are that: measured, "Your local changes …", "The following untracked
+    working tree files …" and "Updating the following directories would lose untracked files in
+    them" each abort before writing, witnessed by a second incoming file sorting FIRST keeping its
+    old content. **Read that as three measured MESSAGES and not as the code's meaning**, which is
+    the correction the second pass forced here: `blocked` is the FALL-THROUGH whenever both probes
+    come up empty, so it is also what an already-half-applied checkout reports on every LATER sweep
+    (measured: sweep 1 `half-applied`, sweeps 2 and 3 `blocked`, tree still mixed), and what a
+    half-apply whose only casualty was filtered as regenerable detritus reports on the FIRST one.
+    So what `blocked` no longer says is "NOTHING was discarded": the branch reports what it FOUND,
+    one-way, like every other report on this path — and says outright when it could not look.
 
     RETURNS None WHEN THERE IS NOTHING TO SAY — already current, or opted out. The key it feeds
     is therefore ABSENT on the boring path and PRESENT whenever a reader has something to read.
@@ -1895,7 +2033,12 @@ def sync_main_checkout(root: Path) -> dict | None:
     `removed_ignored`, though it is the same kind of post-mortem: there a file was DELETED with
     its worktree, here a path was written over and still exists holding somebody else's bytes.
     One name per verb keeps `released`'s scan and this one from being confused for each other,
-    and keeps a grep for either landing on one implementation.
+    and keeps a grep for either landing on one implementation. It rides on `updated: true` AND on
+    `half-applied`, with one asymmetry that is deliberate rather than sloppy: on `updated: true`
+    the list is the probe's, UNFILTERED, because the merge completed and therefore wrote every
+    incoming path; on `half-applied` only SOME were written, so there it is filtered down to the
+    paths whose fingerprint actually moved. Same verb, same key, and the branch that cannot know
+    is the one that checks.
     """
     if os.environ.get(_MAIN_SYNC_OPT_OUT):
         return None
@@ -1951,25 +2094,73 @@ def sync_main_checkout(root: Path) -> dict | None:
         doomed = _ignored_paths_the_ff_will_overwrite(root, remote)
     except Exception:                               # noqa: BLE001 — a diagnostic, never a gate
         doomed = []
+    # The two partial-apply snapshots (VMCP-244), taken here for the same reason as the probe
+    # above — afterwards the answer is unrecoverable — and caught SEPARATELY on purpose: one of
+    # them failing must not discard what the other already knows, which is the mistake
+    # `_ignored_paths_the_ff_will_overwrite` documents in itself ("one unreadable path returns []
+    # for the WHOLE batch"). Both stay best-effort: a diagnostic may cost the report, never the
+    # fast-forward.
+    try:
+        tracked_before = _tracked_changes(root)
+    except Exception:                               # noqa: BLE001 — a diagnostic, never a gate
+        tracked_before = None
+    try:
+        prints_before = _fingerprints(root, doomed)
+    except Exception:                               # noqa: BLE001 — a diagnostic, never a gate
+        prints_before = None
     merged = _run_git(("merge", "--ff-only", remote), root, None)
     if merged.returncode != 0:
-        # The uncommitted-work case, and the one this whole function is shaped around: git
-        # refused because the fast-forward would have overwritten a modified tracked file or an
-        # untracked one. Nothing was changed. Its own message names the files, so pass it
-        # through verbatim rather than paraphrasing it into something less useful.
-        return {"updated": False, "code": MAIN_SYNC_BLOCKED, "branch": branch, "path": str(root),
-                "reason": f"`git merge --ff-only {remote}` refused, so the checkout is unchanged "
-                          f"and NOTHING was discarded: "
-                          f"{(merged.stderr or merged.stdout).strip()}"}
+        # git refused. Which of TWO states that leaves is measured off the TREE and never read out
+        # of the message: locale and git version make the text unparseable in principle. (Not
+        # because the three up-front messages are unlike each other — an earlier draft said they
+        # "share their vocabulary with nothing" and the second pass disproved it: two of the three
+        # share the whole phrase "would be overwritten by merge".) And note WHICH files git names
+        # here — the one it could NOT write. The ones it DID write are the report's job, which is
+        # the inversion card 835 opens with, so the message is passed through verbatim AND the
+        # paths ride in their own keys.
+        half: list[str] = []
+        if tracked_before is not None:
+            tracked_after = _tracked_changes(root)
+            if tracked_after is not None:
+                half = sorted(tracked_after - tracked_before)
+        over: list[str] = []
+        if prints_before is not None:
+            prints_after = _fingerprints(root, doomed)
+            over = [p for p in doomed if prints_after.get(p) != prints_before.get(p)]
+        if not half and not over:
+            # "Found nothing" is not "nothing happened", and when BOTH probes were unavailable it
+            # is not even that. Saying so is the whole subject of this card: a report that borrows
+            # the reassurance of a check it did not run is how #806 shipped its own overclaim.
+            looked = tracked_before is not None or prints_before is not None
+            found = ("nothing half-written was found afterwards — which is what was CHECKED, not a "
+                     "promise about the checkout"
+                     if looked else
+                     "and whether it had already written PART of the update could NOT be checked "
+                     "on this run at all")
+            return {"updated": False, "code": MAIN_SYNC_BLOCKED, "branch": branch,
+                    "path": str(root),
+                    "reason": f"`git merge --ff-only {remote}` refused; {found}: "
+                              f"{(merged.stderr or merged.stdout).strip()}"}
+        state = {"updated": False, "code": MAIN_SYNC_PARTIAL, "branch": branch, "path": str(root),
+                 "reason": f"`git merge --ff-only {remote}` FAILED PART-WAY: HEAD did not move, "
+                           f"but part of the update was already written, so this checkout now "
+                           f"mixes two commits and `git status` shows the incoming content as the "
+                           f"human's own uncommitted work. It does NOT heal itself, and clearing "
+                           f"whatever stopped the merge is not enough (measured: those same "
+                           f"half-written paths then block the merge as local changes, and every "
+                           f"later sweep reports `blocked`). A HUMAN has to commit them or drop "
+                           f"them (`git -C {root} checkout -- <paths>`, which DISCARDS them); "
+                           f"nothing here will: "
+                           f"{(merged.stderr or merged.stdout).strip()}"}
+        _add_capped(state, "half_applied", half)
+        _add_capped(state, "overwritten_ignored", over)
+        return state
     result = {"updated": True, "branch": branch, "path": str(root),
               "from": before, "to": target, "commits": int(behind.stdout.strip() or 0)}
-    if doomed:
-        # ONLY on this branch, and only when non-empty. A refusal destroys nothing, so a key
-        # there would be a warning about a loss that did not happen; and a key present on every
-        # successful sync is the never-read field the paragraph above is about.
-        result["overwritten_ignored"] = doomed[:_MAX_REPORTED_IGNORED]
-        if len(doomed) > _MAX_REPORTED_IGNORED:
-            result["overwritten_ignored_truncated"] = len(doomed)
+    # Only when non-empty: a key present on every successful sync is the never-read field the
+    # paragraph above is about. Unfiltered here, unlike on the refusal branch — this merge
+    # COMPLETED, so every incoming path was written and there is nothing to filter down to.
+    _add_capped(result, "overwritten_ignored", doomed)
     return result
 
 

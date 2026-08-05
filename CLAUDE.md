@@ -305,8 +305,55 @@ assertion in `tests/unit/test_line_length_gate.py`, which pyproject must agree w
   `git status --porcelain` (the second shows the `.gitignore` as `??` or ` M`, and still nothing
   about the file that dies). The contrast is
   what makes it a finding rather than a complaint about git: untracked-and-NOT-ignored at the same
-  path is refused outright, so the REFUSAL branches really do discard nothing and that half of the
-  claim was always sound. It is git's own behaviour — `git pull --ff-only` typed by hand loses the
+  path is refused outright. **What used to close that sentence — "so the REFUSAL branches really do
+  discard nothing and that half of the claim was always sound" — was itself FALSE, and #835 (filed
+  by 806's own round-2 review, reproduced twice more here) is that correction: `merge --ff-only` is
+  NOT ATOMIC.** It attempts every entry and writes everything it can, so ONE path it cannot write
+  leaves the rest written with HEAD unmoved — and that was the ONE branch where the
+  `overwritten_ignored` probe was deliberately discarded, i.e. the branch promising safety was the
+  branch that could destroy an ignored file leaving no trace at all. Two triggers measured on real
+  git 2.50.1, and the second is why the card's own "rare on a developer's machine" caveat is weaker
+  than it looks: `chmod 500` on a directory, and `chflags uchg` — the Finder "Locked" checkbox — on
+  a tracked file THE INCOMING COMMIT HAS TO WRITE (the second pass caught that qualifier missing
+  and measured its absence: lock a tracked file the update does not touch and the ff is a clean
+  `updated: true`). NOT bounded by index order, which is the natural guess and is measured false: a
+  tracked `zzz.txt` sorting AFTER the failing path is applied too. So the state has its own code,
+  `half-applied` (`MAIN_SYNC_PARTIAL`), because the ACTION differs — the checkout now mixes two
+  commits and `git status` attributes upstream's content to the human, who can commit somebody
+  else's landed change as their own — carrying `half_applied` (the tracked paths the failed ff
+  wrote) beside `overwritten_ignored`. **And it does not heal**: measured, the half-written paths
+  then block the ff themselves as local changes, so clearing the original blocker is NOT enough and
+  every later sweep reports `blocked` over a still-mixed tree — only a human committing or dropping
+  those paths ends it. `blocked` keeps its name for the refusal where both probes found nothing,
+  and the three up-front refusals really are that ("Your local changes …", "The following untracked
+  working tree files …", "Updating the following directories would lose untracked files in them"
+  each abort before writing, witnessed by a second incoming file sorting FIRST keeping its old
+  content) — but read those as three measured MESSAGES, not as the code's meaning: `blocked` is the
+  FALL-THROUGH when both probes are silent, which is also what the already-half-applied checkout
+  above reports, and what a half-apply whose only casualty got filtered as regenerable detritus
+  reports on the first sweep. So what `blocked` no longer does is assert "NOTHING was
+  discarded"; it reports what the two probes FOUND, and says outright when it could not look. Those
+  probes are the tree, never the message (locale and git version make the text unparseable —
+  though NOT because the three messages are unlike each other: two of them share the whole phrase
+  "would be overwritten by merge"): a set-difference of `git diff-index --name-only HEAD` taken
+  before and after — the difference, because the ordinary refusal happens BECAUSE the human has a
+  tracked file modified, so an after-only read would blame this tool for their edit — and, for the
+  ignored half, an `os.lstat` fingerprint of each path the probe named, INODE included (git unlinks
+  and recreates, so the inode moves even where mtime granularity would not; the second pass built
+  the FAT32 case that needs it). **`diff-index`, the PLUMBING, and that is a correction paid for in
+  a regression**: this shipped as `git diff --name-only HEAD` for one round, and `git diff`
+  REFRESHES A HUMAN'S INDEX AND WRITES IT, with `GIT_OPTIONAL_LOCKS=0` and `--no-optional-locks`
+  both INERT against it — end to end the refused run moved the index under that form, and not under
+  the pre-835 code, breaking a property #806 had measured. The discriminating input is a
+  stat-dirty-but-content-CLEAN entry whose mtime is in the PAST; `touch` it to NOW and git calls the
+  entry racily clean, declines to record the stat, and `git diff` looks innocent — which is why an
+  isolated probe of mine saw nothing and the end-to-end one did. (`GIT_OPTIONAL_LOCKS=0 git status
+  --porcelain` also preserves the index — there the variable IS load-bearing — and lost only on
+  needing rename and untracked records parsed out.) `diff-index` costs false positives on
+  stat-dirty-clean entries, which the set-difference cancels: it can hide a half-applied path, never
+  invent one. The fingerprint is not belt either: the shape that decides the whole design is a
+  failing merge whose ONLY casualty is the ignored file, where `git diff` and `git status` are both
+  EMPTY before AND after. It is git's own behaviour — `git pull --ff-only` typed by hand loses the
   same file — and a "copy it aside first" is buildable but was NOT built: the card asked for a
   post-mortem and explicitly not a guard, so #806 fixed
   the SILENCE and not the loss: a SUCCESSFUL sync now carries `overwritten_ignored` (filtered by

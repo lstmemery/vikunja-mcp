@@ -3722,8 +3722,15 @@ def test_uncommitted_work_in_an_untouched_file_survives_the_fast_forward(repo, t
 def test_the_fast_forward_refuses_rather_than_overwriting_uncommitted_work(repo, tracker,
                                                                           tmp_path):
     """THE invariant. The incoming commit touches the very file the human is editing, so the
-    update must not happen at all — refused, reported, and NOTHING discarded. git is what
-    enforces this, which is why the ladder ends in `merge --ff-only` and never in a reset."""
+    update must not happen at all — refused, reported, and this file untouched. git is what
+    enforces this, which is why the ladder ends in `merge --ff-only` and never in a reset.
+
+    IT USED TO ASSERT THE PHRASE "NOTHING was discarded" AND THAT PHRASE IS GONE — VMCP-244 (835),
+    because `merge --ff-only` is not atomic and the sentence was therefore false on a DIFFERENT
+    input than this one (see the 835 section at the end of this file). This input is the up-front
+    refusal, where git checks before writing and really does write nothing; what changed is that
+    the branch now says what it FOUND instead of asserting what it never checked. The ground truth
+    below is what this test was always for, and none of it moved."""
     _api, wf = tracker
     before = _git(repo, "rev-parse", "HEAD")
     (repo / "README.md").write_text("hi\nWORK THE HUMAN HAS NOT COMMITTED\n")
@@ -3733,7 +3740,7 @@ def test_the_fast_forward_refuses_rather_than_overwriting_uncommitted_work(repo,
 
     state = res["main_checkout"]
     assert state["updated"] is False and state["code"] == workspace_cmd.MAIN_SYNC_BLOCKED, state
-    assert "NOTHING was discarded" in state["reason"]
+    assert "nothing half-written was found" in state["reason"], state["reason"]
     assert _git(repo, "rev-parse", "HEAD") == before, "the checkout must not have moved"
     assert (repo / "README.md").read_text() == "hi\nWORK THE HUMAN HAS NOT COMMITTED\n"
 
@@ -4598,3 +4605,434 @@ def test_the_probe_leaves_the_index_of_a_REFUSED_checkout_untouched(repo, tracke
     assert index.stat().st_mtime_ns == before, (
         "the probe refreshed the index of a checkout whose merge was then refused"
     )
+
+
+# --- VMCP-244 (835): `merge --ff-only` is NOT ATOMIC, and `blocked` promised that it was ---
+#
+# Filed by the round-2 independent review of VMCP-240 (806) and reproduced independently here
+# before anything was changed, on real git 2.50.1 (Apple Git-155). `merge --ff-only` applies
+# entries and can fail PART-WAY, leaving what it already wrote written — and the refusal branch
+# said "the checkout is unchanged and NOTHING was discarded", which is the ONE branch where
+# #806's `overwritten_ignored` probe was deliberately thrown away. So the branch that promised
+# safety was the branch that could destroy an ignored file without leaving any trace.
+#
+# THREE SHAPES, all built rather than reasoned about, and the third is what decides the design:
+#   * an unwritable DIRECTORY (`chmod 500`) -> `unable to unlink old '<p>': Permission denied`;
+#   * `chflags uchg` — Finder's "Locked" checkbox — on a tracked FILE -> the same, `Operation
+#     not permitted`. A checkbox, not a contrived permission, which is why the reachability
+#     caveat on the card is weaker than the card thought;
+#   * a shape whose ONLY casualty is the human's ignored file: `git diff --name-only HEAD` and
+#     `git status --porcelain` are BOTH empty before AND after. A tracked-diff-only detector
+#     reports `blocked` there and hides the loss, which is why the ignored half is fingerprinted.
+#
+# AND ONE REFUTATION, which changes the framing rather than the fix: the damage is NOT bounded by
+# index order. A tracked `zzz.txt` sorting AFTER the locked `zlocked.txt` was applied too, so
+# git's checkout loop attempts EVERY entry and writes everything it can; what survives is exactly
+# what git could not write. `test_the_half_apply_is_not_bounded_by_index_order` is that pin.
+#
+# What KEEPS `blocked` honest is measured, not assumed: all three up-front refusals ("Your local
+# changes …", "The following untracked working tree files …", "Updating the following directories
+# would lose untracked files in them") write NOTHING — a second incoming file sorting first stayed
+# at its old content in each, and `test_an_up_front_refusal_writes_nothing_and_stays_blocked`
+# replays one of them. Read that as three measured MESSAGES, never as what the CODE promises:
+# `blocked` is the fall-through whenever both probes are silent, so an already-half-applied checkout
+# reports it on every LATER sweep (measured: sweep 1 `half-applied`, sweeps 2 and 3 `blocked`, tree
+# still mixed — the state does not heal, because the half-written paths then block the ff themselves
+# as local changes).
+#
+# MUTATION SWEEP, ROUND ONE. One selection throughout (`tests/unit/test_workspace_cmd.py -p
+# no:randomly`, no `-q`), `collected 178` and `0 errors` in every round, every round read by
+# COUNTING lines that begin `FAILED ` and lines that begin `ERROR ` separately; control 0 failed:
+#   * no ignored FINGERPRINT half at all ........................ control 0 failed; 4 failed
+#   * tracked half is after-only, no set DIFFERENCE ............. control 0 failed; 5 failed
+#   * no partial detection at all: every refusal is `blocked` ... control 0 failed; 7 failed
+#   * ONE try/except around both snapshots instead of two ....... control 0 failed; 1 failed
+#   * `_add_capped` drops the cap slice ........................ control 0 failed; 2 failed
+#   * `_add_capped` emits the key even when empty .............. control 0 failed; 7 failed
+#   * `_fingerprints` follows symlinks (`os.stat`, not `os.lstat`) control 0 failed; 0 failed
+#   * the fingerprint drops the INODE .......................... control 0 failed; 0 failed
+#   * the fingerprint snapshot taken AFTER the merge ............ control 0 failed; 4 failed
+#   * `blocked` keeps asserting NOTHING was discarded ........... control 0 failed; 1 failed
+# THE TWO ZEROS ARE DECLARED rather than discovered here and left unsaid. `os.lstat` needs a victim
+# that is a SYMLINK under a partial apply and nothing here builds one, so that property is measured
+# directly instead — `os.stat` on a symlink answers about the TARGET, a different inode and a path
+# the merge does not touch. The inode is belt over `mtime_ns` on THIS filesystem and only earns its
+# place on a coarse-mtime one, which no test here mounts; the independent second pass built that
+# case on a FAT32 image and saw the inode move in both halves of it.
+#
+# ROUND TWO, after that second pass found a REGRESSION and five overclaims in the round-one text.
+# Same selection, `collected 181` and `0 errors` in every round, control 0 failed:
+#   * `blocked` claims the check ran when neither probe answered  control 0 failed; 1 failed
+#   * `MAIN_SYNC_PARTIAL` renamed, rulebook left alone ......... control 0 failed; 1 failed
+#   * `_tracked_changes` back to `git diff` (the regression) .... control 0 failed; 1 failed
+#   * `_tracked_changes` drops `--no-renames` .................. control 0 failed; 0 failed
+# The `git diff` round is the one worth reading twice: it failed EXACTLY ONE test, the new
+# `test_the_partial_apply_probes_do_not_REFRESH_a_refused_checkouts_index`, and that single number
+# is the measurement saying the pre-existing index pin next door cannot see this class at all — it
+# has no stat-dirty-but-content-clean entry, so git never wants to write. `--no-renames` pins
+# nothing: `diff-index` is plumbing and does not read `diff.renames`, so the flag is belt against a
+# future default, and rename detection could only ever add a name to BOTH snapshots, where the set
+# difference cancels it.
+
+def _unwritable_dir(path: Path):
+    """A directory git cannot unlink out of, restored however the test ends — otherwise pytest's
+    own tmp_path teardown fails on it."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def _cm():
+        mode = path.stat().st_mode
+        path.chmod(0o500)
+        try:
+            yield
+        finally:
+            path.chmod(mode)
+    return _cm()
+
+
+def _half_applying_stand(repo, tmp_path, extra_local=(), extra_incoming=()):
+    """The card's own stand: tracked `aaa.txt` plus a tracked file inside a directory git will not
+    be able to write, an IGNORED `shot.png` of the human's, and a sibling landing all of them."""
+    _ignoring(repo, "*.png")
+    (repo / "aaa.txt").write_text("v1\n")
+    (repo / "ro").mkdir()
+    (repo / "ro" / "bbb.txt").write_text("v1\n")
+    for rel in extra_local:
+        (repo / rel).write_text("v1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "the state the human is sitting on")
+    _git(repo, "push", "origin", "main")
+    (repo / "shot.png").write_bytes(b"\x89PNG the human's own evidence screenshot")
+    assert _git(repo, "status", "--porcelain") == "", "the ignored file is invisible, as always"
+
+    incoming = {"aaa.txt": "v2\n", "ro/bbb.txt": "v2\n", "shot.png": "UPSTREAM\n"}
+    incoming.update({rel: "v2\n" for rel in extra_incoming})
+    return _land_on_origin(tmp_path, "halfapply", incoming, force=True)
+
+
+def test_a_fast_forward_that_failed_PART_WAY_is_not_reported_as_blocked(repo, tracker, tmp_path):
+    """THE CARD, reproduced and then fixed. Before this, the payload for this exact input was
+    `{"updated": false, "code": "blocked", "reason": "… the checkout is unchanged and NOTHING was
+    discarded: error: unable to unlink old 'ro/bbb.txt': Permission denied"}` — while `aaa.txt`
+    had gone v1->v2 and the human's ignored `shot.png` had been replaced by upstream's bytes.
+
+    Both halves of that sentence were false at once, and the probe had ALREADY named `shot.png`
+    on the same input: the code discarded its answer because the branch was not `updated: true`.
+
+    Three assertions, because a code alone would not have caught the lie: the STATE is named,
+    the tracked half-write is listed, and the ignored casualty is named."""
+    _api, wf = tracker
+    _half_applying_stand(repo, tmp_path)
+    before = _git(repo, "rev-parse", "HEAD")
+
+    with _unwritable_dir(repo / "ro"):
+        res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["updated"] is False, state
+    assert state["code"] == workspace_cmd.MAIN_SYNC_PARTIAL, state
+    assert state["half_applied"] == ["aaa.txt"], state
+    assert state["overwritten_ignored"] == ["shot.png"], state
+    assert "NOTHING was discarded" not in state["reason"], state["reason"]
+    assert "unable to unlink old" in state["reason"], "git's own message still rides along"
+    # ...and the ground truth the report is about, so this cannot pass on a report alone.
+    assert _git(repo, "rev-parse", "HEAD") == before, "HEAD really did not move"
+    assert (repo / "aaa.txt").read_text() == "v2\n", "the half-apply really happened"
+    assert (repo / "ro" / "bbb.txt").read_text() == "v1\n", "and stopped where git could not write"
+    assert (repo / "shot.png").read_text() == "UPSTREAM\n", "the human's bytes really are gone"
+
+
+@pytest.mark.skipif(not hasattr(os, "chflags"), reason="BSD file flags (macOS): no Linux analogue")
+def test_the_finder_LOCKED_checkbox_produces_the_same_half_apply(repo, tracker, tmp_path):
+    """The SECOND trigger, measured by 806's own second pass and re-measured here: `chflags uchg`
+    is what Finder's "Locked" checkbox sets, and it makes git fail with `Operation not permitted`
+    on that one file while writing everything else.
+
+    It matters to how reachable this is, not to the fix: the card's own caveat called an
+    unlinkable path rare ("permissions, file flags, a full disk, an open file on Windows"), and a
+    checkbox in a file manager is not rare."""
+    _api, wf = tracker
+    _ignoring(repo, "*.png")
+    (repo / "aaa.txt").write_text("v1\n")
+    (repo / "zlocked.txt").write_text("v1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "before")
+    _git(repo, "push", "origin", "main")
+    (repo / "shot.png").write_bytes(b"\x89PNG the human's own evidence")
+    _land_on_origin(tmp_path, "locked",
+                    {"aaa.txt": "v2\n", "zlocked.txt": "v2\n", "shot.png": "UPSTREAM\n"},
+                    force=True)
+
+    os.chflags(repo / "zlocked.txt", 0x00000002)          # UF_IMMUTABLE, i.e. `chflags uchg`
+    try:
+        res = gc_workspaces(cwd=repo, workflow=wf)
+    finally:
+        os.chflags(repo / "zlocked.txt", 0)
+
+    state = res["main_checkout"]
+    assert state["code"] == workspace_cmd.MAIN_SYNC_PARTIAL, state
+    assert "Operation not permitted" in state["reason"], state["reason"]
+    assert state["overwritten_ignored"] == ["shot.png"], state
+    assert (repo / "zlocked.txt").read_text() == "v1\n", "the locked file is what git could not do"
+    assert (repo / "shot.png").read_text() == "UPSTREAM\n"
+
+
+def test_the_half_apply_is_not_bounded_by_index_order(repo, tracker, tmp_path):
+    """THE REFUTATION, and the reason no part of this fix reasons from ordering.
+
+    "Everything sorting BEFORE the failure point is applied" is the natural reading of a loop that
+    dies, and it is WRONG here: `zzz.txt` sorts after `ro/bbb.txt` and is applied anyway, so git's
+    checkout loop attempts every entry and writes everything it can. What survives is exactly what
+    git could not write — which is why the detector asks the WORKING TREE what changed instead of
+    deriving a prefix of the index."""
+    _api, wf = tracker
+    _half_applying_stand(repo, tmp_path, extra_local=["zzz.txt"], extra_incoming=["zzz.txt"])
+
+    with _unwritable_dir(repo / "ro"):
+        res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["code"] == workspace_cmd.MAIN_SYNC_PARTIAL, state
+    assert state["half_applied"] == ["aaa.txt", "zzz.txt"], state
+    assert (repo / "zzz.txt").read_text() == "v2\n", (
+        "a path sorting AFTER the failure was written too — the damage is not order-bounded"
+    )
+
+
+def test_a_half_apply_whose_only_casualty_is_an_IGNORED_file_is_still_reported(repo, tracker,
+                                                                              tmp_path):
+    """THE SHAPE THAT DECIDES THE DESIGN, and the one a tracked-diff detector cannot see.
+
+    The incoming commit touches exactly two paths: the tracked file git cannot write, and a
+    force-added `shot.png` the checkout ignores. Measured on real git: `git diff --name-only HEAD`
+    is EMPTY before AND after, `git status --porcelain` likewise — because the half-written path is
+    untracked locally — while the human's bytes are gone. So `half_applied` is empty here, and the
+    only thing that makes this branch report at all is the per-path FINGERPRINT of the paths the
+    probe named."""
+    _api, wf = tracker
+    _ignoring(repo, "*.png")
+    (repo / "ro").mkdir()
+    (repo / "ro" / "bbb.txt").write_text("v1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "before")
+    _git(repo, "push", "origin", "main")
+    (repo / "shot.png").write_bytes(b"\x89PNG the human's own evidence")
+    _land_on_origin(tmp_path, "ignonly", {"ro/bbb.txt": "v2\n", "shot.png": "UPSTREAM\n"},
+                    force=True)
+
+    with _unwritable_dir(repo / "ro"):
+        res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["code"] == workspace_cmd.MAIN_SYNC_PARTIAL, state
+    assert state["overwritten_ignored"] == ["shot.png"], state
+    assert "half_applied" not in state, (
+        "nothing TRACKED changed here, and a key present with an empty list is the never-read "
+        "field this module keeps having to rescue"
+    )
+    assert _git(repo, "status", "--porcelain") == "", "git says nothing, before or after"
+    assert (repo / "shot.png").read_text() == "UPSTREAM\n"
+
+
+def test_an_up_front_refusal_writes_nothing_and_stays_blocked(repo, tracker, tmp_path):
+    """THE CONTRAST that keeps `blocked` a useful word, and it is measured rather than argued.
+
+    git checks the whole update BEFORE writing any of it, so a refusal for a local modification
+    aborts with nothing written: measured on all three up-front refusals, a second incoming file
+    sorting FIRST kept its old content. Here `aaa.txt` is that witness. So this branch keeps
+    `blocked`, gains no key, and is what makes the new code mean something."""
+    _api, wf = tracker
+    (repo / "aaa.txt").write_text("v1\n")
+    (repo / "coll.txt").write_text("v1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "before")
+    _git(repo, "push", "origin", "main")
+    before = _git(repo, "rev-parse", "HEAD")
+    (repo / "coll.txt").write_text("THE HUMAN IS EDITING THIS\n")
+    _land_on_origin(tmp_path, "upfront", {"aaa.txt": "v2\n", "coll.txt": "UPSTREAM\n"})
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["code"] == workspace_cmd.MAIN_SYNC_BLOCKED, state
+    assert "half_applied" not in state and "overwritten_ignored" not in state, state
+    assert _git(repo, "rev-parse", "HEAD") == before
+    assert (repo / "aaa.txt").read_text() == "v1\n", (
+        "a path sorting before the refused one stayed put — the up-front check really is up-front"
+    )
+    assert (repo / "coll.txt").read_text() == "THE HUMAN IS EDITING THIS\n"
+
+
+def test_the_humans_own_pre_existing_edit_is_never_called_half_applied(repo, tracker, tmp_path):
+    """Why the tracked half is a SET DIFFERENCE and not just "what differs from HEAD afterwards".
+
+    The refusal above happens BECAUSE the human has `coll.txt` modified, so an after-only reading
+    would report the human's own in-flight edit as something this tool's merge wrote — on the most
+    ordinary refusal there is. The before-snapshot is what tells the two apart, and here the
+    half-apply is real (`aaa.txt`) while `coll.txt` must not be in the list."""
+    _api, wf = tracker
+    _ignoring(repo, "*.png")
+    (repo / "aaa.txt").write_text("v1\n")
+    (repo / "mine.txt").write_text("v1\n")
+    (repo / "ro").mkdir()
+    (repo / "ro" / "bbb.txt").write_text("v1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "before")
+    _git(repo, "push", "origin", "main")
+    (repo / "mine.txt").write_text("THE HUMAN'S OWN UNCOMMITTED EDIT\n")
+    _land_on_origin(tmp_path, "mixed", {"aaa.txt": "v2\n", "ro/bbb.txt": "v2\n"})
+
+    with _unwritable_dir(repo / "ro"):
+        res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["code"] == workspace_cmd.MAIN_SYNC_PARTIAL, state
+    assert state["half_applied"] == ["aaa.txt"], state
+    assert (repo / "mine.txt").read_text() == "THE HUMAN'S OWN UNCOMMITTED EDIT\n", (
+        "and it survived, which is the property the report must not misdescribe"
+    )
+
+
+def test_the_half_applied_list_is_capped_and_says_so(repo, tracker, tmp_path):
+    """Same cap and same `_truncated` sibling as `overwritten_ignored`, for the same reason: a
+    fast-forward can carry hundreds of paths, and a report nobody can read is not a report. The
+    number is the length BEFORE the cap."""
+    _api, wf = tracker
+    n = workspace_cmd._MAX_REPORTED_IGNORED + 3
+    names = [f"f{i:03d}.txt" for i in range(n)]
+    for name in names:
+        (repo / name).write_text("v1\n")
+    (repo / "ro").mkdir()
+    (repo / "ro" / "bbb.txt").write_text("v1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "before")
+    _git(repo, "push", "origin", "main")
+    incoming = {name: "v2\n" for name in names}
+    incoming["ro/bbb.txt"] = "v2\n"
+    _land_on_origin(tmp_path, "many", incoming)
+
+    with _unwritable_dir(repo / "ro"):
+        res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["code"] == workspace_cmd.MAIN_SYNC_PARTIAL, state
+    assert len(state["half_applied"]) == workspace_cmd._MAX_REPORTED_IGNORED, state
+    assert state["half_applied_truncated"] == n, state
+
+
+def test_a_failing_half_apply_check_costs_the_report_and_never_the_verdict(repo, tracker, tmp_path,
+                                                                          monkeypatch):
+    """The same best-effort class as the `overwritten_ignored` probe next door, and the same
+    argument: a diagnostic must never become a new way for the reaper to fail. The sweep still
+    returns its three lists and the fast-forward is still attempted.
+
+    AND IT PINS THE SEPARATE `except`, which is the part worth having a test for: the two snapshots
+    are caught INDEPENDENTLY, so losing the tracked one costs the `half_applied` key and NOT the
+    ignored evidence — the mistake `_ignored_paths_the_ff_will_overwrite` documents against itself
+    ("one unreadable path returns [] for the WHOLE batch, discarding names already found"). Wrap
+    both in one `try` and this file's most important report disappears whenever `git diff` hiccups.
+    """
+    _api, wf = tracker
+    _half_applying_stand(repo, tmp_path)
+    monkeypatch.setattr(workspace_cmd, "_tracked_changes",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("git fell over")))
+
+    with _unwritable_dir(repo / "ro"):
+        res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert set(res) >= {"released", "kept", "expected", "main_checkout"}
+    state = res["main_checkout"]
+    assert state["updated"] is False and "half_applied" not in state, state
+    assert state["code"] == workspace_cmd.MAIN_SYNC_PARTIAL, state
+    assert state["overwritten_ignored"] == ["shot.png"], state
+
+
+def test_the_partial_apply_probes_do_not_REFRESH_a_refused_checkouts_index(repo, tracker, tmp_path):
+    """THE REGRESSION THIS CARD SHIPPED FOR ONE ROUND, and the stand its own predecessor could not
+    build. `test_the_probe_leaves_the_index_of_a_REFUSED_checkout_untouched` asks the same question
+    and stays GREEN here — measured, control 0 failed and the `git diff` form 0 failed against it —
+    because its checkout has no STAT-DIRTY-BUT-CONTENT-CLEAN entry, which is the only state that
+    makes git want to write the index at all.
+
+    Two things have to be true of that entry and the second is what hid the bug: the stat must
+    differ from the index, AND its mtime must be in the PAST. `touch`ed to NOW, git calls the entry
+    racily clean, deliberately declines to record the fresh stat, and every read looks innocent.
+    Here `stat_dirty.txt` is given mtime 0 — which is just the ordinary state of a file somebody
+    stopped editing an hour ago.
+
+    Measured on real git 2.50.1: `git diff --name-only HEAD` moves the index mtime and
+    `GIT_OPTIONAL_LOCKS=0` does NOT stop it (nor does `git --no-optional-locks`), while
+    `git diff-index --name-only HEAD` leaves it alone. That is why this function uses the plumbing.
+    The property being defended is the module's oldest one here: on a run whose merge is REFUSED,
+    nothing of ours may write in somebody else's working directory."""
+    _api, wf = tracker
+    (repo / "stat_dirty.txt").write_text("v1\n")
+    (repo / "coll.txt").write_text("v1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "before")
+    _git(repo, "push", "origin", "main")
+    (repo / "coll.txt").write_text("THE HUMAN IS EDITING THIS\n")     # -> the merge is refused
+    os.utime(repo / "stat_dirty.txt", (0, 0))                         # stat-dirty, content-clean
+    _land_on_origin(tmp_path, "idx", {"coll.txt": "UPSTREAM\n"})
+    index = Path(_git(repo, "rev-parse", "--git-path", "index"))
+    index = index if index.is_absolute() else repo / index
+    before = index.stat().st_mtime_ns
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert res["main_checkout"]["code"] == workspace_cmd.MAIN_SYNC_BLOCKED, res["main_checkout"]
+    assert index.stat().st_mtime_ns == before, (
+        "the partial-apply probe refreshed and rewrote the index of a HUMAN's checkout on a run "
+        "whose merge was refused — `git diff HEAD` does that and no env var stops it; the "
+        "plumbing `git diff-index` is what does not"
+    )
+
+
+def test_a_refusal_that_could_not_be_CHECKED_does_not_claim_it_was(repo, tracker, tmp_path,
+                                                                   monkeypatch):
+    """The failure this whole chain is made of, one level up: a report that reassures about
+    something it never looked at. With BOTH snapshots unavailable there is no evidence either way,
+    so the `blocked` reason must not borrow the wording of the branch that did look."""
+    _api, wf = tracker
+    (repo / "coll.txt").write_text("v1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "before")
+    _git(repo, "push", "origin", "main")
+    (repo / "coll.txt").write_text("THE HUMAN IS EDITING THIS\n")
+    _land_on_origin(tmp_path, "blind", {"coll.txt": "UPSTREAM\n"})
+    boom = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("git fell over"))   # noqa: E731
+    monkeypatch.setattr(workspace_cmd, "_tracked_changes", boom)
+    monkeypatch.setattr(workspace_cmd, "_fingerprints", boom)
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["code"] == workspace_cmd.MAIN_SYNC_BLOCKED, state
+    assert "could NOT be checked" in state["reason"], state["reason"]
+    assert "was found afterwards" not in state["reason"], state["reason"]
+
+
+def test_the_rulebook_names_every_main_checkout_code_the_sweep_can_emit():
+    """SKILL.md is where an agent LEARNS what a `main_checkout` code means, so the code VALUES are a
+    cross-surface contract: add or rename one without the rulebook moving and the orchestrator reads
+    a code its own instructions never mention.
+
+    VMCP-244 (835) is why this is asserted rather than assumed. That card added `half-applied` AND
+    had to rewrite the rulebook line it landed next to — the line claiming the whole `updated:
+    false` family had lost NOTHING — and nothing anywhere would have gone red had the rulebook been
+    left alone.
+
+    Its bound, named here rather than discovered by the next reader: PRESENCE of the backticked
+    value, so it cannot check that what the rulebook SAYS about a code is true, and a value that is
+    also an ordinary word could be vouched for by unrelated prose (`blocked` is a tracker LABEL in
+    this same file). It catches the one failure that is otherwise completely silent — a code the
+    rulebook does not mention at all."""
+    skill = (Path(workspace_cmd.__file__).parent / "skills" / "tracker" / "SKILL.md").read_text(
+        encoding="utf-8")
+    codes = {n: v for n, v in vars(workspace_cmd).items()
+             if n.startswith("MAIN_SYNC_") and isinstance(v, str)}
+    assert len(codes) >= 8, sorted(codes)
+    missing = sorted(v for v in codes.values() if f"`{v}`" not in skill)
+    assert not missing, f"the rulebook names no such main_checkout code: {missing}"
+    for key in ("half_applied", "half_applied_truncated", "overwritten_ignored"):
+        assert f"`{key}`" in skill, f"the rulebook never mentions the key {key}"
