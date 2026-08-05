@@ -431,6 +431,68 @@ AUTO_NAMED_PROBES = ("page-2026-08-02T22-28-55-167Z.yml", "console-2026-08-02T22
 # guard matches on.
 STORAGE_STATE_SHAPE_KEYS = ("cookies", "origins")
 
+# ---------------------------------------------------------------------------------------------
+# The browser's TEXT artifacts, which until VMCP-209 (752) had no content lock at all — the
+# asymmetry that card was filed for. The binary ones are held by leading magic bytes under any
+# name (#629) and a storage state by the two list-valued keys above; the text ones were held only
+# by PROSE rules, which pin what the rulebook PRINTS (#703's explicit `filename`, #736's
+# `--output-dir`, #751's `--config`) and not what lands on disk. Every future flag the rulebook
+# does not print walks past all three.
+#
+# `.gitignore` used to say a content axis had been "considered and dropped", on two grounds. Both
+# were re-measured on this card and only ONE of them survived.
+#
+# WRONG: "it fires on any file that DOCUMENTS it — this comment included." That is true of a
+# MARKER GREP and false of the classifier below, and the difference is the same one the
+# storage-state gate already relies on: that gate does not scan for the string `"cookies"`, it
+# requires the candidate to BE a JSON object with two list-valued keys, so a file that merely
+# discusses the shape is not a candidate. The text analogue is a WHOLE-FILE grammar — EVERY
+# non-blank line must match, over a minimum line count — which makes a fenced six-line quotation
+# inside two hundred lines of prose a non-candidate rather than a false red. Measured both ways
+# on this tree, and the two answers differ only AFTER this card lands: see
+# `test_the_naive_marker_grep_would_be_red_on_arrival_and_the_whole_file_grammar_is_not`.
+#
+# RIGHT, and narrowed rather than dropped: "it reaches `browser_snapshot` alone of the four."
+# Measured against real artifacts from an own `--isolated --headless` server (0.0.78 line,
+# `@playwright/mcp@latest` on 2026-08-05, own throwaway origin, own stdio client), it reaches
+# THREE of the four text writers, and the fourth is out of reach for a structural reason rather
+# than for want of trying: `browser_evaluate` writes whatever the evaluated JS returned, so it
+# has no grammar to match. Its measured output was the JSON string literal
+# `"<page text with \n escapes>"`, which is indistinguishable from any other JSON string — the
+# one place the retired word "indistinguishable" is still the right one.
+#
+# The grammars, transcribed from those runs rather than from the filing card (which had two
+# details wrong, both corrected here: the console level is `WARNING`, not `WARN`, and a `ref`
+# token is frame-qualified — `[ref=f1e1]` — on any page that is not the first document):
+#
+#   aria snapshot (`page-*.yml`, and `browser_snapshot(filename=…)` byte-identically):
+#       - generic [active] [ref=e1]:
+#         - heading "…" [level=1] [ref=e2]
+#         - link "go next" [ref=e4] [cursor=pointer]:
+#           - /url: /next?token=…
+#   console  (`console-*.log`):   [      54ms] [LOG] … @ http://…:9
+#   console  (explicit filename): Total messages: 3 (Errors: 1, Warnings: 1) / [LOG] … @ …
+#   network  (explicit filename): 2. [GET] http://…?token=… => [404] Not Found
+#
+# Two properties of the aria form were probed rather than assumed, because a matcher requiring
+# EVERY line to match is only as good as its worst input. Multi-line page content — `<pre>`,
+# `<textarea>`, `<blockquote>` — is FLATTENED onto one line, and embedded quotes are escaped, so
+# the one-item-per-line grammar survives content designed to break it. And the `ref` counter
+# restarts per snapshot but keeps its `[ref=` prefix in both spellings.
+_ARIA_ITEM_LINE = re.compile(r"^\s*-\s\S")
+_ARIA_REF_TOKEN = re.compile(r"\[ref=[0-9a-z]+\]")
+# Two thresholds, and both are floors on EVIDENCE rather than on size. A single `- foo` line is
+# an ordinary markdown bullet; a single `[ref=e1]` is somebody quoting one. A snapshot of even
+# an empty body carries the root node plus its children, and the smallest real one measured here
+# was 6 lines with 6 refs.
+ARIA_MIN_ITEM_LINES = 3
+ARIA_MIN_REF_LINES = 2
+_CONSOLE_TIMED_LINE = re.compile(r"^\[\s*\d+ms\]\s\[[A-Z]+\]\s")
+_CONSOLE_PLAIN_LINE = re.compile(r"^\[[A-Z]+\]\s")
+_CONSOLE_TOTALS_HEADER = re.compile(r"^Total messages: \d+")
+_NETWORK_REQUEST_LINE = re.compile(r"^\d+\.\s\[[A-Z]+\]\s\S+\s=>\s\[\d+\]\s")
+_NETWORK_NOTE_LINE = re.compile(r"^Note: ")
+
 # The scan has to READ a candidate to classify it, so it needs a ceiling on a single read. What
 # that ceiling may NOT be is a silent skip, and the first version of it was exactly that:
 # `1 << 20`, justified by "a credential export that big is not a thing" — a universal about every
@@ -482,6 +544,10 @@ GIT_CALL_MARKERS = (
     # SKIP tests that work — trading a false alarm for lost coverage, which is the same
     # trade #622 exists to refuse, just pointing the other way.
     "_scan_for_storage_state_shape(REPO_ROOT",
+    # VMCP-209 (752) added a second scan over the same walk, and its own false-red pin drives
+    # the shared walk directly. Same door, same rule: the marker is the call carrying REPO_ROOT.
+    "_scan_for_browser_text_artifact_shape(REPO_ROOT",
+    "_publishable_copies(REPO_ROOT",
 )
 
 # --- Is this tree a git checkout at all? (#622) ---------------------------------------------
@@ -1752,6 +1818,139 @@ def test_every_filename_skill_md_prescribes_is_excluded_by_this_repos_gitignore(
         "spelling, this config key, and the two env vars that need no flag at all"
 
 
+def _publishable_copies(root: Path):
+    """Every copy of every path `git add -A` could publish, yielded as `(rel, size, raw)`.
+
+    ONE walk, shared by both shape scans below rather than written twice — VMCP-209 (752)
+    extracted it unchanged from the storage-state scan. The classifier is the easy half; the
+    subtle half is WHICH BYTES count as publishable, and that took VMCP-141 (630) plus its
+    reviewer two rounds to get right. A second hand-written copy would be the one nobody
+    re-measured, and the two gates would drift apart in silence.
+
+    `raw` is `b""` when `size` exceeds `SHAPE_SCAN_MAX_BYTES`; the caller decides what to do
+    with a candidate it cannot afford to read, and both callers REPORT rather than skip.
+
+    TRACKED and UNTRACKED are kept apart, which VMCP-141 (630) is about. The candidate LIST
+    always came from git; the BYTES came from the worktree, and where the two disagree the scan
+    went quiet. Built rather than reasoned about, on a clean clone: a shaped file `git add -f`ed
+    and then DELETED from the worktree -> 1 passed; the worktree copy overwritten with `{}`
+    while the index blob stayed a cookie -> 1 passed; committed and then deleted locally without
+    committing the deletion (` D` in status) -> 1 passed. In all three `git cat-file -p :<path>`
+    still hands out the credential. CI never saw it (a fresh checkout is clean, and there the
+    index half IS the whole scan), which is why this is a hardening rather than a leak — but the
+    local run was claiming a guarantee it did not have.
+
+    EVERY copy of one candidate is yielded — the UNION, not a choice. #630's first version READ
+    THE INDEX INSTEAD OF THE WORKTREE, and its reviewer measured that this swapped one blind spot
+    for a wider one. Both copies matter, for two different commands: for a tracked-and-modified
+    path `git add -A` stages the WORKTREE bytes, while `git commit` (with nothing staged)
+    publishes the INDEX blob. Reading either alone leaves a real state silent.
+
+    Measured, on a real repo, with the index-only version: a committed benign `package.json`
+    whose worktree copy was overwritten with a credential and NOT staged — `git status` says
+    ` M`, `git add -A --dry-run` says `add 'package.json'`, and the scan reported NOTHING,
+    while the ORIGINAL worktree-only scan caught it. That state is also more reachable than
+    the three above: those need a deliberate `git add -f`, this needs only an overwrite of a
+    tracked file.
+    """
+    tracked, untracked = set(), set()
+    for args, into in ((("ls-files", "-z"), tracked),
+                       (("ls-files", "--others", "--exclude-standard", "-z"), untracked)):
+        listed = _git(*args, cwd=root)
+        assert listed.returncode == 0, f"git {' '.join(args)} failed: {listed.stderr.strip()}"
+        into.update(p for p in listed.stdout.split("\0") if p)
+
+    for rel in sorted(tracked | untracked):
+        if rel in tracked:
+            sized = _git("--no-pager", "cat-file", "-s", f":{rel}", cwd=root)
+            if sized.returncode == 0:            # a conflicted entry has no single size — skip it
+                size = int(sized.stdout.strip())
+                if size > SHAPE_SCAN_MAX_BYTES:
+                    yield rel, size, b""
+                elif size:
+                    blob = _git_bytes("--no-pager", "cat-file", "blob", f":{rel}", cwd=root)
+                    if blob.returncode == 0:
+                        yield rel, size, blob.stdout
+        path = root / rel
+        try:
+            if path.is_file():
+                size = path.stat().st_size
+                if size > SHAPE_SCAN_MAX_BYTES:
+                    yield rel, size, b""
+                elif size:
+                    yield rel, size, path.read_bytes()
+        except OSError:
+            pass
+
+
+def _classify_browser_text_artifact(raw: bytes) -> str | None:
+    """Name the browser text artifact these bytes ARE, or None — VMCP-209 (752).
+
+    WHOLE-FILE, and that is the whole design. Each grammar demands that EVERY non-blank line
+    match it, so the classifier answers "this file IS an aria snapshot", never "this file
+    mentions one" — the same distinction that lets the storage-state gate coexist with the
+    paragraphs describing the storage-state shape. A marker grep cannot make that distinction,
+    and the cost of not making it is measured next door rather than argued.
+
+    Bytes, not text, and a decode failure is a NEGATIVE rather than an exception: these are
+    text artifacts, so anything that is not UTF-8 is not one. That is a narrower claim than the
+    storage-state gate's, which accepts UTF-16 and BOMs because `json.loads` detects them; here
+    the producer writes UTF-8 (measured) and a line grammar has no encoding sniffer to borrow.
+    """
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    body = [ln for ln in text.splitlines() if ln.strip()]
+    if not body:
+        return None
+
+    if (len(body) >= ARIA_MIN_ITEM_LINES
+            and all(_ARIA_ITEM_LINE.match(ln) for ln in body)
+            and sum(1 for ln in body if _ARIA_REF_TOKEN.search(ln)) >= ARIA_MIN_REF_LINES):
+        return "aria snapshot (the page's own text, and its links' query strings)"
+
+    # The explicit-`filename` console export opens with a totals header and drops the per-line
+    # timing; the auto-named `console-*.log` keeps the timing and has no header. Accept either,
+    # and require at least one MESSAGE line: a header on its own is what an empty console
+    # produces (measured: `Total messages: 0 (Errors: 0, Warnings: 0)`), and an artifact with no
+    # messages has no page content in it to leak.
+    messages = body[1:] if _CONSOLE_TOTALS_HEADER.match(body[0]) else body
+    if messages and (all(_CONSOLE_TIMED_LINE.match(ln) for ln in messages)
+                     or all(_CONSOLE_PLAIN_LINE.match(ln) for ln in messages)):
+        return "console log (page console output, and the URLs it names)"
+
+    # The weakest of the three grammars, and the reason is worth stating rather than hiding: it
+    # has to tolerate a trailing PROSE line ("Note: 1 static request not shown, …") whose wording
+    # belongs to one version of the tool, where the other two are machine formats throughout. It
+    # still requires at least one request line, so the note alone — an empty network log — is not
+    # classified, for the same reason the bare console header is not.
+    if (any(_NETWORK_REQUEST_LINE.match(ln) for ln in body)
+            and all(_NETWORK_REQUEST_LINE.match(ln) or _NETWORK_NOTE_LINE.match(ln)
+                    for ln in body)):
+        return "network log (every URL the page requested, query strings included)"
+
+    return None
+
+
+def _scan_for_browser_text_artifact_shape(root: Path) -> tuple[list[tuple[str, str]], list[str]]:
+    """The text-artifact half of the shape gate — VMCP-209 (752). Same walk, same honesty about
+    a candidate too large to read: reported, never skipped."""
+    offenders: list[tuple[str, str]] = []
+    unclassified: list[str] = []
+    named = set()
+    for rel, size, raw in _publishable_copies(root):
+        if size > SHAPE_SCAN_MAX_BYTES:
+            if rel not in unclassified:
+                unclassified.append(rel)
+            continue
+        kind = _classify_browser_text_artifact(raw)
+        if kind and rel not in named:
+            named.add(rel)
+            offenders.append((rel, kind))
+    return offenders, unclassified
+
+
 def _scan_for_storage_state_shape(root: Path) -> tuple[list[str], list[str]]:
     """The shape scan, as ONE implementation, parameterised by repo root — VMCP-141 (630).
 
@@ -1763,88 +1962,35 @@ def _scan_for_storage_state_shape(root: Path) -> tuple[list[str], list[str]]:
 
     The real test below passes REPO_ROOT and nothing else does, so the parameter buys the pins
     their subject without giving anyone a scanner aimed somewhere else by default.
+
+    The candidate walk it drives lives in `_publishable_copies`, shared with the text-artifact
+    scan since VMCP-209 (752); everything the walk itself had to learn is documented there.
     """
-    # TRACKED and UNTRACKED are kept apart, which VMCP-141 (630) is about. The candidate LIST
-    # always came from git; the BYTES came from the worktree, and where the two disagree the scan
-    # went quiet. Built rather than reasoned about, on a clean clone: a shaped file `git add -f`ed
-    # and then DELETED from the worktree -> 1 passed; the worktree copy overwritten with `{}`
-    # while the index blob stayed a cookie -> 1 passed; committed and then deleted locally without
-    # committing the deletion (` D` in status) -> 1 passed. In all three `git cat-file -p :<path>`
-    # still hands out the credential. CI never saw it (a fresh checkout is clean, and there the
-    # index half IS the whole scan), which is why this is a hardening rather than a leak — but the
-    # local run was claiming a guarantee it did not have.
-    tracked, untracked = set(), set()
-    for args, into in ((("ls-files", "-z"), tracked),
-                       (("ls-files", "--others", "--exclude-standard", "-z"), untracked)):
-        listed = _git(*args, cwd=root)
-        assert listed.returncode == 0, f"git {' '.join(args)} failed: {listed.stderr.strip()}"
-        into.update(p for p in listed.stdout.split("\0") if p)
-
-    def _candidate_sources(rel: str) -> list[tuple[int, bytes]]:
-        """EVERY copy of one candidate that git could publish — the UNION, not a choice.
-
-        #630's first version READ THE INDEX INSTEAD OF THE WORKTREE, and its reviewer measured
-        that this swapped one blind spot for a wider one. Both copies matter, for two different
-        commands: for a tracked-and-modified path `git add -A` stages the WORKTREE bytes, while
-        `git commit` (with nothing staged) publishes the INDEX blob. Reading either alone leaves
-        a real state silent.
-
-        Measured, on a real repo, with the index-only version: a committed benign `package.json`
-        whose worktree copy was overwritten with a credential and NOT staged — `git status` says
-        ` M`, `git add -A --dry-run` says `add 'package.json'`, and the scan reported NOTHING,
-        while the ORIGINAL worktree-only scan caught it. That state is also more reachable than
-        the three this card was filed for: those need a deliberate `git add -f`, this needs only
-        an overwrite of a tracked file.
-        """
-        found: list[tuple[int, bytes]] = []
-        if rel in tracked:
-            sized = _git("--no-pager", "cat-file", "-s", f":{rel}", cwd=root)
-            if sized.returncode == 0:            # a conflicted entry has no single size — skip it
-                size = int(sized.stdout.strip())
-                if size > SHAPE_SCAN_MAX_BYTES:
-                    found.append((size, b""))
-                elif size:
-                    blob = _git_bytes("--no-pager", "cat-file", "blob", f":{rel}", cwd=root)
-                    if blob.returncode == 0:
-                        found.append((size, blob.stdout))
-        path = root / rel
-        try:
-            if path.is_file():
-                size = path.stat().st_size
-                if size > SHAPE_SCAN_MAX_BYTES:
-                    found.append((size, b""))
-                elif size:
-                    found.append((size, path.read_bytes()))
-        except OSError:
-            pass
-        return found
-
     offenders, unclassified = [], []
-    for rel in sorted(tracked | untracked):
-        for size, raw in _candidate_sources(rel):
-            if size > SHAPE_SCAN_MAX_BYTES:
-                if rel not in unclassified:
-                    unclassified.append(rel)  # REPORTED, never skipped — see SHAPE_SCAN_MAX_BYTES
-                continue
-            try:
-                # BYTES, not `read_text(encoding="utf-8")`. That call sat inside this same
-                # `except (OSError, ValueError)` and `UnicodeDecodeError` is a subclass of
-                # `ValueError`, so a shaped file written with a BOM or in UTF-16 was skipped in
-                # SILENCE. Measured: `json.loads` on BYTES accepts UTF-8-with-BOM, UTF-16 and
-                # UTF-32 (it detects the encoding itself), while the text path fails on all three.
-                # Precisely those three axes close — a file with a genuinely invalid byte still
-                # raises, and should: it is not valid JSON in any encoding, so that is a correct
-                # refusal rather than a miss. No real producer writes those forms either
-                # (playwright-core 1.62.0 writes utf8 via JSON.stringify), which is why this is
-                # hardening: a `continue` that goes quiet on a shaped file is the class this repo
-                # keeps filing cards about, reachable or not.
-                data = json.loads(raw)
-            except (OSError, ValueError):
-                continue  # unreadable, not text, or not JSON — cannot be a storage state
-            if isinstance(data, dict) and all(
-                isinstance(data.get(key), list) for key in STORAGE_STATE_SHAPE_KEYS
-            ) and rel not in offenders:
-                offenders.append(rel)      # named ONCE, whichever copy carries the credential
+    for rel, size, raw in _publishable_copies(root):
+        if size > SHAPE_SCAN_MAX_BYTES:
+            if rel not in unclassified:
+                unclassified.append(rel)      # REPORTED, never skipped — see SHAPE_SCAN_MAX_BYTES
+            continue
+        try:
+            # BYTES, not `read_text(encoding="utf-8")`. That call sat inside this same
+            # `except (OSError, ValueError)` and `UnicodeDecodeError` is a subclass of
+            # `ValueError`, so a shaped file written with a BOM or in UTF-16 was skipped in
+            # SILENCE. Measured: `json.loads` on BYTES accepts UTF-8-with-BOM, UTF-16 and
+            # UTF-32 (it detects the encoding itself), while the text path fails on all three.
+            # Precisely those three axes close — a file with a genuinely invalid byte still
+            # raises, and should: it is not valid JSON in any encoding, so that is a correct
+            # refusal rather than a miss. No real producer writes those forms either
+            # (playwright-core 1.62.0 writes utf8 via JSON.stringify), which is why this is
+            # hardening: a `continue` that goes quiet on a shaped file is the class this repo
+            # keeps filing cards about, reachable or not.
+            data = json.loads(raw)
+        except (OSError, ValueError):
+            continue  # unreadable, not text, or not JSON — cannot be a storage state
+        if isinstance(data, dict) and all(
+            isinstance(data.get(key), list) for key in STORAGE_STATE_SHAPE_KEYS
+        ) and rel not in offenders:
+            offenders.append(rel)          # named ONCE, whichever copy carries the credential
 
     return offenders, unclassified
 
@@ -1932,6 +2078,217 @@ def test_no_file_of_storage_state_shape_is_reachable_by_git():
         "is not a credential: `.gitignore` it — which also removes it from `git add -A`'s reach " \
         "— or, if it genuinely has to be committable, raise SHAPE_SCAN_MAX_BYTES together with " \
         "the measurement in the comment that justifies it"
+
+
+# --- VMCP-209 (752): the TEXT artifacts had no content lock at all ---------------------------
+#
+# Real bytes, from an own `--isolated --headless` server driven over stdio against an own
+# throwaway origin — not transcribed from the filing card, which had two details wrong. Kept as
+# fixtures so the pins below prove the gate against what the tool ACTUALLY writes; the long
+# console line is split across source lines only to stay inside this repo's wrap, and carries no
+# newline of its own.
+_ARIA_ARTIFACT = (
+    b'- generic [active] [ref=e1]:\n'
+    b'  - heading "VMCP752-ARIA-MARKER" [level=1] [ref=e2]\n'
+    b'  - paragraph [ref=e3]: "secret line: VMCP752-BODY-MARKER"\n'
+    b'  - link "go next" [ref=e4] [cursor=pointer]:\n'
+    b'    - /url: /next?token=VMCP752-QUERY-MARKER\n'
+    b'  - button "press me" [ref=e5]\n'
+)
+# The same page snapshotted after a second navigation: `ref` tokens come frame-qualified.
+_ARIA_ARTIFACT_FRAME_QUALIFIED = _ARIA_ARTIFACT.replace(b"[ref=e", b"[ref=f1e")
+_CONSOLE_AUTO_NAMED = (
+    b"[      54ms] [LOG] VMCP752-CONSOLE-MARKER @ http://127.0.0.1:20752/:9\n"
+    b"[      54ms] [WARNING] a warning line @ http://127.0.0.1:20752/:10\n"
+    b"[      64ms] [ERROR] Failed to load resource: the server responded with a status of "
+    b"404 (Not Found) @ http://127.0.0.1:20752/api?token=VMCP752-NETWORK-MARKER:0\n"
+)
+_CONSOLE_EXPLICIT = (
+    b"Total messages: 3 (Errors: 1, Warnings: 1)\n\n"
+    b"[LOG] VMCP752-CONSOLE-MARKER @ http://127.0.0.1:20752/:9\n"
+    b"[WARNING] a warning line @ http://127.0.0.1:20752/:10\n"
+)
+_NETWORK_EXPLICIT = (
+    b"2. [GET] http://127.0.0.1:20752/api?token=VMCP752-NETWORK-MARKER => [404] Not Found\n\n"
+    b'Note: 1 static request not shown, run with "static" option to see it.\n'
+)
+# The two EMPTY forms and the evaluate dump: measured outputs that carry no page content, and
+# therefore correctly classify as nothing. Named here so "not classified" stays a decision.
+_CONSOLE_EMPTY = b"Total messages: 0 (Errors: 0, Warnings: 0)\n"
+_NETWORK_EMPTY = b'\nNote: 1 static request not shown, run with "static" option to see it.\n'
+_EVALUATE_DUMP = (
+    b'"VMCP752-ARIA-MARKER\\n\\nsecret line: VMCP752-BODY-MARKER\\n\\ngo next\\npress me "\n'
+)
+
+_REAL_TEXT_ARTIFACTS = {
+    "aria snapshot": _ARIA_ARTIFACT,
+    "aria snapshot, frame-qualified refs": _ARIA_ARTIFACT_FRAME_QUALIFIED,
+    "console log, auto-named": _CONSOLE_AUTO_NAMED,
+    "console log, explicit filename": _CONSOLE_EXPLICIT,
+    "network log, explicit filename": _NETWORK_EXPLICIT,
+}
+
+
+@requires_git_checkout
+def test_no_file_of_browser_text_artifact_shape_is_reachable_by_git():
+    """The lock the TEXT artifacts did not have — VMCP-209 (752), filed off #736's review.
+
+    THE ASYMMETRY THIS CLOSES. A screenshot is held by its leading magic bytes under any name
+    (#629) and a storage state by its two list-valued keys, both independently of what the file
+    is called. The browser's text output had neither: it was held only by rules over PROSE —
+    #703 pins the `filename` SKILL.md prints, #736 the `--output-dir` it prints, #751 the
+    `--config` it prints — and every one of those pins asks what the RULEBOOK SAYS, never what
+    is on disk. #751 is the proof that this matters: `--config '{"outputDir": …}'` moved every
+    auto-named artifact past both existing pins, and closing that ROUTE left the CLASS open, one
+    undocumented flag wide.
+
+    WHAT IT MATCHES, and why a whole-file grammar rather than a marker grep. Each shape demands
+    that EVERY non-blank line match, over a floor of lines, so the question answered is "is this
+    file an artifact" and not "does this file mention one". That is the same move the
+    storage-state gate makes by parsing JSON instead of grepping for `"cookies"`, and it is what
+    lets this gate coexist with the paragraphs — in `.gitignore`, in CLAUDE.md, in this very
+    file — that quote the shapes in order to describe them. The alternative was measured, not
+    assumed: see the next test, where the naive grep is red on arrival and this is not.
+
+    MEASURED FALSE REDS OVER THIS REPO: zero, for all three grammars, over the candidate set
+    `_publishable_copies` yields (73 tracked + 0 untracked-and-not-ignored at the time of
+    writing, `.github/workflows/ci.yml` being the only `.yml` and this file the densest quoter
+    of the shapes). That number is what made the lock landable rather than a nuisance, and it is
+    re-derived on every run by the pin below rather than trusted from this sentence.
+
+    WHAT IT DOES NOT REACH, measured rather than conceded. `browser_evaluate` writes whatever
+    the evaluated JS returned — its measured output is a JSON string literal — so it has no
+    grammar, and no version of this gate could give it one. That is the one place CLAUDE.md's
+    retired "indistinguishable from a legitimate file" is still exactly right, and it is now
+    said of ONE writer instead of four. The two EMPTY forms (a console export with no messages,
+    a network export with only its trailing note) are also unclassified, and correctly: an
+    artifact with no messages in it has no page content to leak.
+
+    Same honest boundary as its sibling: this is a GATE — red in the pre-push `uv run pytest
+    tests/unit -q` and red in CI — not a lock on `git commit`, and it cannot see a file that
+    never reaches this working tree. A candidate above `SHAPE_SCAN_MAX_BYTES` is REPORTED rather
+    than skipped, for the reason that constant documents at length. Offending PATHS are named;
+    contents never are.
+    """
+    offenders, unclassified = _scan_for_browser_text_artifact_shape(REPO_ROOT)
+
+    assert not offenders, \
+        f"{offenders} — git can publish a file that IS a browser text artifact. Every line " \
+        "matches the shape named beside the path, so this is not a file that mentions one. " \
+        "These carry the page's own text and the query strings of everything it requested, " \
+        "which on a logged-in page is a credential, and THIS REPO IS PUBLIC. The `.gitignore` " \
+        "rules cannot help: they cover the `.playwright-mcp/` DIRECTORY and a list of " \
+        "extensions, and a text artifact under a caller-chosen name in the repo root is " \
+        "outside both. Delete it (and `git rm --cached` it if tracked); do not just rename it. " \
+        "If you need it, put it under `.playwright-mcp/`, which SKILL.md already prescribes"
+
+    assert not unclassified, \
+        f"{unclassified} — bigger than the {SHAPE_SCAN_MAX_BYTES}-byte ceiling this scan will " \
+        "read, so it could NOT be classified. Reported rather than skipped, for the same " \
+        "reason the storage-state scan reports: an aria snapshot has no fixed upper size " \
+        "either (it is the whole accessibility tree of whatever page was open), so 'too big to " \
+        "classify' is what a fat one looks like. Look at what it is, then `.gitignore` it — " \
+        "which also removes it from `git add -A`'s reach"
+
+
+@requires_git_checkout
+def test_the_naive_marker_grep_would_be_red_on_arrival_and_the_whole_file_grammar_is_not():
+    """The measurement that chose the design — VMCP-209 (752), and it only became visible when
+    this card landed.
+
+    `.gitignore` recorded the content axis as "considered and dropped", on two grounds. The
+    first — that a scan for aria markers "fires on any file that DOCUMENTS it — this comment
+    included" — is TRUE of a marker grep and FALSE of a whole-file grammar, and the two answers
+    were IDENTICAL (zero hits each) right up until this card, because nothing in the tree quoted
+    a `[ref=…]` token yet. The moment fixtures and prose arrive, they diverge: this test is what
+    makes the divergence a fact the suite re-derives rather than a claim in a docstring.
+
+    So it asserts the SPLIT, not two numbers: the naive grep must hit at least one legitimate
+    file (it will hit this one, and it may hit `.gitignore` and CLAUDE.md as the prose there
+    grows), while the shipped grammar hits none. Reading it the other way round is the point —
+    a future edit that quotes more artifact text makes the naive number go UP and must leave the
+    grammar at zero. The day the grammar stops being zero, the gate above has found something.
+
+    The second ground `.gitignore` gave — "it reaches `browser_snapshot` alone of the four" —
+    was narrowed by measurement rather than dropped: three of the four text writers have a
+    grammar, and the fourth cannot have one. That is recorded where the classifier lives.
+    """
+    naive_hits, grammar_hits = [], []
+    for rel, size, raw in _publishable_copies(REPO_ROOT):
+        if size > SHAPE_SCAN_MAX_BYTES:
+            continue
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        if _ARIA_REF_TOKEN.search(text) and rel not in naive_hits:
+            naive_hits.append(rel)
+        if _classify_browser_text_artifact(raw) and rel not in grammar_hits:
+            grammar_hits.append(rel)
+
+    assert naive_hits, \
+        "the naive marker grep now hits NOTHING in this repo, which means the prose and " \
+        "fixtures that made it red on arrival have been deleted. That is not a pass: this " \
+        "pin exists to hold the reason the shipped gate is a whole-file grammar instead of a " \
+        "grep, and with nothing quoting an artifact the two designs are indistinguishable again"
+
+    assert not grammar_hits, \
+        f"the whole-file grammar hit {grammar_hits}. Either a real artifact reached the tree — " \
+        "in which case the gate above is already failing and telling you which — or a " \
+        "legitimate file has drifted into a shape where EVERY non-blank line matches an " \
+        "artifact grammar. If it is the second, that is a false red and the grammar must be " \
+        "narrowed, not the file rewritten"
+
+
+@pytest.mark.parametrize("label", sorted(_REAL_TEXT_ARTIFACTS))
+def test_a_real_browser_text_artifact_is_caught_under_an_innocuous_name(clone, label):
+    """Every measured artifact shape, staged under a name no rule here covers, must be named.
+
+    `notes.md` is the point: it is not `page-*.yml`, not under `.playwright-mcp/`, matches no
+    extension rule and no ignore pattern — exactly the file #703's prose rule asks an agent not
+    to create and cannot stop. The name is deliberately the most ordinary one in the repo's own
+    vocabulary, since a gate that only catches suspicious names is the name layer again.
+    """
+    _stage(clone, "notes.md", _REAL_TEXT_ARTIFACTS[label])
+    offenders, unclassified = _scan_for_browser_text_artifact_shape(clone)
+    assert [rel for rel, _ in offenders] == ["notes.md"], (
+        f"a real {label} staged as notes.md was not caught: {offenders}, {unclassified}")
+
+
+@pytest.mark.parametrize("label,body", [("console with no messages", _CONSOLE_EMPTY),
+                                        ("network with no requests", _NETWORK_EMPTY),
+                                        ("browser_evaluate dump", _EVALUATE_DUMP),
+                                        ("an ordinary markdown bullet list",
+                                         b"- one\n- two\n- three\n"),
+                                        ("a changelog entry with one quoted ref",
+                                         b"- fixed the [ref=e1] token handling\n"),
+                                        ("a two-line aria excerpt quoted in prose",
+                                         b'- heading "Title" [ref=e1]\n'
+                                         b'- paragraph [ref=e2]: body text\n')])
+def test_the_shapes_that_are_deliberately_not_classified(label, body):
+    """The negative half, and every row is a decision rather than an oversight.
+
+    The two EMPTY forms and the `browser_evaluate` dump are measured outputs of the real tool
+    that carry no page content — nothing to leak, so classifying them would be pure false-red
+    surface. The last three rows are the false-red frontier from the other side, and each pins
+    a DIFFERENT threshold — which is a correction, not a flourish: an earlier version of this
+    test claimed the changelog row was held by the line floor, and the sweep disproved it.
+    Dropping `ARIA_MIN_ITEM_LINES` from 3 to 1 measured 0 failed, because that row has only ONE
+    ref and the REF floor was catching it either way, i.e. the line floor was pinned by nothing.
+    Measured after adding the two-line excerpt (selection this file, control 0 failed):
+    `ARIA_MIN_REF_LINES` 2 -> 0 kills the bullet-list row, and `ARIA_MIN_ITEM_LINES` 3 -> 1
+    kills the excerpt row. Both floors are now load-bearing and each has its own witness.
+
+    The excerpt row also names this gate's one deliberate false NEGATIVE: a genuine snapshot of
+    fewer than three lines walks past. Measured, the smallest real one produced here was six
+    lines with six refs (a snapshot carries the root node and its children, not a fragment), and
+    a two-line excerpt in prose is the commoner object by far — this file, `.gitignore` and
+    CLAUDE.md all contain one. The trade is taken knowingly and in that direction: a missed
+    two-line artifact leaks two lines, while a false red on documentation gets the whole gate
+    deleted by whoever hits it.
+    """
+    assert _classify_browser_text_artifact(body) is None, \
+        f"{label} was classified as an artifact — that is a false red at the source"
 
 
 @requires_git_checkout

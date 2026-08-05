@@ -71,8 +71,12 @@ dist/
 #
 # Neither half reaches the text writers either — `browser_snapshot`, `browser_console_messages`,
 # `browser_network_requests` and `browser_evaluate` all drop theirs in the root too, carrying the
-# page's TEXT and request query strings under names and in formats indistinguishable from a
-# legitimate file here. That was filed as #703 and is NOT closable by a rule: the names measured
+# page's TEXT and request query strings under names no rule in THIS FILE can separate from a
+# legitimate one. That last clause used to say "and in formats indistinguishable from a legitimate
+# file here", and #752 disproved the format half by building the separator: three of the four
+# write a machine grammar, and the claim now belongs to `browser_evaluate` alone. The NAME half
+# stands, and it is what the sentence is really about — this is a file of name patterns.
+# That was filed as #703 and is NOT closable by a rule: the names measured
 # were `.md`, `.txt`, `.json` and one with no extension, while this repo's tracked files are 7
 # `.md`, 3 `.json`, 1 `.yml` and 2 with no extension (LICENSE, skills) — any pattern wide enough
 # to catch the spill hides the repo's own content.
@@ -82,9 +86,16 @@ dist/
 # ".playwright-mcp/vmcp-554-snap.md")`), so the artifact lands in the ONE directory the rule above
 # already covers wholesale. Of the three axes compared — extension, leading bytes, directory — it
 # is the only one that reaches text, and it costs a rule that is already here. (A CONTENT axis
-# was considered and dropped rather than overlooked: aria-snapshot markers appear in no tracked
-# file today, so a scan for them would be free, but it reaches `browser_snapshot` alone of the
-# four and it fires on any file that DOCUMENTS it — this comment included.) Measured
+# was dropped here on two grounds, and #752 put both to a test: only one survived, so the axis is
+# now SHIPPED alongside this rule rather than declined. FALSE: "it fires on any file that
+# DOCUMENTS it — this comment included" — true of a marker grep, false of a whole-file grammar
+# that requires EVERY non-blank line to match, which is the same distinction letting the
+# storage-state gate coexist with the paragraphs below describing storage state. TOO WIDE: "it
+# reaches `browser_snapshot` alone of the four" — measured against real artifacts, it reaches
+# THREE, and the fourth, `browser_evaluate`, cannot be reached by anything, since it writes
+# whatever the evaluated JS returned. The measured price over this repo was zero false reds. The
+# gate is test_no_file_of_browser_text_artifact_shape_is_reachable_by_git; like the storage-state
+# one it reads shape, not names, so it covers what no line in this file can.) Measured
 # (0.0.78, own `--isolated --headless` server, own stdio client, throwaway origin): all four text
 # writers and the screenshot accept the prefix and land there, `check-ignore` answering with the
 # `.playwright-mcp/` rule for each. Two facts that came with it. The directory must EXIST — a

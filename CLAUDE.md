@@ -1344,8 +1344,32 @@ one the shared session server runs, which its tool ROSTER says and the absence o
 does not, since `PLAYWRIGHT_MCP_CAPS` and `--config` carry capabilities too — six of which write,
 and `browser_snapshot`, `browser_console_messages`, `browser_network_requests` and
 `browser_evaluate` drop the page's own
-TEXT and its request query strings in the same root as plain text — no listable extension, no
-signature, indistinguishable from a legitimate file here. A marker planted on a probe page came
+TEXT and its request query strings in the same root as plain text — no listable extension and no
+signature. **What used to follow that clause was "indistinguishable from a legitimate file here",
+and it was an overclaim: tracker #752 refuted it by BUILDING the discriminator it said could not
+exist.** The word survives for exactly ONE of those four writers now. Extension and leading bytes
+really are useless here — that half was measured on #629 and stands — but the third axis, SHAPE,
+was never put to a test; it was waved off in `.gitignore` as "considered and dropped" on two
+grounds, of which one was false and the other too wide. Three of the four write a MACHINE GRAMMAR
+that a whole-file matcher separates from prose at a measured cost of ZERO false reds over this
+repo: the aria snapshot is one YAML list item per line carrying `[ref=…]` tokens, the console log
+is `[<n>ms] [LEVEL] … @ <url>` per line (or a totals header plus `[LEVEL]` lines when written to
+an explicit `filename`), and the network log is `N. [METHOD] <url> => [<status>] …`. Only
+`browser_evaluate` is genuinely indistinguishable, for a structural reason rather than for want of
+a pattern — it writes whatever the evaluated JS returned, measured as a bare JSON string literal —
+and no version of any gate could give it a grammar. The false ground was "a scan fires on any file
+that DOCUMENTS the shape": true of a marker grep, false of a whole-file grammar, which is the same
+distinction that lets the storage-state gate coexist with the paragraphs describing storage state.
+That difference is now itself a measurement rather than an argument — the naive grep and the
+grammar returned the SAME zero until this card landed, and
+`test_the_naive_marker_grep_would_be_red_on_arrival_and_the_whole_file_grammar_is_not` re-derives
+the divergence on every run, because the fixtures and this very paragraph are what make the naive
+one red. The lock is `test_no_file_of_browser_text_artifact_shape_is_reachable_by_git`, built on
+the same union-of-index-and-worktree candidate walk as the storage-state gate (now one shared
+`_publishable_copies`, not two copies) and with the same refusal to skip a candidate too large to
+read. Its own deliberate false NEGATIVES are named where it lives: an artifact of fewer than three
+lines, and the two EMPTY forms, which carry no page content to leak.
+A marker planted on a probe page came
 back in three of those files, and a token placed in a request's query string in two — that second
 count is CONDITIONAL, re-measured on #703 rather than carried over: the tokened URL is in the
 network log always and in the CONSOLE log only when the request errors, which is what #629's probe
