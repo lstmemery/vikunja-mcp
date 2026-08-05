@@ -274,7 +274,34 @@ assertion in `tests/unit/test_line_length_gate.py`, which pyproject must agree w
   Every entry point canonicalises to the MAIN worktree first (`_main_worktree`), so create /
   release / gc agree on paths and config even when invoked from INSIDE a linked tree — the
   normal place for a per-task agent, and where the gitignored `.vikunja-mcp.env` does not
-  exist. Safety invariant taken from hgdev-acp's reaper: push OK → remove, push FAIL → KEEP
+  exist. **`--gc` also FAST-FORWARDS that main worktree, and that is the whole of #801**
+  (`sync_main_checkout`, optional `main_checkout` key). Nothing in the drain used to move it:
+  a task lands with `git push origin HEAD:main` from its OWN tree, which advances the shared
+  `refs/remotes/origin/<base>` and never the local branch the main checkout sits on — so the
+  folder a human works in, and the one the pump was launched from, falls behind monotonically
+  and never catches up (measured 2026-08-05: `5d7acdb` against `origin/main` `01b096be`, **58
+  commits over ONE session**, every task green). It rides on `--gc` because that is already the
+  call the pump makes every tick, already canonicalised here, already networked and already
+  returning a payload SKILL.md tells the pump to read — zero new orchestrator steps, where a
+  rulebook rule would have cost a step that can be forgotten. It is
+  **fast-forward ONLY and refuses rather than resolves**: the
+  main checkout is somebody else's working directory, so `reset --hard`, `checkout -f`, `clean`,
+  `stash`, `pull`, a bare `merge` and switching branches are all deliberately absent and must
+  stay absent. What protects uncommitted work is GIT, not a guard of ours — `merge --ff-only`
+  refuses outright when it would overwrite a modified tracked file or an untracked one, and
+  that is load-bearing rather than lazy: a "refuse unless the tree is clean" guard would never
+  have fired on the very checkout the card was filed from, which held the human's untracked
+  `BOARD-ANALYSIS-2026-08-03.md`. The key is ABSENT when the checkout is current or
+  `VIKUNJA_MCP_NO_MAIN_SYNC=1` is set (the `NO_SKILL_SYNC`/`NO_TRACE` idiom — env, never the
+  toml: this is one clone on one machine, like `worktree_root`), so present ⇒ read it. Codes
+  are `MAIN_SYNC_*` and NOT `CODE_*` on purpose: that prefix is the closed per-WORKTREE
+  vocabulary `_keep_is_expected` grades and three pins guard, and these never reach the grader
+  — pinned, not promised, by
+  `test_main_sync_codes_are_not_part_of_the_graded_worktree_vocabulary`. It runs AFTER the
+  sweep and OUTSIDE the repo flock (its `git fetch` is networked, and VMCP-72 bounded that hold
+  on purpose), and it is BEST-EFFORT: anything it raises becomes an entry, never an exception,
+  so the reaper gains no new way to fail.
+  Safety invariant taken from hgdev-acp's reaper: push OK → remove, push FAIL → KEEP
   (dirty, unpushed, or reachable-from-no-ref ⇒ reported, never destroyed).
   Housekeeping is never how an agent's work disappears — **except for IGNORED files, and that
   exception is real, measured, and deliberately NOT closed (#710).** The hole is in the FIRST of

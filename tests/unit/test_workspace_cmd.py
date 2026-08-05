@@ -3113,7 +3113,15 @@ def test_gc_still_defers_to_a_real_write_in_a_tree_it_has_already_inspected(repo
 
     second = gc_workspaces(cwd=repo, workflow=wf)
 
-    assert second == {"released": [], "kept": [], "expected": []}
+    # VMCP-238 (801) relaxed this from an exact-dict equality, and the reason is that the push
+    # above is REAL: it advances `origin/main` past the main checkout, so `--gc`'s new
+    # fast-forward legitimately has work to do and reports it. The assertion this test exists
+    # for is untouched — all THREE lists still empty, i.e. the tree is in NEITHER list — and the
+    # "gc returns exactly these keys when there is nothing else to say" half did not go
+    # unpinned: it moved to test_gc_says_nothing_about_a_main_checkout_that_is_already_current,
+    # which asserts it on the only path where it is honestly true.
+    assert {k: v for k, v in second.items() if k != "main_checkout"} == {
+        "released": [], "kept": [], "expected": []}
     assert path.is_dir() and (path / "feature.txt").exists()
 
 
@@ -3617,3 +3625,290 @@ def test_the_override_changes_nothing_at_the_default_setting(repo):
     clean = Path(ensure_workspace(769, cwd=repo)["path"])
     assert release_workspace(769, cwd=repo)["released"] is True
     assert not clean.exists()
+
+
+# --- VMCP-238 (801): the MAIN checkout is fast-forwarded by --gc, or refused and reported ---
+#
+# The defect these pin is not a failure anywhere: every task lands from its own worktree with
+# `git push origin HEAD:main`, which moves the shared `refs/remotes/origin/<base>` and never the
+# local branch the main checkout sits on, so the folder a human works in falls behind forever.
+# Measured on this repo the day the card was written: 58 commits over one session.
+#
+# Every test below drives REAL git — a real bare origin, a real sibling clone landing real
+# commits — for the same reason the file's header gives: the one property that matters is that
+# housekeeping cannot destroy a human's uncommitted work, and a fake would only mirror this
+# module's own beliefs about `merge --ff-only`.
+
+def _land_on_origin(tmp_path: Path, name: str, files: dict) -> str:
+    """Land a commit on the bare origin the way a SIBLING worktree does — from a clone of its
+    own, so the main checkout's branch is never touched and its `origin/<base>` goes stale
+    exactly as it does in production."""
+    other = tmp_path / f"sibling-{name}"
+    subprocess.run(["git", "clone", str(tmp_path / "origin.git"), str(other)],
+                   check=True, capture_output=True)
+    _git(other, "config", "user.email", "sibling@example.com")
+    _git(other, "config", "user.name", "Sibling")
+    for rel, content in files.items():
+        (other / rel).write_text(content)
+    _git(other, "add", "-A")
+    _git(other, "commit", "-m", f"sibling: {name}")
+    _git(other, "push", "origin", "HEAD:main")
+    return _git(other, "rev-parse", "HEAD")
+
+
+def test_gc_fast_forwards_a_stale_main_checkout(repo, tracker, tmp_path):
+    """The card's own scenario, reproduced: work lands from elsewhere, the main checkout does not
+    move, and the next sweep brings it up to date and says by how much."""
+    _api, wf = tracker
+    before = _git(repo, "rev-parse", "HEAD")
+    landed = _land_on_origin(tmp_path, "one", {"other.txt": "a\n"})
+    landed2 = _land_on_origin(tmp_path, "two", {"other.txt": "b\n"})
+    assert _git(repo, "rev-parse", "HEAD") == before, "the drift is real before we sweep"
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["updated"] is True, state
+    assert state["from"] == before and state["to"] == landed2
+    assert state["commits"] == 2, state
+    assert state["branch"] == "main"
+    assert _git(repo, "rev-parse", "HEAD") == landed2
+    assert (repo / "other.txt").read_text() == "b\n"
+    assert landed != landed2                      # both really landed, in order
+
+
+def test_gc_says_nothing_about_a_main_checkout_that_is_already_current(repo, tracker):
+    """ABSENT means "nothing for you to do". The key exists to be READ, and a field present on
+    every tick is the signal VMCP-68 had to split `kept` in two to rescue."""
+    _api, wf = tracker
+    res = gc_workspaces(cwd=repo, workflow=wf)
+    assert "main_checkout" not in res, res
+    assert set(res) == {"released", "kept", "expected"}
+
+
+def test_the_fast_forward_leaves_an_untracked_human_file_alone(repo, tracker, tmp_path):
+    """The live case this card was filed from: the stale checkout held the human's own untracked
+    `BOARD-ANALYSIS-2026-08-03.md`. A guard of ours that demanded a CLEAN tree would refuse here
+    — i.e. would never fire in the one situation it was written for."""
+    _api, wf = tracker
+    (repo / "BOARD-ANALYSIS.md").write_text("the human's own working document\n")
+    landed = _land_on_origin(tmp_path, "one", {"other.txt": "a\n"})
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert res["main_checkout"]["updated"] is True, res["main_checkout"]
+    assert _git(repo, "rev-parse", "HEAD") == landed
+    assert (repo / "BOARD-ANALYSIS.md").read_text() == "the human's own working document\n"
+
+
+def test_uncommitted_work_in_an_untouched_file_survives_the_fast_forward(repo, tracker, tmp_path):
+    """The other half of the same property: a human mid-edit in a file the incoming commits do
+    not touch keeps their edit AND gets the update."""
+    _api, wf = tracker
+    (repo / "README.md").write_text("hi\nHUMAN EDIT IN FLIGHT\n")
+    landed = _land_on_origin(tmp_path, "one", {"other.txt": "a\n"})
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert res["main_checkout"]["updated"] is True
+    assert _git(repo, "rev-parse", "HEAD") == landed
+    assert (repo / "README.md").read_text() == "hi\nHUMAN EDIT IN FLIGHT\n"
+
+
+def test_the_fast_forward_refuses_rather_than_overwriting_uncommitted_work(repo, tracker,
+                                                                          tmp_path):
+    """THE invariant. The incoming commit touches the very file the human is editing, so the
+    update must not happen at all — refused, reported, and NOTHING discarded. git is what
+    enforces this, which is why the ladder ends in `merge --ff-only` and never in a reset."""
+    _api, wf = tracker
+    before = _git(repo, "rev-parse", "HEAD")
+    (repo / "README.md").write_text("hi\nWORK THE HUMAN HAS NOT COMMITTED\n")
+    _land_on_origin(tmp_path, "one", {"README.md": "landed from a sibling\n"})
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["updated"] is False and state["code"] == workspace_cmd.MAIN_SYNC_BLOCKED, state
+    assert "NOTHING was discarded" in state["reason"]
+    assert _git(repo, "rev-parse", "HEAD") == before, "the checkout must not have moved"
+    assert (repo / "README.md").read_text() == "hi\nWORK THE HUMAN HAS NOT COMMITTED\n"
+
+
+def test_gc_refuses_a_main_checkout_that_has_diverged(repo, tracker, tmp_path):
+    """A local commit the remote does not have. A fast-forward would discard it, so there is no
+    fast-forward — and the refusal names the count rather than quoting git."""
+    _api, wf = tracker
+    (repo / "local-only.txt").write_text("a human's unpushed commit\n")
+    _git(repo, "add", "local-only.txt")
+    _git(repo, "commit", "-m", "local work")
+    mine = _git(repo, "rev-parse", "HEAD")
+    _land_on_origin(tmp_path, "one", {"other.txt": "a\n"})
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["updated"] is False and state["code"] == workspace_cmd.MAIN_SYNC_DIVERGED, state
+    assert "1 local commit" in state["reason"], state
+    assert _git(repo, "rev-parse", "HEAD") == mine
+    assert (repo / "local-only.txt").exists()
+
+
+def test_gc_leaves_a_main_checkout_on_another_branch_alone(repo, tracker, tmp_path):
+    """Switching branches under someone who is working is not housekeeping. Refused by NAME, so
+    the reason can say that, instead of leaving a reader to infer it from a git error."""
+    _api, wf = tracker
+    _git(repo, "switch", "-c", "human-debugging")
+    mine = _git(repo, "rev-parse", "HEAD")
+    _land_on_origin(tmp_path, "one", {"other.txt": "a\n"})
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["updated"] is False and state["code"] == workspace_cmd.MAIN_SYNC_OFF_BRANCH
+    assert state["branch"] == "human-debugging", state
+    assert _git(repo, "rev-parse", "HEAD") == mine
+    assert _git(repo, "rev-parse", "--abbrev-ref", "HEAD") == "human-debugging"
+
+
+def test_gc_leaves_a_detached_main_checkout_alone(repo, tracker, tmp_path):
+    """Detached HEAD has no branch to fast-forward. Named separately from `off-branch` because
+    the fix a human applies differs, and the reason spells that fix out."""
+    _api, wf = tracker
+    mine = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "--detach", "HEAD")
+    _land_on_origin(tmp_path, "one", {"other.txt": "a\n"})
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["updated"] is False and state["code"] == workspace_cmd.MAIN_SYNC_DETACHED
+    assert "switch main" in state["reason"], state
+    assert _git(repo, "rev-parse", "HEAD") == mine
+
+
+def test_the_main_checkout_sync_can_be_opted_out_of(repo, tracker, tmp_path, monkeypatch):
+    """Same escape hatch as VIKUNJA_MCP_NO_SKILL_SYNC / VIKUNJA_MCP_NO_TRACE, and silent when
+    set: whoever set it does not want to hear about the checkout every tick either."""
+    _api, wf = tracker
+    before = _git(repo, "rev-parse", "HEAD")
+    _land_on_origin(tmp_path, "one", {"other.txt": "a\n"})
+    monkeypatch.setenv(workspace_cmd._MAIN_SYNC_OPT_OUT, "1")
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert "main_checkout" not in res, res
+    assert _git(repo, "rev-parse", "HEAD") == before
+
+
+def test_a_failing_main_sync_never_costs_the_sweep_its_verdicts(repo, tracker, monkeypatch):
+    """Best-effort in the same sense as the epic marker and the Your Call ping: the reaper must
+    not acquire a new way to fail. The tree is still reaped and the failure is still reported."""
+    _api, wf = tracker
+    path = Path(ensure_workspace(42, cwd=repo)["path"])
+    _quiesce(path)
+
+    def boom(_root):
+        raise RuntimeError("git fell over")
+    monkeypatch.setattr(workspace_cmd, "sync_main_checkout", boom)
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert [r["task_id"] for r in res["released"]] == [42], res
+    assert not path.exists()
+    assert res["main_checkout"]["code"] == workspace_cmd.MAIN_SYNC_ERROR
+    assert "git fell over" in res["main_checkout"]["reason"]
+
+
+def test_main_sync_codes_are_not_part_of_the_graded_worktree_vocabulary(repo, tracker, tmp_path):
+    """The boundary the module's comment claims, asserted instead of promised.
+
+    `CODE_*` is a CLOSED enumeration of per-WORKTREE refusals that `_keep_is_expected` grades
+    cell by cell, pinned three separate ways — so a new member there is supposed to redden those
+    pins. The main-checkout codes are a different vocabulary: they describe the SHARED checkout,
+    they ride in their own key, and they must never reach the grader. Rename them into `CODE_*`
+    and the three grid pins go red for a code that has no cell to sit in; leave them apart and
+    this test is what keeps the promise honest.
+
+    Both halves are asserted, because the names alone would not catch a colliding VALUE."""
+    declared_codes = {n: v for n, v in vars(workspace_cmd).items()
+                      if n.startswith("CODE_") and isinstance(v, str)}
+    declared_main = {n: v for n, v in vars(workspace_cmd).items()
+                     if n.startswith("MAIN_SYNC_") and isinstance(v, str)}
+    assert len(declared_main) >= 7, sorted(declared_main)
+    assert not set(declared_codes) & set(declared_main)
+    assert not set(declared_codes.values()) & set(declared_main.values()), (
+        "a main-checkout code now shares a VALUE with a worktree refusal code — the grader keys "
+        "on values, so this is exactly the collision the separate prefix exists to prevent"
+    )
+
+    # ...and structurally: a sweep in which BOTH a tree is kept and the sync refuses must keep
+    # the two apart.
+    _api, wf = tracker
+    path = Path(ensure_workspace(42, cwd=repo)["path"])
+    (path / "UNSAVED.txt").write_text("work\n")             # -> kept: dirty
+    _quiesce(path)
+    (repo / "README.md").write_text("hi\nhuman edit\n")     # -> main_checkout: blocked
+    _land_on_origin(tmp_path, "one", {"README.md": "from a sibling\n"})
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert [e["code"] for e in res["kept"]] == [workspace_cmd.CODE_DIRTY], res["kept"]
+    assert res["main_checkout"]["code"] == workspace_cmd.MAIN_SYNC_BLOCKED
+    for entry in res["kept"] + res["expected"] + res["released"]:
+        assert entry.get("code") not in set(declared_main.values()), entry
+
+
+def test_the_cli_gc_line_carries_the_main_checkout_key(repo, tracker, tmp_path, monkeypatch,
+                                                       capsys):
+    """The payload is a cross-process contract — the pump reads the JSON LINE, not the dict — so
+    the key has to survive the CLI, and the ABSENT case has to stay absent there too."""
+    _api, wf = tracker
+    monkeypatch.setattr(workspace_cmd, "_build_workflow", lambda root: (wf, None))
+    monkeypatch.chdir(repo)
+
+    assert run_workspace(["--gc"]) == 0
+    assert "main_checkout" not in json.loads(capsys.readouterr().out)
+
+    landed = _land_on_origin(tmp_path, "one", {"other.txt": "a\n"})
+    assert run_workspace(["--gc"]) == 0
+    state = json.loads(capsys.readouterr().out)["main_checkout"]
+    assert state["updated"] is True and state["to"] == landed
+
+
+def test_the_merge_stays_ff_only_even_when_the_ancestor_check_lies(repo, tracker, tmp_path,
+                                                                  monkeypatch):
+    """`--ff-only` is DEFENCE IN DEPTH, and this is the only input that can show it.
+
+    For every ordinary input the `merge-base --is-ancestor` guard above has already excluded
+    every non-fast-forward, so dropping the flag changes NOTHING and no test built from an
+    honest input can catch it: measured on this section's own selection WITHOUT this test,
+    control 0 failed; `--ff-only` dropped 0 failed. What the flag is actually for is the WINDOW
+    between that check and the merge — a human committing in their own checkout, or a sibling
+    landing, in those milliseconds. From inside the function that race is indistinguishable
+    from the check simply being wrong, so that is how it is built here: force the check to
+    answer yes on a checkout that has genuinely diverged.
+
+    Without the flag git would merrily MERGE — inventing a merge commit in a human's working
+    directory, which is precisely the class of action this module refuses to take. With it, git
+    refuses and the checkout is untouched."""
+    _api, wf = tracker
+    (repo / "local-only.txt").write_text("a human's unpushed commit\n")
+    _git(repo, "add", "local-only.txt")
+    _git(repo, "commit", "-m", "local work")
+    mine = _git(repo, "rev-parse", "HEAD")
+    _land_on_origin(tmp_path, "one", {"other.txt": "a\n"})
+
+    real_git_ok = workspace_cmd._git_ok
+    monkeypatch.setattr(workspace_cmd, "_git_ok",
+                        lambda *a, **k: True if a[:2] == ("merge-base", "--is-ancestor")
+                        else real_git_ok(*a, **k))
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["updated"] is False and state["code"] == workspace_cmd.MAIN_SYNC_BLOCKED, state
+    assert _git(repo, "rev-parse", "HEAD") == mine, "the checkout must not have moved"
+    assert _git(repo, "rev-list", "--count", "--merges", "HEAD") == "0", (
+        "a merge commit was invented in the human's checkout — `--ff-only` is what forbids that"
+    )
+    assert (repo / "local-only.txt").exists()

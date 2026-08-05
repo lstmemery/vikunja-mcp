@@ -1524,6 +1524,127 @@ def _read_liveness(wf, deadline) -> tuple[dict, set]:
         ) from exc
 
 
+# --- VMCP-238 (801): the MAIN checkout drifts, and no step of the drain ever moved it ---
+#
+# Every task lands from its OWN worktree with `git push origin HEAD:main`. That advances the
+# SHARED remote-tracking ref `refs/remotes/origin/<base>` and NOT the local branch the main
+# checkout has checked out — nothing in create / release / gc / the rulebook's push recipe
+# touches it. So the folder a human works in, and the one the orchestrator was launched from,
+# falls behind monotonically and never catches up on its own. Measured on this repo 2026-08-05:
+# `HEAD` at `5d7acdb` against `origin/main` at `01b096be`, 58 commits, accumulated over ONE
+# session in which every task landed green. That is the whole defect — not a failure anywhere,
+# just a ref nobody was moving.
+#
+# WHY THE CODES ARE `MAIN_SYNC_*` AND DELIBERATELY NOT `CODE_*`. That other prefix is a CLOSED
+# vocabulary of per-WORKTREE refusals, graded cell by cell by `_keep_is_expected` and pinned
+# three separate ways, so a new `CODE_*` reddens those pins until somebody grades it — which is
+# exactly right for a code that can land in `kept`. These cannot: they describe the shared
+# checkout, never appear on a worktree entry, and never reach the grader. Naming them apart
+# keeps that enumeration closed AND true; the separation is pinned by
+# test_main_sync_codes_are_not_part_of_the_graded_worktree_vocabulary, not left to this note.
+MAIN_SYNC_FETCH_FAILED = "fetch-failed"
+MAIN_SYNC_NO_REMOTE = "no-remote-branch"
+MAIN_SYNC_DETACHED = "detached"
+MAIN_SYNC_OFF_BRANCH = "off-branch"
+MAIN_SYNC_DIVERGED = "diverged"
+MAIN_SYNC_BLOCKED = "blocked"
+MAIN_SYNC_ERROR = "error"          # the best-effort wrapper in gc: anything unforeseen
+
+# Same idiom as VIKUNJA_MCP_NO_SKILL_SYNC and VIKUNJA_MCP_NO_TRACE — a thing that happens to a
+# human's machine by default gets an env escape, not a config key. Repo toml would be wrong
+# twice over: this is a property of ONE clone on ONE machine (like `worktree_root`, not like
+# `wip_limit`), and a committed opt-out would turn one person's preference into the team's.
+_MAIN_SYNC_OPT_OUT = "VIKUNJA_MCP_NO_MAIN_SYNC"
+
+
+def sync_main_checkout(root: Path) -> dict | None:
+    """Fast-forward the MAIN checkout onto `origin/<default branch>`, or REFUSE and say why.
+
+    THE ONE RULE THIS IS BUILT AROUND: the main checkout is somebody ELSE's working directory.
+    A human works there, the session's shared browser/MCP roots resolve there, and it can hold
+    uncommitted work at any moment (it held an untracked `BOARD-ANALYSIS-2026-08-03.md` while
+    this card was being written). So the update is FAST-FORWARD ONLY and REFUSES rather than
+    resolves. Not on this ladder, and never to be added: `reset --hard`, `checkout -f`, `clean`,
+    `stash`, `pull` (which may merge or rebase), a `merge` without `--ff-only`, or switching the
+    branch. Every one of those either discards a human's work or invents a commit in their tree;
+    a stale checkout is a nuisance, and losing an afternoon of uncommitted edits is not.
+
+    WHAT PROTECTS THE UNCOMMITTED WORK IS GIT ITSELF, not a guard written here, and that is the
+    point rather than an omission: `merge --ff-only` refuses outright when the incoming commits
+    would overwrite a modified tracked file OR an untracked one, and leaves everything untouched
+    when it does. So the tool never has to decide which local edits are precious. A guard of our
+    own that merely required a clean tree would be WORSE than useless here — the very checkout
+    this card is about has an untracked file in it, so "refuse unless clean" would mean the fix
+    never fires in the one case it was filed for. Edits to files the incoming commits do not
+    touch survive the fast-forward, which is the desirable half of the same property.
+
+    RETURNS None WHEN THERE IS NOTHING TO SAY — already current, or opted out. The key it feeds
+    is therefore ABSENT on the boring path and PRESENT whenever a reader has something to read.
+    That direction is deliberate and is the lesson `removed_ignored` and VMCP-68's `kept`/
+    `expected` split both paid for: a field that is present on every tick stops being read.
+    Present means either "the shared checkout moved, here is how far" or "it is stale and here
+    is what is holding it" — both worth a line in the orchestrator's report, neither an alarm.
+    """
+    if os.environ.get(_MAIN_SYNC_OPT_OUT):
+        return None
+    base = default_base(root)
+    remote = f"origin/{base}"
+
+    proc = _run_git(("fetch", "origin"), root, _GIT_NET_TIMEOUT)
+    if proc.returncode != 0:
+        return {"updated": False, "code": MAIN_SYNC_FETCH_FAILED, "branch": base,
+                "path": str(root),
+                "reason": f"`git fetch origin` failed in the main checkout: "
+                          f"{(proc.stderr or proc.stdout).strip()}"}
+    if not _git_ok("rev-parse", "--verify", "--quiet", f"{remote}^{{commit}}", cwd=root):
+        return {"updated": False, "code": MAIN_SYNC_NO_REMOTE, "branch": base,
+                "path": str(root),
+                "reason": f"there is no {remote} to fast-forward onto — the remote's default "
+                          f"branch is not what `default_base` resolved to"}
+
+    head = _run_git(("symbolic-ref", "--quiet", "--short", "HEAD"), root, None)
+    if head.returncode != 0:
+        return {"updated": False, "code": MAIN_SYNC_DETACHED, "branch": None, "path": str(root),
+                "reason": "the main checkout is in DETACHED HEAD, so there is no branch to "
+                          f"fast-forward; a human puts it back with `git -C {root} switch {base}`"}
+    branch = head.stdout.strip()
+    if branch != base:
+        return {"updated": False, "code": MAIN_SYNC_OFF_BRANCH, "branch": branch,
+                "path": str(root),
+                "reason": f"the main checkout is on `{branch}`, not `{base}` — left alone on "
+                          f"purpose: switching branches under someone who is working is not "
+                          f"housekeeping"}
+
+    before = _git("rev-parse", "HEAD", cwd=root)
+    target = _git("rev-parse", remote, cwd=root)
+    if before == target:
+        return None                                    # already current: nothing to say
+    # `--is-ancestor` is what makes this a FAST-FORWARD and not a merge: 1 means the checkout
+    # holds commits that `origin/<base>` does not, i.e. an unpushed human commit or a remote
+    # rolled backwards. Either way this tool is the wrong actor — `merge --ff-only` would refuse
+    # anyway, but refusing HERE lets the reason name the real situation instead of quoting git.
+    if not _git_ok("merge-base", "--is-ancestor", before, target, cwd=root):
+        ahead = _run_git(("rev-list", "--count", f"{remote}..HEAD"), root, None)
+        return {"updated": False, "code": MAIN_SYNC_DIVERGED, "branch": branch, "path": str(root),
+                "reason": f"the main checkout has diverged from {remote} "
+                          f"({ahead.stdout.strip() or '?'} local commit(s) not on the remote) — "
+                          f"a fast-forward would discard them, so nothing was done"}
+
+    behind = _run_git(("rev-list", "--count", f"HEAD..{remote}"), root, None)
+    merged = _run_git(("merge", "--ff-only", remote), root, None)
+    if merged.returncode != 0:
+        # The uncommitted-work case, and the one this whole function is shaped around: git
+        # refused because the fast-forward would have overwritten a modified tracked file or an
+        # untracked one. Nothing was changed. Its own message names the files, so pass it
+        # through verbatim rather than paraphrasing it into something less useful.
+        return {"updated": False, "code": MAIN_SYNC_BLOCKED, "branch": branch, "path": str(root),
+                "reason": f"`git merge --ff-only {remote}` refused, so the checkout is unchanged "
+                          f"and NOTHING was discarded: "
+                          f"{(merged.stderr or merged.stdout).strip()}"}
+    return {"updated": True, "branch": branch, "path": str(root),
+            "from": before, "to": target, "commits": int(behind.stdout.strip() or 0)}
+
+
 def gc_workspaces(cwd: Path | None = None, workflow=None) -> dict:
     """Reap worktrees whose task is no longer alive on the board.
 
@@ -1606,6 +1727,15 @@ def gc_workspaces(cwd: Path | None = None, workflow=None) -> dict:
     live tree missing from it would read as dead. It applies to the WHOLE read, so VMCP-68's
     `parked` set — a third consumer of the same fetch, and the one that made "Your Call" drive
     pagination too — is inside the budget rather than beside it.
+
+    VMCP-238 (801) adds a FOURTH key, `main_checkout`, and it is about the shared checkout
+    rather than about any worktree. This command is where it belongs because it is the one call
+    the pump already makes every tick, already canonicalises to the main worktree, already goes
+    to the network and already returns a payload the rulebook tells the pump to READ — so the
+    behaviour costs the orchestrator zero new steps, where a rule in SKILL.md would have cost a
+    step that can be forgotten. It is OPTIONAL in the payload: absent means the checkout is
+    current (or the operator opted out), present means it moved or is stuck. See
+    `sync_main_checkout` for the fast-forward-only contract and for what it will never do.
     """
     here = repo_root(cwd).resolve()
     root = _main_worktree(here)
@@ -1715,7 +1845,26 @@ def gc_workspaces(cwd: Path | None = None, workflow=None) -> dict:
                 released.append(result)
             else:
                 (expected if _keep_is_expected(result, parked) else kept).append(result)
-    return {"released": released, "kept": kept, "expected": expected}
+    # VMCP-238 (801): the shared checkout, AFTER the sweep and OUTSIDE the lock — both on
+    # purpose. After, because reaping is this command's job and a bolted-on courtesy must not
+    # delay or endanger it. Outside, because the fast-forward starts with a network `git fetch`,
+    # and VMCP-72 bounded how long the flock may be held precisely so a slow network cannot wedge
+    # every other agent's ensure/--release: nothing else in this module writes to the main
+    # checkout's index, working tree or `refs/heads/<base>`, so it needs no lock of ours.
+    #
+    # BEST-EFFORT, in the same sense as the epic marker and the Your Call ping: the reaper must
+    # not acquire a new way to fail. Anything this raises becomes an entry, never an exception —
+    # a wedged fetch (WorkspaceError from the timeout), an unreadable repo, a git that is not
+    # there. The one thing it must never do is cost a verdict already decided above.
+    result = {"released": released, "kept": kept, "expected": expected}
+    try:
+        main_state = sync_main_checkout(root)
+    except Exception as e:  # noqa: BLE001 — see above: report it, never raise past the sweep
+        main_state = {"updated": False, "code": MAIN_SYNC_ERROR, "path": str(root),
+                      "reason": f"{e.__class__.__name__}: {e}"}
+    if main_state is not None:
+        result["main_checkout"] = main_state
+    return result
 
 
 def run_workspace(argv: list[str]) -> int:
