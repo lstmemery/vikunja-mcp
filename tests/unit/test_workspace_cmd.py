@@ -3446,7 +3446,17 @@ def test_a_path_git_had_to_QUOTE_is_never_called_routine(repo):
 
 def test_the_report_is_capped_but_the_count_is_not(repo):
     """`--gc` runs unattended and its line is parsed by a hub process; a sibling project has
-    already lost a session to an oversized read. Truncation must not hide the SIZE of the loss."""
+    already lost a session to an oversized read, so the COUNT has to survive the cap even when the
+    names do not.
+
+    WHAT THAT COUNT IS NOT — and this test's own input is why the distinction is easy to miss.
+    Every entry here is a loose FILE, so `removed_ignored_truncated` coincides with the number of
+    files destroyed; the test below is an input where it does not. The condition for coinciding is
+    one destroyed file per printed entry and nothing lost inside a FILTERED entry — NOT the absence
+    of directories, which VMCP-249 (840) had to measure to believe (one ignored directory holding
+    exactly one file, plus 50 loose files, reports 51 against 51 files). That card is also where
+    the module comment stopped calling this number the "TRUE total".
+    """
     _ignoring(repo, "*.png")
     path = Path(ensure_workspace(42, cwd=repo)["path"])
     total = workspace_cmd._MAX_REPORTED_IGNORED + 7
@@ -3458,6 +3468,61 @@ def test_the_report_is_capped_but_the_count_is_not(repo):
     assert res["released"] is True
     assert len(res["removed_ignored"]) == workspace_cmd._MAX_REPORTED_IGNORED
     assert res["removed_ignored_truncated"] == total
+
+
+def test_the_truncated_count_is_entries_not_the_size_of_the_loss(repo):
+    """`removed_ignored_truncated` is `len(destroyed)` — POST-filter, POST-collapse — so it is not
+    the size of the loss, and it is not a bound on it in EITHER direction (below it here; above it
+    when a printed entry is a symlink, or a directory holding only symlinks, which destroys no
+    ignored regular file at all). VMCP-249 (840) settled that by building the state rather than by
+    preferring a wording, and this is the state, kept as a pin so the prose above
+    `_MAX_REPORTED_IGNORED` cannot drift back.
+
+    What disagreed was 2 texts against 1, not one file against another: this module comment and
+    SKILL.md both said TRUE total, while SKILL.md 88 lines earlier already said the number
+    "inherits exactly the blindness of the key" BY NAME — so the rulebook contradicted itself, and
+    a cross-reference vouched for a text saying the opposite.
+
+    Three shapes at once: a REPRODUCIBLE ignored directory holding a hand-authored file (100
+    files, one git entry, filtered away entirely), a NON-reproducible ignored directory (30 files,
+    ONE entry) and 57 loose ignored files. 187 ignored files are destroyed; the key reports 58.
+
+    The OVER-reporting direction is deliberately NOT pinned, and the reason is whose behaviour it
+    is: 51 reported entries against zero destroyed regular files is a fact about what git chooses
+    to PRINT for a symlink, not about any code here, so a test on it would go red on a git change
+    with nothing of ours defective. It is measured in the module comment instead.
+
+    Sweep, selection = this file, `-q` dropped so `collected` is readable: control 0 failed / 0
+    errors / 192 collected. Counting the number PRE-filter (`len(ignored)`, which is 59 on this
+    input) -> 1 failed / 0 errors / 192 collected, this test ALONE. Making
+    `_is_reproducible_ignored` return False always -> 5 failed / 0 errors / 192 collected, this
+    test among them. Read that second round as collateral rather than as this pin's own strength:
+    four of its five kills belong to the filter's existing pins, and the round is here only
+    because the number this test asserts moves 58 -> 59 with the filter gone.
+    """
+    _ignoring(repo, "*.png", ".playwright-mcp/", ".venv/")
+    path = Path(ensure_workspace(42, cwd=repo)["path"])
+    (path / ".venv").mkdir()
+    (path / ".venv" / "MEASUREMENTS.md").write_text("irreplaceable, and it dies unnamed\n")
+    for n in range(99):
+        (path / ".venv" / f"lib{n}.py").write_text("x = 1\n")
+    (path / ".playwright-mcp" / "840").mkdir(parents=True)
+    for n in range(30):
+        (path / ".playwright-mcp" / "840" / f"page-{n}.yml").write_text("aria snapshot\n")
+    for n in range(57):
+        (path / f"shot-{n:04d}.png").write_bytes(b"\x89PNG")
+    destroyed_files = 100 + 30 + 57
+
+    res = release_workspace(42, cwd=repo)
+
+    assert res["released"] is True
+    # 59 git `!!` entries, minus `.venv/` as recognisably regenerable. NOT 187.
+    assert res["removed_ignored_truncated"] == 58
+    assert res["removed_ignored_truncated"] < destroyed_files, (
+        "the count is entries, not files: one entry stands for a whole collapsed directory and a "
+        "filtered entry stands for arbitrarily many unnamed ones"
+    )
+    assert not path.exists()
 
 
 def test_the_detritus_filter_does_not_cover_what_an_agent_authors(repo):
@@ -4729,7 +4794,13 @@ def test_the_overwrite_report_skips_reproducible_detritus(repo, tracker, tmp_pat
 
 def test_the_overwrite_report_is_capped_but_the_count_is_not(repo, tracker, tmp_path):
     """Same consumer bound as `removed_ignored`: `--gc` runs unattended and a hub process parses
-    its one JSON line. Truncation must never hide the SIZE of the loss."""
+    its one JSON line, so the COUNT has to survive the cap even when the names do not.
+
+    NOT the size of the loss, here either — `_add_capped` says so where it is written and VMCP-249
+    (840) took the same overclaim out of this docstring: the number is the length of the list AFTER
+    every filter and give-up that produced it. That every entry in this input is a loose FILE is
+    what makes it coincide with the file count, and #836 already measured the shape where it does
+    not (505 destroyed paths reported as 500)."""
     _api, wf = tracker
     _ignoring(repo, "*.png")
     total = workspace_cmd._MAX_REPORTED_IGNORED + 7

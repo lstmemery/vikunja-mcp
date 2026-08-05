@@ -977,10 +977,39 @@ _REPRODUCIBLE_IGNORED_SUFFIXES = (".pyc", ".pyo")
 # unattended and its one JSON line is read by a hub process. Measured by the second pass — 3000
 # loose ignored files at a tree root produce 3000 entries and a 50,133-byte line, and a sibling
 # project has already lost a daemon session to an oversized read (hgdev-acp, a >24.5 KiB log pull).
-# Nothing is hidden by the cap: past it the entry also carries `removed_ignored_truncated` with the
-# TRUE total, so the count survives even when the names do not. Absence of that key means the list
-# is complete. Contrived state (git collapses ignored DIRECTORIES into one entry, so this needs
-# thousands of loose FILES), which is why it is a cap and not a refusal.
+# **What the cap bounds is the NUMBER of names and NOT the size of the line, so it does not by
+# itself hold the payload under that read** — measured for VMCP-249 (840): 50 names, the cap's own
+# maximum, at 800 characters each are a 40,440-byte line, well past the >24.5 KiB read cited above.
+# Whether a BYTE budget belongs beside the entry budget is filed as VMCP-260 (862) rather than
+# guessed at here; what is fixed is that the justification above no longer overstates its reach.
+#
+# Past the cap the entry also carries `removed_ignored_truncated`, so the COUNT survives even when
+# the names do not — and what that count IS is `len(destroyed)`: the length of the list AFTER the
+# filter above and AFTER git's collapse of an ignored DIRECTORY into one entry, taken before the
+# cap. **It is NOT the size of the loss, and calling it the "TRUE total" here was wrong** (VMCP-249
+# again, which settled it by construction rather than by preferring a wording): a tree holding
+# `.venv/` with 100 files (ONE entry, filtered away), `.playwright-mcp/840/` with 30 (ONE entry, and
+# the entry git prints is the PARENT `.playwright-mcp/`) and 57 loose `*.png` destroys 187 ignored
+# files and reports 58. So it inherits exactly the blindness of the key it sits beside, which is
+# what `_add_capped` already says of `overwritten_ignored_truncated`.
+#
+# AND IT IS A BOUND IN NEITHER DIRECTION. The tempting repair — "then read it as a LOWER bound on
+# the loss" — is false as well, and an independent pass refuted it the same way: 51 sibling ignored
+# directories each holding one symlink pointing OUT of the tree report 51 with ZERO ignored regular
+# files destroyed, the targets surviving intact. An entry is a POSITION git chose to print, not a
+# file. Nor is the coincidence about directories being absent: one ignored directory holding exactly
+# one file plus 50 loose files reports 51 against 51 files (measured). The condition is that no
+# printed entry stands for more than one destroyed file AND no filtered entry stood for any — which
+# a build tree that ran the gates is not, `.venv/` being there and holding more than one file (3 of
+# 3 build trees on VMCP-185's live sample, not re-measured here).
+#
+# Absence of the key means the LIST was not truncated, and NEVER that nothing beyond the names was
+# destroyed: under the cap the same collapse is still in force (measured, 2 entries named against 32
+# ignored files destroyed), so the ONE-DIRECTION reading below survives the cap unchanged in both of
+# its halves. Reaching the cap takes 51 non-reproducible ENTRIES, and only entries: one ignored
+# directory contributes ONE of them however full (measured, 30 files two levels down -> one entry),
+# so no amount of content inside a single directory gets there, while 51 SIBLING directories do
+# (measured) — which is why "it needs thousands of loose FILES" was too narrow a way to say it.
 _MAX_REPORTED_IGNORED = 50
 
 
