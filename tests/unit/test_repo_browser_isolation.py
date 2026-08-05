@@ -3386,19 +3386,29 @@ def test_a_path_whose_FIRST_COMPONENT_looks_like_a_merge_stage_is_not_a_silent_m
     The fix is one path segment — `f":./{rel}"` — and it is a fix rather than a workaround: `./`
     makes the rest of the string a PATH, so nothing in it can be read as a stage. That resolution
     is relative to CWD, which is also what `ls-files` prints against, so the two halves agree at any
-    `root` inside the WORKING TREE, top or not — the walk hands both commands the same `cwd=root`.
-    "Working tree" rather than "repository", because that boundary is measurable and was measured
-    instead of assumed: at `root` = the `.git` directory `ls-files` still lists every tracked path
-    (top-relative there), while every `:./` read refuses outright — `fatal: relative path syntax
-    can't be used outside working tree` — and the BARE form is the one that answers. No caller here
-    hands the walk that path, so the row bounds the sentence rather than reporting a hazard.
+    `root` inside the working tree THE READ RESOLVES AGAINST, top or not — the walk hands both
+    commands the same `cwd=root`. Both qualifiers are load-bearing, and each was built rather than
+    reasoned. Not "repository": at `root` = the `.git` directory every `:./` read refuses outright,
+    `fatal: relative path syntax can't be used outside working tree`, while `ls-files` still lists
+    tracked paths (top-relative there) and the bare form answers most of them — 8 of 10 on one
+    stand, the two exceptions being the stage-named path this pin is about and a gitlink. `.git` is
+    the LOUD member of that boundary rather than its only one: there `ls-files --others` fails
+    (`this operation must be run in a work tree`), which the walk's own assert turns into a raise,
+    whereas at `.git/modules/<name>` both listings succeed and the walk simply yields `[]` in
+    silence. And not "the working tree it sits in" either: point `core.worktree` elsewhere, and a
+    cwd that is inside the repository and holds a tracked path still gets that same `:./` refusal
+    while bare answers with the bytes. No caller here hands the walk any of these, so the rows bound
+    the sentence rather than report a hazard.
 
     THE DIRECTION THERE IS THE OPPOSITE of what #820 shipped, and the retraction is spelled out
     rather than quietly overwritten, because the false form is still readable in `git log`. This
     docstring used to say the halves "agree for the reason they already had to: `root` is a
-    repository TOP at both call sites"; the comment in `_publishable_copies` said the same; and the
-    message of commit `a1b80a6` put it past rescue — "the fix depends on `root` being a repository
-    top where the bare form depended on the opposite". A commit message is not rewritten here for
+    repository TOP at both call sites"; the comment in `_publishable_copies` said it with ONE word
+    changed, `TOP in both call sites` — a difference this correction itself first reported as "the
+    same", and its own second pass caught, one preposition adrift in the passage whose subject is
+    misattribution; and the message of commit `a1b80a6` put it past rescue — "the fix depends on
+    `root` being a repository top where the bare form depended on the opposite". A commit message is
+    not rewritten here for
     prose (a force-push to main is not that cheap — VMCP-229 (773) records the same call on
     `5389be0`), so that sentence stays wrong where it stands and is RETRACTED here. The
     precondition belongs to the BARE form: `:<rel>` resolves from the repository ROOT, so it agreed
@@ -3416,16 +3426,19 @@ def test_a_path_whose_FIRST_COMPONENT_looks_like_a_merge_stage_is_not_a_silent_m
         benign  / shaped    rc=0, 18 B — the ROOT file's      []           ['x.json']
         shaped  / benign    rc=0, 62 B — the ROOT file's      ['x.json']   []
 
-    Every `:./` answer is the right one for the subdirectory's own file and every bare one is wrong,
-    so off the top the bare form yields the SAME `hidden` / `named-falsely` pair this file pins for
-    merge stages, reached along a different axis: a credential hidden in one polarity, and in the
-    other a file named as the offender whose own bytes are harmless. "Misses EVERY tracked file" was
-    wider than its proof.
+    Across those three rows every `:./` answer is the right one for the subdirectory's own file and
+    every bare one is wrong, so off the top the bare form yields the SAME `hidden` / `named-falsely`
+    pair this file pins for merge stages, reached along a different axis: a credential hidden in one
+    polarity, and in the other a file named as the offender whose own bytes are harmless. "Misses
+    EVERY tracked file" was wider than its proof. "Every bare one is wrong" is bounded to the rows
+    ON PURPOSE — there is a FOURTH polarity where bare is right BY ACCIDENT, both copies shaped, and
+    it agrees with `:./` while still having read the other file.
 
     WHICH of the two you get is decided not by the presence of a root-level namesake but by what the
     bare revspec resolves to IN THE INDEX — and putting it the short way was this correction's own
-    first overclaim, so the routes to the MISS are measured rather than reasoned, and only the first
-    is namesake-free. No root entry at all: `does not exist`. A root namesake that is present but
+    first overclaim, so the routes to the MISS are measured rather than reasoned, listed as a SAMPLE
+    and not as a closed set, and only the first is namesake-free. No root entry at all: `does not
+    exist`. A root namesake that is present but
     UNTRACKED, or that is a DIRECTORY of that name: the twin is right there and the read still
     fails, `exists on disk, but not in the index`. And a name that ALSO parses as a stage, where the
     two defects COMPOSE — a tracked root `x.json` beside an index-only `sub/2:x.json` gives bare
@@ -3436,7 +3449,11 @@ def test_a_path_whose_FIRST_COMPONENT_looks_like_a_merge_stage_is_not_a_silent_m
     twin a SYMLINK (mode 120000) and bare exits 0 on ten bytes — the link's target PATH — no shape
     scan flags, so the credential hides. A GITLINK (mode 160000) is the counterexample to the tidy
     reading of that rule: in the index at stage 0, a blob it is not, so it MISSES on a fourth
-    message again, `could not get object info`.
+    message again, `could not get object info` — as does a tracked namesake whose loose object has
+    been deleted. And the condition is NECESSARY, never sufficient: a tracked but EMPTY root
+    namesake resolves perfectly (rc=0, 0 B) and still yields nothing, killed one line down by
+    `elif size:` rather than by the revspec at all. So the two branches are not a dichotomy —
+    "resolves, and yields nothing" is a third outcome.
 
     UNREACHABLE HERE — and that is counted now rather than asserted, since a count in this very
     clause is what went wrong twice. `_publishable_copies` has FOUR direct call sites, not the
