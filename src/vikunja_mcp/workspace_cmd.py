@@ -2030,9 +2030,17 @@ def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str) -> list[str]:
         status is NOT empty, and the difference is worth keeping: git reports the `.gitignore`
         (`??` when it is new, ` M` when the rule was appended to a committed one) and still says
         nothing whatever about the file that dies;
-      * the contrast that makes it a finding at all: untracked-and-NOT-ignored at an incoming
-        path and git refuses outright (`The following untracked working tree files would be
-        overwritten by merge`), which is the `blocked` branch, where nothing is destroyed.
+      * the contrast that makes it a finding at all, and it fails on exactly ONE diff shape:
+        untracked-and-NOT-ignored at an incoming path and git refuses outright (`The following
+        untracked working tree files would be overwritten by merge`), which is the `blocked`
+        branch, where nothing is destroyed. The shape is an entry landing ON a live GITLINK's own
+        path as a non-directory — VMCP-247 (838), measured at `469db93`: that TYPECHANGE deletes
+        the submodule's whole working directory at rc=0, and untracked-and-NOT-ignored content goes
+        with it, as does a file the SUBMODULE tracks and the human has modified. NOT "inside a live
+        gitlink", which this bullet said for one round: an incoming path INSIDE one is refused in
+        the ordinary way (measured, rc=1, that path named). So for that content there is no refusal
+        to contrast with and no key here to name it either: this probe reports IGNORED paths, and
+        that is a remit rather than an oversight to widen quietly.
     Same class as VMCP-185 (710): `git status --porcelain` and checkout's own protections do not
     see ignored paths. It is a property of GIT, not a decision of this module — a human typing
     `git pull --ff-only` loses the same file — so this REPORTS and never refuses, by the same
@@ -2126,6 +2134,19 @@ def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str) -> list[str]:
         30 files inside one submodule, and not at 25). Losing a name stays the right trade, for
         the reason losing the batch was: a diagnostic must never be what breaks the operation it
         describes;
+      * AND THAT SILENCE IS NOT ONLY ABOUT IGNORED PATHS — the one entry in this list that is
+        outside the key's REMIT rather than inside its give-ups, so no widening of the ask reaches
+        it (VMCP-247 (838), measured at `469db93`). The same typechange takes untracked-and-NOT-
+        ignored content and a file the SUBMODULE tracks and the human has modified, at rc=0, with
+        `git status --porcelain` empty afterwards — that last on the rc=0 branch ONLY: through
+        #835's half-applying branch the same typechange leaves ` T sub` in status and rides out in
+        `half_applied` instead, so THERE the loss does surface. What BOUNDS the class is the shape
+        rather than a promise, and the neighbouring shapes were built rather than reasoned about: a
+        plain gitlink DELETE (`:160000 000000 … D`) destroys nothing at all — git refuses to remove
+        a non-empty directory and says so (`warning: unable to rmdir 'sub': Directory not empty`),
+        the content survives — and neither does the gitlink becoming a real DIRECTORY, whose
+        colliding member is refused in the ordinary way. So this is the TYPECHANGE, not "any
+        incoming change to a submodule";
       * the name reported is the one on THIS disk only where the two can differ and git agrees
         they are the same path. On a case-insensitive filesystem (measured on macOS with
         `core.ignorecase=true`) a local ignored `out.png` under an incoming `out.PNG` IS
@@ -2464,6 +2485,28 @@ def sync_main_checkout(root: Path) -> dict | None:
     longer says is "NOTHING was
     discarded": the branch reports what it FOUND, one-way, like every other report on this path —
     and says outright when it could not look.
+
+    AND THE THIRD CORRECTION TO THAT SAME SENTENCE IS ONE DIFF SHAPE — an incoming entry landing ON
+    a live GITLINK's path as a non-directory — VMCP-247 (838), filed by the implementer of 837 and
+    measured at `469db93` on real git 2.50.1. Such a TYPECHANGE (`:160000 <non-gitlink> … T`;
+    measured with `100644` and with `120000`, which destroy identically) deletes that submodule's
+    whole WORKING DIRECTORY at rc=0 with no warning, and the two shapes the sentence above names as
+    protected die with it: an untracked-and-NOT-ignored file, and a file that is MODIFIED and
+    TRACKED — tracked by the SUBMODULE, which is the only index that has ever heard of it (the
+    superproject holds ZERO entries under a gitlink, so from up here every one of those files is
+    untracked). On that branch `git status --porcelain` is empty afterwards.
+    SAY "ON THE GITLINK'S PATH" AND NOT "INSIDE A LIVE GITLINK", which is what this paragraph said
+    for one round until the second pass built the counterexample: when the incoming path is one
+    INSIDE the gitlink (`sub/precious.txt`) the contrast HOLDS in there exactly as it does
+    anywhere, measured twice — rc=1 and "The following untracked working tree files would be
+    overwritten by merge" naming that very path, nothing destroyed. A live gitlink is not a blanket
+    blind spot; one diff shape is. Two consequences, and the second is why this is the deepest of
+    the three corrections: no probe of ours reports that content — `overwritten_ignored` is about
+    IGNORED paths by name and by remit — and, unlike 806 and 835, the CONTRAST is absent rather
+    than narrowed, so "the tool never has to decide which local edits are precious" has one shape
+    where git decides nothing either. What to DO about it is a product question parked for a human,
+    not guessed at here; the measurements, including the shapes that are NOT losses, live in this
+    card's section of `tests/unit/test_workspace_cmd.py`.
 
     RETURNS None WHEN THERE IS NOTHING TO SAY — already current, or opted out. The key it feeds
     is therefore ABSENT on the boring path and PRESENT whenever a reader has something to read.

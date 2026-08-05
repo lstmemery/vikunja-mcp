@@ -287,7 +287,8 @@ assertion in `tests/unit/test_line_length_gate.py`, which pyproject must agree w
   **fast-forward ONLY and refuses rather than resolves**: the
   main checkout is somebody else's working directory, so `reset --hard`, `checkout -f`, `clean`,
   `stash`, `pull`, a bare `merge` and switching branches are all deliberately absent and must
-  stay absent. What protects uncommitted work is GIT, not a guard of ours — `merge --ff-only`
+  stay absent. What protects uncommitted work is GIT, not a guard of ours — outside a live GITLINK
+  `merge --ff-only`
   refuses outright when it would overwrite a modified TRACKED file or an untracked one that is
   NOT IGNORED, and that is load-bearing rather than lazy: a "refuse unless the tree is clean"
   guard would never
@@ -305,7 +306,33 @@ assertion in `tests/unit/test_line_length_gate.py`, which pyproject must agree w
   `git status --porcelain` (the second shows the `.gitignore` as `??` or ` M`, and still nothing
   about the file that dies). The contrast is
   what makes it a finding rather than a complaint about git: untracked-and-NOT-ignored at the same
-  path is refused outright. **What used to close that sentence — "so the REFUSAL branches really do
+  path is refused outright. **That contrast FAILS ON ONE DIFF SHAPE — an entry landing ON a live
+  GITLINK's own path as a non-directory — which is #838 and the deepest of the three corrections
+  this sentence has taken** — measured at `469db93` on git 2.50.1: that TYPECHANGE
+  (`:160000 <non-gitlink> … T`, e.g. upstream replacing the submodule with an ordinary file, and
+  identically with a symlink) deletes the submodule's whole working directory at rc=0 with no
+  warning, and BOTH protected shapes die with it — an untracked-and-NOT-ignored file, and one that
+  is MODIFIED and TRACKED by the SUBMODULE, the only index that has ever heard of it (the
+  superproject holds ZERO entries under a gitlink, so from up here every file in it is untracked);
+  on that branch `git status --porcelain` is empty afterwards, while through #835's half-applying
+  branch the same typechange leaves ` T sub` and rides out in `half_applied`. **Say "on the
+  gitlink's path", never "inside a live gitlink"** — that wider wording stood for one round and the
+  independent second pass disproved it by construction: an incoming path INSIDE the gitlink
+  (`sub/precious.txt`) is refused in the ordinary way, rc=1, naming that path, nothing destroyed. A
+  live gitlink is not a blanket blind spot; one shape is. 806 and 835 each NARROWED the sentence;
+  here the contrast is ABSENT on that shape, so no probe of ours reports the content either —
+  `overwritten_ignored` is about IGNORED paths by name and by remit, and widening the ask cannot
+  reach a file no rule matches. The class is bounded by SHAPE and not by hope, and the neighbours
+  were built: a plain gitlink DELETE destroys nothing (git refuses to remove a non-empty directory
+  and warns, the content survives), and neither does the gitlink becoming a real DIRECTORY, whose
+  colliding member is refused normally. Nor is the pre-merge ` M sub` a signal
+  to lean on: it is absent whenever the doomed file is ignored by the SUBMODULE's own rules (both
+  statuses empty, before and after), and `submodule.<name>.ignore = all` or
+  `diff.ignoreSubmodules = all` switch it off outright — #766's lesson again. What the tool should
+  DO about it is a product question parked for a human, not guessed at in code; this repo has no
+  submodules (`git ls-files -s | awk '$1=="160000"'` is empty — `.gitmodules` is the wrong
+  evidence, a gitlink lives in the INDEX), so it is latent HERE and ordinary in a consumer's
+  checkout. **What used to close that sentence — "so the REFUSAL branches really do
   discard nothing and that half of the claim was always sound" — was itself FALSE, and #835 (filed
   by 806's own round-2 review, reproduced twice more here) is that correction: `merge --ff-only` is
   NOT ATOMIC.** It attempts every entry and writes everything it can, so ONE path it cannot write

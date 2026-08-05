@@ -5998,3 +5998,278 @@ def test_one_unaskable_path_costs_only_itself_and_not_the_paths_around_it(repo, 
     assert state["updated"] is True, state
     assert state["overwritten_ignored"] == ["a.png", "z.png"], state
     assert (repo / "sub").is_file(), "the submodule really was replaced by a file"
+
+
+# --- VMCP-247 (838): the CONTRAST fails on ONE diff shape — an entry ON a gitlink's path --------
+#
+# Filed by the implementer of VMCP-246 (837) as the residue that card deliberately did not fix,
+# and reproduced here before a word of prose moved. Everything below is command output on real
+# git 2.50.1, taken at `469db93`, on shell stands outside this suite unless a test is named; the
+# rounds and counterexamples credited to the second pass were run by it in its own clone.
+#
+# WHAT THE CHAIN CLAIMED. #710 -> 806 -> 835 -> 837 -> 836 all rest on one contrast, stated in
+# `sync_main_checkout`, in `_ignored_paths_the_ff_will_overwrite` and in CLAUDE.md: an IGNORED file
+# can be destroyed silently BECAUSE git protects the untracked-and-NOT-ignored case itself, so the
+# only silence left to name is the ignored one. Both halves were re-measured rather than inherited:
+#   * untracked-and-NOT-ignored at an incoming path .. rc=1, "The following untracked working tree
+#                                                      files would be overwritten by merge", intact
+#   * a MODIFIED TRACKED file at an incoming path .... rc=1, "Your local changes to the following
+#                                                      files would be overwritten by merge", intact
+# `test_the_untracked_but_not_ignored_contrast_refuses_and_reports_no_loss` is that half's pin.
+#
+# THE SHAPE THAT BREAKS IT is an incoming entry landing ON a live GITLINK's own path as a
+# non-directory — a TYPECHANGE, `:160000 <non-gitlink> … T` — and in a stronger form than the card
+# claimed. The checkout holds, inside that submodule's working directory, `keep.png` (ignored by the
+# superproject's `*.png`), `precious.txt` (untracked and NOT ignored by any rule of EITHER repo) and
+# a MODIFIED `inside.txt` (tracked — by the SUBMODULE, the only index that has heard of it;
+# `git ls-files -s | grep -c '^sub/'` in the superproject is 0, so from up here every file in there
+# is untracked):
+#   * before ... `git status --porcelain` says ` M sub`; the submodule's own says ` M inside.txt`,
+#                `?? keep.png`, `?? precious.txt`
+#   * merge .... rc=0, no refusal, no warning, `mode change 160000 => 100644 sub`
+#   * after .... all THREE gone, `git status --porcelain` EMPTY, `overwritten_ignored` naming none
+#                of them (`['a.png']` when an ignored NEIGHBOUR is in the same commit, absent when
+#                there is none)
+# The dst mode is NOT part of the shape: `:160000 120000 … T`, upstream putting a SYMLINK there,
+# destroys identically (second pass). So for that content there is no refusal to contrast with AND
+# no key to name it: the loss is outside this probe's remit, not merely outside its reach.
+# `--no-index` does answer about those paths (`sub/keep.png` rc=0, `sub/precious.txt` rc=1,
+# `sub/inside.txt` rc=1) and even honours the SUBMODULE's own `.gitignore` — `check-ignore
+# --no-index -v sub/scratch/notes.txt` prints `sub/.gitignore:1:scratch/` though the superproject
+# has no such rule — so widening the ask would reach the IGNORED half and could never reach
+# `precious.txt`, which no rule matches.
+#
+# SAY "ON THE GITLINK'S PATH", NEVER "INSIDE A LIVE GITLINK". This section, both docstrings and
+# CLAUDE.md all carried the wider wording for one round, and the independent second pass disproved
+# it by construction: keep the gitlink live and populated, and let the incoming commit land at a
+# path INSIDE it (`:160000 000000 … D sub` plus `:000000 100644 … A sub/precious.txt`) —
+# `merge --ff-only` is rc=1, "The following untracked working tree files would be overwritten by
+# merge: sub/precious.txt", and all three files are intact. Reproduced independently here. The
+# asymmetry survives with it: the same shape carrying an incoming `sub/keep.png` is rc=0 and the
+# human's ignored bytes are replaced. A live gitlink is not a blanket blind spot; one shape is, and
+# a guard written from the wide version would be scoped to the wrong set.
+#
+# WHAT ELSE BOUNDS THE CLASS, all built rather than reasoned about (the last two by the second
+# pass). A plain gitlink DELETE (`:160000 000000 … D`) destroys NOTHING: rc=0 with `warning: unable
+# to rmdir 'sub': Directory not empty`, and `sub/` still a directory holding `.git`, `inside.txt`
+# and `precious.txt` — the submodule is still a working repo (`git -C sub status` answers). The
+# gitlink becoming a real DIRECTORY is the same when its members are new, and REFUSED (rc=1) when an
+# incoming member collides with one on disk. So this is the TYPECHANGE, not "any incoming change to
+# a submodule".
+#
+# AND THE PRE-MERGE ` M sub` IS NOT A SIGNAL TO BUILD ON, which is what a "refuse when the gitlink
+# is dirty" guard would need. Three ways it is absent while the loss is not:
+#   * the doomed file is ignored by the SUBMODULE's own rules -> superproject status EMPTY, the
+#     submodule's own status EMPTY, before AND after; the file is gone (fully invisible, the
+#     #806 shape one level down)
+#   * `submodule.<name>.ignore = all` .......... ` M sub` -> empty, file gone (#766's lesson again)
+#   * `diff.ignoreSubmodules = all` ............ same, repo-wide
+# `git diff-index --name-only HEAD` never names `sub` at all, with or without those knobs, so the
+# module's own `_tracked_changes` read could not see it either.
+#
+# WHAT SURVIVES THE TYPECHANGE, because it is what the loss actually costs: `.git/modules/<name>`
+# is untouched, so the submodule's COMMITTED content is recoverable (`cat-file -p HEAD:inside.txt`
+# answered after the merge) — but not freely, since the surviving `core.worktree` points at the path
+# that is now a file and EVERY read there dies `fatal: cannot chdir to '../../../sub'`; neither
+# `-c core.worktree=` nor `git config --unset` helps, because git chdirs first, so it takes a hand
+# edit of that config file. What dies for good is exactly the UNCOMMITTED work.
+#
+# WHAT THIS CARD DID AND DID NOT DO. It corrected the prose at the places the contrast is ASSERTED
+# for the FF: `sync_main_checkout`'s founding paragraph (now carrying its THIRD correction), the
+# probe's contrast bullet plus a bounds entry, and CLAUDE.md. `_incoming_displacing_paths` needed
+# no edit — its typechange paragraph already said "ignored and NOT-ignored content alike" and filed
+# this card. SKILL.md was checked and deliberately NOT touched, and the WARRANT is not the one an
+# earlier draft of this section gave ("it asserts the contrast nowhere"): the second pass refuted
+# that by finding the place — line ~369, for the RELEASE guard rather than the ff
+# ("Untracked-но-НЕигнорируемое (`??`) гвард при НАСТРОЙКАХ ПО УМОЛЧАНИЮ видит и дерево держит — то
+# есть дыра ровно на игнорируемом"). Two measured reasons stand in its place. For the FF it asserts
+# nothing to correct: its `blocked` bullet already says "git отказался, И ЭТОТ ПРОГОН НЕ НАШЁЛ
+# недописанного" and "Не пересказывай это человеку как гарантию". For the RELEASE guard the
+# sentence survives a live gitlink for a reason of GIT's rather than the guard's — with ` M sub`
+# switched off all three ways above, `_inspect_status` returns `([], [])`, i.e. BLIND, while
+# `git worktree remove` refuses outright (`fatal: working trees containing submodules cannot be
+# moved or removed`, rc=128, the file intact) and this module never passes `--force`; verified here
+# on a real worktree, including that `--force` DOES destroy it, which is why the absent flag is
+# load-bearing. The residue there — that refusal is a RAISE, so it lands in `kept` as
+# `release-error` on every sweep — is filed as VMCP-261 (863).
+# ONE CLAIM OF THAT WARRANT WAS ALSO TOO WIDE and the second pass caught it: "the loss changes no
+# agent ACTION, since there is nothing for the agent to name" holds on the rc=0 branch ONLY. Reached
+# through #835's half-applying ff (a `chflags uchg` neighbour, built with it sorting before AND
+# after `sub`), the same typechange gives `code: 'half-applied'`, `half_applied: ['.gitmodules',
+# 'sub']` and a NON-empty `git status --porcelain` (` D .gitmodules`, ` T sub`) with all three files
+# still gone — so there the agent does have something to name, and SKILL.md's existing instruction
+# to report `half_applied` already covers it. Its wording there calls the collateral an IGNORED file
+# ("а лежавший там игнорируемый файл мог погибнуть"), which is now known to be narrower than the
+# truth; that one word is left to whoever answers the product question rather than changed here.
+# What the tool should DO — report the gitlink path, widen the ask with `--no-index`, or refuse the
+# ff on that shape — is a product question parked for a human via `call_human`, because refusing
+# would break the chain's standing "report and never refuse" and #806's reason for that rule (the
+# rulebook TELLS agents to write `shot-<id>.png`) does not apply to a submodule, where the rulebook
+# tells them to write nothing.
+#
+# THE TDD ROUND, recorded because a prose defect has no other red. Selection
+# `-k lands_ON_a_gitlinks_path`, `collected 193 items / 192 deselected / 1 selected` in both, no
+# `-q`, `FAILED `- and `ERROR `-prefixed
+# lines counted separately: control (the shipped assertions) 0 failed, 0 ERROR lines; the round that
+# asserted what the contrast bullet READ AS WRITTEN predicts — `updated is False`,
+# `code == MAIN_SYNC_BLOCKED`, `precious.txt` still there — 1 failed, 0 ERROR lines, with
+# `AssertionError: {'updated': True, …} assert (True is False)`. That failure IS the disproof; the
+# assertions were then flipped to the measured truth.
+#
+# MUTATION SWEEP, VMCP-247 (838). Selection `tests/unit/test_workspace_cmd.py -p no:randomly`, no
+# `-q`, `FAILED `- and `ERROR `-prefixed lines counted SEPARATELY, `collected 193` and 0 ERROR lines
+# in every round including the control, `__pycache__` deleted before each and the target restored
+# and sha256-verified after each. control 0 failed:
+#   * simulate REFUSING the ff on a gitlink typechange .............. control 0 failed; 2 failed
+#   * simulate NAMING the gitlink path in `overwritten_ignored` ..... control 0 failed; 2 failed
+#   * drop the `rel in gitlinks` early return in `_expand_if_directory` control 0 failed; 0 failed
+# The first two are the point: each is one of the parked product options, each fails BOTH this
+# card's typechange pin and 837's `test_one_unaskable_path_costs_only_itself…`, so neither option
+# can be implemented without a test noticing. The THIRD is a real find rather than a shrug — that
+# early return was pinned by NOTHING (837's own seam test passes `gitlinks={'vendor/sub'}` with
+# `rel='vendor'`, so it exercises the NESTED `dirnames[:]` prune and never the top-level one), and
+# the typechange pin below now asserts it directly. The second pass swept the same file
+# independently on selection `-k "gitlink or contrast"` (`collected 193`, control 0 failed) and its
+# rounds are worth reading beside these: `_add_capped` emitting the key unconditionally 3 failed
+# (BOTH new tests), dropping the pointer-move skip 1 failed, dropping the NESTED prune 2 failed,
+# `--diff-filter=ACMT` -> `ACMTD` 0 failed, and the probe returning `[]` unconditionally 0 failed —
+# that last meaning NEITHER new test exercises the probe, which is why they are labelled
+# characterisation pins and not coverage.
+#
+# THE SUITE'S OWN SCOPE, unchanged from 837 and worth repeating because it is what makes this
+# latent: there are no submodules in this repository (`git ls-files -s | awk '$1=="160000"'` is
+# empty — `.gitmodules` is the wrong evidence, a gitlink lives in the INDEX). `--gc` ships to
+# consumers on the moving `stable` channel and `sync_main_checkout` runs in THEIR main checkout.
+
+
+def _upstream_replaces_the_gitlink(tmp_path, name, with_a_file=True, path="sub"):
+    """Land the shape this card is about: upstream drops the gitlink at `path`.
+
+    `with_a_file=True` puts an ordinary FILE there (`:160000 100644 … T`, a TYPECHANGE);
+    `False` removes it outright (`:160000 000000 … D`), which is the discriminator."""
+    other = tmp_path / f"sibling-{name}"
+    subprocess.run(["git", "clone", str(tmp_path / "origin.git"), str(other)],
+                   check=True, capture_output=True)
+    _git(other, "config", "user.email", "sibling@example.com")
+    _git(other, "config", "user.name", "Sibling")
+    _git(other, "rm", "-q", "--cached", path)
+    shutil.rmtree(other / path, ignore_errors=True)
+    if with_a_file:
+        (other / path).write_text("upstream made this an ordinary file\n")
+        _git(other, "add", path)
+    _git(other, "rm", "-q", "-f", ".gitmodules")
+    _git(other, "commit", "-m", f"sibling: {name}")
+    _git(other, "push", "origin", "HEAD:main")
+
+
+def test_the_contrast_is_FALSE_when_the_incoming_entry_lands_ON_a_gitlinks_path(repo, tracker,
+                                                                                tmp_path):
+    """THE CARD'S OWN INPUT, and it is largely a CHARACTERISATION pin — green on arrival by
+    construction, because nothing about the code was wrong here and the defect was in the prose
+    describing it. Say that rather than let a reader take a passing test for a fix.
+
+    The founding contrast of #710 -> 806 -> 835 -> 837 -> 836 is that git protects
+    untracked-and-NOT-ignored content itself, leaving the IGNORED case as the only silence worth a
+    key. It fails on ONE diff shape — an entry landing ON a live gitlink's own path as a
+    non-directory — and there in the strongest form available: all THREE shapes die at rc=0, the
+    ignored one, the untracked-and-NOT-ignored one, and one that is MODIFIED and TRACKED (by the
+    SUBMODULE; the superproject holds no index entry under a gitlink at all, which is why git never
+    asks about them). NOT "inside a live gitlink" — an incoming path INSIDE one is refused in the
+    ordinary way, which the section header above measures.
+
+    `overwritten_ignored` is ABSENT here rather than short, and that is the sharper statement: the
+    ignored NEIGHBOUR case is 837's test next door, so what this adds is an absent key over a
+    three-file loss — the one-way reading's worst case, live.
+
+    WHAT IT PINS ABOUT OUR CODE, since the rest is git's and the sweep says so: `_add_capped`'s
+    only-when-non-empty rule (the second pass's round kills this and the other new test together),
+    and the `rel in gitlinks` early return in `_expand_if_directory`, asserted DIRECTLY below
+    because a sweep round found it pinned by nothing at all — 837's own seam test passes
+    `gitlinks={'vendor/sub'}` against `rel='vendor'`, so it exercises the nested `dirnames[:]` prune
+    and never this one. Of the three parked product options, two — naming the gitlink path and
+    refusing the ff — each fail this test in a measured round; the third, widening the ask with
+    `--no-index`, would only move a line if the widening answered non-empty here, which no
+    assertion constrains, so do not read this as catching all three."""
+    _api, wf = tracker
+    _ignoring(repo, "*.png")
+    _with_submodule(repo, tmp_path, inner={"inside.txt": "the submodule's own tracked file\n"})
+    (repo / "sub" / "keep.png").write_bytes(b"\x89PNG the human's own, ignored by `*.png`")
+    (repo / "sub" / "precious.txt").write_text("untracked and NOT ignored by any rule\n")
+    (repo / "sub" / "inside.txt").write_text("MODIFIED, and TRACKED inside the submodule\n")
+    # The superproject cannot see any of it: `check-ignore` is not even askable about those paths
+    # (837), and the INDEX is the reason — asserted, since every claim above rests on it.
+    assert not [p for p in _git(repo, "ls-files", "-s").splitlines() if "\tsub/" in p], (
+        "the superproject holds ZERO index entries under a gitlink"
+    )
+    # `?? precious.txt` in the SUBMODULE's own status is what makes it untracked-and-NOT-ignored
+    # from up here too: no rule of either repo matches it.
+    assert "?? precious.txt" in _git(repo, "-C", "sub", "status", "--porcelain")
+
+    _upstream_replaces_the_gitlink(tmp_path, "sub2file")
+
+    # The gitlink path is handed back WHOLE rather than walked into — the top-level early return,
+    # which nothing else in this file covers. Asked before the sweep so the state is the one the
+    # merge then acts on.
+    _git(repo, "fetch", "--no-recurse-submodules", "origin")
+    gitlinks = workspace_cmd._index_gitlink_paths(repo, ["sub"])
+    assert gitlinks == frozenset({"sub"}), ("the index is what names a gitlink", gitlinks)
+    assert workspace_cmd._expand_if_directory(repo, "sub", gitlinks) == ["sub"], (
+        "a gitlink path must not be expanded into the unaskable paths inside it"
+    )
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["updated"] is True, ("no refusal on this shape", state)
+    assert "overwritten_ignored" not in state, ("nor is any of it named", state)
+    for dead in ("keep.png", "precious.txt", "inside.txt"):
+        assert not (repo / "sub" / dead).exists(), (
+            f"sub/{dead} must be gone — this pin is the loss, not a wish about it", dead
+        )
+    assert (repo / "sub").is_file(), "the submodule really was replaced by a file"
+    assert _git(repo, "status", "--porcelain") == "", (
+        "and on THIS branch git says nothing about it afterwards; through #835's half-applying ff "
+        "the same typechange leaves ` T sub` instead (measured, section header above)"
+    )
+
+
+def test_a_plain_gitlink_DELETE_is_not_the_shape_and_destroys_nothing(repo, tracker, tmp_path):
+    """THE DISCRIMINATOR, and it is what keeps the correction from becoming "submodules are
+    unsafe". Upstream removes the gitlink OUTRIGHT instead of putting a file there
+    (`:160000 000000 … D`): git then needs the path for nothing, refuses to remove a non-empty
+    directory, SAYS SO on stderr, and everything survives — the human's untracked file, the
+    submodule's own tracked file, and the submodule as a working repository.
+
+    BE HONEST ABOUT WHAT IT PINS: of the four things it asserts, exactly ONE is about our code —
+    `_add_capped`'s only-when-non-empty rule, which the second pass's round kills — and the other
+    three are properties of GIT. In particular it pins NOTHING about `--diff-filter=ACMT`. An
+    earlier draft credited that filter with the silence ("drops a `D` entry before the probe sees
+    it, which is the right answer here for once"); the second pass measured both halves and it is
+    not what makes it so — restoring `D` to the filter is `control 0 failed; that round 0 failed`,
+    and with `D` restored `_ignored_of` still answers `[]`, because `check-ignore sub` is rc=1: the
+    silence comes from the ignore answer. The filter is tidiness here, not the guard.
+
+    What the shape itself buys is real: a guard written for "any incoming change to a submodule"
+    would fire where nothing is at risk."""
+    _api, wf = tracker
+    _ignoring(repo, "*.png")
+    _with_submodule(repo, tmp_path, inner={"inside.txt": "the submodule's own tracked file\n"})
+    (repo / "sub" / "precious.txt").write_text("untracked and NOT ignored by any rule\n")
+
+    _upstream_replaces_the_gitlink(tmp_path, "subdeleted", with_a_file=False)
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["updated"] is True, state
+    assert "overwritten_ignored" not in state, state
+    assert (repo / "sub" / "precious.txt").read_text() == (
+        "untracked and NOT ignored by any rule\n"
+    ), "a plain gitlink delete destroys nothing — git will not remove a non-empty directory"
+    assert (repo / "sub" / "inside.txt").read_text() == "the submodule's own tracked file\n", (
+        "the submodule's OWN tracked file survives too, which is what makes it 'nothing'"
+    )
+    assert (repo / "sub").is_dir(), "and the directory is still a directory"
+    assert _git(repo, "-C", "sub", "status", "--porcelain") == "?? precious.txt", (
+        "the submodule is still a working repository, not a husk"
+    )
