@@ -3639,18 +3639,22 @@ def test_the_override_changes_nothing_at_the_default_setting(repo):
 # housekeeping cannot destroy a human's uncommitted work, and a fake would only mirror this
 # module's own beliefs about `merge --ff-only`.
 
-def _land_on_origin(tmp_path: Path, name: str, files: dict) -> str:
+def _land_on_origin(tmp_path: Path, name: str, files: dict, force: bool = False) -> str:
     """Land a commit on the bare origin the way a SIBLING worktree does — from a clone of its
     own, so the main checkout's branch is never touched and its `origin/<base>` goes stale
-    exactly as it does in production."""
+    exactly as it does in production.
+
+    `force` is `git add -f`, needed only when the incoming path is one the SIBLING's clone also
+    ignores — which is the shape VMCP-240 (806) is about, and the harder of its two routes."""
     other = tmp_path / f"sibling-{name}"
     subprocess.run(["git", "clone", str(tmp_path / "origin.git"), str(other)],
                    check=True, capture_output=True)
     _git(other, "config", "user.email", "sibling@example.com")
     _git(other, "config", "user.name", "Sibling")
     for rel, content in files.items():
+        (other / rel).parent.mkdir(parents=True, exist_ok=True)
         (other / rel).write_text(content)
-    _git(other, "add", "-A")
+    _git(other, "add", *(["-f"] if force else []), "-A")
     _git(other, "commit", "-m", f"sibling: {name}")
     _git(other, "push", "origin", "HEAD:main")
     return _git(other, "rev-parse", "HEAD")
@@ -3912,3 +3916,366 @@ def test_the_merge_stays_ff_only_even_when_the_ancestor_check_lies(repo, tracker
         "a merge commit was invented in the human's checkout — `--ff-only` is what forbids that"
     )
     assert (repo / "local-only.txt").exists()
+
+
+# --- VMCP-240 (806): the ff DOES destroy an IGNORED file, and now says which one ---
+#
+# Filed by the independent review of 801. `merge --ff-only` protects a modified TRACKED file and
+# an untracked one that is NOT ignored; an IGNORED file is untracked and is overwritten silently
+# — rc=0, `git status --porcelain` empty before and after. Same blind spot as VMCP-185 (710), one
+# layer up: not the worktree reaper this time but the shared checkout.
+#
+# These tests do NOT change the outcome, and that is deliberate: the loss is git's own behaviour
+# (a human's `git pull --ff-only` does it too) and refusing on ignored paths would stop the sync
+# from ever firing in a repo whose rulebook tells agents to write `shot-<id>.png`. What they pin
+# is that the loss stopped being INVISIBLE — and, on the refusal branch, that no such key appears,
+# because there nothing died.
+#
+# MUTATION SWEEP over this whole file, one selection throughout (`collected 157` in every round,
+# so no round measured a different selection), control 0 failed:
+#   * drop `GIT_OPTIONAL_LOCKS=0` from the probe's diff ......... 0 failed  <- see the note on
+#   * report every ignored path (drop the regenerable filter) ... 1 failed     the index test
+#   * drop the cap slice ....................................... 1 failed
+#   * emit the key unconditionally ............................. 3 failed
+#   * drop the try/except around the probe ..................... 1 failed
+#   * drop the exists-on-disk filter ........................... 1 failed
+#   * run the probe AFTER the merge instead of before .......... 5 failed
+#   * drop `--no-renames` ...................................... 1 failed
+#   * drop `--diff-filter=ACMT` ................................ 0 failed
+#   * grade check-ignore's rc as `!= 0` instead of `not in (0,1)` 0 failed
+# The three zeros are all DECLARED as pinning nothing where they live, rather than discovered
+# here and left unsaid: the env var is belt over a call shape that never writes (the index test
+# says so in full), `--diff-filter=ACMT`'s exclusion of `D` cannot produce a report because a
+# deleted path is tracked locally and `check-ignore` drops it anyway, and the rc grade computes
+# the same empty list either way because a non-zero exit leaves stdout empty.
+#
+# ROUND TWO, after the independent second pass forced the directory expansion. Same file, same
+# `-p no:randomly`, `collected 160` in every round, control 0 failed:
+#   * no directory expansion at all ............................ 2 failed
+#   * expansion follows symlinked directories .................. 1 failed
+#   * an EMPTY directory returns nothing instead of its own name  0 failed
+#   * an un-suppressed `git status --porcelain` inside the probe  1 failed
+# The zero is a defensive branch nothing constructs here (an incoming path that is a local EMPTY
+# directory), left in and named rather than deleted, because its failure mode is a caller reading
+# "no paths at risk" for a path that exists. The last round is the second pass's own M13, replayed
+# on this tree: it is what says the index test has teeth against index WRITES even though it does
+# not pin the env var — a distinction that took a mutation in each direction to establish.
+
+
+def test_the_fast_forward_names_the_ignored_file_it_destroys(repo, tracker, tmp_path):
+    """ROUTE ONE, and the whole finding in one input: this repo ignores `*.png`, its own SKILL.md
+    tells agents to write `shot-<id>.png`, and upstream force-added a file at that path.
+
+    Both halves are asserted, because naming is not saving: the human's bytes really are gone
+    (that is git, and this module does not fight it) and the report is now the only trace there
+    ever was of them.
+
+    `ghost.png` rides along to pin the EXISTENCE filter, and it needs to be here rather than in a
+    test of its own: `check-ignore` answers about a NAME, not about a file (measured — it reports
+    `ghost.png` in a checkout that has no such path), so without the `lexists` step every ignored
+    path an incoming commit merely ADDS would be reported as destroyed."""
+    _api, wf = tracker
+    _ignoring(repo, "*.png")
+    (repo / "shot.png").write_bytes(b"\x89PNG the human's own evidence screenshot")
+    assert _git(repo, "status", "--porcelain") == "", "the whole problem: git sees nothing here"
+    landed = _land_on_origin(tmp_path, "one",
+                             {"shot.png": "UPSTREAM\n", "ghost.png": "no local file\n"},
+                             force=True)
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["updated"] is True, state
+    assert state["overwritten_ignored"] == ["shot.png"], state
+    assert "overwritten_ignored_truncated" not in state
+    assert _git(repo, "rev-parse", "HEAD") == landed
+    assert (repo / "shot.png").read_text() == "UPSTREAM\n", "the human's file really is gone"
+
+
+def test_a_locally_uncommitted_ignore_rule_is_enough_to_lose_the_file(repo, tracker, tmp_path):
+    """ROUTE TWO, and the more reachable one: NO upstream `git add -f` is needed. A rule the human
+    typed into their own `.gitignore` and never committed, plus an ordinary incoming file at that
+    path, and the same silent overwrite follows.
+
+    It is also what forces the probe to ask `git check-ignore` (which reads the WORKING TREE's
+    rules) rather than anything derived from the committed tree."""
+    _api, wf = tracker
+    (repo / ".gitignore").write_text("notes.txt\n")          # uncommitted, deliberately
+    (repo / "notes.txt").write_text("the human's scratch notes\n")
+    landed = _land_on_origin(tmp_path, "one", {"notes.txt": "UPSTREAM\n"})
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["updated"] is True, state
+    assert state["overwritten_ignored"] == ["notes.txt"], state
+    assert _git(repo, "rev-parse", "HEAD") == landed
+    assert (repo / "notes.txt").read_text() == "UPSTREAM\n"
+
+
+def test_the_untracked_but_not_ignored_contrast_refuses_and_reports_no_loss(repo, tracker,
+                                                                            tmp_path):
+    """THE CONTRAST that makes the two above a finding rather than a complaint about git: the same
+    input with the ignore rule REMOVED is refused outright, and the human's file survives.
+
+    So the new key must be ABSENT here. `blocked` already means "nothing was discarded", and a
+    post-mortem field on a branch where nothing died would make that sentence unreadable."""
+    _api, wf = tracker
+    before = _git(repo, "rev-parse", "HEAD")
+    (repo / "notes.txt").write_text("the human's scratch notes\n")
+    _land_on_origin(tmp_path, "one", {"notes.txt": "UPSTREAM\n"})
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["updated"] is False and state["code"] == workspace_cmd.MAIN_SYNC_BLOCKED, state
+    assert "overwritten_ignored" not in state, state
+    assert "untracked working tree files would be overwritten" in state["reason"]
+    assert _git(repo, "rev-parse", "HEAD") == before
+    assert (repo / "notes.txt").read_text() == "the human's scratch notes\n"
+
+
+def test_an_ordinary_fast_forward_says_nothing_about_ignored_files(repo, tracker, tmp_path):
+    """ABSENT is the ordinary answer, and it has to stay ordinary. A checkout holding an ignored
+    file the incoming commits do not touch loses nothing, so there is nothing to report — the
+    probe asks for the INTERSECTION of what is arriving with what is on disk, never whether the
+    tree holds ignored paths at all."""
+    _api, wf = tracker
+    _ignoring(repo, "*.png")
+    (repo / "shot.png").write_bytes(b"\x89PNG untouched by anything landing")
+    _land_on_origin(tmp_path, "one", {"other.txt": "a\n"})
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert res["main_checkout"]["updated"] is True
+    assert "overwritten_ignored" not in res["main_checkout"], res["main_checkout"]
+    assert (repo / "shot.png").read_bytes() == b"\x89PNG untouched by anything landing"
+
+
+def test_a_path_inside_an_ignored_directory_is_named_in_full(repo, tracker, tmp_path):
+    """FINER-GRAINED than `removed_ignored`, and that is measured rather than claimed: VMCP-185's
+    report reads `git status --ignored`, which collapses an ignored DIRECTORY into ONE entry, so a
+    file inside `.playwright-mcp/` dies unnamed there. `git check-ignore` answers per PATH, so
+    here the individual file is named — the one place this report is better than its sibling."""
+    _api, wf = tracker
+    _ignoring(repo, ".playwright-mcp/")
+    (repo / ".playwright-mcp" / "806").mkdir(parents=True)
+    (repo / ".playwright-mcp" / "806" / "page.yml").write_text("the human's aria snapshot\n")
+    _land_on_origin(tmp_path, "one", {".playwright-mcp/806/page.yml": "UPSTREAM\n"}, force=True)
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["overwritten_ignored"] == [".playwright-mcp/806/page.yml"], state
+
+
+def test_a_path_RENAMED_into_an_ignored_name_is_still_seen(repo, tracker, tmp_path):
+    """`--no-renames` is load-bearing BESIDE `--diff-filter=ACMT`, and only this input shows it.
+
+    Measured on real git: a rename is status `R`, `ACMT` excludes `R`, so with detection left ON
+    the pair reports NOTHING for the commit below — `git diff --name-only --diff-filter=ACMT`
+    over a pure rename prints an empty list, while the same command with `--no-renames` prints
+    the destination (the rename having become an add plus a delete). So the flag is what keeps a
+    file renamed INTO an ignored path from being written over unannounced."""
+    _api, wf = tracker
+    _ignoring(repo, "/notes.txt")          # anchored: an unanchored rule would hide the SOURCE
+    (repo / "docs").mkdir()
+    (repo / "docs" / "notes.txt").write_text("a\nb\nc\nd\ne\nf\ng\nh\n")   # long enough to detect
+    _git(repo, "add", "docs")
+    _git(repo, "commit", "-m", "notes live under docs/")
+    _git(repo, "push", "origin", "main")
+    (repo / "notes.txt").write_text("the human's own scratch notes\n")
+
+    other = tmp_path / "sibling-rename"
+    subprocess.run(["git", "clone", str(tmp_path / "origin.git"), str(other)],
+                   check=True, capture_output=True)
+    _git(other, "config", "user.email", "sibling@example.com")
+    _git(other, "config", "user.name", "Sibling")
+    _git(other, "mv", "-f", "docs/notes.txt", "notes.txt")
+    _git(other, "commit", "-m", "sibling: notes move to the root")
+    _git(other, "push", "origin", "HEAD:main")
+    assert _git(other, "diff", "--name-status", "HEAD~1..HEAD").startswith("R"), (
+        "the input is only interesting while git DETECTS this as a rename"
+    )
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["updated"] is True, state
+    assert state["overwritten_ignored"] == ["notes.txt"], state
+
+
+def test_a_DIRECTORY_replaced_upstream_by_a_file_names_what_died_inside_it(repo, tracker,
+                                                                            tmp_path):
+    """THE CHANNEL WITH NO PATH IN THE DIFF, built by this card's independent second pass and the
+    reason `_expand_if_directory` exists.
+
+    Upstream turns the tracked directory `out/` into a FILE; the checkout holds its own ignored
+    `out/shot.png`. The incoming diff names `out` (added) and `out/bar.txt` (deleted, so filtered)
+    — the path that actually dies is in NEITHER, and asking `check-ignore` about `out` answers
+    "not ignored", because a directory is not what the rule matches. Measured before the fix: the
+    fast-forward returned rc=0, the file was gone, and `overwritten_ignored` was ABSENT. It also
+    refutes the sentence this feature's docstring used to carry — git removes an untracked file
+    here, as long as it is ignored.
+
+    The contrast holds one level up too, and the second pass measured it: put an untracked-and-NOT
+    -ignored file in that directory and git refuses the whole merge (`Updating the following
+    directories would lose untracked files in them`)."""
+    _api, wf = tracker
+    _ignoring(repo, "*.png")
+    (repo / "out").mkdir()
+    (repo / "out" / "bar.txt").write_text("tracked, so `out/` is a real directory upstream\n")
+    _git(repo, "add", "out")
+    _git(repo, "commit", "-m", "a directory that upstream will replace")
+    _git(repo, "push", "origin", "main")
+    (repo / "out" / "shot.png").write_bytes(b"\x89PNG the human's own evidence")
+    assert _git(repo, "status", "--porcelain") == "", "invisible before, as it always was"
+
+    other = tmp_path / "sibling-dir2file"
+    subprocess.run(["git", "clone", str(tmp_path / "origin.git"), str(other)],
+                   check=True, capture_output=True)
+    _git(other, "config", "user.email", "sibling@example.com")
+    _git(other, "config", "user.name", "Sibling")
+    _git(other, "rm", "-r", "-q", "out")
+    (other / "out").write_text("now an ordinary file\n")
+    _git(other, "add", "out")
+    _git(other, "commit", "-m", "sibling: out becomes a file")
+    _git(other, "push", "origin", "HEAD:main")
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["updated"] is True, state
+    assert state["overwritten_ignored"] == ["out/shot.png"], state
+    assert (repo / "out").is_file(), "the directory really was replaced"
+
+
+def test_an_ignored_DIRECTORY_is_reported_file_by_file_not_as_one_entry(repo, tracker, tmp_path):
+    """The mirror case, and the one that makes "finer-grained than `removed_ignored`" true rather
+    than a hope: the LOCAL path is an ignored DIRECTORY and the incoming commit puts a file there.
+
+    `check-ignore` answers about `out` — the directory IS ignored here — so without the expansion
+    the report is the single entry `out` for any number of dead files inside it, which is exactly
+    the collapse `removed_ignored` is bounded by (`git status --ignored` folds a directory into
+    one line). Two files die and both are named."""
+    _api, wf = tracker
+    _ignoring(repo, "out/")
+    (repo / "out").mkdir()
+    (repo / "out" / "a.txt").write_text("the human's own scratch\n")
+    (repo / "out" / "b.txt").write_text("and another\n")
+    _land_on_origin(tmp_path, "one", {"out": "upstream puts a file at that name\n"})
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["updated"] is True, state
+    assert sorted(state["overwritten_ignored"]) == ["out/a.txt", "out/b.txt"], state
+
+
+def test_the_directory_expansion_does_not_walk_through_a_symlink(repo, tracker, tmp_path):
+    """`islink` before `isdir`, because a symlinked directory is ONE path to git and one path to
+    delete — walking it would name files that do not live in this checkout at all, and report as
+    destroyed things the merge never touches."""
+    _api, wf = tracker
+    _ignoring(repo, "/link")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "precious.txt").write_text("not in the checkout\n")
+    (repo / "link").symlink_to(outside)
+    _land_on_origin(tmp_path, "one", {"link": "upstream puts a file at that name\n"},
+                    force=True)          # the rule is pushed, so the sibling ignores it too
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["overwritten_ignored"] == ["link"], state
+    assert (outside / "precious.txt").read_text() == "not in the checkout\n"
+
+
+def test_the_overwrite_report_skips_reproducible_detritus(repo, tracker, tmp_path):
+    """The SAME filter as `released`, inherited for one-word-one-meaning. Its own docstring says
+    the noise argument is weaker here — an incoming commit has to ADD a path under `.venv/` for
+    this to fire at all — so this pins the shared behaviour, not a reason to have it twice."""
+    _api, wf = tracker
+    _ignoring(repo, ".venv/")
+    (repo / ".venv").mkdir()
+    (repo / ".venv" / "pyvenv.cfg").write_text("home = /usr\n")
+    _land_on_origin(tmp_path, "one", {".venv/pyvenv.cfg": "UPSTREAM\n"}, force=True)
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert res["main_checkout"]["updated"] is True
+    assert "overwritten_ignored" not in res["main_checkout"], res["main_checkout"]
+    assert workspace_cmd._is_reproducible_ignored(".venv/pyvenv.cfg") is True, (
+        "the filter is what keeps this quiet — if that changes, this test is measuring nothing"
+    )
+
+
+def test_the_overwrite_report_is_capped_but_the_count_is_not(repo, tracker, tmp_path):
+    """Same consumer bound as `removed_ignored`: `--gc` runs unattended and a hub process parses
+    its one JSON line. Truncation must never hide the SIZE of the loss."""
+    _api, wf = tracker
+    _ignoring(repo, "*.png")
+    total = workspace_cmd._MAX_REPORTED_IGNORED + 7
+    for n in range(total):
+        (repo / f"shot-{n:04d}.png").write_bytes(b"\x89PNG")
+    _land_on_origin(tmp_path, "one",
+                    {f"shot-{n:04d}.png": "UPSTREAM\n" for n in range(total)}, force=True)
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["updated"] is True
+    assert len(state["overwritten_ignored"]) == workspace_cmd._MAX_REPORTED_IGNORED
+    assert state["overwritten_ignored_truncated"] == total
+
+
+def test_a_failing_overwrite_probe_costs_the_report_and_never_the_sync(repo, tracker, tmp_path,
+                                                                       monkeypatch):
+    """A DIAGNOSTIC MUST NOT BECOME A GATE. The fast-forward worked before this report existed and
+    has to keep working when the report cannot be computed — same best-effort class as the whole
+    `main_checkout` key inside `--gc`, one level down."""
+    _api, wf = tracker
+    _ignoring(repo, "*.png")
+    (repo / "shot.png").write_bytes(b"\x89PNG")
+    monkeypatch.setattr(workspace_cmd, "_ignored_paths_the_ff_will_overwrite",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("git fell over")))
+    landed = _land_on_origin(tmp_path, "one", {"shot.png": "UPSTREAM\n"}, force=True)
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["updated"] is True and "overwritten_ignored" not in state, state
+    assert _git(repo, "rev-parse", "HEAD") == landed
+
+
+def test_the_probe_leaves_the_index_of_a_REFUSED_checkout_untouched(repo, tracker, tmp_path):
+    """The OUTCOME the module's standing rule asks for (`_git_inspect`'s note): the probe runs
+    BEFORE the merge, including on the run where the merge is then REFUSED, and on that run
+    nothing of ours may have written in a human's working directory.
+
+    IT DOES NOT PIN THE ENV VAR, AND ITS FIRST NAME SAID IT DID. Sweep on this file: control
+    0 failed; dropping `env_extra={"GIT_OPTIONAL_LOCKS": "0"}` from the probe's `git diff`
+    0 failed. The reason is the SHAPE of the call rather than the flag — `HEAD..<remote>` is a
+    TREE-TO-TREE comparison, and measured directly on a repo with a modified tracked file it does
+    not move the index mtime with the variable or without it, nor does `check-ignore`, while
+    `git status --porcelain` does. So the flag is belt, and this test is a pin on the RESULT.
+
+    IT IS NOT INERT, though, which is the other half and needed its own round: inserting an
+    un-suppressed `_run_git(("status", "--porcelain"), root, None)` into the probe gives control
+    0 failed; mutation 1 failed, and the one failure is this test. It has teeth against index
+    WRITES — it just does not pin the flag. (Both rounds were built by the independent second
+    pass and replayed here.)"""
+    _api, wf = tracker
+    (repo / "README.md").write_text("hi\nWORK THE HUMAN HAS NOT COMMITTED\n")
+    _land_on_origin(tmp_path, "one", {"README.md": "landed from a sibling\n"})
+    index = Path(_git(repo, "rev-parse", "--git-path", "index"))
+    index = index if index.is_absolute() else repo / index
+    before = index.stat().st_mtime_ns
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert res["main_checkout"]["code"] == workspace_cmd.MAIN_SYNC_BLOCKED
+    assert index.stat().st_mtime_ns == before, (
+        "the probe refreshed the index of a checkout whose merge was then refused"
+    )

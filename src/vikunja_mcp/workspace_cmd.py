@@ -328,14 +328,28 @@ class _ReadDeadline:
 
 def _run_git(
     args: tuple[str, ...], cwd: Path | None, timeout: float | None,
-    env_extra: dict[str, str] | None = None,
+    env_extra: dict[str, str] | None = None, stdin_text: str | None = None,
 ) -> subprocess.CompletedProcess:
+    """`stdin_text` REPLACES the standing `stdin=DEVNULL`, and only one caller wants it.
+
+    DEVNULL is the default for a reason worth keeping: a git subcommand that decides to ask a
+    question would otherwise inherit this process's stdin, which for the MCP server is the
+    TRANSPORT. `git check-ignore --stdin` is the one call here whose input IS a path list, and
+    it is fed this way rather than through argv because the alternative has two edges this one
+    does not — ARG_MAX on a large incoming diff, and `-z`, which git refuses without `--stdin`
+    (measured: `fatal: -z only makes sense with --stdin`). What `-z` buys is narrower than an
+    earlier draft of this sentence claimed, and the second pass measured the difference: without
+    it a SPACE in a filename survives fine, a non-ASCII byte comes back C-quoted (and un-quoted
+    again under `core.quotePath=false`), and only a NEWLINE has no unquoted spelling at all.
+    """
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", **(env_extra or {})}
     limit = _GIT_TIMEOUT if timeout is None else timeout
     try:
         return subprocess.run(
             ["git", *args], cwd=cwd, capture_output=True, text=True,
-            stdin=subprocess.DEVNULL, env=env, timeout=limit,
+            **({"input": stdin_text} if stdin_text is not None
+               else {"stdin": subprocess.DEVNULL}),
+            env=env, timeout=limit,
         )
     except subprocess.TimeoutExpired:
         # convert here rather than let TimeoutExpired escape: the module's whole error
@@ -1557,6 +1571,146 @@ MAIN_SYNC_ERROR = "error"          # the best-effort wrapper in gc: anything unf
 _MAIN_SYNC_OPT_OUT = "VIKUNJA_MCP_NO_MAIN_SYNC"
 
 
+# How many files one incoming path may contribute when it turns out to be a local DIRECTORY.
+# Separate from `_MAX_REPORTED_IGNORED`, which caps the REPORT: this caps the QUESTION, so that a
+# commit replacing a directory holding a `node_modules` never turns one sweep into a filesystem
+# walk. Hitting it means the answer is short, which is a bound named in the docstring rather than
+# a refusal — the alternative, giving up on the whole directory, reports less rather than more.
+_MAX_DIR_EXPANSION = 500
+
+
+def _expand_if_directory(root: Path, rel: str) -> list[str]:
+    """`rel` for an ordinary path; the FILES INSIDE IT when the checkout has a directory there.
+
+    THE CASE THIS EXISTS FOR was built by the independent second pass and disproved a sentence
+    this function's own docstring used to carry ("git removes only TRACKED files"). Upstream
+    replaces a tracked DIRECTORY with a FILE of the same name; the checkout holds its own ignored
+    file inside that directory. Measured: rc=0, the directory and everything in it is gone, and
+    the probe said nothing at all — the incoming diff names `out` (added) and `out/bar.txt`
+    (deleted, so filtered), while the path that actually died, `out/shot.png`, is in neither.
+    Asking `check-ignore` about `out` answers rc=1, because the DIRECTORY is not ignored.
+
+    So a present path that is a DIRECTORY is replaced by its contents, which is also what makes
+    the report finer-grained than `removed_ignored`'s in the mirror case (a locally IGNORED
+    directory replaced by an incoming file): that used to yield the single entry `out` for any
+    number of dead files inside it.
+
+    Symlinks are NOT followed (`islink` first): a symlinked directory is one path to git and one
+    path to delete, and walking through it would name files that live outside the checkout.
+    """
+    full = os.path.join(root, rel)
+    if os.path.islink(full) or not os.path.isdir(full):
+        return [rel]
+    inside: list[str] = []
+    for dirpath, _dirnames, filenames in os.walk(full):
+        for name in filenames:
+            inside.append(os.path.relpath(os.path.join(dirpath, name), root))
+            if len(inside) >= _MAX_DIR_EXPANSION:
+                return inside
+    # An EMPTY directory keeps its own name: nothing is lost with it, but a caller that gets an
+    # empty list back for a path that exists would read it as "this path is not at risk". Nothing
+    # in the suite constructs that state — measured, `return inside` alone is control 0 failed /
+    # 0 failed — so this branch is defensive and is named rather than pretended to be pinned.
+    return inside or [rel]
+
+
+def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str) -> list[str]:
+    """Name the IGNORED files a fast-forward onto `remote` is about to overwrite — VMCP-240 (806).
+
+    THE HOLE THIS EXISTS FOR, measured on real git (2.50.1) rather than reasoned about, three
+    branches on one stand — a bare origin, a main checkout, a sibling landing with `git push
+    origin HEAD:main`:
+      * upstream tracks `shot.png` (it took a `git add -f` there), the main checkout holds the
+        HUMAN's own `shot.png` under this repo's `*.png` rule -> `git status --porcelain` prints
+        NOTHING, `merge --ff-only` returns rc=0, and the human's file is gone;
+      * the same loss WITHOUT any upstream force-add: an UNCOMMITTED rule in the human's own
+        `.gitignore` plus an ordinary incoming file at that path -> rc=0, gone. This is the more
+        reachable of the two and the reason the check must read the working tree's rules. Its
+        status is NOT empty, and the difference is worth keeping: git reports the `.gitignore`
+        (`??` when it is new, ` M` when the rule was appended to a committed one) and still says
+        nothing whatever about the file that dies;
+      * the contrast that makes it a finding at all: untracked-and-NOT-ignored at an incoming
+        path and git refuses outright (`The following untracked working tree files would be
+        overwritten by merge`), which is the `blocked` branch, where nothing is destroyed.
+    Same class as VMCP-185 (710): `git status --porcelain` and checkout's own protections do not
+    see ignored paths. It is a property of GIT, not a decision of this module — a human typing
+    `git pull --ff-only` loses the same file — so this REPORTS and never refuses, by the same
+    argument #801 used to reject "only update when the tree is clean": a guard that refuses on
+    ignored paths would refuse in a repo whose rulebook TELLS agents to write `shot-<id>.png` and
+    `.playwright-mcp/<id>/`, i.e. would stop the sync from ever firing.
+
+    HOW, and why each step is the cheap one. `git diff --name-only` over `HEAD..remote` is the
+    incoming path set. `--no-renames` is LOAD-BEARING BESIDE `--diff-filter=ACMT` and not tidiness
+    — measured: a rename is status `R`, which `ACMT` filters OUT, so with detection left on the
+    pair answers NOTHING for a commit that renamed a file INTO a path this checkout ignores; with
+    `--no-renames` the same commit arrives as an add plus a delete and the destination is kept.
+    The `D` half of that is belt rather than braces, and the honest reading is that it pins
+    nothing: a deleted path is TRACKED here, so `check-ignore` would drop it two steps later
+    anyway. Do NOT restate that as "a deletion is not a loss channel" — this docstring did, and
+    the second pass disproved it by building one (a directory replaced by a file takes the
+    ignored files inside it with it, rc=0); what makes THAT case invisible is not the `D` filter
+    but the path never being in the diff at all, and it is `_expand_if_directory` that answers
+    it. Existence is checked in python (`lexists`, so a broken symlink still counts as something
+    being written over) — the incoming set is about the COMMITS, and a path that is not on this
+    disk has nothing to lose. Then ONE `git check-ignore`, whose default does the index
+    filtering for free — measured, without `--no-index` it does NOT report a TRACKED path
+    (`tracked.png` absent from its output while `untracked.png` is there), which is exactly the
+    split that matters, since a tracked file is protected by git's own refusal. It also names the
+    FULL path inside an ignored directory (`out/deep/file.txt`), where `status --ignored`
+    collapses the directory into one entry.
+
+    THE BOUNDS, and the list is the point: a key that means one thing needs its silences written
+    down, and an EARLIER version of this list called itself complete at three while missing the
+    one that mattered.
+      * it says these paths were WRITTEN, not that their bytes differed — an incoming file
+        byte-identical to the local ignored one is still named;
+      * `_is_reproducible_ignored` filters it, exactly as on `released`, so this can be silent
+        about a file parked under `.venv/`. The noise argument is WEAKER here than there (an
+        incoming commit would have to add a path under `.venv/` for it to fire at all), so the
+        filter is inherited for one-word-one-meaning rather than because it is load-bearing;
+      * the `rc not in (0, 1)` grade is DOCUMENTATION and pins nothing, measured: check-ignore
+        answers 1 for "none of these are ignored", which is the ordinary case and not an error,
+        but every non-zero exit leaves stdout EMPTY, so `!= 0` — or no check at all — computes
+        the same empty list. It is written out so that nobody later "fixes" rc=1 into a failure.
+        What is real is that the probe gives up SILENTLY on anything it cannot read: a diagnostic
+        must never be what breaks the operation it describes;
+      * and so AN ABSENT KEY IS NEVER A PROOF THAT NOTHING DIED — the same one-way reading
+        `removed_ignored` has. Four routes to absent-with-a-loss: the filter above, either
+        `return []` in this function, the caller's `except`, and a directory walk stopped at
+        `_MAX_DIR_EXPANSION`. The rulebook states that direction to agents rather than leaving
+        it here.
+    """
+    changed = _run_git(
+        ("diff", "--name-only", "-z", "--no-renames", "--diff-filter=ACMT",
+         f"HEAD..{remote}"),
+        root, None, env_extra={"GIT_OPTIONAL_LOCKS": "0"},
+    )
+    if changed.returncode != 0:
+        return []
+    # GIT_OPTIONAL_LOCKS=0 above is the module's standing rule (see `_git_inspect`) applied by
+    # habit, and it is BELT — say so rather than let a reader think it is doing the work. This
+    # probe runs BEFORE the merge, including on the run where the merge is then REFUSED, where
+    # nothing of ours should have written in a human's checkout at all; what actually keeps that
+    # true is the SHAPE of the calls. Measured: `git diff HEAD..<remote>` is a TREE-TO-TREE
+    # comparison and leaves the index mtime alone with or without the variable, as does
+    # `check-ignore`, while `git status --porcelain` moves it. The sweep agrees — dropping this
+    # env_extra kills no test (see the section header in tests/unit/test_workspace_cmd.py).
+    present: list[str] = []
+    for p in changed.stdout.split("\0"):
+        if not p or not os.path.lexists(os.path.join(root, p)):
+            continue
+        present.extend(_expand_if_directory(root, p))
+    if not present:
+        return []
+    checked = _run_git(("check-ignore", "-z", "--stdin"), root, None,
+                       env_extra={"GIT_OPTIONAL_LOCKS": "0"},
+                       stdin_text="\0".join(present) + "\0")
+    if checked.returncode not in (0, 1):
+        return []
+    return [p for p in checked.stdout.split("\0")
+            if p and not _is_reproducible_ignored(p)]
+
+
 def sync_main_checkout(root: Path) -> dict | None:
     """Fast-forward the MAIN checkout onto `origin/<default branch>`, or REFUSE and say why.
 
@@ -1571,12 +1725,27 @@ def sync_main_checkout(root: Path) -> dict | None:
 
     WHAT PROTECTS THE UNCOMMITTED WORK IS GIT ITSELF, not a guard written here, and that is the
     point rather than an omission: `merge --ff-only` refuses outright when the incoming commits
-    would overwrite a modified tracked file OR an untracked one, and leaves everything untouched
-    when it does. So the tool never has to decide which local edits are precious. A guard of our
-    own that merely required a clean tree would be WORSE than useless here — the very checkout
-    this card is about has an untracked file in it, so "refuse unless clean" would mean the fix
-    never fires in the one case it was filed for. Edits to files the incoming commits do not
-    touch survive the fast-forward, which is the desirable half of the same property.
+    would overwrite a modified TRACKED file, or an untracked one that is NOT IGNORED, and leaves
+    everything untouched when it does. So the tool never has to decide which local edits are
+    precious. A guard of our own that merely required a clean tree would be WORSE than useless
+    here — the very checkout this card is about has an untracked file in it, so "refuse unless
+    clean" would mean the fix never fires in the one case it was filed for. Edits to files the
+    incoming commits do not touch survive the fast-forward, which is the desirable half of the
+    same property.
+
+    THAT SENTENCE USED TO SAY "OR AN UNTRACKED ONE", FULL STOP, AND IT WAS WIDER THAN ITS PROOF —
+    VMCP-240 (806), found by the independent review of the card that shipped it. An IGNORED file
+    IS untracked, and git overwrites it silently: rc=0, empty stderr, `updated: true`. Two routes,
+    both measured, both live in this repo, whose own rulebook tells agents to write
+    `shot-<id>.png` into a checkout that ignores `*.png`. Only the FIRST of them is invisible to
+    `git status --porcelain` (empty before and after) — the second needs a local ignore rule, so
+    status shows the `.gitignore` itself as `??` or ` M` while saying nothing about the file that
+    dies. See `_ignored_paths_the_ff_will_overwrite`, which is what now NAMES the loss in
+    `overwritten_ignored`. Naming is not preventing, and the wording matters in both directions:
+    the REFUSAL branches still discard nothing (that half of the claim was always sound), while
+    `updated: true` is where a file can have died. The same overclaim rode out in the commit body
+    of 27666c2a, which cannot be rewritten (a force-push to `main` over a message is not worth
+    it), so the correction lives here, in CLAUDE.md and in SKILL.md instead.
 
     RETURNS None WHEN THERE IS NOTHING TO SAY — already current, or opted out. The key it feeds
     is therefore ABSENT on the boring path and PRESENT whenever a reader has something to read.
@@ -1584,6 +1753,12 @@ def sync_main_checkout(root: Path) -> dict | None:
     `expected` split both paid for: a field that is present on every tick stops being read.
     Present means either "the shared checkout moved, here is how far" or "it is stale and here
     is what is holding it" — both worth a line in the orchestrator's report, neither an alarm.
+
+    `overwritten_ignored` obeys that same one-way reading and is deliberately NOT spelled
+    `removed_ignored`, though it is the same kind of post-mortem: there a file was DELETED with
+    its worktree, here a path was written over and still exists holding somebody else's bytes.
+    One name per verb keeps `released`'s scan and this one from being confused for each other,
+    and keeps a grep for either landing on one implementation.
     """
     if os.environ.get(_MAIN_SYNC_OPT_OUT):
         return None
@@ -1631,6 +1806,14 @@ def sync_main_checkout(root: Path) -> dict | None:
                           f"a fast-forward would discard them, so nothing was done"}
 
     behind = _run_git(("rev-list", "--count", f"HEAD..{remote}"), root, None)
+    # BEFORE the merge, because afterwards the answer is unrecoverable: the paths are tracked by
+    # then and the human's bytes are already gone. Best-effort in the strongest sense — anything
+    # this raises must cost the REPORT and never the fast-forward, which is the whole point of
+    # the feature and was working before the report existed.
+    try:
+        doomed = _ignored_paths_the_ff_will_overwrite(root, remote)
+    except Exception:                               # noqa: BLE001 — a diagnostic, never a gate
+        doomed = []
     merged = _run_git(("merge", "--ff-only", remote), root, None)
     if merged.returncode != 0:
         # The uncommitted-work case, and the one this whole function is shaped around: git
@@ -1641,8 +1824,16 @@ def sync_main_checkout(root: Path) -> dict | None:
                 "reason": f"`git merge --ff-only {remote}` refused, so the checkout is unchanged "
                           f"and NOTHING was discarded: "
                           f"{(merged.stderr or merged.stdout).strip()}"}
-    return {"updated": True, "branch": branch, "path": str(root),
-            "from": before, "to": target, "commits": int(behind.stdout.strip() or 0)}
+    result = {"updated": True, "branch": branch, "path": str(root),
+              "from": before, "to": target, "commits": int(behind.stdout.strip() or 0)}
+    if doomed:
+        # ONLY on this branch, and only when non-empty. A refusal destroys nothing, so a key
+        # there would be a warning about a loss that did not happen; and a key present on every
+        # successful sync is the never-read field the paragraph above is about.
+        result["overwritten_ignored"] = doomed[:_MAX_REPORTED_IGNORED]
+        if len(doomed) > _MAX_REPORTED_IGNORED:
+            result["overwritten_ignored_truncated"] = len(doomed)
+    return result
 
 
 def gc_workspaces(cwd: Path | None = None, workflow=None) -> dict:

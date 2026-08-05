@@ -288,11 +288,42 @@ assertion in `tests/unit/test_line_length_gate.py`, which pyproject must agree w
   main checkout is somebody else's working directory, so `reset --hard`, `checkout -f`, `clean`,
   `stash`, `pull`, a bare `merge` and switching branches are all deliberately absent and must
   stay absent. What protects uncommitted work is GIT, not a guard of ours — `merge --ff-only`
-  refuses outright when it would overwrite a modified tracked file or an untracked one, and
-  that is load-bearing rather than lazy: a "refuse unless the tree is clean" guard would never
+  refuses outright when it would overwrite a modified TRACKED file or an untracked one that is
+  NOT IGNORED, and that is load-bearing rather than lazy: a "refuse unless the tree is clean"
+  guard would never
   have fired on the very checkout the card was filed from, which held the human's untracked
-  `BOARD-ANALYSIS-2026-08-03.md`. The key is ABSENT when the checkout is current or
-  `VIKUNJA_MCP_NO_MAIN_SYNC=1` is set (the `NO_SKILL_SYNC`/`NO_TRACE` idiom — env, never the
+  `BOARD-ANALYSIS-2026-08-03.md`. **That sentence used to end at "or an untracked one", and #806 —
+  filed by 801's own independent reviewer — measured that an IGNORED file is untracked and dies
+  anyway.** Two routes, both built on real git and both live in this repo: upstream force-adds a
+  path this checkout ignores (`*.png` — and a `.png` in the MAIN checkout is an ordinary state
+  here, since the shared browser resolves a bare `filename` against the MCP server's cwd, which
+  IS this checkout; the rulebook's own `shot-<id>.png` recipe writes into the agent's worktree,
+  which is a different folder and a different instance of the same rule), or — needing no
+  force-add at all, so the likelier one — a rule the human typed into their
+  own UNCOMMITTED `.gitignore` plus an ordinary incoming file at that path. Both give rc=0, empty
+  stderr and the human's bytes replaced; only the FIRST is also invisible to
+  `git status --porcelain` (the second shows the `.gitignore` as `??` or ` M`, and still nothing
+  about the file that dies). The contrast is
+  what makes it a finding rather than a complaint about git: untracked-and-NOT-ignored at the same
+  path is refused outright, so the REFUSAL branches really do discard nothing and that half of the
+  claim was always sound. It is git's own behaviour — `git pull --ff-only` typed by hand loses the
+  same file — and a "copy it aside first" is buildable but was NOT built: the card asked for a
+  post-mortem and explicitly not a guard, so #806 fixed
+  the SILENCE and not the loss: a SUCCESSFUL sync now carries `overwritten_ignored` (filtered by
+  the same regenerable-name list as `removed_ignored`, capped the same way, with
+  `overwritten_ignored_truncated` past the cap), computed BEFORE the merge as the incoming path
+  list ∩ what exists on disk ∩ `git check-ignore` — with any incoming path that is a local
+  DIRECTORY expanded into the files inside it first, which is the one channel that has no path in
+  the diff at all: a directory replaced upstream by a FILE takes its ignored contents with it,
+  measured, and the first version of this feature reported nothing at all for it. Same one-way
+  reading as `removed_ignored` — and read it in that ONE direction, because absent has four ways
+  to be wrong (the filter, either give-up branch of the probe, the caller's `except`, and a
+  directory walk cut off at its bound) — and
+  deliberately NOT the same NAME: there a file was DELETED with its tree, here a path was WRITTEN
+  OVER and still exists holding somebody else's bytes. Same class as #710 either way — neither
+  `git status --porcelain` nor checkout's own guards see ignored paths. The `main_checkout` key
+  ITSELF is ABSENT when the checkout is current or `VIKUNJA_MCP_NO_MAIN_SYNC=1` is set
+  (the `NO_SKILL_SYNC`/`NO_TRACE` idiom — env, never the
   toml: this is one clone on one machine, like `worktree_root`), so present ⇒ read it. Codes
   are `MAIN_SYNC_*` and NOT `CODE_*` on purpose: that prefix is the closed per-WORKTREE
   vocabulary `_keep_is_expected` grades and three pins guard, and these never reach the grader
