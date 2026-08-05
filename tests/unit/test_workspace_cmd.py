@@ -4896,10 +4896,12 @@ def test_the_probe_leaves_the_index_of_a_REFUSED_checkout_untouched(repo, tracke
 # would lose untracked files in them") write NOTHING — a second incoming file sorting first stayed
 # at its old content in each, and `test_an_up_front_refusal_writes_nothing_and_stays_blocked`
 # replays one of them. Read that as three measured MESSAGES, never as what the CODE promises:
-# `blocked` is the fall-through whenever both probes are silent, so an already-half-applied checkout
-# reports it on every LATER sweep (measured: sweep 1 `half-applied`, sweeps 2 and 3 `blocked`, tree
-# still mixed — the state does not heal, because the half-written paths then block the ff themselves
-# as local changes).
+# `blocked` is the fall-through whenever both probes are silent, so a checkout half-applied IN ITS
+# TRACKED PATHS reports it on every LATER sweep (measured: sweep 1 `half-applied`, sweeps 2 and 3
+# `blocked`, tree still mixed — that state does not heal, because the half-written paths then block
+# the ff themselves as local changes). VMCP-252 (851) narrowed that from the universal it was
+# written as: on the ignored-only form later sweeps report `half-applied` again and the state heals
+# the moment the blocker goes — see that card's own block below.
 #
 # MUTATION SWEEP, ROUND ONE. One selection throughout (`tests/unit/test_workspace_cmd.py -p
 # no:randomly`, no `-q`), `collected 178` and `0 errors` in every round, every round read by
@@ -5060,17 +5062,12 @@ def test_the_half_apply_is_not_bounded_by_index_order(repo, tracker, tmp_path):
     )
 
 
-def test_a_half_apply_whose_only_casualty_is_an_IGNORED_file_is_still_reported(repo, tracker,
-                                                                              tmp_path):
-    """THE SHAPE THAT DECIDES THE DESIGN, and the one a tracked-diff detector cannot see.
+def _ignored_only_stand(repo, tmp_path, name="ignonly"):
+    """THE SHAPE THAT DECIDES THE DESIGN, as a helper because four tests now build it.
 
-    The incoming commit touches exactly two paths: the tracked file git cannot write, and a
-    force-added `shot.png` the checkout ignores. Measured on real git: `git diff --name-only HEAD`
-    is EMPTY before AND after, `git status --porcelain` likewise — because the half-written path is
-    untracked locally — while the human's bytes are gone. So `half_applied` is empty here, and the
-    only thing that makes this branch report at all is the per-path FINGERPRINT of the paths the
-    probe named."""
-    _api, wf = tracker
+    The incoming commit touches EXACTLY two paths: the tracked file inside a directory git will not
+    be able to write, and a force-added `shot.png` this checkout ignores. So the only casualty is
+    the human's ignored file, and `git status --porcelain` is empty before AND after."""
     _ignoring(repo, "*.png")
     (repo / "ro").mkdir()
     (repo / "ro" / "bbb.txt").write_text("v1\n")
@@ -5078,8 +5075,20 @@ def test_a_half_apply_whose_only_casualty_is_an_IGNORED_file_is_still_reported(r
     _git(repo, "commit", "-m", "before")
     _git(repo, "push", "origin", "main")
     (repo / "shot.png").write_bytes(b"\x89PNG the human's own evidence")
-    _land_on_origin(tmp_path, "ignonly", {"ro/bbb.txt": "v2\n", "shot.png": "UPSTREAM\n"},
-                    force=True)
+    return _land_on_origin(tmp_path, name, {"ro/bbb.txt": "v2\n", "shot.png": "UPSTREAM\n"},
+                           force=True)
+
+
+def test_a_half_apply_whose_only_casualty_is_an_IGNORED_file_is_still_reported(repo, tracker,
+                                                                              tmp_path):
+    """THE SHAPE THAT DECIDES THE DESIGN, and the one a tracked-diff detector cannot see.
+
+    Measured on real git: `git diff --name-only HEAD` is EMPTY before AND after, `git status
+    --porcelain` likewise — because the half-written path is untracked locally — while the human's
+    bytes are gone. So `half_applied` is empty here, and the only thing that makes this branch
+    report at all is the per-path FINGERPRINT of the paths the probe named."""
+    _api, wf = tracker
+    _ignored_only_stand(repo, tmp_path)
 
     with _unwritable_dir(repo / "ro"):
         res = gc_workspaces(cwd=repo, workflow=wf)
@@ -5093,6 +5102,285 @@ def test_a_half_apply_whose_only_casualty_is_an_IGNORED_file_is_still_reported(r
     )
     assert _git(repo, "status", "--porcelain") == "", "git says nothing, before or after"
     assert (repo / "shot.png").read_text() == "UPSTREAM\n"
+
+
+# --- VMCP-252 (851): the code was right and the SENTENCE was wrong on that very shape ---
+#
+# Filed by the independent review of VMCP-244 (835) — by its second pass, then reproduced by the
+# reviewer personally, and reproduced a third time here before anything was changed (real git
+# 2.50.1, Apple Git-155, the stand `_ignored_only_stand` builds). 835's verdict was `approve` and
+# its core stands: the refusal branch no longer claims "NOTHING was discarded" and no longer throws
+# away the probe's answer. What was still wrong is what the new branch PRINTS.
+#
+# ONE `reason` was written for the TRACKED form and emitted on BOTH, and all FOUR of its assertions
+# are FALSE when the only casualty is an ignored file. Measured, in that state:
+#   * "this checkout now mixes two commits" — no: `ro/bbb.txt` is still v1 and `git diff-index
+#     --name-only HEAD` is empty, i.e. the tracked tree is entirely at HEAD;
+#   * "`git status` shows the incoming content as the human's own uncommitted work" — no:
+#     `git status --porcelain` is `''`. An ignored file is invisible to it, which is the property
+#     that makes this shape undetectable by a tracked-diff probe at all, and it is written out in
+#     `_fingerprints` in `workspace_cmd.py` (NOT in this file, which defines no such helper);
+#   * "clearing whatever stopped the merge is not enough … every later sweep reports `blocked`" —
+#     no: `chmod 700 ro` plus ONE sweep gives `{'updated': True, 'commits': 1}`. It heals fully.
+#     And while the blocker stands and nothing else in the checkout changes, later sweeps report
+#     `half-applied` again rather than `blocked` — "never `blocked`" would be one more universal,
+#     and deleting the now-foreign file makes the very next sweep `blocked`;
+#   * "A HUMAN has to commit them or drop them (`git -C <root> checkout -- <paths>`, which DISCARDS
+#     them)" — there is nothing to commit and nothing to drop, and the command the report names
+#     does not even take the path: in the half-applied state `shot.png` is not tracked locally, so
+#     `git checkout -- shot.png` answers `error: pathspec 'shot.png' did not match any file(s)
+#     known to git`, rc=1. (It answers rc=0 AFTER the ff completes, because upstream force-added
+#     it — so this has to be measured in the half-applied state or it measures nothing.)
+# And the one thing that DID happen — the human's bytes are gone with nothing anywhere to restore
+# them from — the old sentence never said at all.
+#
+# THE FIX IS A SPLIT, not a rewording — and ROUND ONE OF THAT SPLIT SHIPPED A FRESH OVERCLAIM OF
+# THE VERY CLASS IT WAS FIXING, which the independent second pass built and this file now pins. It
+# branched on `not half`, reasoning that an empty `half` means the ignored-only form. An empty
+# `half` is THREE states. Besides "the probe FAILED" (`tracked_after is None`) there is "the probe
+# ANSWERED AND WAS BLIND", because `half` is a SET DIFFERENCE: a tracked file the human had locally
+# DELETED which the incoming commit also modifies is in the before set AND the after set, so it
+# cancels — and the ignored-only prose then went out over a tree that was really mixed and really
+# did not heal (`git status` ` M aaa.txt`, the file at upstream's v2 against HEAD's v1, sweeps 2
+# and 3 `blocked` with the blocker CLEARED). `_tracked_changes` states that bound about itself ("at
+# worst it hides one"); reading it as proof is what cost the round. So the only branch that may
+# claim a quiet tree is the one where `git diff-index` came back EMPTY afterwards, which is a
+# direct reading and was already computed. The three pins are
+# `test_an_empty_half_applied_is_never_reported_as_a_quiet_TRACKED_tree` (blind-but-answered),
+# `test_a_failing_half_apply_check_costs_the_report_and_never_the_verdict` (unanswered, which
+# already built that state) and the ignored-only reason test (the empty, provable case).
+#
+# THE LOSS SENTENCE IS HEDGED FOR THE SAME REASON. Round one said "the human's own are GONE and
+# NOTHING can recover them — no git object ever held them", and both halves are false on inputs
+# this branch cannot tell apart from the stand: a path force-added once and un-staged with
+# `git rm --cached` leaves `status` EMPTY and the human's blob in the object store (`git cat-file
+# -p` hands the bytes back, `git fsck` calls it dangling), and an ignored file whose bytes already
+# equalled upstream's lost nothing at all. `test_the_overwritten_ignored_bytes_are_not_always_
+# unrecoverable` is the first of those, built rather than argued.
+#
+# WHAT IS DELIBERATELY NOT FIXED HERE: `overwritten_ignored` rings on EVERY sweep while the blocker
+# stands (measured: three consecutive sweeps, `['shot.png']` each time, because every failed attempt
+# unlinks and recreates the file so the fingerprint moves again), and a FOURTH time on the
+# `updated: true` sweep that finally heals it — four reports for one loss. That is the never-read
+# failure VMCP-68 had to split `kept`/`expected` to cure, and silencing it is the one-way reading
+# the whole #710 -> #806 -> #835 chain defends, so WHICH of the two to give up is a product
+# decision and 851 parked it for a human (`call_human`). The pin below records the status quo and
+# says so; whichever way the answer goes, it is that assertion that has to move.
+#
+# MUTATION SWEEP. One selection throughout — `tests/unit/test_workspace_cmd.py -p no:randomly -k
+# "half_appl or ignored_only or IGNORED_file or up_front_refusal or partial_apply or overwritten or
+# PART_WAY or LOCKED_checkbox"`, no `-q` — `collected 197 items / 177 deselected / 20 selected` and
+# `0` ERROR lines in EVERY round, each round read by counting lines that begin `FAILED ` and lines
+# that begin `ERROR ` separately; control 0 failed:
+#   * one `reason` for both forms (the pre-851 shape) ............ control 0 failed; 3 failed
+#   * round one's shape: a BLIND probe reads as a quiet tree ..... control 0 failed; 1 failed
+#   * round one's shape: a FAILED probe reads as a quiet tree .... control 0 failed; 1 failed
+#   * the tracked form never names the ignored loss .............. control 0 failed; 1 failed
+#   * the loss sentence back to the flat overclaim ............... control 0 failed; 3 failed
+#   * `half-applied` requires a TRACKED half (835's core) ....... control 0 failed; 7 failed
+# The two round-one rounds are the ones worth reading twice: each kills exactly ONE test, and they
+# kill DIFFERENT ones, which is the measurement saying the blind-probe pin is not a duplicate of
+# the pre-existing failed-probe state — without the new test, round one's own defect ships green.
+# An EARLIER sweep over the whole file (`collected 195`, control 0 failed) measured round one's
+# pins before the rework: 2, 1, 1, 1 and 5 failed for the same first, third, fourth, fifth and
+# sixth rows. It is kept out of the table above because it is a different selection AND different
+# code; two rounds of a sweep are not comparable just because their labels match.
+
+def test_the_ignored_only_half_applys_reason_says_what_actually_happened(repo, tracker, tmp_path):
+    """The four false assertions, each one asserted ABSENT, and the true one asserted present.
+
+    A substring pin over prose is normally a bad trade; here the prose IS the deliverable — this
+    string is the only thing a human ever sees about a loss that already happened — and every one
+    of these four phrases was measured false on this exact input before it was split."""
+    _api, wf = tracker
+    _ignored_only_stand(repo, tmp_path)
+
+    with _unwritable_dir(repo / "ro"):
+        res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    reason = state["reason"]
+    assert state["code"] == workspace_cmd.MAIN_SYNC_PARTIAL, state
+    assert "half_applied" not in state, state
+    assert "mixes two commits" not in reason, reason
+    assert "uncommitted work" not in reason, reason
+    assert "checkout --" not in reason, reason
+    assert "every later sweep reports" not in reason, reason
+    assert "Nothing tracked differs from HEAD at all" in reason, reason
+    assert "not recoverable from anything HERE" in reason, reason
+    assert "nothing is left here to block the merge again" in reason, reason
+    assert "unable to unlink old" in reason, "git's own message still rides along"
+
+
+def test_the_TRACKED_half_apply_keeps_every_word_it_measured(repo, tracker, tmp_path):
+    """The other side of the split: narrowing the sentence must not COST the form it was true of.
+
+    On the tracked form all four assertions hold — 835 measured them — so they stay, and the
+    ignored casualty that rode along on the same input gains its own sentence instead of being
+    covered by advice that cannot reach it (`checkout --` is offered for the tracked paths and
+    named as inapplicable to the untracked ones)."""
+    _api, wf = tracker
+    _half_applying_stand(repo, tmp_path)
+
+    with _unwritable_dir(repo / "ro"):
+        res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    reason = state["reason"]
+    assert state["half_applied"] == ["aaa.txt"], state
+    assert state["overwritten_ignored"] == ["shot.png"], state
+    assert "mixes two commits" in reason, reason
+    assert "every later sweep reports `blocked`" in reason, reason
+    assert "checkout -- <paths>" in reason, reason
+    assert "not recoverable from anything HERE" in reason, "the ignored loss is named here too"
+
+
+def test_the_ignored_only_half_apply_HEALS_once_the_blocker_is_cleared(repo, tracker, tmp_path):
+    """THE THIRD false assertion, refuted by running it rather than by reading the diff.
+
+    "It does NOT heal itself, and clearing whatever stopped the merge is not enough" is true of the
+    tracked form, where the half-written paths themselves then block the ff as local changes. Here
+    there are none: the tracked tree never moved, so the moment the blocker is gone the ordinary
+    fast-forward completes and the checkout is current."""
+    _api, wf = tracker
+    _ignored_only_stand(repo, tmp_path)
+
+    with _unwritable_dir(repo / "ro"):
+        first = gc_workspaces(cwd=repo, workflow=wf)["main_checkout"]
+    assert first["code"] == workspace_cmd.MAIN_SYNC_PARTIAL, first
+
+    second = workspace_cmd.sync_main_checkout(repo)
+
+    assert second["updated"] is True, second
+    assert second["commits"] == 1, second
+    assert (repo / "ro" / "bbb.txt").read_text() == "v2\n", "the ff really finished"
+
+
+def test_a_LATER_sweep_on_the_ignored_only_form_is_half_applied_again(repo, tracker, tmp_path):
+    """The second sweep on this form, which NO test ran before — and it is not `blocked`.
+
+    `blocked` is the fall-through when both probes are silent, and on the TRACKED form that is what
+    sweeps 2 and 3 give (835 measured it). Here the fingerprint probe is not silent: each failed
+    attempt unlinks and recreates the ignored path, so its inode moves again (measured, three
+    different inodes over three sweeps) even though the CONTENT has been upstream's since sweep 1.
+
+    So the code repeats — which refutes the universal — and so does `overwritten_ignored`, which is
+    the noise 851 parked for a human. THIS ASSERTION IS THE STATUS QUO, NOT A RULING: if the answer
+    is "filter a path that already holds the incoming bytes", the list here becomes absent from
+    sweeps 2 and 3 and this test must be changed deliberately, which is the point of pinning it."""
+    _api, wf = tracker
+    _ignored_only_stand(repo, tmp_path)
+
+    with _unwritable_dir(repo / "ro"):
+        states = [gc_workspaces(cwd=repo, workflow=wf)["main_checkout"],
+                  workspace_cmd.sync_main_checkout(repo),
+                  workspace_cmd.sync_main_checkout(repo)]
+
+    assert [s["code"] for s in states] == [workspace_cmd.MAIN_SYNC_PARTIAL] * 3, states
+    assert [s.get("overwritten_ignored") for s in states] == [["shot.png"]] * 3, states
+    assert _git(repo, "status", "--porcelain") == "", "and the tracked tree is still not mixed"
+    assert (repo / "ro" / "bbb.txt").read_text() == "v1\n"
+
+    # ...and "never `blocked`" would be one universal too many, which the second pass caught: let
+    # the human do the obvious thing with a file that is now somebody else's content and the path
+    # leaves the probe's list, both probes go quiet, and the fall-through fires honestly.
+    (repo / "shot.png").unlink()
+    with _unwritable_dir(repo / "ro"):
+        after_delete = workspace_cmd.sync_main_checkout(repo)
+    assert after_delete["code"] == workspace_cmd.MAIN_SYNC_BLOCKED, after_delete
+
+
+def test_an_empty_half_applied_is_never_reported_as_a_quiet_TRACKED_tree(repo, tracker, tmp_path):
+    """ROUND TWO OF THIS CARD, and the fresh overclaim its OWN first fix shipped — built by the
+    independent second pass, reproduced here on a real stand, and the reason the split branches on
+    `git diff-index` AFTERWARDS instead of on `not half`.
+
+    `half` is a SET DIFFERENCE, so a path that is in BOTH snapshots cancels. One ordinary human act
+    builds that: they deleted a tracked file locally, and the incoming commit also modifies it. The
+    probe ANSWERS, `half` comes back empty, and the first fix then printed the ignored-only prose —
+    "Nothing TRACKED moved … `git status` is silent … this DOES heal" — over a tree that really was
+    mixed and really did not heal. Measured then: `git status` ` M aaa.txt`, the file holding
+    upstream's v2 against HEAD's v1, and sweeps 2 and 3 answering `blocked` with the blocker CLEARED
+    and HEAD never reaching the remote. `_tracked_changes` states that bound about itself; this is
+    what reading it as proof costs.
+
+    So the assertions are BOTH halves: the report must refuse to claim silence, and the ground truth
+    must be the mixed tree that makes the refusal necessary."""
+    _api, wf = tracker
+    _ignoring(repo, "*.png")
+    (repo / "aaa.txt").write_text("v1\n")
+    (repo / "ro").mkdir()
+    (repo / "ro" / "bbb.txt").write_text("v1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "before")
+    _git(repo, "push", "origin", "main")
+    (repo / "shot.png").write_bytes(b"\x89PNG the human's own evidence")
+    (repo / "aaa.txt").unlink()                  # the human deleted a tracked file, no ceremony
+    _land_on_origin(tmp_path, "cancels",
+                    {"aaa.txt": "v2\n", "ro/bbb.txt": "v2\n", "shot.png": "UPSTREAM\n"}, force=True)
+
+    with _unwritable_dir(repo / "ro"):
+        state = gc_workspaces(cwd=repo, workflow=wf)["main_checkout"]
+    reason = state["reason"]
+
+    assert state["code"] == workspace_cmd.MAIN_SYNC_PARTIAL, state
+    assert "half_applied" not in state, "the set difference really did cancel"
+    assert "Nothing tracked differs from HEAD" not in reason, reason
+    assert "nothing is left here to block the merge again" not in reason, reason
+    assert "UNCLEAR rather than nothing" in reason, reason
+    assert "do not assume this heals on its own" in reason, reason
+    # The ground truth the refusal is about, so this cannot pass on a report alone.
+    assert (repo / "aaa.txt").read_text() == "v2\n", "the merge DID write a tracked path"
+    assert _git(repo, "show", "HEAD:aaa.txt") == "v1", "while HEAD still says v1 — mixed"
+    assert _git(repo, "status", "--porcelain") == "M aaa.txt", (   # the helper strips the XY column
+        "git is not silent here — which is the whole point"
+    )
+    second = workspace_cmd.sync_main_checkout(repo)         # blocker released with the `with`
+    assert second["code"] == workspace_cmd.MAIN_SYNC_BLOCKED, (
+        f"and it does NOT heal: {second}"
+    )
+
+
+def test_the_overwritten_ignored_bytes_are_not_always_unrecoverable(repo, tracker, tmp_path):
+    """Why the loss sentence is HEDGED, measured rather than conceded — also the second pass.
+
+    The flat version said "the human's own are GONE and NOTHING can recover them — no git object
+    ever held them", and this state disproves the second clause and therefore the first: the human
+    force-added their screenshot once and un-staged it (`git rm --cached`), which leaves
+    `git status --porcelain` EMPTY — byte-identical in every signal to the plain stand — and their
+    blob in the object store. `_ignored_of` asks `check-ignore` without `--no-index`, so that path
+    is still ignored and still doomed, the report still fires, and `git cat-file -p` then hands the
+    original bytes straight back.
+
+    The neighbouring state is the mirror and needs no test of its own because the probe's own
+    docstring already states it: an ignored file whose bytes ALREADY equalled upstream's lost
+    nothing at all, and the key names paths that were WRITTEN, never paths whose content differed.
+    """
+    _api, wf = tracker
+    _ignoring(repo, "*.png")
+    (repo / "ro").mkdir()
+    (repo / "ro" / "bbb.txt").write_text("v1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "before")
+    _git(repo, "push", "origin", "main")
+    # Text, not the usual PNG magic, only so that the recovery assertion can READ the bytes back
+    # through the same text-mode helper every other test here uses. The rule is on the NAME.
+    (repo / "shot.png").write_text("the human's own evidence\n")
+    _git(repo, "add", "-f", "shot.png")
+    _git(repo, "rm", "--cached", "shot.png")
+    human_blob = _git(repo, "hash-object", "shot.png")
+    assert _git(repo, "status", "--porcelain") == "", "indistinguishable from the plain stand"
+    _land_on_origin(tmp_path, "staged", {"ro/bbb.txt": "v2\n", "shot.png": "UPSTREAM\n"}, force=True)
+
+    with _unwritable_dir(repo / "ro"):
+        state = gc_workspaces(cwd=repo, workflow=wf)["main_checkout"]
+
+    assert state["overwritten_ignored"] == ["shot.png"], state
+    assert "`git fsck --lost-found`" in state["reason"], state["reason"]
+    assert (repo / "shot.png").read_text() == "UPSTREAM\n", "the overwrite really happened"
+    assert _git(repo, "cat-file", "-p", human_blob) == "the human's own evidence", (
+        "and the bytes the flat sentence called unrecoverable come back out of the object store"
+    )
 
 
 def test_an_up_front_refusal_writes_nothing_and_stays_blocked(repo, tracker, tmp_path):
@@ -5206,6 +5494,14 @@ def test_a_failing_half_apply_check_costs_the_report_and_never_the_verdict(repo,
     assert state["updated"] is False and "half_applied" not in state, state
     assert state["code"] == workspace_cmd.MAIN_SYNC_PARTIAL, state
     assert state["overwritten_ignored"] == ["shot.png"], state
+    # VMCP-252 (851): the UNCHECKED branch of the split reason lives here, because this is the
+    # state that builds it — `half` is empty because the probe FAILED, not because the tree is
+    # silent, and `tracked_after` is therefore None rather than an empty set.
+    assert "could NOT be checked" in state["reason"], state["reason"]
+    assert "Nothing tracked differs from HEAD" not in state["reason"], (
+        "an empty `half` that came from a FAILED probe must never be reported as a silent tree — "
+        "that is the same borrowed reassurance #806 shipped and 835 was filed for"
+    )
 
 
 def test_the_partial_apply_probes_do_not_REFRESH_a_refused_checkouts_index(repo, tracker, tmp_path):

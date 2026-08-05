@@ -1609,8 +1609,13 @@ MAIN_SYNC_BLOCKED = "blocked"
 # while doing so. `merge --ff-only` is NOT ATOMIC: it attempts every entry and writes everything
 # it can, so ONE path it cannot write leaves the checkout holding PART of the update with HEAD
 # still on the old commit. Named apart from `blocked` because the ACTION differs — `blocked` is
-# "nothing happened, the next sweep retries", this is "your checkout now mixes two commits and
-# `git status` attributes upstream's content to you".
+# "nothing happened, the next sweep retries", this is "something WAS written, a human has to look".
+# WHAT got written decides everything after that, and the two forms have OPPOSITE properties, which
+# is VMCP-252 (851): this comment used to end "your checkout now mixes two commits and `git status`
+# attributes upstream's content to you", and that is the TRACKED form only. When the only casualty
+# is an IGNORED path, `git status` says nothing at all, there is nothing to commit or drop, and the
+# ff completes on the very next sweep once the blocker is gone — while the human's bytes at that
+# path are already unrecoverable. One code, two reports: see `_partial_apply_reason`.
 MAIN_SYNC_PARTIAL = "half-applied"
 MAIN_SYNC_ERROR = "error"          # the best-effort wrapper in gc: anything unforeseen
 
@@ -2307,6 +2312,92 @@ def _add_capped(state: dict, key: str, paths: list[str]) -> None:
         state[f"{key}_truncated"] = len(paths)
 
 
+def _partial_apply_reason(root: Path, remote: str, half: list[str], over: list[str],
+                          tracked_after: set[str] | None, message: str) -> str:
+    """The `half-applied` prose, SPLIT by what the run actually established — VMCP-252 (851).
+
+    ONE sentence used to be emitted on both forms of this state, written for the TRACKED one, and
+    all FOUR of its assertions are false when the only casualty is an IGNORED file. Measured at
+    `6231c850` on real git 2.50.1, on the stand `_ignored_only_stand` builds: the tracked tree is
+    entirely at HEAD (`ro/bbb.txt` still v1, `diff-index` empty), `git status --porcelain` is `''`
+    about the casualty — an ignored file is invisible to it, which is the property that makes this
+    shape undetectable by a tracked-diff probe at all — `chmod 700` on the blocking directory plus
+    ONE sweep gives `{'updated': True, 'commits': 1}`, and the `git checkout -- <path>` the report
+    prescribed answers `error: pathspec 'shot.png' did not match any file(s) known to git`, rc=1,
+    because in the half-applied state that path is not tracked locally. Meanwhile the one thing
+    that HAD happened — the human's bytes replaced by upstream's — went unsaid.
+
+    IT BRANCHES ON `tracked_after`, NOT ON `not half`, AND THAT IS ROUND TWO OF THIS CARD — the
+    first version branched on `not half` and shipped a FRESH overclaim of the very class it was
+    fixing, caught by the independent second pass and reproduced here. An empty `half` does NOT
+    mean the tracked tree is untouched, for TWO different reasons: the probe may have FAILED (then
+    `tracked_after is None`), and — the one that is easy to miss — the probe may have ANSWERED AND
+    BEEN BLIND, because `half` is a SET DIFFERENCE. Built: the human has locally DELETED a tracked
+    file that the incoming commit also modifies, so that path is in the before set AND the after
+    set and cancels out. Measured on that input, with the old wording: the report said "Nothing
+    TRACKED moved … `git status` is silent … this DOES heal" while `git status` said ` M aaa.txt`,
+    the file on disk held upstream's v2 against HEAD's v1, and sweeps 2 and 3 with the blocker
+    CLEARED both answered `blocked` with HEAD never reaching the remote. `_tracked_changes` states
+    that bound about itself ("at worst it hides one"); this is what reading it as proof costs.
+
+    So the only branch that may claim a quiet tree is the one where `tracked_after` is EMPTY —
+    nothing tracked differs from HEAD at all, which is a direct reading rather than an inference,
+    and it is already computed. When it is non-empty with nothing NEW in it, the honest answer is
+    that this run cannot separate the human's own edits from what the merge wrote over them, which
+    errs towards "cannot say" and never towards safety: it also fires when the human simply had an
+    unrelated file modified, where nothing tracked was written at all.
+
+    Not split further, on purpose. `over` non-empty rides along with the tracked form as its own
+    sentence (the `checkout --` advice cannot reach an untracked path, so it is named as
+    inapplicable rather than left to be misread), and the tracked form keeps every word of what
+    #835 measured about it — narrowing a sentence must not cost the form it was true of.
+    """
+    opening = (f"`git merge --ff-only {remote}` FAILED PART-WAY: HEAD did not move, but part of "
+               f"the update was already written")
+    # WHY THIS IS HEDGED AND THE FIRST VERSION WAS NOT: it said "the human's own are GONE and
+    # NOTHING can recover them — no git object ever held them", and the second pass built both
+    # counterexamples, each reproduced here and each INDISTINGUISHABLE from the plain stand by
+    # anything this branch can see. `git add -f <path>` followed by `git rm --cached <path>` leaves
+    # `git status --porcelain` empty and the human's blob in the object store, so after that
+    # sentence `git cat-file -p` handed the bytes straight back and `git fsck` called it a dangling
+    # blob. And an ignored file whose bytes ALREADY equalled upstream's lost nothing at all — the
+    # probe reports paths that were WRITTEN, never that their content differed.
+    lost = ("The ignored path(s) in `overwritten_ignored` now hold upstream's bytes, and what was "
+            "there before is not recoverable from anything HERE: this tool keeps no copy, and git "
+            "keeps none of a file it was never asked to track. Two states this cannot tell apart, "
+            "both measured: if that path was ever staged, the old blob may still be in the object "
+            "store (`git fsck --lost-found`), and if the human's bytes already equalled "
+            "upstream's, nothing was lost at all.")
+    if half:
+        parts = [f"{opening}, so this checkout now mixes two commits and `git status` shows the "
+                 f"incoming content as the human's own uncommitted work (`half_applied` names "
+                 f"those paths). It does NOT heal itself, and clearing whatever stopped the merge "
+                 f"is not enough (measured on THIS form: those same half-written paths then block "
+                 f"the merge as local changes, and every later sweep reports `blocked`). A HUMAN "
+                 f"has to commit them or drop them (`git -C {root} checkout -- <paths>`, which "
+                 f"DISCARDS them); nothing here will."]
+        if over:
+            parts.append(f"{lost} `checkout --` does not reach them — they are untracked here.")
+    elif tracked_after is None:
+        parts = [f"{opening}. Whether anything TRACKED was written too could NOT be checked on "
+                 f"this run, so nothing is claimed here about the rest of the checkout.", lost]
+    elif not tracked_after:
+        parts = [f"{opening}. Nothing tracked differs from HEAD at all afterwards (`git "
+                 f"diff-index` came back empty), so no TRACKED path was half-written and `git "
+                 f"status` has no modification of this to show, commit or drop.", lost,
+                 "And unlike the tracked form nothing is left here to block the merge again: "
+                 "clearing whatever stopped it is enough, and the next sweep completes the "
+                 "fast-forward (measured)."]
+    else:
+        parts = [f"{opening}. What ELSE it wrote is UNCLEAR rather than nothing: "
+                 f"{len(tracked_after)} tracked path(s) differ from HEAD and none of them appeared "
+                 f"during the merge, so this run cannot separate the human's own edits from what "
+                 f"the failed merge wrote over them — a path already modified before the merge "
+                 f"cancels out of the comparison. Read `git status` in that checkout before "
+                 f"concluding anything, and do not assume this heals on its own.", lost]
+    return " ".join(parts) + f" git's message: {message}"
+
+
 def sync_main_checkout(root: Path) -> dict | None:
     """Fast-forward the MAIN checkout onto `origin/<default branch>`, or REFUSE and say why.
 
@@ -2361,10 +2452,18 @@ def sync_main_checkout(root: Path) -> dict | None:
     old content. **Read that as three measured MESSAGES and not as the code's meaning**, which is
     the correction the second pass forced here: `blocked` is the FALL-THROUGH whenever both probes
     come up empty, so it is also what an already-half-applied checkout reports on every LATER sweep
-    (measured: sweep 1 `half-applied`, sweeps 2 and 3 `blocked`, tree still mixed), and what a
-    half-apply whose only casualty was filtered as regenerable detritus reports on the FIRST one.
-    So what `blocked` no longer says is "NOTHING was discarded": the branch reports what it FOUND,
-    one-way, like every other report on this path — and says outright when it could not look.
+    WHEN THE HALF-WRITE WAS TRACKED (measured: sweep 1 `half-applied`, sweeps 2 and 3 `blocked`,
+    tree still mixed), and what a half-apply whose only casualty was filtered as regenerable
+    detritus reports on the FIRST one. That first clause is narrower than it read for one round and
+    VMCP-252 (851) is the correction: on the form whose only casualty is an IGNORED path, later
+    sweeps report `half-applied` AGAIN as long as nothing else in the checkout changes, because each
+    failed attempt unlinks and recreates that file, so its fingerprint moves again over content that
+    has been upstream's since sweep 1 (measured, three sweeps, three inodes). "As long as" is not
+    filler — let the human DELETE that now-foreign file and the next sweep is `blocked`, since the
+    path leaves the probe's list and both probes go silent again (measured). So what `blocked` no
+    longer says is "NOTHING was
+    discarded": the branch reports what it FOUND, one-way, like every other report on this path —
+    and says outright when it could not look.
 
     RETURNS None WHEN THERE IS NOTHING TO SAY — already current, or opted out. The key it feeds
     is therefore ABSENT on the boring path and PRESENT whenever a reader has something to read.
@@ -2383,6 +2482,19 @@ def sync_main_checkout(root: Path) -> dict | None:
     incoming path; on `half-applied` only SOME were written, so there it is filtered down to the
     paths whose fingerprint actually moved. Same verb, same key, and the branch that cannot know
     is the one that checks.
+
+    WHAT THAT ONE-WAY READING COSTS ON THE HALF-APPLIED PATH IS AN OPEN QUESTION, NOT A SOLVED ONE
+    (VMCP-252, 851). `--gc` runs every tick, so while the blocker stands the key rings on EVERY
+    sweep for a loss that happened on the FIRST — measured, three consecutive sweeps naming
+    `shot.png`, plus a FOURTH on the `updated: true` sweep that finally heals it. That is the
+    never-read failure VMCP-68 had to split `kept`/`expected` to cure, and quietly suppressing the
+    repeat is the one-way reading the whole #710 -> #806 -> #835 chain defends, so which of the two
+    to give up is a product decision parked for a human rather than guessed at here. The
+    discriminator that would settle it is measured and cheap if it is ever wanted: `git rev-parse
+    <remote>:<path>` against `git hash-object <path>` differ BEFORE the first attempt and match
+    after it, i.e. a sweep can tell "this path already holds the incoming bytes" from "the human's
+    bytes are about to go" — with an unanswerable branch (`rc=128` for a doomed ANCESTOR, which is
+    no blob in the incoming tree at all) that would have to fail towards reporting.
     """
     if os.environ.get(_MAIN_SYNC_OPT_OUT):
         return None
@@ -2465,6 +2577,11 @@ def sync_main_checkout(root: Path) -> dict | None:
         # the inversion card 835 opens with, so the message is passed through verbatim AND the
         # paths ride in their own keys.
         half: list[str] = []
+        # `tracked_after` is carried into the report as well as differenced, because an empty `half`
+        # is THREE states, not one, and only one of them may be reported as a quiet tree — see
+        # `_partial_apply_reason`, whose first version conflated them (VMCP-252). None here means
+        # "no answer" from either snapshot; the set itself is what git says NOW.
+        tracked_after: set[str] | None = None
         if tracked_before is not None:
             tracked_after = _tracked_changes(root)
             if tracked_after is not None:
@@ -2488,16 +2605,8 @@ def sync_main_checkout(root: Path) -> dict | None:
                     "reason": f"`git merge --ff-only {remote}` refused; {found}: "
                               f"{(merged.stderr or merged.stdout).strip()}"}
         state = {"updated": False, "code": MAIN_SYNC_PARTIAL, "branch": branch, "path": str(root),
-                 "reason": f"`git merge --ff-only {remote}` FAILED PART-WAY: HEAD did not move, "
-                           f"but part of the update was already written, so this checkout now "
-                           f"mixes two commits and `git status` shows the incoming content as the "
-                           f"human's own uncommitted work. It does NOT heal itself, and clearing "
-                           f"whatever stopped the merge is not enough (measured: those same "
-                           f"half-written paths then block the merge as local changes, and every "
-                           f"later sweep reports `blocked`). A HUMAN has to commit them or drop "
-                           f"them (`git -C {root} checkout -- <paths>`, which DISCARDS them); "
-                           f"nothing here will: "
-                           f"{(merged.stderr or merged.stdout).strip()}"}
+                 "reason": _partial_apply_reason(root, remote, half, over, tracked_after,
+                                                 (merged.stderr or merged.stdout).strip())}
         _add_capped(state, "half_applied", half)
         _add_capped(state, "overwritten_ignored", over)
         return state

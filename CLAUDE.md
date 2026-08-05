@@ -318,20 +318,55 @@ assertion in `tests/unit/test_line_length_gate.py`, which pyproject must agree w
   and measured its absence: lock a tracked file the update does not touch and the ff is a clean
   `updated: true`). NOT bounded by index order, which is the natural guess and is measured false: a
   tracked `zzz.txt` sorting AFTER the failing path is applied too. So the state has its own code,
-  `half-applied` (`MAIN_SYNC_PARTIAL`), because the ACTION differs — the checkout now mixes two
-  commits and `git status` attributes upstream's content to the human, who can commit somebody
-  else's landed change as their own — carrying `half_applied` (the tracked paths the failed ff
-  wrote) beside `overwritten_ignored`. **And it does not heal**: measured, the half-written paths
-  then block the ff themselves as local changes, so clearing the original blocker is NOT enough and
-  every later sweep reports `blocked` over a still-mixed tree — only a human committing or dropping
-  those paths ends it. `blocked` keeps its name for the refusal where both probes found nothing,
+  `half-applied` (`MAIN_SYNC_PARTIAL`), because the ACTION differs — something WAS written and a
+  human has to look — carrying `half_applied` (the tracked paths the failed ff wrote) beside
+  `overwritten_ignored`. **Everything after that splits on whether `half_applied` is THERE, and the
+  two forms have OPPOSITE properties — #851, filed by 835's own review, is that correction, because
+  ONE `reason` written for the tracked form was printed on both and all FOUR of its assertions are
+  false on the other.** Tracked paths written: the checkout mixes two commits, `git status`
+  attributes upstream's content to the human (who can commit somebody else's landed change as their
+  own), and **it does not heal** — measured, those half-written paths then block the ff themselves
+  as local changes, so clearing the original blocker is NOT enough and every later sweep reports
+  `blocked` over a still-mixed tree; only a human committing or dropping them ends it. ONLY an
+  ignored path written: `git status` says nothing about the CASUALTY before or after (an ignored file
+  is invisible to it, which is what makes this shape undetectable by a tracked-diff probe), there is
+  nothing of it to commit or drop, `git checkout -- <that path>` is `error: pathspec … did not match
+  any file(s) known to git` rc=1 because it is not tracked locally, and the ff COMPLETES on the next
+  sweep once the blocker is gone (`chmod 700` + one sweep → `updated: true`). What is common is the
+  loss itself, which the old sentence never mentioned at all: the paths now hold upstream's bytes and
+  what was there is not recoverable from anything here. **Hedged, because BOTH halves of the flat
+  version were disproved by construction:** `git add -f` then `git rm --cached` leaves `status` empty
+  and the human's blob in the object store, so `git cat-file -p` handed the bytes back and `fsck`
+  called it dangling; and an ignored file whose bytes already equalled upstream's lost nothing — the
+  probe names paths that were WRITTEN, never that their content differed. `_partial_apply_reason` is
+  the split, and it branches on what `git diff-index` says AFTERWARDS rather than on an empty
+  `half_applied`, which is round two of the same card: an empty `half_applied` is THREE states, and
+  besides "the probe failed" there is "the probe answered and was BLIND", because `half` is a SET
+  DIFFERENCE — a tracked file the human had locally DELETED that the incoming commit also modifies
+  cancels out, and the first fix then printed "Nothing TRACKED moved … this DOES heal" over a tree
+  that really was mixed and really did not heal (sweeps 2 and 3 `blocked`, blocker cleared). Only an
+  EMPTY `diff-index` afterwards may be read as a quiet tree; non-empty-with-nothing-new says
+  UNCLEAR, which errs towards "cannot say" and never towards safety.
+  `blocked` keeps its name for the refusal where both probes found nothing,
   and the three up-front refusals really are that ("Your local changes …", "The following untracked
   working tree files …", "Updating the following directories would lose untracked files in them"
   each abort before writing, witnessed by a second incoming file sorting FIRST keeping its old
   content) — but read those as three measured MESSAGES, not as the code's meaning: `blocked` is the
-  FALL-THROUGH when both probes are silent, which is also what the already-half-applied checkout
-  above reports, and what a half-apply whose only casualty got filtered as regenerable detritus
-  reports on the first sweep. So what `blocked` no longer does is assert "NOTHING was
+  FALL-THROUGH when both probes are silent, which is also what the checkout half-applied in its
+  TRACKED paths reports on every later sweep, and what a half-apply whose only casualty got filtered
+  as regenerable detritus reports on the first sweep. That first clause needs the word TRACKED
+  (#851): on the ignored-only form the fingerprint probe is NOT silent on a later sweep — each failed
+  attempt unlinks and recreates the file, so its inode moves again over content that has been
+  upstream's since sweep 1 — so those sweeps report `half-applied` and re-list the path, for as long
+  as nothing else changes there (let the human delete that now-foreign file and the next sweep is
+  `blocked` again, because the path leaves the probe's list — so "never `blocked`" would be one more
+  universal). Which
+  makes the key ring on EVERY tick for a loss that happened on the FIRST (three sweeps measured,
+  plus a fourth on the `updated: true` sweep that heals it): the never-read failure VMCP-68 split
+  `kept`/`expected` to cure, against the one-way reading this whole chain defends — a product
+  decision parked for a human rather than guessed at, with the discriminator that would settle it
+  (`git rev-parse <remote>:<path>` vs `git hash-object <path>`, differing before the first attempt
+  and matching after) measured and written down where the code is. So what `blocked` no longer does is assert "NOTHING was
   discarded"; it reports what the two probes FOUND, and says outright when it could not look. Those
   probes are the tree, never the message (locale and git version make the text unparseable —
   though NOT because the three messages are unlike each other: two of them share the whole phrase
