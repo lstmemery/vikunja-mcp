@@ -594,9 +594,25 @@ GIT_CALL_MARKERS = (
     # the shared walk directly. Same door, same rule: the marker is the call carrying REPO_ROOT.
     "_scan_for_browser_text_artifact_shape(REPO_ROOT",
     "_publishable_copies(REPO_ROOT",
-    # VMCP-242 (819) lifted the magic-bytes loop out of its test for the same reason, so the
-    # door it used to hold — a literal `_git(` in the test body — closed behind it. Without this
-    # line that pin would keep its decorator and lose the scanner that CHECKS the decorator.
+    # VMCP-242 (819) lifted the magic-bytes loop out of its test for the same reason, so the door
+    # it used to hold — a literal `_git(` in the test BODY — closed behind it. What this entry
+    # buys is RENAME INSURANCE, and round 1 of that card claimed more than that: "without this
+    # line that pin would keep its decorator and lose the scanner that CHECKS the decorator" is
+    # FALSE on today's tree, and its own second pass is what measured so. The pin is named
+    # `…_is_reachable_by_git()`, and `_by_git():` carries `_git(` inside it, so the def LINE is
+    # already a marker and the pin stays in the scanner's scope with this entry deleted. Two
+    # rounds, recorded in full at the foot of this file, control 0 failed / 0 errors / collected
+    # 122: drop this line alone -> 0 failed; drop this line AND the pin's
+    # decorator -> 1 failed, that scanner test. Rename the test to anything without `_git(`
+    # in it and this entry becomes the only thing holding the door — a real reason to keep it,
+    # and not the reason first given. No round over today's tree can show that, which is why it
+    # is argued here rather than left for a count to imply.
+    # And the property is not special to this entry: measured over every pin carrying a
+    # helper-door marker, THREE of the four are redundant the same way, because all three are
+    # named `…_is_reachable_by_git`. The exception — the one entry above that is load-bearing
+    # today — is `_publishable_copies(REPO_ROOT`, whose pin's name reaches no marker at all. Read
+    # this list as insurance against a rename, then, and not as the thing keeping three of these
+    # four pins in scope.
     "_scan_for_browser_binary_signature(REPO_ROOT",
 )
 
@@ -3090,10 +3106,11 @@ def test_a_tracked_candidate_whose_index_object_is_gone_is_reported(clone):
     function, driven over the same synthetic root, `['asset.bin']`; the shared walk, `[]`.
 
     Deleting the loose object is a real state, not a contrivance: it is what a partial clone, a
-    pruned object store or a corrupted repository look like from here. The neighbouring row that
-    the walk still cannot construct is the one where `-s` SUCCEEDS and `blob` then fails — both
-    read the same object, and it is recorded at the foot of this file as unpinned rather than
-    claimed as covered.
+    pruned object store or a corrupted repository look like from here. The NEIGHBOURING row — `-s`
+    SUCCEEDS and `blob` then fails — this docstring called unconstructible for one round, on the
+    argument that both commands read the same object. They do, and it does not follow: they
+    disagree about the object's TYPE. That row is now built and pinned by
+    `test_an_index_entry_whose_OBJECT_IS_NOT_A_BLOB_is_reported` below.
     """
     _stage(clone, "asset.bin", _PNG)
     blob = subprocess.run(["git", "rev-parse", ":asset.bin"], cwd=clone, check=True,
@@ -3144,30 +3161,140 @@ def test_a_candidate_the_binary_gate_cannot_read_is_reported_and_not_skipped(clo
     assert offenders == [], f"nothing was classified, so nothing should be named: {offenders}"
 
 
+@pytest.mark.parametrize("oid", ["tree", "commit"])
+def test_an_index_entry_whose_OBJECT_IS_NOT_A_BLOB_is_reported(clone, oid):
+    """The row the record below used to call UNCONSTRUCTIBLE, built — VMCP-242 (819), round 2.
+
+    The claim rested on "`-s` SUCCEEDS and `blob` then fails — both read the same object", and the
+    argument is FALSE: reading the same object is not reading it the same way. `cat-file -s` prints
+    the size of whatever object the index entry names, of ANY type; `cat-file blob` additionally
+    demands that the object BE a blob. So the state needs only an index entry whose OID is not a
+    blob, which ONE `git update-index --add --cacheinfo` writes on an OID the fixture already has
+    (`--add` is required: without it git exits 128 with "missing --add option?"). Measured on git
+    2.50.1, both rows: `-s` rc 0, `blob` rc 128 `fatal: … bad file`, and the SHIPPED scan
+    `offenders=[] unreadable=['a.bin']`. What `-s` PRINTS is deliberately not written down — it is
+    the size of the tree or commit object it was pointed at, so it moves with the fixture's
+    filename, committer identity, message and timezone; the rows assert the two exit codes, which
+    are the mechanism, and an independent pass caught this docstring quoting a size measured under
+    a different identity than the one the fixture actually uses.
+
+    The branch also CARRIES WEIGHT, which is the half that makes this a pin rather than a
+    curiosity. The loop this scan replaced read the blob DIRECTLY and reported a non-zero exit, so
+    a shim of the pre-#819 body (`git show ff3d208^:…`) driven over these same two roots answers
+    `unreadable=['a.bin']` as well — measured. It reaches that answer by a different ROUTE, so
+    what is shared is the report and its cause (the refused blob read), not the walk's path to it.
+    Dropping the yield would therefore lose a report this repository had before the card. Not a
+    REGRESSION, though, and the distinction is worth keeping: the yield itself shipped in
+    `ff3d208`; what was missing was this pin. It is the last UNPINNED half of the index half's two
+    could-not-read branches — bounded rather than absolute, because one relaxation elsewhere in
+    the walk still kills nothing (`_worktree_copy`'s `if not size: return None` in prefix mode),
+    and that one is outside the class: pre-#819 reported nothing in its state either.
+
+    A GITLINK entry pointing at a LOCALLY-PRESENT commit (`--cacheinfo 160000,<commit>,sub`)
+    reaches this same branch — measured, `unreadable=['sub']` on both scanner versions — and an
+    earlier draft of this docstring called that the ORDINARY submodule. It is not, and the
+    correction matters because it moves which BRANCH a submodule is about. Built with a real
+    `git submodule add`: the gitlink names a commit living in the SUBMODULE's object store, so the
+    superproject's `git cat-file -s :./sub` fails outright — rc 128, `could not get object info` —
+    and the walk takes the NEIGHBOURING `-s`-failed branch, the one pinned above. Measured through
+    the shipped walk, a real superproject yields `('sub', None, None)` and the scan answers
+    `([], ['sub'])`.
+
+    So no gitlink is a row here, for a stronger reason than deference: under the ordinary
+    construction a gitlink is not this state at all. Whether a submodule belongs in `unreadable`
+    is VMCP-248 (839)'s question, and it sits on that other branch.
+
+    These two rows are corrupt-index shapes, and they survive the fix that card names as its
+    EXAMPLE, which was built rather than assumed. Dropping candidates by `ls-files --stage` mode
+    160000: the gitlink state stops being reported (`([], [])`) and both of these still report
+    `([], ['a.bin'])`, so these rows stay green. They do NOT survive every spelling of the same
+    goal, and the counter-shape was built too — drop every candidate whose object TYPE git can
+    name and is not a blob, which is where that card's own diagnosis points. Under it both of
+    these states report `([], [])`, so both rows go RED, while the neighbouring `-s`-failed pin is
+    untouched (`([], ['asset.bin'])`, no type being knowable there). An implementer taking that
+    route therefore gets its only signal from this pin and nothing else. That is a real cost of
+    pinning now rather than waiting, accepted rather than overlooked: the branch is load-bearing
+    today, and what round 1 shipped instead was the branch unpinned with a false argument under it.
+    """
+    rev = "HEAD^{tree}" if oid == "tree" else "HEAD"
+    target = subprocess.run(["git", "rev-parse", rev], cwd=clone, check=True,
+                            capture_output=True, text=True).stdout.strip()
+    subprocess.run(["git", "update-index", "--add", "--cacheinfo", f"100644,{target},a.bin"],
+                   cwd=clone, check=True, capture_output=True)
+    # `subprocess.run` rather than the `_git` helper, like every other clone-driven pin here: that
+    # helper's spelling is one of GIT_CALL_MARKERS, and this test builds its own throwaway repo.
+    sized = subprocess.run(["git", "cat-file", "-s", ":./a.bin"], cwd=clone, capture_output=True)
+    blob = subprocess.run(["git", "cat-file", "blob", ":./a.bin"], cwd=clone, capture_output=True)
+    assert sized.returncode == 0 and blob.returncode != 0, (
+        "this round measures nothing unless the size read SUCCEEDS where the blob read refuses — "
+        f"that disagreement IS the state: -s rc={sized.returncode}, blob rc={blob.returncode}"
+    )
+
+    offenders, unreadable = _scan_for_browser_binary_signature(clone)
+    assert unreadable == ["a.bin"], (
+        f"git carries this path in the index and then refuses to hand the object over, so the "
+        f"scan must say it could not look rather than looking away. It reported {unreadable}"
+    )
+    # "carries in the index" and NOT "would publish": here `git add -A` says `remove 'a.bin'` (the
+    # status is `AD`), so what would publish this entry is a bare `git commit`, not `add -A`. The
+    # walk's own docstring defines publishable by `add -A`, and the neighbouring pins inherit that
+    # looser wording; measured on this state rather than reasoned from the shared phrasing.
+    assert offenders == [], f"nothing was classified, so nothing should be named: {offenders}"
+
+
 # MUTATION-CHECKED for VMCP-242 (819), selection `tests/unit/test_repo_browser_isolation.py`,
 # `__pycache__` deleted and PYTHONDONTWRITEBYTECODE=1 every round, each round restored from a byte
 # copy and the file confirmed sha256-identical afterwards, and `collected` cross-checked against
-# the control's 101 at every round (`-q` dropped, since it prints no `collected` line at all).
-# Rounds were read by COUNTING lines beginning `FAILED ` and, separately, `ERROR ` — never by the
-# first `N failed` in stdout, because pytest prints a failing test's docstring inside its
+# the control's own count at every round (`-q` dropped, since it prints no `collected` line at
+# all). Rounds were read by COUNTING lines beginning `FAILED ` and, separately, `ERROR ` — never
+# by the first `N failed` in stdout, because pytest prints a failing test's docstring inside its
 # traceback and the docstrings here contain the literal `control 0 failed`. Control round: 0
-# failed, 0 errors, collected 103.
+# failed, 0 errors, collected 122 — and 122 in all twelve rounds below, every one of them replayed
+# on ONE stand over the FINAL text of this file, after the last prose edit rather than before it.
+# RE-MEASURED IN FULL for round 2, on the tree that ships this comment (base at `b3cb44f`, plus
+# this card's round-2 edits), and of the nine counts round 1 recorded FOUR moved, as did
+# `collected` — so do not carry a figure out of this record across a landing. Round 1 is why that
+# warning is here rather than assumed: it shipped this header reading `101` four lines above a
+# tail reading `103`. Neither was MISMEASURED — 101 was true at `ff3d208`, where the selection
+# really did collect 101, that landing's header said so, and the record held that ONE figure and
+# no other; the second commit at `972ca81` moved the selection to 103, ADDED a figure to the tail
+# (the diff is a `+` with no matching `-`, so "updated" would be wrong) and left the header. The
+# divergence is that commit's alone, and it is the same class this record takes credit for fixing
+# in #630's own numbers below, committed inside its own text. **The `collected` cross-check would
+# NOT have caught it**, and saying otherwise was this round's own first draft: that check compares
+# each ROUND to the CONTROL, and at `972ca81` both read 103, so a stale HEADER never enters the
+# comparison. What catches it is measuring LAST, on the tree being pushed — which is why this
+# round re-ran everything instead of reconciling. VMCP-243 (820) then grew the selection again,
+# and this card's own pin once more; 122 belongs to the tree this comment lands in, and the way to
+# re-derive it is to run the selection, not to trust the digits.
 #   * the pre-#819 CHOICE (worktree wins, index consulted only where `is_file()` is False) ->
 #     1 failed: `test_the_binary_gate_reads_the_INDEX_for_a_tracked_candidate[
 #     worktree-copy-overwritten-with-text]`. Exactly one row, and that is the finding rather than
 #     a weak result — the other two rows of that pin have no worktree copy at all, so the old
 #     fallback served them and they were never the bug.
-#   * the shared walk cut to the INDEX alone -> 4 failed:
+#   * the shared walk cut to the INDEX alone -> 5 failed:
 #     `test_the_binary_gate_reads_the_WORKTREE_too_for_a_tracked_candidate[False]`,
 #     `test_the_binary_gate_needs_no_size_ceiling_where_the_shape_gates_do[worktree]`,
-#     `test_a_candidate_the_binary_gate_cannot_read_is_reported_and_not_skipped` and #630's own
-#     `test_the_shape_gate_reads_the_WORKTREE_too_for_a_tracked_candidate[False]`.
-#   * the shared walk cut to the WORKTREE alone -> 8 failed: all three rows of
+#     `test_a_candidate_the_binary_gate_cannot_read_is_reported_and_not_skipped`, #630's own
+#     `test_the_shape_gate_reads_the_WORKTREE_too_for_a_tracked_candidate[False]`, and #820's
+#     `test_a_conflicted_path_with_a_SHAPED_worktree_copy_is_still_caught`.
+#   * the shared walk cut to the WORKTREE alone -> 24 failed: all three rows of
 #     `test_the_binary_gate_reads_the_INDEX_for_a_tracked_candidate`, the `[index]` row of the
-#     ceiling pin, `test_a_tracked_candidate_whose_index_object_is_gone_is_reported`, and all
-#     three of #630's `test_the_shape_gate_reads_the_INDEX_for_a_tracked_candidate`. THAT is what
-#     says the halves are independent rather than one traded for the other: 4 and 8, with no row
-#     in both.
+#     ceiling pin, `test_a_tracked_candidate_whose_index_object_is_gone_is_reported`, both rows of
+#     the non-blob pin below, all three of #630's
+#     `test_the_shape_gate_reads_the_INDEX_for_a_tracked_candidate`, and fourteen of the seventeen
+#     rows #820 added — the ones whose expected answer comes from the index half ALONE — across
+#     `test_a_path_whose_FIRST_COMPONENT_looks_like_a_merge_stage_is_not_a_silent_miss`,
+#     `test_the_names_that_never_parsed_as_a_stage_are_the_control` and the `[hidden]` row of
+#     `test_a_merge_stage_THAT_EXISTS_hands_over_ANOTHER_PATHS_BYTES`. Fourteen of seventeen and
+#     not "the index-only rows #820 added": its `[named-falsely]` row stages an index-only
+#     candidate too and survives this cut, because the answer it expects is carried by a shaped
+#     WORKTREE copy. THAT pair is what says the halves are independent rather than one traded for
+#     the other: 5 and 24, with no row in both — checked BY NAME over all 29, not inferred from the
+#     two totals. The PROPERTY is the durable half and the totals are not: both moved under #820
+#     (4 -> 5 and 8 -> 24) while the mutations and the disjointness stayed put. And #820 did touch
+#     this walk — it rewrote the index half's revspec (`:{rel}` -> `:./{rel}`, two lines) — just
+#     not WHICH copies are read, which is the only thing these two rounds are about.
 #   * `SHAPE_SCAN_MAX_BYTES` applied in prefix mode on the WORKTREE side -> 1 failed, the
 #     `[worktree]` row; on the INDEX side -> 1 failed, the `[index]` row. TWO rounds because the
 #     guard is written twice and one probe reaches one site: the second pass over this text
@@ -3177,7 +3304,12 @@ def test_a_candidate_the_binary_gate_cannot_read_is_reported_and_not_skipped(clo
 #     a refusal to look.
 #   * the name-ONCE dedup dropped -> 1 failed, and specifically the `[True]` row, where both
 #     copies carry the picture. The `[False]` row cannot fall to it — only one copy is shaped.
-#   * the unreadable report replaced by `return offenders, []` -> 2 failed, both unreadable pins.
+#   * the unreadable report replaced by `return offenders, []` -> 4 failed: all three pins that
+#     assert a NON-EMPTY `unreadable`, one of them parametrised in two rows. "Non-empty" is
+#     load-bearing — a FOURTH test asserts `unreadable == []` (the ceiling pin) and cannot fall to
+#     this mutation at all. Round 1 recorded 2 here and named them "both unreadable pins", which
+#     the pin added below makes FALSE rather than merely stale: a round carries prose out of date
+#     as readily as it carries a count.
 #   * the unresolvable-index-entry yield dropped -> 1 failed,
 #     `test_a_tracked_candidate_whose_index_object_is_gone_is_reported`. That branch IS this
 #     card's own second-pass finding: without it a tracked candidate whose object is gone and
@@ -3185,10 +3317,33 @@ def test_a_candidate_the_binary_gate_cannot_read_is_reported_and_not_skipped(clo
 #     to invisible, because `cat-file -s` fails first and the walk's pre-existing
 #     conflicted-entry skip swallowed the whole index half.
 #   * the index BLOB-read unreadable yield (`elif prefix is not None: yield rel, size, None`)
-#     dropped -> 0 failed. UNPINNED, and left that way knowingly: reaching it needs `cat-file -s`
-#     to succeed on an object `cat-file blob` then refuses, and both read the same object — the
-#     second pass tried to build it and could not either. It is a backstop for a state this suite
-#     cannot construct, not coverage anyone should read as tested.
+#     dropped -> 2 failed, both rows of `test_an_index_entry_whose_OBJECT_IS_NOT_A_BLOB_is_reported`
+#     above. Round 1 read 0 here and called the state unconstructible, on the argument that
+#     reaching it needs `cat-file -s` to succeed on an object `cat-file blob` then refuses, "and
+#     both read the same object". The ZERO was honest — the mutation applied and killed nobody —
+#     and the ARGUMENT under it was false, which is the harder half to notice: a zero with a
+#     mechanism beside it reads as settled. The two commands do read the same object and disagree
+#     about its TYPE, so an index entry whose OID is not a blob reaches the branch, and the pin
+#     above builds two such entries with one `git update-index --add --cacheinfo` each. Its
+#     docstring carries the construction, and why no submodule gitlink is one of its rows: a REAL
+#     one fails the SIZE read and lands on the branch one bullet up, not on this one.
+#   * `GIT_CALL_MARKERS` losing its `_scan_for_browser_binary_signature(REPO_ROOT` line -> 0
+#     failed. Round 1 read that zero as STRUCTURALLY unpinnable and offered a mechanism:
+#     `test_every_pin_here_that_shells_out_to_git_declares_it` fires when a test CARRIES a marker
+#     and LACKS the decorator, so deleting a door removes the pin from the check's SCOPE instead of
+#     breaking the check. That mechanism is real in general and DOES NOT APPLY HERE, and what shows
+#     it is the round nobody ran: drop the door line AND the pin's decorator -> 1 failed, the same
+#     scanner test. The pin never left the scope. It is named `…_is_reachable_by_git()`, and
+#     `_by_git():` carries the older marker `_git(` in the def line itself, so the zero is a SECOND
+#     door standing, not an absent one — an inference presented as a mechanism, which is the same
+#     defect as the false argument one bullet up and was caught by the same second pass.
+#   * so the round from the other side proves less than it appears to: marker KEPT and
+#     `@requires_git_checkout` removed from
+#     `test_no_file_of_browser_artifact_shape_is_reachable_by_git` -> 1 failed, exactly
+#     `test_every_pin_here_that_shells_out_to_git_declares_it` — but the pin's own NAME would have
+#     produced that red with the entry deleted too, so it does not attribute the red to the entry.
+#     What the entry buys is RENAME INSURANCE, which no round over today's tree can demonstrate;
+#     it is argued beside the constant instead.
 
 
 # --- VMCP-243 (820): `:<rel>` is a REVSPEC, so a leading `<0-3>:` component parses as a stage ---
