@@ -42,7 +42,7 @@ arrival with false positives that are ordinary correct prose:
     test_repo_browser_isolation (`89504e470d0a1a0a` PNG, `ffd8ffe0` JPEG, `255044462d` for
     `%PDF-`), and three are commits in docs/superpowers/specs that the document quotes precisely
     BECAUSE a rebase orphaned them.
-That is the same lesson VMCP-141 (629) reached about file extensions and VMCP-171 (695) reaches
+That is the same lesson VMCP-140 (629) reached about file extensions and VMCP-171 (695) reaches
 about quoted strings: the token does not decide what the token means. The anchor idiom does. Over
 the same checkout, and with THE RULER THIS FILE ACTUALLY SHIPS, `at `<hex>`` matches 42
 occurrences of 15 distinct shas in 4 files — 34 of them in test_mutation_sweep_contract.py, where

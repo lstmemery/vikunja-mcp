@@ -190,13 +190,25 @@ _SCANNED_DIRS = (SRC_DIR, TESTS_DIR)
 # run and the 17:56 commit carrying the sentence — quoting round counts with NO control in its
 # paragraph, and `75a1e52` added another count to that same paragraph 49 minutes after that.
 # So repo
-# markdown holds a real offender too, and the sole-false-positive argument was gone on BOTH scopes.
-# What is left for markdown alone is the behaviour-change reason — and READ THAT AS A PRICE STILL
-# UNPAID rather than as a decision, because the src/ half of the same sentence has now been paid
-# and the shape of the bill is on record two paragraphs up: measure the hits first, separate the
-# real from the false positive, exclude the false ones AT THE PATTERN and grandfather the real. The
-# markdown scope is bigger than src/ was and nobody has run that arithmetic; do it before widening,
-# not after. How many hits there are is deliberately not
+# markdown looked like it held a real offender too, and the sole-false-positive argument looked
+# gone on BOTH scopes.
+# THAT LAST STEP IS WITHDRAWN, and VMCP-210 (753) is the card that withdrew it — the sentence
+# graded markdown's hit by eye where src/'s was graded by opening it. Graded the same way, the
+# markdown hit is a FALSE POSITIVE ON BOTH ITS NUMBERS. One paragraph is uncontrolled today, the
+# stale-figure sweep block, and the two things the trigger matches in it are a figure the block
+# QUOTES in order to discuss it (a wrapped one it names by line) and one it calls illustrative in
+# the same breath. Neither is a round of anything; both are prose ABOUT rounds — which is the
+# identical mistake the exit-code gloss made in src/, and this comment made it while explaining
+# that mistake.
+# So the arithmetic nobody had run comes out the other way: widening to markdown today buys ZERO
+# true catches and costs one false red. That is a STRONGER reason to leave the scope where it is
+# than the behaviour-change reason it replaces, and it is the reason to record, because the weak
+# one invites a future card to pay a price that would buy nothing. Neither number is durable —
+# re-measure both before widening, the way src/ was measured, and note that the two false
+# positives here are NOT excludable at the pattern the way `ran / ` was: `5 failed / 102 passed`
+# is the exact shape of a real round this file pins a row for, so the only thing separating them
+# is that one is inside a quotation, which no lexical rule this scanner has can see.
+# How many hits there are is deliberately not
 # written here any more: that number moved twice inside one afternoon, and what a reader needs
 # from it is asserted in the tree-wide test at the end of the file. WHAT it asserts is THIS
 # paragraph — the line-fed one, found by an anchor phrase — and no longer the weaker "markdown is

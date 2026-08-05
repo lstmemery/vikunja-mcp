@@ -187,8 +187,17 @@ oversells is worse than none.
     the measurement that would justify it has not been made.
   * IT READS QUOTATIONS, NEVER POINTERS. A bare `:1473`, a `VMCP-N (id)` pair, a sha, a line
     number — none of them is a quoted string, so none of them is in scope. That is the class of
-    VMCP-155 (660) and VMCP-198 (735) and it stays open here; 735's remedy was to make the tool
-    hand back the ref, which is a different kind of fix from a scanner.
+    VMCP-155 (660) and VMCP-198 (735); 735's remedy was to make the tool hand back the ref, which
+    is a different kind of fix from a scanner. THE SENTENCE ABOUT THIS SCANNER IS UNCHANGED and
+    the class no longer stays wholly open: VMCP-195 (732) added a SECOND, separate gate at the
+    foot of this file, and the split is worth stating precisely because it is easy to overclaim.
+    That gate never asks whether a pointer is RIGHT — a checkout has no tracker to ask — it asks
+    only whether the tree is self-CONSISTENT, since one id has one ref and one ref has one id.
+    A pair fabricated the SAME way at every site is still invisible, and a card mentioned exactly
+    once has nothing to disagree with. What is closed is the shape #660 actually shipped, where
+    the composed ref sat beside the correct one. Anchors are the third pointer kind and belong to
+    test_measured_figure_anchors, which resolves them against git; line numbers remain wholly
+    unguarded, and nothing here changes that.
   * THE CORPUS IS THE WORKING TREE AND NOTHING ELSE. Commit messages, card descriptions, review
     comments, another repository — a claim quoting any of them is unanswerable here, and one of
     the three grandfathered entries is exactly that (a heading out of a Vikunja card). The
@@ -1030,4 +1039,100 @@ def test_the_scan_reaches_every_scope_it_says_it_covers():
         "this scanner's own source is in the corpus, so the quotations its ratchet list holds "
         "verbatim count as evidence that the tree carries them — the list would then vouch for "
         "itself and empty out. See `_tracked_text_files`"
+    )
+
+
+# --- VMCP-195 (732): the POINTER half, closed as far as a checkout can close it ----------------
+#
+# The boundary bullet above says this scanner reads quotations and never pointers, and that a
+# `VMCP-N (id)` pair is therefore out of scope. That stays TRUE of the scanner; what follows is a
+# SECOND, much narrower gate beside it, and the difference between them is the whole design.
+#   The class is #660's: an agent COMPOSED a ref instead of echoing the one a tool handed back,
+# and shipped `VMCP-181 (732)` into a landed file. A composed ref does not look broken — it points
+# at a DIFFERENT LIVE CARD, so the reader follows it and never notices. `VMCP-N` is assigned
+# per-project by the server and `id` is global, so no arithmetic recovers one from the other; the
+# only authority is the tracker, which a unit test deliberately cannot reach (no token, no
+# network). That is why the quotation scanner could not take this on and why the remedy #735
+# reached for was to make the tool hand the ref back.
+#   WHAT A CHECKOUT CAN STILL DECIDE IS INTERNAL CONSISTENCY. The pairing is a bijection: one id
+# has one ref and one ref has one id. So if the tree writes the same id under two different refs,
+# or the same ref against two different ids, one of those sites is a fabrication — and THAT is
+# answerable with no tracker at all. It is strictly weaker than correctness (a pair that is wrong
+# the SAME way everywhere stays invisible, and a repo mentioning a card exactly once has nothing
+# to compare), and strictly stronger than nothing, which is what was here before.
+#   IT CAUGHT A LIVE ONE ON ARRIVAL, which is the argument for it. Measured over the 297 pairs in
+# the publishable tree: exactly two conflicts. `VMCP-141` was written against BOTH 629 and 630 —
+# and `get_task` says 629 is VMCP-140, so `test_measured_figure_anchors.py` carried a phantom of
+# precisely #660's shape, landed, reviewed and unnoticed. It is corrected in the same commit as
+# this gate. The other conflict is the ratchet entry below.
+_REF_PAIR = re.compile(r"VMCP-(\d+)\s*\((\d+)\)")
+
+# A RETRACTION reproduces the string it retracts, so the founding defect is lexically identical to
+# every correction of it — the same reason the quotation ratchet above holds a phantom on purpose.
+# `VMCP-181 (732)` is #660's fabricated ref, quoted in four places (SKILL.md, server.py,
+# workflow.py, test_workflow_gates.py), every one of them immediately saying it is wrong. Keyed by
+# the ID whose refs conflict, so a NEW phantom on 732 would still have to be added here by hand.
+# Adding an entry is allowed; what it must carry is the reason, in this comment, in your words.
+KNOWN_RETRACTED_REF_PAIRS = frozenset({"732"})
+
+
+def test_no_card_is_written_under_two_different_refs():
+    """A composed `VMCP-N (id)` pair points at a LIVE unrelated card — #660's defect (VMCP-195).
+
+    Not the scanner above: that one reads QUOTED STRINGS, and a pointer is not a quotation. This
+    asks the one question about a pointer that needs no tracker — is the tree self-consistent? —
+    and it is deliberately the weaker half of the class, because the stronger half is unreachable
+    from a checkout by construction.
+
+    MUTATION-CHECKED, `__pycache__` deleted per round then `PYTHONDONTWRITEBYTECODE=1`, this test
+    as the selection, every round restored from a COPY with the restore confirmed by sha256 and
+    every mutation asserted to have APPLIED before its round ran. Control round: 0 failed.
+      * the live phantom this gate arrived with, put back (`VMCP-141 (629)` in
+        test_measured_figure_anchors) -> 1 failed, naming both refs and the file of each
+      * plant `VMCP-999 (630)` anywhere in the tree -> 1 failed, the id-side direction
+      * plant `VMCP-141 (99999)` -> 1 failed, the ref-side direction, which is the one a bare
+        id-keyed map would miss: 99999 is mentioned nowhere else, so nothing conflicts on the id
+      * empty `KNOWN_RETRACTED_REF_PAIRS` -> 1 failed on `732`, i.e. the ratchet is load-bearing
+        rather than decorative, and its one entry is the retraction it says it is
+      * the FALSE-RED PRICE, measured before landing rather than after: two conflicts across 297
+        pairs in the publishable tree, one a true catch and one the retraction. A gate that
+        reddens on correct prose gets switched off, so the number that matters is that one
+    """
+    by_id: dict[str, dict[str, list[str]]] = {}
+    for name, body in _tracked_text_files():
+        for match in _REF_PAIR.finditer(body):
+            ref, card = match.group(1), match.group(2)
+            by_id.setdefault(card, {}).setdefault(ref, []).append(name)
+
+    assert by_id, (
+        "no `VMCP-N (id)` pair found anywhere in the tree, so this gate scanned nothing and "
+        "passed for the wrong reason — the `no tests ran looks like a pass` shape. Either the "
+        "corpus broke or the citation idiom changed; neither is a reason to be green"
+    )
+
+    conflicts = {
+        card: refs for card, refs in by_id.items()
+        if len(refs) > 1 and card not in KNOWN_RETRACTED_REF_PAIRS
+    }
+    assert not conflicts, (
+        f"the same card id is written under two different `VMCP-N` refs: {conflicts}. The pairing "
+        "is a bijection, so at least one of those sites is a COMPOSED ref — #660's defect, which "
+        "does not look broken because it points at a different LIVE card. Ask `get_task(<id>)` "
+        "which ref is real and fix the other; if the wrong one is being quoted deliberately as a "
+        "retraction, add the id to KNOWN_RETRACTED_REF_PAIRS with your reason in its comment"
+    )
+
+    by_ref: dict[str, dict[str, list[str]]] = {}
+    for card, refs in by_id.items():
+        for ref, names in refs.items():
+            by_ref.setdefault(ref, {})[card] = names
+    reused = {
+        ref: cards for ref, cards in by_ref.items()
+        if len(cards) > 1 and not set(cards) <= KNOWN_RETRACTED_REF_PAIRS
+    }
+    assert not reused, (
+        f"the same `VMCP-N` ref is written against two different card ids: {reused}. This is the "
+        "direction an id-keyed map alone cannot see — a fabricated pair whose ID appears nowhere "
+        "else conflicts with nothing on the id side, and only the ref side notices. One of these "
+        "sites is a composed ref; `get_task` on each id says which"
     )
