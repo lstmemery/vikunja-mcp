@@ -73,6 +73,7 @@ answer is a skip rather than the 30 red tests it used to be.
 """
 import inspect
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -593,6 +594,10 @@ GIT_CALL_MARKERS = (
     # the shared walk directly. Same door, same rule: the marker is the call carrying REPO_ROOT.
     "_scan_for_browser_text_artifact_shape(REPO_ROOT",
     "_publishable_copies(REPO_ROOT",
+    # VMCP-242 (819) lifted the magic-bytes loop out of its test for the same reason, so the
+    # door it used to hold — a literal `_git(` in the test body — closed behind it. Without this
+    # line that pin would keep its decorator and lose the scanner that CHECKS the decorator.
+    "_scan_for_browser_binary_signature(REPO_ROOT",
 )
 
 # --- Is this tree a git checkout at all? (#622) ---------------------------------------------
@@ -1336,11 +1341,19 @@ def test_no_file_of_browser_artifact_shape_is_reachable_by_git():
     untracked-and-not-ignored. The index half is what still sees a `git add -f` and a file
     committed before any rule existed, which no ignore pattern can retract.
 
-    Content comes from the working tree, FALLING BACK to the index blob when a tracked path has
-    no worktree copy — and that branch is not a nicety. Measured: a PNG committed as `asset.bin`
-    with its worktree copy deleted was listed by `git ls-files`, was invisible to `Path.is_file`,
-    and the earlier version of this loop skipped it in silence while both pins stayed green. A
-    candidate whose bytes cannot be read from EITHER source is reported as unreadable rather than
+    Content comes from BOTH copies of a candidate — the UNION, which is VMCP-242 (819) and not
+    what shipped here. Until then it read the working tree with a FALLBACK to the index blob: a
+    choice, and the fallback branch only ever fired when the worktree copy was ABSENT. #630's
+    reviewer built the consequence in this same file, one gate over from the one it had just
+    argued out — a real PNG committed as `asset.bin`, its worktree copy overwritten with `just
+    some text` and NOT staged. `git status --porcelain` says ` M asset.bin`, the index blob still
+    starts `89504e470d0a1a0a`, a plain `git commit` publishes the PNG, and this gate said nothing.
+    The argument is #630's, verbatim and unchanged by being about pictures instead of cookies:
+    `git add -A` stages the WORKTREE bytes and `git commit` publishes the INDEX blob, so neither
+    copy alone is "what git would publish". The walk that answers it is shared with the two shape
+    scans, so the two halves cannot drift apart again.
+
+    A candidate whose bytes cannot be read from EITHER copy is reported as unreadable rather than
     skipped, on the same principle the storage-state scan applies to a file too big to parse.
 
     Unlike that scan this one needs NO size ceiling, and the contrast is the point: it never
@@ -1382,38 +1395,14 @@ def test_no_file_of_browser_artifact_shape_is_reachable_by_git():
       passes on the same state (the name is `.bin`, outside its globs) — so nothing else was
       covering it. Disabling ONLY that branch, on the identical state -> PASS, which is the
       pre-fix behaviour and what makes the branch load-bearing rather than decorative.
-    """
-    tracked, untracked = set(), set()
-    for args, sink in ((("ls-files", "-z"), tracked),
-                       (("ls-files", "--others", "--exclude-standard", "-z"), untracked)):
-        listed = _git(*args)
-        assert listed.returncode == 0, f"git {' '.join(args)} failed: {listed.stderr.strip()}"
-        sink.update(p for p in listed.stdout.split("\0") if p)
 
-    offenders, unreadable = [], []
-    for rel in sorted(tracked | untracked):
-        path = REPO_ROOT / rel
-        head = b""
-        try:
-            if path.is_file():
-                with path.open("rb") as handle:
-                    head = handle.read(MAGIC_PREFIX_BYTES)
-            elif rel in tracked:
-                # in the index, no worktree copy: read the BLOB, never skip — see docstring
-                blob = _git_bytes("cat-file", "blob", f":{rel}")
-                if blob.returncode != 0:
-                    unreadable.append(rel)
-                    continue
-                head = blob.stdout[:MAGIC_PREFIX_BYTES]
-            else:
-                continue  # untracked and already gone: nothing git could publish either
-        except OSError:
-            unreadable.append(rel)
-            continue
-        for fmt, signature in BROWSER_BINARY_SIGNATURES.items():
-            if head.startswith(signature):
-                offenders.append(f"{rel} ({fmt})")
-                break
+    Every round above was run against the INLINE loop this test used to carry, over this
+    repository, with probes planted in it and deleted afterwards. That is why none of them found
+    #819: the state it is about is a DISAGREEMENT between two copies, and planting one here means
+    holding a real screenshot in the repo whose guard forbids it. The scan is a function now and
+    the rounds that replace these live beside their pins, on a throwaway clone.
+    """
+    offenders, unreadable = _scan_for_browser_binary_signature(REPO_ROOT)
 
     assert not unreadable, \
         f"{unreadable} — git lists these as publishable but their bytes could not be read from " \
@@ -1863,17 +1852,32 @@ def test_every_filename_skill_md_prescribes_is_excluded_by_this_repos_gitignore(
         "spelling, this config key, and the two env vars that need no flag at all"
 
 
-def _publishable_copies(root: Path):
+def _publishable_copies(root: Path, *, prefix: int | None = None):
     """Every copy of every path `git add -A` could publish, yielded as `(rel, size, raw)`.
 
-    ONE walk, shared by both shape scans below rather than written twice — VMCP-209 (752)
-    extracted it unchanged from the storage-state scan. The classifier is the easy half; the
+    ONE walk, shared by all THREE scans below rather than written three times — VMCP-209 (752)
+    extracted it unchanged from the storage-state scan, VMCP-242 (819) brought the magic-bytes
+    scan onto it. The classifier is the easy half; the
     subtle half is WHICH BYTES count as publishable, and that took VMCP-141 (630) plus its
     reviewer two rounds to get right. A second hand-written copy would be the one nobody
-    re-measured, and the two gates would drift apart in silence.
+    re-measured, and the two gates would drift apart in silence — which is not a worry, it is
+    what happened: the magic-bytes scan kept its own inline copy, that copy read the worktree
+    with a FALLBACK to the index rather than the union, and it stayed that way through #630's
+    whole two-round argument in the same file. #630's own record of what a duplicated loop costs
+    is next door: the first version of its pins measured the copy, so the real mutation came back
+    green.
 
     `raw` is `b""` when `size` exceeds `SHAPE_SCAN_MAX_BYTES`; the caller decides what to do
-    with a candidate it cannot afford to read, and both callers REPORT rather than skip.
+    with a candidate it cannot afford to read, and both shape callers REPORT rather than skip.
+
+    PREFIX MODE (`prefix=N`) changes two things for the magic-bytes caller, and both are the
+    difference between the two questions rather than taste. It reads at most N bytes from each
+    copy and applies NO ceiling: `SHAPE_SCAN_MAX_BYTES` exists because a `json.loads` can be
+    handed an unbounded file, and a fixed prefix cannot — a magic number is not hidden by
+    growing the file, so blanking a large candidate here would invent a blind spot instead of
+    closing one. And it yields `raw=None` for a copy whose bytes could not be read, so
+    "could not look" stays distinguishable from "looked and found nothing"; in the default mode
+    such a copy is dropped silently, exactly as it was before this parameter existed.
 
     TRACKED and UNTRACKED are kept apart, which VMCP-141 (630) is about. The candidate LIST
     always came from git; the BYTES came from the worktree, and where the two disagree the scan
@@ -1910,22 +1914,79 @@ def _publishable_copies(root: Path):
             sized = _git("--no-pager", "cat-file", "-s", f":{rel}", cwd=root)
             if sized.returncode == 0:            # a conflicted entry has no single size — skip it
                 size = int(sized.stdout.strip())
-                if size > SHAPE_SCAN_MAX_BYTES:
+                if prefix is None and size > SHAPE_SCAN_MAX_BYTES:
                     yield rel, size, b""
                 elif size:
                     blob = _git_bytes("--no-pager", "cat-file", "blob", f":{rel}", cwd=root)
                     if blob.returncode == 0:
-                        yield rel, size, blob.stdout
-        path = root / rel
+                        yield rel, size, blob.stdout if prefix is None else blob.stdout[:prefix]
+                    elif prefix is not None:
+                        yield rel, size, None      # in the index, and git would not hand it over
         try:
-            if path.is_file():
-                size = path.stat().st_size
-                if size > SHAPE_SCAN_MAX_BYTES:
-                    yield rel, size, b""
-                elif size:
-                    yield rel, size, path.read_bytes()
+            worktree = _worktree_copy(root / rel, prefix)
         except OSError:
-            pass
+            # The file is there and its bytes are not: reported in prefix mode (with no size to
+            # report, since the stat may be what failed), dropped in the default one as before.
+            worktree = (None, None) if prefix is not None else None
+        if worktree is not None:
+            yield rel, worktree[0], worktree[1]
+
+
+def _worktree_copy(path: Path, prefix: int | None) -> tuple[int | None, bytes] | None:
+    """The worktree half of the walk above: `(size, raw)`, or None when there is nothing to read.
+
+    Split out so the caller's `except OSError` covers this read and NOTHING else. Inline — which
+    is where this body was — that handler also wrapped the `yield`, so an OSError arriving from
+    the CONSUMER would be graded as "the file could not be read". Harmless while the handler was
+    a bare `pass`; not harmless now that it produces a reported `unreadable`."""
+    if not path.is_file():
+        return None
+    size = path.stat().st_size
+    if prefix is None and size > SHAPE_SCAN_MAX_BYTES:
+        return size, b""
+    if not size:
+        return None                              # nothing to classify and no signature to match
+    if prefix is None:
+        return size, path.read_bytes()
+    with path.open("rb") as handle:
+        return size, handle.read(prefix)
+
+
+def _scan_for_browser_binary_signature(root: Path) -> tuple[list[str], list[str]]:
+    """The magic-bytes scan of #629, as ONE implementation over the shared walk — VMCP-242 (819).
+
+    It used to live INLINE in its own test, reading `path.is_file()` first and the index blob only
+    as a FALLBACK — a choice, not a union. Two things follow from that shape, and the second is
+    why this is a function now rather than a smaller edit in place. A committed PNG whose worktree
+    copy is overwritten with text passed in SILENCE while `git commit` published the PNG; and no
+    pin could ever have caught it, because the loop was reachable only by pointing the real test
+    at the real repository, where that divergence does not exist. Taking a `root` is what lets the
+    rounds below drive the SHIPPED scanner over a throwaway clone — the same move #630 made for
+    the storage-state scan, and for the same recorded reason.
+
+    `unreadable` is a candidate whose bytes came back from NEITHER copy, which is the assertion
+    the caller still makes: "could not look" and "looked and found nothing" are different answers.
+    An EMPTY file is neither — it is yielded by nothing and reported as nothing, because it
+    carries no signature to match and git publishing it costs no page content.
+    """
+    offenders: list[str] = []
+    seen: list[str] = []
+    readable: set[str] = set()
+    named: set[str] = set()
+    for rel, _size, head in _publishable_copies(root, prefix=MAGIC_PREFIX_BYTES):
+        if rel not in seen:
+            seen.append(rel)
+        if head is None:
+            continue
+        readable.add(rel)
+        if rel in named:
+            continue                             # named ONCE, whichever copy carries the picture
+        for fmt, signature in BROWSER_BINARY_SIGNATURES.items():
+            if head.startswith(signature):
+                named.add(rel)
+                offenders.append(f"{rel} ({fmt})")
+                break
+    return offenders, [rel for rel in seen if rel not in readable]
 
 
 def _classify_browser_text_artifact(raw: bytes) -> str | None:
@@ -2746,7 +2807,12 @@ def test_the_shape_gate_reads_the_INDEX_for_a_tracked_candidate(clone, state):
 # against the control every round: cutting the walk to the index alone is **1 failed**, and it is
 # exactly `test_the_shape_gate_reads_the_WORKTREE_too_for_a_tracked_candidate[False]`. The `[True]`
 # row cannot fall to that mutation by construction — it STAGES the file, so the index copy is the
-# credential either way. 752's reviewer measured the same 1 with TWO constructions (cut the
+# credential either way. That TOTAL is a property of who is on the walk rather than of this pin,
+# and VMCP-242 (819) moved it by putting the magic-bytes gate on the same walk: re-run there, same
+# selection and same construction, control 0 failed and the identical mutation is now **4 failed**
+# — this row plus three of the binary gate's. The row named above is still exactly one of them,
+# which is the only half that was ever about #630, and the record below it stands unchanged.
+# 752's reviewer measured the same 1 with TWO constructions (cut the
 # worktree read; and additionally drop untracked candidates); 798's round is the first of those
 # two, not a third one, so what agrees here is three runs of two constructions, and the
 # disagreement is with the record rather than between the rounds. The
@@ -2833,3 +2899,166 @@ def test_the_shape_gate_reads_the_WORKTREE_too_for_a_tracked_candidate(clone, st
         f"staged={staged}: `git add -A` would publish this worktree copy, and the scan reported "
         f"{offenders}. Reading only the index is what #630's first version did"
     )
+
+
+# --- VMCP-242 (819): the MAGIC-BYTES gate chose a copy where the shape gate reads both ---------
+#
+# The PNG signature plus the head of a real IHDR chunk. The scan reads `MAGIC_PREFIX_BYTES` (8)
+# and nothing more, so the tail is here to make the probe the shape of a screenshot rather than
+# to be matched — and the signature is written out as a LITERAL rather than taken from
+# `BROWSER_BINARY_SIGNATURES`, because a probe built from the constant under test agrees with it
+# by construction and would go on agreeing after somebody emptied the dict.
+_PNG = (b"\x89PNG\r\n\x1a\n"
+        b"\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89")
+
+
+@pytest.mark.parametrize("state", ["worktree-copy-overwritten-with-text", "worktree-copy-deleted",
+                                   "committed-then-deleted-locally"])
+def test_the_binary_gate_reads_the_INDEX_for_a_tracked_candidate(clone, state):
+    """The first row is the defect; the other two are the branch that already worked, held down.
+
+    `worktree-copy-overwritten-with-text` is the state #630's reviewer built in this same file,
+    one gate over from the one it had just fixed: the index blob is a PNG, the worktree copy is
+    prose, and the pre-#819 loop asked `path.is_file()` first and so never looked at the index.
+    `git status --porcelain` reports ` M`, `git commit` with nothing staged publishes the PNG,
+    and the gate said the repo was clean. That is the card's own construction, driving the
+    SHIPPED test function against a patched `REPO_ROOT`; the sweep record at the foot of this
+    file is the same fact from the other side — control 0 failed, and restoring the pre-#819
+    choice reddens this row and only this row, 1 failed.
+
+    The other two rows have no worktree copy at all, so the old fallback fired and they passed
+    before this card as well. They are here because they were pinned by PROSE only — the rounds
+    in the real test's docstring — and prose does not fail. With the union in place all three
+    ride the same branch, and cutting it drops all three at once.
+    """
+    _stage(clone, "asset.bin", _PNG)
+    if state == "worktree-copy-overwritten-with-text":
+        (clone / "asset.bin").write_bytes(b"just some text\n")
+    elif state == "worktree-copy-deleted":
+        (clone / "asset.bin").unlink()
+    else:
+        subprocess.run(["git", "commit", "-m", "add"], cwd=clone, check=True, capture_output=True)
+        (clone / "asset.bin").unlink()
+
+    offenders, _ = _scan_for_browser_binary_signature(clone)
+    assert offenders == ["asset.bin (PNG)"], (
+        f"state {state!r}: the index still holds a PNG under a name no ignore rule covers, so "
+        f"git would publish a picture of whatever page the browser had open — the scan reported "
+        f"{offenders}"
+    )
+
+
+@pytest.mark.parametrize("staged", [False, True])
+def test_the_binary_gate_reads_the_WORKTREE_too_for_a_tracked_candidate(clone, staged):
+    """The other half, and the pin that stops the fix from being a SWAP.
+
+    #630's first version replaced its source instead of adding one, and its reviewer caught it;
+    the same mistake is available here and would be invisible in the rows above, all three of
+    which the index alone satisfies. So: a committed, benign `notes.md` whose worktree copy is
+    overwritten with PNG bytes. `git add -A` stages exactly those bytes.
+
+    `staged=True` is the same file with the picture in BOTH copies, which is what pins the path
+    being named ONCE — a union that appended per copy would report it twice — and it is also why
+    the two halves drop DIFFERENT rows: cutting the worktree read leaves this row green, because
+    then the index carries the PNG too.
+    """
+    (clone / "notes.md").write_bytes(b"benign\n")
+    subprocess.run(["git", "add", "notes.md"], cwd=clone, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "benign"], cwd=clone, check=True, capture_output=True)
+    (clone / "notes.md").write_bytes(_PNG)
+    if staged:
+        subprocess.run(["git", "add", "notes.md"], cwd=clone, check=True, capture_output=True)
+
+    offenders, _ = _scan_for_browser_binary_signature(clone)
+    assert offenders == ["notes.md (PNG)"], (
+        f"staged={staged}: `git add -A` would publish these worktree bytes, and the scan "
+        f"reported {offenders}. Reading only the index is the swap #630 was bounced for"
+    )
+
+
+def test_the_binary_gate_needs_no_size_ceiling_where_the_shape_gates_do(clone):
+    """Why the shared walk grew a `prefix` mode instead of this scan simply calling it.
+
+    `_publishable_copies` blanks any copy over `SHAPE_SCAN_MAX_BYTES` and lets the shape scans
+    report it, because `json.loads` can be handed an unbounded file. This scan reads eight bytes,
+    so the same treatment would have converted a correct answer ("that is a PNG") into a refusal
+    to look — a blind spot invented by the refactor rather than one closed by it. The probe is
+    truncated to one byte over the ceiling rather than written out: sparse wherever the
+    filesystem supports it, and the only way to ask the question at all.
+    """
+    big = clone / "huge.bin"
+    with big.open("wb") as handle:
+        handle.write(_PNG)
+        handle.truncate(SHAPE_SCAN_MAX_BYTES + 1)
+    assert big.stat().st_size > SHAPE_SCAN_MAX_BYTES, "the probe is not actually over the ceiling"
+
+    offenders, unreadable = _scan_for_browser_binary_signature(clone)
+    assert offenders == ["huge.bin (PNG)"], f"a large PNG is still a PNG; scan reported {offenders}"
+    assert unreadable == [], f"nothing here is unreadable, yet the scan reported {unreadable}"
+
+    shaped, unclassified = _scan_for_storage_state_shape(clone)
+    assert shaped == [] and unclassified == ["huge.bin"], (
+        "the control for the sentence above: the SHAPE scan must still report the same file as "
+        f"too large to classify rather than looking at it, and it reported {shaped}/{unclassified}"
+    )
+
+
+def test_a_candidate_the_binary_gate_cannot_read_is_reported_and_not_skipped(clone):
+    """`unreadable` survived the lift, and it is not decorative: this repo grades a silent skip
+    on a credential as the bug class, and a silent skip on a screenshot is the same shape.
+
+    Built rather than reasoned about: a tracked file whose worktree copy is chmod 000. The stat
+    succeeds, the open raises, and the index blob is empty (a zero-byte blob is yielded by
+    nothing), so NEITHER copy answers — which is exactly the state the assertion is worded for.
+    Skipped on a root that can read anything regardless of mode.
+    """
+    if os.getuid() == 0:                                    # root ignores the mode bits entirely
+        pytest.skip("running as root: an unreadable file cannot be constructed by mode alone")
+    _stage(clone, "locked.bin", b"")
+    (clone / "locked.bin").write_bytes(_PNG)
+    (clone / "locked.bin").chmod(0o000)
+    try:
+        offenders, unreadable = _scan_for_browser_binary_signature(clone)
+    finally:
+        (clone / "locked.bin").chmod(0o644)
+
+    assert unreadable == ["locked.bin"], (
+        f"a candidate whose bytes came back from neither copy must be REPORTED — 'could not "
+        f"look' is not 'looked and found nothing'. The scan reported {unreadable}"
+    )
+    assert offenders == [], f"nothing was classified, so nothing should be named: {offenders}"
+
+
+# MUTATION-CHECKED for VMCP-242 (819), selection `tests/unit/test_repo_browser_isolation.py`,
+# `__pycache__` deleted and PYTHONDONTWRITEBYTECODE=1 every round, each round restored from a byte
+# copy and the file confirmed sha256-identical afterwards, and `collected` cross-checked against
+# the control's 101 at every round (`-q` dropped, since it prints no `collected` line at all).
+# Rounds were read by COUNTING lines beginning `FAILED ` and, separately, `ERROR ` — never by the
+# first `N failed` in stdout, because pytest prints a failing test's docstring inside its
+# traceback and the docstrings here contain the literal `control 0 failed`. Control round: 0
+# failed, 0 errors.
+#   * the pre-#819 CHOICE (worktree wins, index consulted only when there is no worktree copy) ->
+#     1 failed: `test_the_binary_gate_reads_the_INDEX_for_a_tracked_candidate[
+#     worktree-copy-overwritten-with-text]`. Exactly one row, and that is the finding rather than
+#     a weak result — the other two rows of that pin have no worktree copy at all, so the old
+#     fallback served them and they were never the bug.
+#   * the shared walk cut to the INDEX alone -> 4 failed, disjoint from the row above:
+#     `test_the_binary_gate_reads_the_WORKTREE_too_for_a_tracked_candidate[False]`,
+#     `test_the_binary_gate_needs_no_size_ceiling_where_the_shape_gates_do`,
+#     `test_a_candidate_the_binary_gate_cannot_read_is_reported_and_not_skipped` and #630's own
+#     `test_the_shape_gate_reads_the_WORKTREE_too_for_a_tracked_candidate[False]`.
+#   * the shared walk cut to the WORKTREE alone -> 6 failed: all three rows of
+#     `test_the_binary_gate_reads_the_INDEX_for_a_tracked_candidate` and all three of #630's
+#     `test_the_shape_gate_reads_the_INDEX_for_a_tracked_candidate`. THAT is what says the two
+#     halves are independent rather than one traded for the other: 4 and 6, and no row in both.
+#   * `SHAPE_SCAN_MAX_BYTES` applied in prefix mode too -> 1 failed, the size-ceiling pin. Which
+#     is why the mode exists: reusing the walk unchanged would have blanked a large PNG and
+#     turned a correct answer into a refusal to look.
+#   * the name-ONCE dedup dropped -> 1 failed, and specifically the `[True]` row, where both
+#     copies carry the picture. The `[False]` row cannot fall to it — only one copy is shaped.
+#   * the unreadable report replaced by `return offenders, []` -> 1 failed, its own pin.
+#   * the index-copy unreadable yield (`elif prefix is not None: yield rel, size, None`) dropped
+#     -> 0 failed. UNPINNED, and left that way deliberately: reaching it needs `cat-file -s` to
+#     succeed on an object `cat-file blob` then refuses, and both read the same object, so no
+#     construction here produces it. It is a backstop for a state this suite cannot build, not
+#     coverage anyone should read as tested.

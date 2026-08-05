@@ -1390,7 +1390,21 @@ and the honest bound is sharper than "a list can't be complete": the name does n
 content at all.** Measured, a screenshot asked for as `shot.bin`, or with NO extension, is still
 PNG, because the format comes from the `type` argument (png|jpeg). So layer two reads the leading
 MAGIC BYTES of what `git add -A` could publish and fails on PNG/JPEG/PDF under any name, needing
-no size ceiling because a magic number cannot be hidden by growing the file. **It is complete
+no size ceiling because a magic number cannot be hidden by growing the file. **That phrase
+"what `git add -A` could publish" was aspirational for two cards, and #819 is what made it true
+of this layer.** It kept its own INLINE loop, which read the worktree and consulted the index
+only as a FALLBACK — a choice, not the union its sibling had just spent two rounds arguing for —
+so it sat one gate away from #630 through that whole argument and came out unchanged, and a
+committed PNG whose worktree copy is overwritten with text passed in silence while `git commit`
+published the PNG. That is the same defect #630 was bounced for, in the same file, found by
+#630's own second-round reviewer and reproduced by construction. The loop is now
+`_scan_for_browser_binary_signature(root)` on the SHARED `_publishable_copies` walk — which is
+also the only shape that could ever be pinned, since the inline one was reachable only through
+the real repository, where the two copies never disagree. Reusing that walk UNCHANGED was
+measured and rejected: it blanks anything over `SHAPE_SCAN_MAX_BYTES`, which is right for a
+`json.loads` and would have turned "that is a PNG" into "too large to look at" — so it grew a
+`prefix` mode that reads eight bytes with no ceiling, and the default mode is byte-identical to
+before. **It is complete
 about NAMES and about the three formats it names — NOT about formats.** That distinction was the
 card's own first defect: an earlier draft called those three "the entire binary surface", and the
 second pass disproved it by construction. `browser_network_request` — in the DEFAULT capability
