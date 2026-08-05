@@ -1965,8 +1965,14 @@ def _publishable_copies(root: Path, *, prefix: int | None = None):
             # its first component is `sub`. `./` makes the remainder a PATH, so nothing in it can
             # be read as a stage. Both reads take it — a bare SIZE read exits 128 here and skips
             # the path; a bare BLOB read exits 128 into `if blob.returncode == 0` one line down.
-            # `./` is relative to CWD, and so is `ls-files`'s output, so the two agree here for
-            # the reason they already had to: `root` is a repository TOP in both call sites.
+            # `./` also makes the read CWD-RELATIVE, and `cwd=root` is what both this read and the
+            # `ls-files` above are handed, so the two halves agree at any `root` inside the WORKING
+            # TREE — top or not. VMCP-243 (820) wrote that BACKWARDS, as a precondition the
+            # FIX depends on; the precondition is the BARE form's, since a bare `:<rel>` resolves
+            # from the repository ROOT, and `./` REMOVES it. Off the top the bare form also goes
+            # wrong the same TWO ways it goes wrong on a stage, not just by missing. Both
+            # corrections, with the call sites RE-COUNTED (four, not two), are measured in the
+            # stage pin's docstring below.
             sized = _git("--no-pager", "cat-file", "-s", f":./{rel}", cwd=root)
             if sized.returncode != 0:
                 # `:./rel` did not resolve — a conflicted entry has no single size, and neither has
@@ -3379,11 +3385,75 @@ def test_a_path_whose_FIRST_COMPONENT_looks_like_a_merge_stage_is_not_a_silent_m
 
     The fix is one path segment — `f":./{rel}"` — and it is a fix rather than a workaround: `./`
     makes the rest of the string a PATH, so nothing in it can be read as a stage. That resolution
-    is relative to CWD, which is also what `ls-files` prints against, so the two halves agree for
-    the reason they already had to: `root` is a repository TOP at both call sites. Measured from a
-    SUBDIRECTORY, the bare form misses EVERY tracked file (`:x.json` rc=128 against `:./x.json`
-    rc=0) — unreachable here, and recorded because the fix now depends on that precondition where
-    the bare form depended on the opposite one.
+    is relative to CWD, which is also what `ls-files` prints against, so the two halves agree at any
+    `root` inside the WORKING TREE, top or not — the walk hands both commands the same `cwd=root`.
+    "Working tree" rather than "repository", because that boundary is measurable and was measured
+    instead of assumed: at `root` = the `.git` directory `ls-files` still lists every tracked path
+    (top-relative there), while every `:./` read refuses outright — `fatal: relative path syntax
+    can't be used outside working tree` — and the BARE form is the one that answers. No caller here
+    hands the walk that path, so the row bounds the sentence rather than reporting a hazard.
+
+    THE DIRECTION THERE IS THE OPPOSITE of what #820 shipped, and the retraction is spelled out
+    rather than quietly overwritten, because the false form is still readable in `git log`. This
+    docstring used to say the halves "agree for the reason they already had to: `root` is a
+    repository TOP at both call sites"; the comment in `_publishable_copies` said the same; and the
+    message of commit `a1b80a6` put it past rescue — "the fix depends on `root` being a repository
+    top where the bare form depended on the opposite". A commit message is not rewritten here for
+    prose (a force-push to main is not that cheap — VMCP-229 (773) records the same call on
+    `5389be0`), so that sentence stays wrong where it stands and is RETRACTED here. The
+    precondition belongs to the BARE form: `:<rel>` resolves from the repository ROOT, so it agreed
+    with a CWD-relative candidate list only where the two coincided. `:./{rel}` REMOVES that
+    precondition — it does not acquire one.
+
+    The parenthesis #820 hung on the false claim is itself sound, and now supports the sentence
+    instead of refuting it, but it named ONE branch of two. Re-measured on git 2.50.1 (Apple
+    Git-155) with `cwd` a SUBDIRECTORY holding an index-only `x.json` — which is the name `ls-files`
+    prints there — every row also re-run through THIS walk, `root` pointed at that subdirectory.
+    `SHAPED` is a storage state, `benign` is not, and the ROOT copy is tracked wherever it exists:
+
+        ROOT / SUB          bare `:x.json`                    walk bare    walk `:./`
+        nothing / shaped    rc=128 `does not exist`           []           ['x.json']
+        benign  / shaped    rc=0, 18 B — the ROOT file's      []           ['x.json']
+        shaped  / benign    rc=0, 62 B — the ROOT file's      ['x.json']   []
+
+    Every `:./` answer is the right one for the subdirectory's own file and every bare one is wrong,
+    so off the top the bare form yields the SAME `hidden` / `named-falsely` pair this file pins for
+    merge stages, reached along a different axis: a credential hidden in one polarity, and in the
+    other a file named as the offender whose own bytes are harmless. "Misses EVERY tracked file" was
+    wider than its proof.
+
+    WHICH of the two you get is decided not by the presence of a root-level namesake but by what the
+    bare revspec resolves to IN THE INDEX — and putting it the short way was this correction's own
+    first overclaim, so the routes to the MISS are measured rather than reasoned, and only the first
+    is namesake-free. No root entry at all: `does not exist`. A root namesake that is present but
+    UNTRACKED, or that is a DIRECTORY of that name: the twin is right there and the read still
+    fails, `exists on disk, but not in the index`. And a name that ALSO parses as a stage, where the
+    two defects COMPOSE — a tracked root `x.json` beside an index-only `sub/2:x.json` gives bare
+    `:2:x.json` rc=128 `is in the index, but not at stage 2`, a miss DESPITE the namesake. The
+    wrong-BYTES branch is the narrower one, and it was built rather than inferred: the namesake has
+    to be in the index at the stage named AND its object has to be a BLOB. Give the root `x.json` a
+    live `UU` and that same bare `:2:x.json` exits 0 on THAT path's stage-2 bytes; make the root
+    twin a SYMLINK (mode 120000) and bare exits 0 on ten bytes — the link's target PATH — no shape
+    scan flags, so the credential hides. A GITLINK (mode 160000) is the counterexample to the tidy
+    reading of that rule: in the index at stage 0, a blob it is not, so it MISSES on a fourth
+    message again, `could not get object info`.
+
+    UNREACHABLE HERE — and that is counted now rather than asserted, since a count in this very
+    clause is what went wrong twice. `_publishable_copies` has FOUR direct call sites, not the
+    "both" the retracted text claimed on both sides; three of them forward a `root` parameter, and
+    every argument reaching those three in this suite is `REPO_ROOT` (3 calls) or the `clone`
+    fixture's directory (18), while the fourth site passes `REPO_ROOT` itself. Both are working-tree
+    tops. Measured at `269b4bc`, and re-derive rather than trust, since the digits move with any
+    landing: the calls are the `_publishable_copies(` occurrences that are NOT the `def`, not the
+    `GIT_CALL_MARKERS` entry and not prose, so a bare `grep -c` overcounts — this docstring is
+    itself among the hits it would add. The number is not what makes the clause safe either; what
+    makes it safe is that no caller supplies a non-top, and THAT is the thing to re-check. So the
+    clause carries nothing today, in behaviour or in any pin, and the error ran in the
+    CONSERVATIVE direction: the code is more robust than its own text was. It is corrected
+    because "the walk requires a repository top", believed, invites either a guard nobody needs or
+    a SECOND copy of the walk for another cwd — and a second copy is the exact failure
+    `_publishable_copies` was assembled to prevent (its own docstring: the duplicate "would be the
+    one nobody re-measured").
     """
     (clone / name).parent.mkdir(parents=True, exist_ok=True)
     _stage(clone, name, _SHAPE)
