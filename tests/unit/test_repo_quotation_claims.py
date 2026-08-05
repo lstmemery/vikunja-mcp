@@ -1070,10 +1070,21 @@ _REF_PAIR = re.compile(r"VMCP-(\d+)\s*\((\d+)\)")
 # A RETRACTION reproduces the string it retracts, so the founding defect is lexically identical to
 # every correction of it — the same reason the quotation ratchet above holds a phantom on purpose.
 # `VMCP-181 (732)` is #660's fabricated ref, quoted in four places (SKILL.md, server.py,
-# workflow.py, test_workflow_gates.py), every one of them immediately saying it is wrong. Keyed by
-# the ID whose refs conflict, so a NEW phantom on 732 would still have to be added here by hand.
+# workflow.py, test_workflow_gates.py), every one of them immediately saying it is wrong.
+#   KEYED BY THE PAIR SINCE VMCP-236 (797), which is what the name always said and what the value
+# was not. A retraction is not a fact about an id, nor about a ref: it is a fact about ONE PAIRING,
+# and keying it by the id alone cost a hole and a false red at once. Both were MEASURED on this
+# tree against a control of 0 failed, not read off the diff, and they point in opposite directions:
+#   * SILENT — the id side excused the whole CARD, so a SECOND phantom on 732 was invisible.
+#     `VMCP-777 (732)` planted in a tracked file measured 0 failed, while the sentence that used to
+#     stand here promised a new phantom on 732 would still have to be added by hand. It would not.
+#   * LOUD — the ref side excused a group only when EVERY id in it was ratcheted, so writing the
+#     CORRECT pair `VMCP-181 (706)`, which is the string `get_task(706)` hands back, measured
+#     1 failed under an assert saying one of those sites was composed. Neither of them was.
+# Pair-keyed, the retracted pairing is excised from the corpus before either question is asked, so
+# both directions then answer about the rest of the tree and neither needs a clause of its own.
 # Adding an entry is allowed; what it must carry is the reason, in this comment, in your words.
-KNOWN_RETRACTED_REF_PAIRS = frozenset({"732"})
+KNOWN_RETRACTED_REF_PAIRS = frozenset({("181", "732")})
 
 
 def test_no_card_is_written_under_two_different_refs():
@@ -1084,9 +1095,27 @@ def test_no_card_is_written_under_two_different_refs():
     and it is deliberately the weaker half of the class, because the stronger half is unreachable
     from a checkout by construction.
 
+    THREE HONEST BOUNDS AND ONE SHARP INSTANCE OF ONE OF THEM — counted that way rather than as
+    four, because the instance is not independent and calling it a fourth bound would be this
+    file's own class of defect. A pair wrong the SAME way everywhere stays invisible; a card
+    mentioned exactly once has nothing to compare; a NEW site quoting the retracted pairing in
+    earnest reads as the retraction. The instance belongs to the second, VMCP-236 (797) turned it
+    from a false RED into a bound, and it is the price of no longer reddening on the correct pair:
+    a fabricated id written under a ref whose only other appearance
+    is the retracted pairing leaves that ref with a single claimant once the retraction is excised,
+    so it goes green. `VMCP-181 (500)` is that shape. A checkout cannot tell it from
+    `VMCP-181 (706)`, which is correct — the two differ only in a fact the tracker holds — so the
+    choice was which error to take, and a gate that reddens on correct prose is the one that gets
+    switched off. Recording ref 181's true owner in the ratchet WOULD separate them and is refused
+    for a reason this file cannot make an exception to: that would be a tracker fact, and the
+    paragraph above the regex says the tracker is unreachable from a checkout by construction.
+
     MUTATION-CHECKED, `__pycache__` deleted per round then `PYTHONDONTWRITEBYTECODE=1`, this test
-    as the selection, every round restored from a COPY with the restore confirmed by sha256 and
-    every mutation asserted to have APPLIED before its round ran. Control round: 0 failed.
+    as the selection, every plant asserted to be present before its round ran and every restore
+    diffed against a pristine copy. A plant goes into a TRACKED file OTHER than this one, and that
+    is measured rather than deduced from `_tracked_text_files` excluding SELF: the SAME string that
+    reddens the suite from another file measures 0 failed planted here, so a sweep run inside this
+    module would report a blind gate. Control round: 0 failed.
       * the live phantom this gate arrived with, put back (`VMCP-141 (629)` in
         test_measured_figure_anchors) -> 1 failed, naming both refs and the file of each
       * plant `VMCP-999 (630)` anywhere in the tree -> 1 failed, the id-side direction
@@ -1094,14 +1123,29 @@ def test_no_card_is_written_under_two_different_refs():
         id-keyed map would miss: 99999 is mentioned nowhere else, so nothing conflicts on the id
       * empty `KNOWN_RETRACTED_REF_PAIRS` -> 1 failed on `732`, i.e. the ratchet is load-bearing
         rather than decorative, and its one entry is the retraction it says it is
-      * the FALSE-RED PRICE, measured before landing rather than after: two conflicts across 297
-        pairs in the publishable tree, one a true catch and one the retraction. A gate that
-        reddens on correct prose gets switched off, so the number that matters is that one
+      * plant `VMCP-777 (732)`, a SECOND phantom on the ratcheted id -> 1 failed. Keyed by the id
+        this was 0 failed, so pair-keying STRENGTHENED the id side; it did not only relax the ref
+        side, and that asymmetry is why the round is recorded next to its opposite below
+      * plant the CORRECT pair `VMCP-181 (706)` -> 0 failed. Keyed by the id this was 1 failed,
+        on the one string `get_task(706)` hands back — the false red 797 exists to remove
+      * plant `VMCP-181 (500)` -> 0 failed, the bound named above, measured rather than argued.
+        Keyed by the id this was 1 failed, so the round pins the cost as well as the fix
+
+    FALSE-RED PRICE, re-derived on this tree rather than inherited from the landing that added the
+    gate: 303 pairs in the publishable tree at `8239512`, of which the ratchet excises 4 — the one
+    retracted pairing, in the four files the comment above names, re-derived here rather than
+    carried over — leaving ZERO conflicts in both directions. Keyed by the id it was zero too, so
+    the number did not move; what moved is what it costs to keep. Zero used to hold only while no
+    correct pair naming ref 181 was written down, and `VMCP-181 (706)` is the shape the rulebook
+    asks every agent to write. The same figure is now zero for a reason that does not depend on
+    what nobody has said yet.
     """
     by_id: dict[str, dict[str, list[str]]] = {}
     for name, body in _tracked_text_files():
         for match in _REF_PAIR.finditer(body):
             ref, card = match.group(1), match.group(2)
+            if (ref, card) in KNOWN_RETRACTED_REF_PAIRS:
+                continue
             by_id.setdefault(card, {}).setdefault(ref, []).append(name)
 
     assert by_id, (
@@ -1110,29 +1154,26 @@ def test_no_card_is_written_under_two_different_refs():
         "corpus broke or the citation idiom changed; neither is a reason to be green"
     )
 
-    conflicts = {
-        card: refs for card, refs in by_id.items()
-        if len(refs) > 1 and card not in KNOWN_RETRACTED_REF_PAIRS
-    }
+    conflicts = {card: refs for card, refs in by_id.items() if len(refs) > 1}
     assert not conflicts, (
         f"the same card id is written under two different `VMCP-N` refs: {conflicts}. The pairing "
         "is a bijection, so at least one of those sites is a COMPOSED ref — #660's defect, which "
         "does not look broken because it points at a different LIVE card. Ask `get_task(<id>)` "
         "which ref is real and fix the other; if the wrong one is being quoted deliberately as a "
-        "retraction, add the id to KNOWN_RETRACTED_REF_PAIRS with your reason in its comment"
+        "retraction, add that PAIR — `(ref, id)`, not the bare id — to KNOWN_RETRACTED_REF_PAIRS "
+        "with your reason in its comment, which excises exactly the one site and leaves every "
+        "other mention of both halves under this gate"
     )
 
     by_ref: dict[str, dict[str, list[str]]] = {}
     for card, refs in by_id.items():
         for ref, names in refs.items():
             by_ref.setdefault(ref, {})[card] = names
-    reused = {
-        ref: cards for ref, cards in by_ref.items()
-        if len(cards) > 1 and not set(cards) <= KNOWN_RETRACTED_REF_PAIRS
-    }
+    reused = {ref: cards for ref, cards in by_ref.items() if len(cards) > 1}
     assert not reused, (
         f"the same `VMCP-N` ref is written against two different card ids: {reused}. This is the "
         "direction an id-keyed map alone cannot see — a fabricated pair whose ID appears nowhere "
-        "else conflicts with nothing on the id side, and only the ref side notices. One of these "
-        "sites is a composed ref; `get_task` on each id says which"
+        "else conflicts with nothing on the id side, and only the ref side notices. Retracted "
+        "pairings are already excised, so at least one of these sites is a composed ref and "
+        "`get_task` on each id says which"
     )
