@@ -2286,7 +2286,12 @@ def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str) -> list[str]:
         they are the same path. On a case-insensitive filesystem (measured on macOS with
         `core.ignorecase=true`) a local ignored `out.png` under an incoming `out.PNG` IS
         reported — but under the INCOMING spelling, so the string handed to the human is not the
-        name their file had;
+        name their file had. That same filesystem used to make this key OVERSTATE, which is the
+        one direction everything else here errs against: an incoming commit carrying BOTH
+        spellings of a directory name had every dying object inside it named once per spelling
+        (measured, three objects came back as five names). VMCP-257 (859) closed it in
+        `_same_object_key` — read that docstring before touching the de-dup, because the two
+        obvious keys are each measured wrong in their own way;
       * A PRESENT KEY IS NOT A PROOF THAT THE LIST IS COMPLETE, and that is a SECOND reading
         direction rather than a restatement of the next entry. VMCP-246 (837) added a mechanism for
         it — the bisect above reports the askable paths and drops the unaskable ones beside them, so
@@ -2332,7 +2337,7 @@ def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str) -> list[str]:
         if os.path.isdir(os.path.join(root, p)) and not os.path.islink(os.path.join(root, p))
     ])
     present: list[str] = []
-    seen: set[str] = set()
+    seen: set[tuple | str] = set()
     for p in changed:
         # THE ANCESTOR QUESTION COMES FIRST, and asking it only when `lexists` said "absent" was
         # a bug — the independent second pass built it. `os.path.lexists` follows every component
@@ -2354,10 +2359,62 @@ def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str) -> list[str]:
         # incoming path under one dead ancestor names that same ancestor. Without this a commit
         # adding twenty files under `out/` would report `out` twenty times.
         for candidate in candidates:
-            if candidate not in seen:
-                seen.add(candidate)
+            key = _same_object_key(root, candidate)
+            if key not in seen:
+                seen.add(key)
                 present.append(candidate)
     return [p for p in _ignored_of(root, present) if not _is_reproducible_ignored(p)]
+
+
+def _same_object_key(root: Path, rel: str) -> tuple | str:
+    """A de-dup key for candidate paths that survives a CASE-INSENSITIVE checkout.
+
+    VMCP-257 (859). An incoming commit can carry TWO SPELLINGS of one name — `out` and `OUT` as
+    two blobs in one tree, which `git add` on a case-insensitive checkout would collapse but
+    `update-index --cacheinfo` plants happily. On this disk both spellings answer `os.path.isdir`,
+    `os.walk` walks each as its own directory, `os.path.relpath` is lexical and keeps whichever
+    spelling it was handed, and the caller used to de-dupe on the EXACT string — so every dying
+    object was named once PER SPELLING. Measured on macOS/APFS with `core.ignorecase = true`:
+    three objects on disk (a file, a symlink, and an unrelated `shot.png`) came back as FIVE names.
+
+    THAT DIRECTION IS THE WHOLE POINT. `overwritten_ignored` is read as a lower bound on the loss
+    — the filter and `_MAX_DIR_EXPANSION` both make it UNDERSTATE — and this was the one known road
+    on which it OVERSTATED. Two errors in opposite directions in one key are worse than one, and it
+    also undercut `_expand_if_directory`'s own reason for filtering out real subdirectories
+    ("Naming both would double-count the same bytes"), since the same bytes were double-counted
+    anyway by a road that filter never touched.
+
+    THE KEY IS COMPOSITE, and neither half would do on its own — both alternatives are measured
+    rather than argued. `os.path.normcase` is what the card proposed and it is a NO-OP on POSIX
+    (measured: it hands `OUT/a.txt` straight back), so it collapses nothing here. A bare
+    `(st_dev, st_ino)` does collapse the duplicate, and costs a name: two ignored HARDLINKS dying
+    in one merge came back as ONE name instead of two. Adding `rel.casefold()` keeps them apart
+    while still collapsing the case-duplicate, and buys a property neither half has — this key can
+    NEVER merge two DISTINCT objects on disk, because the inode forbids it. So on a case-SENSITIVE
+    filesystem, where `out/a.txt` and `OUT/a.txt` really are different files, it collapses nothing
+    at all, which is why the fix needs no platform test.
+
+    WHICH SPELLING SURVIVES is the first one the walk reached, exactly as it already was for exact
+    repeats, and it is an INCOMING spelling — the bound this function's own list already states
+    ("the string handed to the human is not the name their file had"). What is NOT closed: two
+    hardlinks whose names differ only in case would still collapse, which needs a case-sensitive
+    filesystem to build and errs in the direction the key errs in everywhere else.
+
+    Falls back to the exact string when `os.lstat` fails. Candidates reach here either from
+    `_doomed_ancestor` (which answers about a path it just stat-ed) or from a walk of this disk, so
+    a failure means a race, and behaving like the old code on it is the smallest possible answer.
+    `lstat`, not `stat`: a symlink must be keyed as ITSELF, and a DANGLING one — which `stat`
+    cannot see at all — is a real casualty with a real inode. That choice is UNPINNED and said so
+    rather than assumed: swapping it kills no test (control 0 failed; that round 0 failed), and it
+    is hard to kill by construction — on a dangling link `stat` raises and the fallback returns the
+    exact string, which is the pre-859 answer for that one path, while everywhere `stat` WOULD
+    resolve onto a target's inode the `casefold` conjunct still keeps the names apart.
+    """
+    try:
+        st = os.lstat(os.path.join(root, rel))
+    except OSError:
+        return rel
+    return (st.st_dev, st.st_ino, rel.casefold())
 
 
 def _tracked_changes(root: Path) -> set[str] | None:

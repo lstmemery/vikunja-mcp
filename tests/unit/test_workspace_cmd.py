@@ -4472,9 +4472,17 @@ def test_a_REAL_subdirectory_inside_the_expansion_is_not_named_only_its_files_ar
     as the size of a loss, and a real subdirectory is not a path that dies — its FILES are, and
     they are named individually. Naming both would double-count the same bytes.
 
+    THAT LAST SENTENCE WAS TRUE OF THIS FILTER AND FALSE OF THE KEY for as long as the de-dup was
+    an exact-string one: VMCP-257 (859) measured the same bytes being double-counted anyway, by a
+    road this filter never touches — an incoming commit carrying two SPELLINGS of one directory
+    name on a case-insensitive checkout named every object inside it once per spelling. So the
+    filter's stated goal was not actually being met end to end. It is now, in `_same_object_key`;
+    the filter is still the right thing here, and the two are separate roads to the same property.
+
     `out/sub` is genuinely ignored here (the rule is `out/`, so `check-ignore` echoes it), which is
     what makes the mutation's output plausible rather than an obvious error, and is why nothing
-    downstream would have caught it either."""
+    downstream would have caught it either.
+    """
     _api, wf = tracker
     _ignoring(repo, "out/")
     (repo / "out").mkdir()
@@ -4490,6 +4498,145 @@ def test_a_REAL_subdirectory_inside_the_expansion_is_not_named_only_its_files_ar
     assert sorted(state["overwritten_ignored"]) == ["out/a.txt", "out/sub/f.txt"], state
     assert "out/sub" not in state["overwritten_ignored"], \
         "the directory itself is not a path that dies; its files are, and they are named"
+
+
+# VMCP-257 (859): THE DE-DUP KEY. MUTATION SWEEP, one selection throughout — this file with
+# `-k "two_spellings or HARDLINKS or real_subdirectory or NESTED_symlink or doomed_ancestor"`,
+# no `-q`, `collected 205 items` / `8 selected` / 0 `ERROR ` lines in every round, each round read
+# by counting `FAILED ` and `ERROR ` lines separately; control 0 failed:
+#   * the key back to the EXACT STRING (the pre-859 shape) ......... control 0 failed; 1 failed
+#   * the BARE `(st_dev, st_ino)` key, no casefold conjunct ........ control 0 failed; 1 failed
+#   * `os.path.normcase` — the card's own option 1 ................. control 0 failed; 1 failed
+#   * `os.lstat` -> `os.stat` ...................................... control 0 failed; 0 failed
+# Rows one and three are the same test failing for opposite reasons and together they are the
+# argument for the shape chosen: row one says the duplicate is real and the key closes it, row
+# three says the fix the card ASKED for does not — `normcase` is a no-op on POSIX. Row two is why
+# the key is composite rather than the obvious inode pair, and it is the half that runs on CI.
+#
+# ROW FOUR IS AN HONEST REMAINDER, not a hole to paper over: `lstat` vs `stat` kills nothing here,
+# and it is hard to kill by construction rather than for want of a test. A dangling symlink makes
+# `stat` raise, which falls back to the exact string — the pre-859 behaviour for that ONE path, so
+# no report changes; and where `stat` would resolve a symlink onto its target's inode, the
+# `casefold` conjunct still keeps the two names apart. The nearest live instance of this class is
+# `lexists` vs `exists` one function up, which is filed as VMCP-268 (884) rather than smuggled in
+# here.
+
+def _case_insensitive(path: Path) -> bool:
+    """Ask the FILESYSTEM, never the platform: `sys.platform` is a proxy and a wrong one — an
+    APFS volume can be created case-SENSITIVE, and a Linux checkout on a mounted share can be
+    case-insensitive. `core.ignorecase` is git's own answer to this same question, taken at
+    clone time from the same place."""
+    probe = path / "VMCP859CaseProbe"
+    probe.write_text("x\n")
+    try:
+        return (path / "vmcp859caseprobe").exists()
+    finally:
+        probe.unlink()
+
+
+def _land_two_spellings(tmp_path: Path, name: str, spellings: tuple[str, ...],
+                        extra: tuple[str, ...] = ()) -> str:
+    """Land ONE commit carrying several spellings of one name as separate blobs.
+
+    Through `hash-object` + `update-index --cacheinfo` + `commit-tree` rather than `git add`,
+    because on a case-insensitive checkout `git add` collapses the two into one entry — the sibling
+    would silently build a tree that does not have the shape under test. `core.ignorecase=false`
+    on the sibling for the same reason.
+    """
+    other = tmp_path / f"sibling-{name}"
+    subprocess.run(["git", "clone", "-q", str(tmp_path / "origin.git"), str(other)],
+                   check=True, capture_output=True)
+    _git(other, "config", "user.email", "sibling@example.com")
+    _git(other, "config", "user.name", "Sibling")
+    _git(other, "config", "core.ignorecase", "false")
+    blob = subprocess.run(["git", "hash-object", "-w", "--stdin"], cwd=other,
+                          input="UPSTREAM\n", capture_output=True, text=True,
+                          check=True).stdout.strip()
+    for rel in (*spellings, *extra):
+        _git(other, "update-index", "--add", "--cacheinfo", f"100644,{blob},{rel}")
+    tree = _git(other, "write-tree")
+    commit = _git(other, "commit-tree", tree, "-p", "HEAD", "-m", f"sibling: {name}")
+    _git(other, "push", "-q", "origin", f"{commit}:refs/heads/main")
+    return commit
+
+
+def test_two_spellings_of_one_incoming_name_do_not_double_count_the_same_bytes(repo, tracker,
+                                                                               tmp_path):
+    """VMCP-257 (859). The ONE road on which `overwritten_ignored` used to OVERSTATE the loss.
+
+    An incoming commit can carry `out` and `OUT` as two blobs in one tree. On a case-insensitive
+    checkout both spellings answer `os.path.isdir`, `os.walk` walks each as its own directory,
+    `os.path.relpath` keeps whichever spelling it was handed, and the caller de-duped on the exact
+    string — so every dying object was named once PER SPELLING. Measured before the fix: three
+    objects on disk came back as five names (`OUT/a.txt`, `OUT/to_dir`, `out/a.txt`, `out/to_dir`
+    and the unrelated `shot.png`).
+
+    THE DIRECTION IS THE POINT. Everything else about this key makes it UNDERSTATE — the
+    regenerable-name filter, `_MAX_DIR_EXPANSION`, every give-up — and it is documented as a lower
+    bound on the loss. Two errors in opposite directions in one key are worse than one.
+
+    SKIPPED, NOT FAKED, on a case-sensitive filesystem, which is where CI runs. There `out` and
+    `OUT` really are two different directories and there is no duplicate to collapse; asserting
+    anything about a shape the disk cannot hold would pin the harness rather than the code. The
+    property that carries the fix on every filesystem is the hardlink test below, which does run
+    everywhere."""
+    if not _case_insensitive(tmp_path):
+        pytest.skip("the duplicate only exists where the filesystem folds case")
+    _api, wf = tracker
+    _ignoring(repo, "out/", "*.png")
+    outside = tmp_path / "outside859"
+    outside.mkdir()
+    (outside / "target.txt").write_text("a file OUTSIDE the checkout\n")
+    (repo / "out").mkdir()
+    (repo / "out" / "a.txt").write_text("the human's own note\n")
+    (repo / "out" / "to_dir").symlink_to(outside)
+    (repo / "shot.png").write_bytes(b"\x89PNG an unrelated ignored casualty")
+    assert _git(repo, "status", "--porcelain") == "", "all three are ignored, as always"
+
+    _land_two_spellings(tmp_path, "spell", ("out", "OUT"), extra=("shot.png",))
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    named = state["overwritten_ignored"]
+    assert len(named) == 3, ("three objects die on this disk — one file, one symlink and one "
+                             "unrelated png — so three names", named)
+    assert sorted(n.lower() for n in named) == ["out/a.txt", "out/to_dir", "shot.png"], named
+
+
+def test_two_ignored_HARDLINKS_dying_together_are_still_named_separately(repo, tracker, tmp_path):
+    """The COST of the fix above, measured and then bought off — and the reason the de-dup key is
+    composite instead of the obvious `(st_dev, st_ino)` (VMCP-257, 859).
+
+    Two hardlinks are ONE inode and TWO names, and both names go when the directory holding them
+    does. A bare inode key collapses them: measured, this exact stand answered `['out/b.txt']`
+    where it should answer both. `rel.casefold()` in the key keeps them apart while still folding
+    the case-duplicate, and it buys the property neither half has on its own — the key can never
+    merge two DISTINCT objects, because the inode forbids that, so on a case-sensitive filesystem
+    it collapses nothing at all.
+
+    Runs EVERYWHERE, unlike its neighbour: hardlinks need no help from the filesystem's case
+    folding, so this is the half of the pin CI actually executes.
+
+    What is still open and named rather than hidden: two hardlinks whose names differ only in CASE
+    would still collapse. Building that needs a case-sensitive filesystem, and it errs in the
+    direction this key errs in everywhere else — understating."""
+    _api, wf = tracker
+    _ignoring(repo, "out/")
+    (repo / "out").mkdir()
+    (repo / "out" / "a.txt").write_text("the human's own note\n")
+    os.link(repo / "out" / "a.txt", repo / "out" / "b.txt")
+    assert (repo / "out" / "a.txt").stat().st_ino == (repo / "out" / "b.txt").stat().st_ino
+
+    _land_on_origin(tmp_path, "hardlink", {"out": "upstream takes that name\n"})
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert sorted(state["overwritten_ignored"]) == ["out/a.txt", "out/b.txt"], (
+        "one inode, two names, two casualties — the de-dup key must not confuse 'the same object' "
+        "with 'the same path'", state
+    )
 
 
 def test_the_walk_names_a_nested_symlinked_directory_and_returns_nothing_beneath_it(tmp_path):
