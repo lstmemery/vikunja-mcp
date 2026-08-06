@@ -1995,8 +1995,14 @@ def _publishable_copies(root: Path, *, prefix: int | None = None):
             # be read as a stage. Both reads take it — a bare SIZE read exits 128 here and skips
             # the path; a bare BLOB read exits 128 into `if blob.returncode == 0` one line down.
             # `./` also makes the read CWD-RELATIVE, and `cwd=root` is what both this read and the
-            # `ls-files` above are handed, so the two halves agree at any `root` inside the WORKING
-            # TREE — top or not. VMCP-243 (820) wrote that BACKWARDS, as a precondition the
+            # `ls-files` above are handed, so the two halves agree at any `root` inside the working
+            # tree THE READ RESOLVES AGAINST — top or not. That qualifier is VMCP-255 (855) and it
+            # is not pedantry: unqualified, the sentence is FALSE in the ordinary physical reading,
+            # because `.git` sits inside the working tree and is exactly where the two commands
+            # disagree — `ls-files` answers, `:./` refuses every path. The docstring below pays for
+            # the qualifier with three constructed rows and owns them; #842 narrowed it THERE and
+            # left this site unqualified, which is the two-site divergence #842 itself was filed
+            # about. VMCP-243 (820) wrote that BACKWARDS, as a precondition the
             # FIX depends on; the precondition is the BARE form's, since a bare `:<rel>` resolves
             # from the repository ROOT, and `./` REMOVES it. Off the top the bare form also goes
             # wrong the same TWO ways it goes wrong on a stage, not just by missing. Both
@@ -3505,14 +3511,18 @@ def test_a_path_whose_FIRST_COMPONENT_looks_like_a_merge_stage_is_not_a_silent_m
     wrong-BYTES branch is the narrower one, and it was built rather than inferred: the namesake has
     to be in the index at the stage named AND its object has to be a BLOB. Give the root `x.json` a
     live `UU` and that same bare `:2:x.json` exits 0 on THAT path's stage-2 bytes; make the root
-    twin a SYMLINK (mode 120000) and bare exits 0 on ten bytes — the link's target PATH — no shape
+    twin a SYMLINK (mode 120000) and bare exits 0 on the length of the link's target PATH, which is
+    what a symlink blob holds — ten bytes on that stand, a fact about the name chosen there and not
+    about symlinks, so read the mechanism and not the digit — no shape
     scan flags, so the credential hides. A GITLINK (mode 160000) is the counterexample to the tidy
     reading of that rule: in the index at stage 0, a blob it is not, so it MISSES on a fourth
     message again, `could not get object info` — as does a tracked namesake whose loose object has
     been deleted. And the condition is NECESSARY, never sufficient: a tracked but EMPTY root
-    namesake resolves perfectly (rc=0, 0 B) and still yields nothing, killed one line down by
-    `elif size:` rather than by the revspec at all. So the two branches are not a dichotomy —
-    "resolves, and yields nothing" is a third outcome.
+    namesake resolves perfectly (rc=0, 0 B) and still yields nothing, killed by the walk's own
+    `elif size:` rather than by the revspec at all. The position that stood here — "one line down"
+    — was wrong (it is three below the `size = int(...)` that feeds it) and is dropped rather than
+    re-numbered, since a line count inside prose moves with the next edit above it. So the two
+    branches are not a dichotomy — "resolves, and yields nothing" is a third outcome.
 
     UNREACHABLE HERE — and that is counted now rather than asserted, since a count in this very
     clause is what went wrong twice. `_publishable_copies` has FOUR direct call sites, not the
