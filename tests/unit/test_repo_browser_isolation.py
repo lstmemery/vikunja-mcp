@@ -798,9 +798,33 @@ def test_gitignore_still_lets_the_settings_file_through():
     `.gitignore` hides `.claude/*` (machine-local state: settings.local.json, worktrees/,
     mailbox/, the scheduler's lock) and re-includes this one shared file. The trap the file's
     own comment records is that the blanket spelling `.claude/` makes the re-inclusion
-    IMPOSSIBLE — git does not descend into an excluded directory, so a later `!` line can
-    never fire. Both spellings look equally reasonable in a diff, and the `!` line survives
-    the swap untouched, so a pin that greps for the `!` line and stops is a false green.
+    IMPOSSIBLE — git cannot re-include a file whose PARENT DIRECTORY is excluded, so the
+    directory rule wins the pattern contest and the `!` line below it never fires. Both
+    spellings look equally reasonable in a diff, and the `!` line survives the swap untouched,
+    so a pin that greps for the `!` line and stops is a false green.
+
+    THAT REASON WAS WRONG UNTIL VMCP-264 (874), here, in the assertion message below and in
+    `.gitignore` itself, and the wrong one is the tempting one: all three said git NEVER
+    DESCENDS into an excluded directory. Measured on git 2.50.1 (Apple Git-155), it does —
+    whenever the index holds a path under it. An ignored `d/` holding three ignored files, an
+    ignored subdirectory and one TRACKED `d/anchor.txt` is reported by `git status --porcelain
+    --ignored` file by file, four entries; drop the tracked file and the same tree collapses to
+    one `d/`. The SPELLING does not enter into that at all — `d/` and `d/*` give the same four
+    entries with the anchor and the same single entry without it — so what decides the walk is
+    a tracked path in the index, not the rule's shape. (VMCP-249 (840) states the same fact
+    from the other side, about which entries a `removed_ignored` list can name.) What the
+    spelling really decides is the PATTERN contest, which is what the second assertion below
+    already reads out of git: `d/` plus `!d/keep.txt` answers `.gitignore:1:d/` and a plain
+    `git add d/keep.txt` is refused, leaving the index empty; change one character to `d/*` and
+    the same negation answers `.gitignore:2:!d/keep.txt`, the add succeeds and the file is
+    staged. On this repository's own rules the pair reads `.claude/settings.json` ->
+    `!.claude/settings.json` and `.claude/settings.local.json` -> `.claude/*`.
+
+    NO ASSERTION WAS ADDED FOR THAT, deliberately, and the card asking for the correction asked
+    for the decision too. `_ignore_rule` IS `git check-ignore -v`, so the pattern-level fact is
+    what the second assertion below already states — it names the rule git applied and where it
+    came from — and the blanket-spelling round in the sweep below already turns it red. Only
+    the EXPLANATION was false, in three places, and only that is changed.
 
     Hence assertions of three different kinds: the negation is still WRITTEN (deleting it and
     the blanket together would leave the file deliverable but no longer deliberately so), git
@@ -828,7 +852,12 @@ def test_gitignore_still_lets_the_settings_file_through():
     local-state provenance (and see `_ignore_rule`: without the source this round passed);
     delete BOTH lines -> FAIL on provenance, because no rule in this repo decides the settings
     file's fate any more; respell the negation as `!/.claude/settings.json` -> FAIL on the
-    literal; rewrite the explanatory comment above the rules -> PASS.
+    literal; rewrite the explanatory comment above the rules -> PASS. Two of those were RE-RUN
+    numerically on the corrected prose for VMCP-264 (874) — this test alone, `collected 1` in
+    every round, `-q` dropped, `FAILED `/`ERROR ` lines counted separately, `.gitignore` restored
+    from a copy and confirmed sha256-identical: control 0 failed, 0 errors; the blanket spelling
+    with the `!` line kept 1 failed; the negation deleted 1 failed. The last round of the list
+    above is why that card changed the comment and not the rules, and it stays a PASS.
     """
     gitignore = REPO_ROOT / ".gitignore"
     assert gitignore.is_file(), ".gitignore is gone"
@@ -836,9 +865,9 @@ def test_gitignore_still_lets_the_settings_file_through():
     ignored, source, pattern = _ignore_rule(SETTINGS_PATH)
     assert not ignored, \
         f"git excludes {SETTINGS_PATH}: the rule it applied is {pattern!r} from {source}. " \
-        "Either the re-inclusion is gone, or `.claude/*` became a blanket `.claude/` — git " \
-        "never descends into an excluded directory, so a `!` line below one can never fire " \
-        "(the comment in .gitignore says exactly this)"
+        "Either the re-inclusion is gone, or `.claude/*` became a blanket `.claude/` — a file " \
+        "whose PARENT DIRECTORY is excluded cannot be re-included, so the directory rule wins " \
+        "and the `!` line below it never fires (the comment in .gitignore says exactly this)"
     assert source == ".gitignore" and (pattern or "").startswith("!"), \
         f"{SETTINGS_PATH} gets through by accident, not by decision: the rule git actually " \
         f"applied is {pattern!r} from {source} — this repo's .gitignore must be what " \
