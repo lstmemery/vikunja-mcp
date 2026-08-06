@@ -2720,19 +2720,47 @@ def sync_main_checkout(root: Path) -> dict | None:
         # `_partial_apply_reason`, whose first version conflated them (VMCP-252). None here means
         # "no answer" from either snapshot; the set itself is what git says NOW.
         tracked_after: set[str] | None = None
+        # GUARDED EACH ON ITS OWN, exactly like the three before-merge snapshots above and for the
+        # reason stated there — one of them failing must not discard what the other already knows.
+        # Here it is worth MORE, not less: an escape from this branch takes the whole state dict
+        # with it, `overwritten_ignored` included, and that was computed BEFORE the merge on the
+        # one branch where a human most needs to know what got written halfway (VMCP-258, 860).
+        # Reachable rather than theoretical: `_tracked_changes` runs `git diff-index` through
+        # `_run_git`, which RAISES `WorkspaceError` on `_GIT_TIMEOUT`. Same rule, same words: a
+        # diagnostic may cost the report, never the fast-forward.
         if tracked_before is not None:
-            tracked_after = _tracked_changes(root)
+            try:
+                tracked_after = _tracked_changes(root)
+            except Exception:                       # noqa: BLE001 — a diagnostic, never a gate
+                tracked_after = None
             if tracked_after is not None:
                 half = sorted(tracked_after - tracked_before)
         over: list[str] = []
+        # `prints_answered`, not `prints_before is not None`, and the distinction is what the guard
+        # COSTS if it is added carelessly: with the after-call able to give up, "I took a before
+        # snapshot" stops implying "I compared". `_fingerprints` swallows `OSError` per path, so
+        # this branch is far less reachable than its neighbour — it is here because the pair, not
+        # the call, is what the report below is allowed to speak for.
+        prints_answered = False
         if prints_before is not None:
-            prints_after = _fingerprints(root, doomed)
-            over = [p for p in doomed if prints_after.get(p) != prints_before.get(p)]
+            try:
+                prints_after: dict[str, tuple | None] | None = _fingerprints(root, doomed)
+            except Exception:                       # noqa: BLE001 — a diagnostic, never a gate
+                prints_after = None
+            if prints_after is not None:
+                prints_answered = True
+                over = [p for p in doomed if prints_after.get(p) != prints_before.get(p)]
         if not half and not over:
             # "Found nothing" is not "nothing happened", and when BOTH probes were unavailable it
             # is not even that. Saying so is the whole subject of this card: a report that borrows
             # the reassurance of a check it did not run is how #806 shipped its own overclaim.
-            looked = tracked_before is not None or prints_before is not None
+            # The PAIR, never one end of it: a before-snapshot with no after-snapshot compared
+            # nothing, and saying "which is what was CHECKED" over that state would be the exact
+            # kind of borrowed reassurance the paragraph below names. Reading `tracked_before`
+            # here was correct until the two after-calls could give up (VMCP-258, 860) and is not
+            # any more; `tracked_after is not None` already implies its own before-half, since it
+            # is only assigned inside that branch.
+            looked = tracked_after is not None or prints_answered
             found = ("nothing half-written was found afterwards — which is what was CHECKED, not a "
                      "promise about the checkout"
                      if looked else

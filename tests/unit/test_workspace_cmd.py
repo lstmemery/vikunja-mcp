@@ -5533,6 +5533,134 @@ def test_a_failing_half_apply_check_costs_the_report_and_never_the_verdict(repo,
     )
 
 
+# VMCP-258 (860): THE TWO AFTER-REFUSAL DIAGNOSTICS ARE GUARDED TOO, EACH ON ITS OWN.
+#
+# MUTATION SWEEP. One selection throughout — `tests/unit/test_workspace_cmd.py`, whole file, no
+# `-q` — `collected 203 items` and `0` ERROR lines in EVERY round, each round read by counting
+# lines that begin `FAILED ` and lines that begin `ERROR ` separately; control 0 failed:
+#   * the after-refusal `_tracked_changes` guard removed ....... control 0 failed; 2 failed
+#   * the after-refusal `_fingerprints` guard removed .......... control 0 failed; 2 failed
+#   * `looked` read off the BEFORE snapshots again ............. control 0 failed; 1 failed
+#   * BOTH after-refusal guards removed ....................... control 0 failed; 3 failed
+# The third row is the one worth reading: it is not a guard at all, it is the guard's COST, and
+# without that row the fix would trade a lost report for a FALSE one. Rows one and two kill two
+# tests each rather than one because the both-probes-died test reaches its state through either
+# guard; the paired single-guard tests are what separate them.
+#
+# TWO NOTES ON THE STAND ITSELF, both worth more than the numbers. The monkeypatch has to let the
+# FIRST call through — a `_tracked_changes` that throws on every call kills the BEFORE snapshot,
+# after which `if tracked_before is not None` skips the after-call entirely and the unguarded line
+# is never executed. That is exactly why the pre-existing
+# `test_a_failing_half_apply_check_costs_the_report_and_never_the_verdict` was green on the defect.
+# And the sweep script's own round LABEL was written with `-m`-style double quotes around a
+# backticked identifier, so the shell ate it (`line 77: looked: command not found`) and the label
+# printed short — CLAUDE.md's commit-message hazard, in a place nobody thinks to apply it. The
+# label is not the measurement, so the round stands; the lesson is that the rule is about double
+# quotes, not about commits.
+
+def _real_once_then_raises(monkeypatch, name, exc):
+    """Let the BEFORE-merge snapshot succeed and blow up the AFTER-refusal one.
+
+    The whole of VMCP-258 (860) lives in that asymmetry, and it is why the pre-existing
+    `test_a_failing_half_apply_check_costs_the_report_and_never_the_verdict` cannot reach it: a
+    monkeypatch that throws on EVERY call kills the before-snapshot, after which the caller's own
+    `if <before> is not None` skips the after-call entirely, so the unguarded line is never run.
+    """
+    real = getattr(workspace_cmd, name)
+    seen: list[int] = []
+
+    def _wrapper(*a, **k):
+        seen.append(1)
+        if len(seen) == 1:
+            return real(*a, **k)
+        raise exc
+
+    monkeypatch.setattr(workspace_cmd, name, _wrapper)
+    return seen
+
+
+def test_a_tracked_probe_dying_AFTER_the_refusal_no_longer_costs_the_whole_report(
+        repo, tracker, tmp_path, monkeypatch):
+    """VMCP-258 (860). `_tracked_changes` runs `git diff-index` through `_run_git`, which RAISES
+    `WorkspaceError` on `_GIT_TIMEOUT` — so this is a slow or locked repository, not a thought
+    experiment. Unguarded, that exception leaves `sync_main_checkout` altogether and takes the
+    ENTIRE state dict with it, including the `overwritten_ignored` computed BEFORE the merge;
+    `gc_workspaces` then reports `MAIN_SYNC_ERROR` and the reaper survives, so the cost is the
+    REPORT, on the one branch where a human most needs it.
+
+    What is asserted is what SURVIVES: the ignored casualty is still named, the code is still the
+    partial-apply one, and the key whose probe died is ABSENT rather than empty — the same
+    one-way reading the rest of this path is built on."""
+    _api, wf = tracker
+    _half_applying_stand(repo, tmp_path)
+    seen = _real_once_then_raises(monkeypatch, "_tracked_changes",
+                                  WorkspaceError("git diff-index … timed out after 600s"))
+
+    with _unwritable_dir(repo / "ro"):
+        res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert len(seen) == 2, "the after-refusal call really was reached"
+    state = res["main_checkout"]
+    assert state["code"] == workspace_cmd.MAIN_SYNC_PARTIAL, state
+    assert state["overwritten_ignored"] == ["shot.png"], (
+        "the pre-merge probe's answer must survive a sibling diagnostic's death — that is the "
+        "rule the before-merge snapshots already state and these two did not follow"
+    )
+    assert "half_applied" not in state, state
+    assert "could NOT be checked" in state["reason"], state["reason"]
+    assert (repo / "shot.png").read_text() == "UPSTREAM\n", "the loss the report is about is real"
+
+
+def test_a_fingerprint_probe_dying_AFTER_the_refusal_no_longer_costs_the_whole_report(
+        repo, tracker, tmp_path, monkeypatch):
+    """The other half of VMCP-258 (860), and the mirror image of the test above: here the TRACKED
+    half survives and the ignored one is lost. `_fingerprints` swallows `OSError` per path, so its
+    own reachability is poor — it is guarded because the RULE is per-call, not because this input
+    is likely, and because a guard on one of two symmetrical calls invites the next reader to
+    conclude the other was deliberate."""
+    _api, wf = tracker
+    _half_applying_stand(repo, tmp_path)
+    seen = _real_once_then_raises(monkeypatch, "_fingerprints", RuntimeError("lstat fell over"))
+
+    with _unwritable_dir(repo / "ro"):
+        res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert len(seen) == 2, "the after-refusal call really was reached"
+    state = res["main_checkout"]
+    assert state["code"] == workspace_cmd.MAIN_SYNC_PARTIAL, state
+    assert state["half_applied"] == ["aaa.txt"], state
+    assert "overwritten_ignored" not in state, state
+
+
+def test_when_BOTH_after_probes_die_the_refusal_says_it_could_not_look(
+        repo, tracker, tmp_path, monkeypatch):
+    """The guard's own COST, paid in the same card that added it. `looked` used to be read off the
+    BEFORE snapshots, which was correct while the after-calls could not give up: a before-snapshot
+    then implied a comparison. Guard them and it stops implying one — this checkout really is
+    half-applied, both after-probes died, and the old reading would have printed "nothing
+    half-written was found afterwards — which is what was CHECKED" over it.
+
+    That is the exact borrowed reassurance #806 shipped and #835 was filed for, so the fix is not
+    optional decoration on 860: without it the guard TRADES a lost report for a false one, which
+    is worse."""
+    _api, wf = tracker
+    _half_applying_stand(repo, tmp_path)
+    _real_once_then_raises(monkeypatch, "_tracked_changes", RuntimeError("diff-index fell over"))
+    _real_once_then_raises(monkeypatch, "_fingerprints", RuntimeError("lstat fell over"))
+
+    with _unwritable_dir(repo / "ro"):
+        res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["code"] == workspace_cmd.MAIN_SYNC_BLOCKED, state
+    assert "could NOT be checked" in state["reason"], state["reason"]
+    assert "which is what was CHECKED" not in state["reason"], (
+        "a before-snapshot with no after-snapshot compared NOTHING; saying otherwise over a "
+        "genuinely half-applied checkout is the one outcome worse than saying nothing"
+    )
+    assert (repo / "aaa.txt").read_text() == "v2\n", "the checkout really is half-applied"
+
+
 def test_the_partial_apply_probes_do_not_REFRESH_a_refused_checkouts_index(repo, tracker, tmp_path):
     """THE REGRESSION THIS CARD SHIPPED FOR ONE ROUND, and the stand its own predecessor could not
     build. `test_the_probe_leaves_the_index_of_a_REFUSED_checkout_untouched` asks the same question
