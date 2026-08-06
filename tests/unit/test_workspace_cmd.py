@@ -3465,11 +3465,15 @@ def test_the_report_is_capped_but_the_count_is_not(repo):
     is also where the module comment stopped calling this number the "TRUE total".
 
     THIS INPUT IS ALSO THE COUNTEREXAMPLE to that round's other universal, and it needed no new
-    code: 57 loose ignored files in the worktree ROOT reach the cap, so content inside a single
-    directory does reach it. What decides whether a directory becomes ONE entry is whether git
-    DESCENDED into it, not whether it is ignored, and the root is never collapsed because the scan
-    STARTS there — measured, that holds even on a worktree whose HEAD tree is EMPTY, so it is not
-    about the root holding tracked files.
+    code: 57 loose ignored files in the worktree ROOT reach the cap. Read that the way the module
+    comment does, which hedges where an earlier draft of THIS docstring stated it flat: it refutes
+    "no amount of content inside a single directory gets there" only on the BROAD reading of "a
+    single directory", the root being one; on the narrow reading, where the antecedent is an ignored
+    directory that collapses to ONE entry, the root is not such a directory at all and what refutes
+    the universal is the tracked-anchor case the module comment builds. What decides whether a
+    directory becomes ONE entry is whether git DESCENDED into it, not whether it is ignored, and the
+    root is never collapsed because the scan STARTS there — measured, that holds even on a worktree
+    whose HEAD tree is EMPTY, so it is not about the root holding tracked files.
     """
     _ignoring(repo, "*.png")
     path = Path(ensure_workspace(42, cwd=repo)["path"])
@@ -3494,7 +3498,10 @@ def test_the_truncated_count_is_entries_not_the_size_of_the_loss(repo):
 
     What disagreed was 3 shipped texts against 1, not one file against another — and round 1 of
     VMCP-249 (840) wrote 2, undercounting the docstring of the function IMMEDIATELY ABOVE this one
-    in this same file. Re-read in the parent commit: the module comment said TRUE total, SKILL.md
+    in this same file. Re-read at `469db93` — round 1's OWN parent, which is where all three sit,
+    and NOT this commit's parent, where round 1 had already fixed two of them; round 2 wrote "the
+    parent commit" and a reader of the shipped file has no cue to read that as anything but
+    `HEAD~1`. There the module comment said TRUE total, SKILL.md
     said the same in Russian, and `test_the_report_is_capped_but_the_count_is_not` said truncation
     must not hide the SIZE of the loss. Those three stood against ONE correct SKILL.md paragraph,
     88 lines earlier than the wrong one and counting from the line that names THIS key, which
@@ -3502,9 +3509,16 @@ def test_the_truncated_count_is_entries_not_the_size_of_the_loss(repo):
     contradicted itself, a cross-reference vouched for a text saying the opposite, and the count of
     disagreeing texts repeated this card's own defect in miniature. Counting the neighbouring key's
     docstring as well makes it 4 against 1. The neighbour is named by POSITION rather than by a line
-    distance on purpose: round 1's 88 is exact and re-derivable, but the review that bounced it put
-    the neighbour "40 lines" away and that one does not reproduce — measured in the round-1 tree,
-    the two are 34 lines apart function to function. Position cannot go stale; a distance can.
+    distance on purpose, and this pair is why: it has produced THREE numbers, no two of them the
+    same measurement. Round 1's 88 for the SKILL.md pair is exact and re-derivable. The review that
+    bounced round 1 put this neighbour "40 lines" away, which is not what its own tree said —
+    measured at `7339e45`, the two `def` lines are 3447 and 3473, 26 apart. Round 2 then answered
+    with "34 lines apart function to function", where the NUMBER is real and the LABEL is not: 34
+    is that neighbour's `def` to the PHRASE being corrected, a different pair. And measured at
+    `211c766` the two `def` lines ARE 40 apart — the review's number arriving true at a tree it was
+    never reading, which is the hazard in one line. Correcting a stale distance with a mislabelled
+    one is this card's own defect one size down, so it is retired rather than re-fitted. Position
+    cannot go stale; a distance can.
 
     Three shapes at once: a REPRODUCIBLE ignored directory holding a hand-authored file (100
     files, one git entry, filtered away entirely), a NON-reproducible ignored directory (30 files,

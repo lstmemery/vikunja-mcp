@@ -980,7 +980,9 @@ _REPRODUCIBLE_IGNORED_SUFFIXES = (".pyc", ".pyo")
 # **What the cap bounds is the NUMBER of names and NOT the size of the line, so it does not by
 # itself hold the payload under that read** — measured for VMCP-249 (840): 50 names, the cap's own
 # maximum, of 800 characters each are 40,000 characters of NAMES, a 40,200-byte JSON array on their
-# own, against the 25,088 bytes of the >24.5 KiB read cited above. **The NAMES are the figure on
+# own, against the 25,088 bytes that ">24.5 KiB" is the FLOOR of — that read's true size is not
+# recorded here, so this comparison holds a fortiori and 25,088 is a threshold, not the read. **The
+# NAMES are the figure on
 # purpose, and round 1 of that card wrote the WHOLE payload's total instead (40,440 bytes), which is
 # not a property of this code at all**: the payload carries `path`, so the total moves with the
 # length of whatever temp directory the stand used — measured, the same content under two temp roots
@@ -993,8 +995,8 @@ _REPRODUCIBLE_IGNORED_SUFFIXES = (".pyc", ".pyo")
 #
 # Past the cap the entry also carries `removed_ignored_truncated`, so the COUNT survives even when
 # the names do not — and what that count IS is `len(destroyed)`: the length of the list AFTER the
-# filter above and AFTER whatever collapse git applied (a directory it did not descend into is ONE
-# entry, and which those are is the paragraph below), taken before the
+# filter above and AFTER whatever collapse git applied (a directory THIS CALL's `git status` did not
+# descend into is ONE entry, and which those are is the paragraph below), taken before the
 # cap. **It is NOT the size of the loss, and calling it the "TRUE total" here was wrong** (VMCP-249
 # again, which settled it by construction rather than by preferring a wording): a tree holding
 # `.venv/` with 100 files (ONE entry, filtered away), `.playwright-mcp/840/` with 30 (ONE entry, and
@@ -1025,14 +1027,24 @@ _REPRODUCIBLE_IGNORED_SUFFIXES = (".pyc", ".pyo")
 # file falls under exactly one entry of the post-filter list — and an independent pass broke that
 # lemma on round 1's own set in one construction: 50 loose `*.png` at the root plus an untracked
 # ignored directory of 30 sorting past the cap, where all 50 PRINTED entries stand for exactly one
-# file each, nothing is filtered, and the count is 51 against a loss of 80. The same pass reports
-# two shapes that break the lemma in `git status` outright — ignored files inside a submodule, and
-# inside a directory git cannot read — both of which `release_workspace` RAISES on rather than
-# reporting, so neither reaches this key; that is its measurement, not one re-built here. So no
+# file each, nothing is filtered, and the count is 51 against a loss of 80. Two further shapes break
+# the lemma in `git status` outright, and **round 2 wrote that `release_workspace` RAISES on BOTH so
+# that neither reaches this key — which is true of only ONE of them** (VMCP-249 round 3, built end
+# to end rather than inherited). A directory git cannot read: `status` warns and omits it, then
+# `git worktree remove` fails "Directory not empty" and this function RAISES, so nothing is
+# reported. A submodule: true only while it is POPULATED, where `remove` refuses outright ("working
+# trees containing submodules cannot be moved or removed"). UNINITIALISED it does not raise at all —
+# and uninitialised is exactly what `ensure_workspace` leaves, since `git worktree add` does not
+# init submodules. Measured: a `sub/` gitlink whose directory the new worktree leaves EMPTY, one
+# ignored `sub/EVIDENCE.png` written into it and 60 loose ignored `*.png` beside it — the
+# superproject's `status --porcelain --ignored` says NOTHING about `sub/`, the release returns
+# `released: True` with `removed_ignored_truncated` 60 and 50 names, and `EVIDENCE.png` is in
+# neither: 61 ignored files destroyed, 60 counted, one of them unnamed, uncounted and unraised.
+# Latent HERE (this repo has no gitlink) and ordinary in the consumer checkout `--gc` runs in. So no
 # "iff" is on offer and this comment does not offer one; a criterion would be unusable anyway, since
 # checking either conjunct needs the tree, which is gone by the time anything reads this key.
-# "PRINTED entry" was the wrong SET as well: the count is
-# `len(destroyed)`, the POST-FILTER list, while the printed names stop at 50, and on the 187-file
+# "PRINTED entry" was the wrong SET as well: the count is `len(destroyed)`, the POST-FILTER list,
+# while the printed names stop at 50, and on the 187-file
 # input above those two are 58 against 50. What the card established needs none of it — this is a
 # count of ENTRIES and it bounds the loss in NEITHER direction. (What that round cited for the
 # ordinary case, VMCP-185's live sample, does not support it either: that sample counted ENTRIES —
@@ -1040,10 +1052,14 @@ _REPRODUCIBLE_IGNORED_SUFFIXES = (".pyc", ".pyo")
 # on: not the mechanism, which allows an ignored directory entry standing for ZERO destroyed regular
 # files (contents only a symlink out), but what `uv` actually writes. An entry `.venv/` appears only
 # when the directory is non-empty (measured: an ignored EMPTY directory yields no entry at all) and
-# is then filtered away, and a `uv` venv is thousands of regular files — two independent checkouts
-# of this same sha gave 1811 and 1624, so the digits belong to the venv rather than to the tree and
+# is then filtered away, and a `uv` venv here is on the order of 1.6-1.8 THOUSAND regular files:
+# 1625, twice, in two independent checkouts at `1fb0082`, against the 1811 and 1624 round 2
+# recorded without naming any tree. So the digits belong to the venv rather than to the tree and
 # the load-bearing part is only that it exceeds one — hence a build tree that ran the gates has a
-# count BELOW its loss.)
+# count BELOW its loss. (Round 2 called that "thousands", which 1.6k is not, and gave its pair no
+# sha; both are corrected here, the second because this repo's own rule is that a figure over a
+# tree carries the tree — and note the correction does NOT retro-anchor round 2's two numbers,
+# which were taken on a tree nobody recorded.))
 #
 # Absence of the key means the LIST was not truncated, and NEVER that nothing beyond the names was
 # destroyed: under the cap the same collapse is still in force (measured, 2 entries named against 32
@@ -1055,7 +1071,13 @@ _REPRODUCIBLE_IGNORED_SUFFIXES = (".pyc", ".pyo")
 # **Whether a directory becomes ONE entry is decided PER DIRECTORY, by whether git had to WALK it:
 # it walks one the index holds a path under, and it walks one holding anything it must report
 # separately (an untracked file that is not ignored). Being ignored does not by itself collapse a
-# directory, and neither does being wholly untracked.** All of that is measured, and the shape that
+# directory, and neither does being wholly untracked.** Read that as a property of THIS CALL and not
+# of git — the third lever is the one `_inspect_status` pins below, and round 2 asserted the two
+# above as if they were the whole of it. Measured on ignored `d/` with 60 files and NEITHER of them
+# present: `--porcelain --ignored` gives ONE entry, and `-uall` — equivalently
+# `status.showUntrackedFiles=all`, which is config anyone can set — gives 60. What holds the
+# condition true here is `_inspect_status` forcing `status.showUntrackedFiles=normal` on this single
+# command, added by #766 for exactly that reason. All of that is measured, and the shape that
 # kills the tidier phrasings is a walked directory with an unwalked child: ignored `d/` with a
 # TRACKED `d/anchor.txt` gives `['d/f0.txt', 'd/f1.txt', 'd/f2.txt', 'd/y/']` — the files at that
 # level individually, the subdirectory holding no indexed path still ONE entry — and moving the
@@ -1071,9 +1093,18 @@ _REPRODUCIBLE_IGNORED_SUFFIXES = (".pyc", ".pyo")
 # rather than a contrivance: `.claude/*` beside a re-included `!.claude/settings.json`, which is
 # what lets that file be TRACKED without a force-add, and the tracked file is then what makes git
 # walk the directory — measured on those real rules, 3 entries out of that one prefix instead of 1.
-# Attribute it to the TRACKED file and not to the `/*` spelling: measured, the two spellings are
-# INDISTINGUISHABLE for entry counts (blanket `.claude/` with the same file force-added also gives
-# 3, and either spelling without a tracked file gives 1). The tree ROOT is never collapsible at all,
+# Attribute it to the TRACKED file and not to the `/*` spelling — but only so far, and **round 2's
+# "the two spellings are INDISTINGUISHABLE for entry counts" is false in one of its two arms**
+# (VMCP-249 round 3, the full 2x3 matrix, same content in every cell). TRACKED: `.claude/*` with the
+# `!` line gives 3 and blanket `.claude/` with the same file force-added also gives 3, so there the
+# spellings really do agree. ABSENT from disk: both give 1. But ON DISK AND UNTRACKED they DIVERGE —
+# `.claude/*` gives 3 (plus `?? .claude/`) against blanket `.claude/`'s 1 — because the `!` line
+# un-ignores `settings.json`, which is the SECOND walk trigger named above, the `notig/` shape
+# verbatim. Round 2 laid exactly that charge at round 1 four paragraphs up ("refuted its own
+# condition without leaving the paragraph") and then did it. Nothing behaves wrongly: that cell is
+# `??`, so it makes the tree dirty and the release refuses. What must not be repeated is the
+# UNIVERSAL — the spellings agree when the re-included file is tracked or absent, not always. The
+# tree ROOT is never collapsible at all,
 # and **not because it holds the tracked files** — that reason was this round's own first draft and
 # a measurement killed it: on a worktree whose HEAD tree is EMPTY, 3 ignored files at the root still
 # print as 3 entries while an ignored SUBDIRECTORY beside them prints as one, so what protects the
@@ -1090,14 +1121,23 @@ _REPRODUCIBLE_IGNORED_SUFFIXES = (".pyc", ".pyo")
 #
 # **THE OTHER SITES SPLIT IN TWO, and an earlier draft of this very paragraph got the split wrong by
 # asserting they were all of one kind.** The census is `git grep -E 'collaps|схлопн|схлопыва'` — and
-# note the Russian needs BOTH stems, a one-stem grep being what hid the twin below. EXISTENTIAL
-# uses, saying only that a loss CAN be hidden, stay true whatever git walks into and are untouched:
-# `_is_reproducible_ignored` and the emit site below, `_ignored_paths_the_ff_will_overwrite` further
-# down, three sites in `test_workspace_cmd.py`, CLAUDE.md, and SKILL.md's own «ЧЕГО ЭТО ПОЛЕ НЕ
-# ЛОВИТ». DEFINITIONAL uses, saying what the NUMBER IS, carry the universal and there are exactly
-# TWO — the paragraph above and its Russian twin in SKILL.md — so both are narrowed in this same
-# commit rather than one being left to disagree with the other, which is the whole point of the
-# card. What is NOT touched, and is filed instead of widened: `.gitignore` and
+# note the Russian needs BOTH stems, a one-stem grep being what hid the twin below. DEFINITIONAL
+# uses, saying what the NUMBER IS, carry the universal: the paragraph above and its Russian twin in
+# SKILL.md, both narrowed rather than one being left to disagree with the other, which is the whole
+# point of the card. The rest are EXISTENTIAL — they say only that a loss CAN be hidden, and their
+# CONCLUSIONS survive whatever git walks into: `_is_reproducible_ignored` and the emit site below,
+# `_ignored_paths_the_ff_will_overwrite` further down, sites in `test_workspace_cmd.py`, CLAUDE.md,
+# and SKILL.md's «ЧЕГО ЭТО ПОЛЕ НЕ ЛОВИТ». **Their conclusions, NOT their sentences — round 2 wrote
+# that they "stay true whatever git walks into" and several of them state the refuted universal
+# verbatim, `.venv/MEASUREMENTS.md` arriving as the entry `.venv/`.** Measured: give `.venv/` a
+# TRACKED `pyvenv.cfg` and the entries are `!! .venv/MEASUREMENTS.md`, `!! .venv/lib0.py`, … — per
+# file, no `.venv/` entry at all — while `removed_ignored` is still absent, because
+# `_is_reproducible_ignored` matches on any `.venv` COMPONENT and drops each one. The file still
+# dies unnamed, so every one of those sites is right about what happens; the MECHANISM they name is
+# the filter, not a collapse. That is the same standard round 2 applied to the two sites below, and
+# did not apply to these. Counting them is also not a census to lean on: the grep returns five hits
+# in `test_workspace_cmd.py`, not three, and one of them is definitional without being false. What
+# is NOT touched, and is filed instead of widened: `.gitignore` and
 # `test_repo_browser_isolation.py` explain this repo's `.claude/*` spelling with "git does not
 # descend into an excluded directory", which the measurements above contradict as a universal —
 # their CONCLUSION survives, and measured rather than assumed: the re-include is blocked at the
