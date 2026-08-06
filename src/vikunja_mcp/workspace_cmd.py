@@ -1917,16 +1917,42 @@ def _expand_if_directory(root: Path, rel: str, gitlinks: frozenset[str] = frozen
     exact repeats (`if candidate not in seen`), so a genuine DUPLICATE from in here would be
     invisible end to end — measured by the second pass — while an EXTRA one is not.
 
-    ONE GAP MEASURED HERE THAT IS, END TO END, NOT A LOSS CHANNEL — and the correction matters more
-    than the gap. `os.walk` defaults to `onerror=None`, so an UNREADABLE subdirectory is skipped in
-    silence: `out/` holding `a.txt` plus a `chmod 000` `locked/` expands to `['out/a.txt']`, naming
-    neither `out/locked` nor its content. An earlier draft of this paragraph called that a second
-    route to a silent present-and-incomplete report; the second pass refuted it and the refutation
-    reproduces — `sync_main_checkout` on that tree answers `{'updated': False, 'code': 'blocked'}`
-    with `fatal: cannot opendir 'out/locked': Permission denied`, `out` is still a directory,
-    nothing is destroyed and NO key is emitted. Git cannot delete what it cannot read, so the
-    refusal branch catches it. The expansion gap is real and reaches no report through this shape;
-    whether EVERY permission shape refuses was not established, which is why it stays written down.
+    ONE GAP MEASURED HERE THAT IS, END TO END, NOT A LOSS CHANNEL — and what saves it is TWO
+    different things, which is the whole of VMCP-253 (852) and the part any one-line summary of
+    this paragraph gets wrong. `os.walk` defaults to `onerror=None`, so an UNREADABLE subdirectory
+    is skipped in silence: `out/` holding `a.txt` plus a `chmod 000` `locked/` expands to
+    `['out/a.txt']`, naming neither `out/locked` nor its content. An earlier draft called that a
+    second route to a silent present-and-incomplete report; the second pass refuted it and the
+    refutation reproduces — `sync_main_checkout` on that tree answers
+    `{'updated': False, 'code': 'blocked'}` with `fatal: cannot opendir 'out/locked': Permission
+    denied`, `out` is still a directory, nothing is destroyed and NO key is emitted.
+
+    THE HEDGE THAT USED TO CLOSE THIS PARAGRAPH — whether EVERY permission shape refuses — IS
+    SPENT. Eight shapes, each built end to end through `sync_main_checkout` against a real bare
+    origin, git 2.50.1 on macOS/APFS:
+      * a DIRECTORY at `000`, `111`, `444` or `500`, and a `000` directory two levels down: the
+        merge REFUSES, `updated: False`, `code: 'blocked'`, `out` is still a directory, the victim
+        is ALIVE and no key is emitted at all. Three different git messages, which is why this is
+        a row and not one input — `cannot opendir` at `000` and `111`, `cannot lstat` at `444`,
+        `cannot unlink` at `500` — and the expansion is short only in the first two (`444` and
+        `500` name `out/locked/precious.txt` perfectly well);
+      * an unreadable FILE inside a READABLE directory: the merge GOES, `updated: True`, and the
+        file is DESTROYED. Measured at `000`, `444` and `111` alike, so it is the SHAPE and not
+        the bits.
+    So the answer is NO, not every shape refuses — and "nothing dies unnamed" survives anyway, by
+    a DIFFERENT mechanism on that one row: the walk NAMES the dead file, because permissions on a
+    FILE do not affect the enumeration of its directory ENTRY while permissions on a DIRECTORY do.
+    Keep the two apart. "Git cannot delete what it cannot read" is what saves the four directory
+    shapes and is FALSE as a general rule — measured, git unlinks an unreadable file without a
+    word. The file row is the one the conclusion rests on and the only one where anything dies, so
+    it is pinned by `test_an_unreadable_FILE_is_destroyed_by_the_merge_and_named_anyway`.
+
+    HONEST BOUND: those are `chmod` shapes on APFS, one owner. ACLs (`chmod +a`), `chflags`, and
+    running as another user or as root are NOT measured and their semantics differ, so this is
+    "none of these eight" and never "none at all". What to REPORT for a directory nobody can read
+    stays a product question and is deliberately not answered here — with the merge refusing on
+    every such shape the key is not emitted at all, so a human already sees `blocked` carrying
+    git's own message, and the cost of doing nothing is close to zero.
     """
     full = os.path.join(root, rel)
     if os.path.islink(full) or not os.path.isdir(full) or rel in gitlinks:

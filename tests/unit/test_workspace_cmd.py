@@ -4521,6 +4521,54 @@ def test_a_REAL_subdirectory_inside_the_expansion_is_not_named_only_its_files_ar
 # `lexists` vs `exists` one function up, which is filed as VMCP-268 (884) rather than smuggled in
 # here.
 
+def test_an_unreadable_FILE_is_destroyed_by_the_merge_and_named_anyway(repo, tracker, tmp_path):
+    """VMCP-253 (852). The ONE permission shape where the fast-forward GOES and something dies —
+    and the reason the conclusion "nothing dies unnamed" needed a second mechanism to stand on.
+
+    Four DIRECTORY shapes (`000`, `111`, `444`, `500`) and a `000` directory two levels down all
+    make `merge --ff-only` refuse: `blocked`, the victim alive, no key emitted. That is what
+    "git cannot delete what it cannot read" covers, and it is FALSE of a FILE — permissions on a
+    file do not affect the enumeration of its directory ENTRY, so git unlinks a `chmod 000` file
+    without a word. What saves this row is not the refusal but the NAMING: `os.walk` lists the
+    entry regardless of its mode, so the casualty reaches `overwritten_ignored`.
+
+    Pinned because the whole grid's conclusion rests on this row alone — the four refusing shapes
+    prove nothing about it, and it was the only shape in the grid that was unpinned.
+
+    MUTATION SWEEP, one selection throughout — this file with `-k "unreadable_FILE or
+    real_subdirectory or NESTED_symlink or two_spellings or HARDLINKS"`, no `-q`, `collected 206
+    items` / `6 selected` / 0 `ERROR ` lines in every round, rounds read by counting `FAILED ` and
+    `ERROR ` lines separately; control 0 failed:
+      * the walk names only READABLE files ..................... control 0 failed; 1 failed
+      * the walk names no plain files at all .................. control 0 failed; 6 failed
+      * `os.walk(onerror=raise)` instead of the silent default . control 0 failed; 0 failed
+    Row one is the pin, and it is the sharp one: it changes exactly the mechanism this test is
+    about and kills exactly this test. Row two is blunt — it kills all six, so it says the walk
+    matters and nothing about WHICH property. Row three is the honest remainder: nothing in the
+    suite makes the walk hit an unreadable directory, so the four REFUSING shapes of the grid stay
+    unpinned. That is deliberate rather than missing — on those the merge refuses, no key is
+    emitted, and the card asked for the grid to be measured and written down, explicitly NOT for a
+    guard."""
+    _api, wf = tracker
+    _ignoring(repo, "out/")
+    (repo / "out").mkdir()
+    (repo / "out" / "a.txt").write_text("the human's own note\n")
+    doomed = repo / "out" / "locked_file"
+    doomed.write_text("the human's bytes, behind a mode nobody can read\n")
+    doomed.chmod(0o000)
+    assert _git(repo, "status", "--porcelain") == "", "ignored, so invisible as always"
+
+    _land_on_origin(tmp_path, "unreadable", {"out": "upstream takes that name\n"})
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["updated"] is True, ("the merge is NOT refused by an unreadable FILE — this is "
+                                      "the shape that disproves the general rule", state)
+    assert sorted(state["overwritten_ignored"]) == ["out/a.txt", "out/locked_file"], state
+    assert not doomed.exists(), "and it really is destroyed; naming is not saving"
+
+
 def _case_insensitive(path: Path) -> bool:
     """Ask the FILESYSTEM, never the platform: `sys.platform` is a proxy and a wrong one — an
     APFS volume can be created case-SENSITIVE, and a Linux checkout on a mounted share can be
