@@ -3322,9 +3322,24 @@ def test_an_index_entry_whose_OBJECT_IS_NOT_A_BLOB_is_reported(clone, oid):
 #     `test_a_path_whose_FIRST_COMPONENT_looks_like_a_merge_stage_is_not_a_silent_miss`,
 #     `test_the_names_that_never_parsed_as_a_stage_are_the_control` and the `[hidden]` row of
 #     `test_a_merge_stage_THAT_EXISTS_hands_over_ANOTHER_PATHS_BYTES`. Fourteen of seventeen and
-#     not "the index-only rows #820 added": its `[named-falsely]` row stages an index-only
-#     candidate too and survives this cut, because the answer it expects is carried by a shaped
-#     WORKTREE copy. THAT pair is what says the halves are independent rather than one traded for
+#     not "the index-only rows #820 added" — and the THREE survivors have THREE DIFFERENT reasons,
+#     which is why naming one of them was not enough (VMCP-263 (871), whose names and mechanisms
+#     are re-derived here by running both cuts and reading the kill sets BY NAME rather than taken
+#     from the card — same discipline and the same control as this record's header, and both
+#     totals came back unchanged). `[named-falsely]` stages an index-only candidate too and
+#     survives, and the
+#     reason this bullet used to give — "the answer it expects is carried by a shaped WORKTREE
+#     copy" — is TRUE and is half of it: that row's `cred.json` is shaped in the index AND on disk,
+#     so EITHER half alone still names it, and measured, it is in NEITHER kill set. `test_a_
+#     conflicted_path_with_a_SHAPED_worktree_copy_is_still_caught` is the opposite shape: it cannot
+#     fall to THIS cut by construction, being the row that asserts the worktree half covers a path
+#     the index half must stay silent on, and it dies to the INDEX cut instead — where, measured,
+#     it is exactly the `+1` of the `4 -> 5` step below. So one of the three survivors is PART of
+#     the disjointness proof rather than an exception to it, which is the strongest thing this
+#     bullet has to say and was the one left unsaid. `test_a_conflicted_entry_leaves_the_SCAN_
+#     STANDING` is not about copies at all: it asserts the scan does not RAISE on a conflicted
+#     entry and reports nothing, which holds with either half alone, so it too is in neither set.
+#     THAT pair is what says the halves are independent rather than one traded for
 #     the other: 5 and 24, with no row in both — checked BY NAME over all 29, not inferred from the
 #     two totals. The PROPERTY is the durable half and the totals are not — and ONE OF THEM MOVED
 #     TWICE, which is what round 2 of this record missed when it handed both shifts to #820.
