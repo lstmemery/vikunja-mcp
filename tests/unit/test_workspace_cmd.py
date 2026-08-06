@@ -4308,7 +4308,25 @@ def test_an_ignored_DIRECTORY_is_reported_file_by_file_not_as_one_entry(repo, tr
 def test_the_directory_expansion_does_not_walk_through_a_symlink(repo, tracker, tmp_path):
     """`islink` before `isdir`, because a symlinked directory is ONE path to git and one path to
     delete — walking it would name files that do not live in this checkout at all, and report as
-    destroyed things the merge never touches."""
+    destroyed things the merge never touches.
+
+    THE FUNCTION IS ASKED DIRECTLY, AND THE REASON IS WEAKER THAN THE CARD THAT ASKED FOR IT
+    PREDICTED — measured, not inherited (VMCP-262, 865). Its worry was that this pin catches the
+    guard's removal only through BATCH SIZE: without `islink` the walk yields `link/precious.txt`,
+    which is beyond a symbolic link, and a batch of ONE has nothing to bisect, so `_ignored_of`
+    gives up exactly as the pre-837 whole-batch code did and the key VANISHES — so add one more
+    ordinary ignored casualty to the same commit, the bisect isolates the unaskable path, the key
+    comes back, and the pin was expected to go green on the defect. Built and run, it does NOT:
+    against a control of 0 failed, `islink` removed plus a second ignored `z.png` dying in the same
+    commit is 1 failed WITHOUT this direct assertion and 1 failed WITH it. The second casualty
+    changes the FAILURE MODE (`overwritten_ignored` present but missing `link`) rather than
+    removing it, because the payload assertion names `link` — so any assertion that names the link
+    still bites. That is the difference from the submodule test next door, whose mutant only ever
+    ADDED names to an exact list.
+
+    So this call is insurance whose failure mode is not demonstrated, kept because it costs one
+    line and states the property (`islink` before `isdir`) where the property lives, instead of
+    inferring it from a report two functions away."""
     _api, wf = tracker
     _ignoring(repo, "/link")
     outside = tmp_path / "outside"
@@ -4317,6 +4335,12 @@ def test_the_directory_expansion_does_not_walk_through_a_symlink(repo, tracker, 
     (repo / "link").symlink_to(outside)
     _land_on_origin(tmp_path, "one", {"link": "upstream puts a file at that name\n"},
                     force=True)          # the rule is pushed, so the sibling ignores it too
+
+    expanded = workspace_cmd._expand_if_directory(repo, "link")
+    assert expanded == ["link"], (
+        "a symlinked directory is ONE path to delete, so the expansion must answer with the link "
+        "itself and nothing from beyond it", expanded
+    )
 
     res = gc_workspaces(cwd=repo, workflow=wf)
 
@@ -5894,13 +5918,54 @@ def test_a_submodule_pointer_bump_no_longer_wipes_the_whole_report(repo, tracker
     and it force-adds a `shot.png` at a path this checkout ignores. The human's own `shot.png` is
     destroyed either way — that is git, and this module does not fight it — but before the fix the
     submodule-internal paths made `check-ignore` exit 128, the probe returned `[]` for the WHOLE
-    batch, and the file died unreported."""
+    batch, and the file died unreported.
+
+    THE PAYLOAD ASSERTION ALONE WAS DISARMED BY 837 ITSELF, which is VMCP-262 (865) and the reason
+    the candidate set is now asserted directly. Measured: on the shipped code the mutant that
+    removes the gitlink filter (plus the subtree prune) leaves this test GREEN, while the same
+    mutant over the pre-837 whole-batch give-up fails it with `KeyError: 'overwritten_ignored'` —
+    1 -> 0 with the assertions untouched. The mechanism is the axis worth carrying away: the
+    mutant's only effect on the REPORT is to ADD unaskable submodule-internal paths beside
+    `shot.png`, and the bisect that arrived in the same card drops exactly those and returns
+    `['shot.png']` either way. So equality against an exact list is strong against a mutant that
+    REMOVES or RENAMES an answerable name and weak against one that ADDS unanswerable ones — and
+    which of the two a mutant is cannot be read off the shape of the assertion, only run.
+
+    Adding a SECOND ordinary ignored casualty was the card's other suggestion and is measured NOT
+    to help on its own for the same reason: the bisect isolates the unaskable paths whatever their
+    answerable neighbours number, so the exact list still comes back whole.
+
+    MUTATION SWEEP for this pin and its neighbour, one selection throughout — this file with
+    `-k "submodule_pointer_bump or pure_gitlink_move or expansion_does_not_walk_through_a_symlink
+    or NESTED_symlink_to_a_directory"`, no `-q`, `collected 203 items` and `4 selected` and 0
+    `ERROR ` lines in every round, each round read by counting `FAILED ` and `ERROR ` lines
+    separately; control 0 failed:
+      * the gitlink-only diff filter removed (m11) .................... control 0 failed; 2 failed
+      * `_index_gitlink_paths` always empty (m12) ..................... control 0 failed; 0 failed
+      * m11 + m12, the pair the card measured at 1 -> 0 ............... control 0 failed; 2 failed
+      * m11 + m12 with THIS test's direct assertion removed ........... control 0 failed; 1 failed
+      * the top-level `islink` guard removed .......................... control 0 failed; 1 failed
+    Row four is the card reproduced on this tree — with the direct assertion gone, m11+m12 leaves
+    THIS test green and only the sibling fails — and rows one and three together are the repair:
+    the pin now bites m11 ALONE, which is more than the card asked for. Row two is the honest
+    remainder: m12 has no effect in this shape at all, because with the filter in place the gitlink
+    entry never reaches the walk, so this test cannot pin the prune and does not claim to."""
     _api, wf = tracker
     _ignoring(repo, "*.png")
     later = _with_submodule(repo, tmp_path)
     (repo / "shot.png").write_bytes(b"\x89PNG the human's own evidence screenshot")
 
     _bump_gitlink_on_origin(tmp_path, "bump", later, extra={"shot.png": "UPSTREAM\n"})
+
+    # THE FETCH IS LOAD-BEARING here for the same reason it is next door: the sibling pushed from a
+    # clone of its own, so `origin/main` is stale until something fetches, and a direct call ahead
+    # of `gc_workspaces` must not borrow the fetch that call does for itself.
+    _git(repo, "fetch", "--no-recurse-submodules", "origin")
+    incoming = workspace_cmd._incoming_displacing_paths(repo, "origin/main")
+    assert incoming == ["shot.png"], (
+        "a pure pointer move displaces nothing, so the gitlink entry must not reach the batch at "
+        "all — asserted HERE because the report below is the same either way", incoming
+    )
 
     res = gc_workspaces(cwd=repo, workflow=wf)
 
