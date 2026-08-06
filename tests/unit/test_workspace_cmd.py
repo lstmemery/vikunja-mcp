@@ -3450,12 +3450,26 @@ def test_the_report_is_capped_but_the_count_is_not(repo):
     names do not.
 
     WHAT THAT COUNT IS NOT — and this test's own input is why the distinction is easy to miss.
-    Every entry here is a loose FILE, so `removed_ignored_truncated` coincides with the number of
-    files destroyed; the test below is an input where it does not. The condition for coinciding is
-    one destroyed file per printed entry and nothing lost inside a FILTERED entry — NOT the absence
-    of directories, which VMCP-249 (840) had to measure to believe (one ignored directory holding
-    exactly one file, plus 50 loose files, reports 51 against 51 files). That card is also where
-    the module comment stopped calling this number the "TRUE total".
+    Every entry here is a loose FILE at the worktree ROOT, so `removed_ignored_truncated` coincides
+    with the number of files destroyed; the test below is an input where it does not. No general
+    CONDITION for coinciding is claimed, here or above `_MAX_REPORTED_IGNORED`, and that is round 2
+    of VMCP-249 (840) removing one rather than an omission. Round 1 stated a condition at BOTH sites
+    and in two DIFFERENT strengths — "no more than one" in the module comment, "one per printed
+    entry" here — and neither is a criterion, but not for the same reason, which is worth keeping
+    straight: an entry standing for ZERO destroyed files satisfies "no more than one" and so breaks
+    only the module comment's form, while a FILTERED entry standing for a loss cancels an
+    over-report and breaks BOTH, this one included. So equal numbers prove nothing either way. The
+    module comment carries both counterexamples and the arithmetic. What is
+    measured is the negative: coinciding is NOT about directories being absent (one ignored
+    directory holding exactly one file, plus 50 loose files, reports 51 against 51 files). That card
+    is also where the module comment stopped calling this number the "TRUE total".
+
+    THIS INPUT IS ALSO THE COUNTEREXAMPLE to that round's other universal, and it needed no new
+    code: 57 loose ignored files in the worktree ROOT reach the cap, so content inside a single
+    directory does reach it. What decides whether a directory becomes ONE entry is whether git
+    DESCENDED into it, not whether it is ignored, and the root is never collapsed because the scan
+    STARTS there — measured, that holds even on a worktree whose HEAD tree is EMPTY, so it is not
+    about the root holding tracked files.
     """
     _ignoring(repo, "*.png")
     path = Path(ensure_workspace(42, cwd=repo)["path"])
@@ -3478,10 +3492,19 @@ def test_the_truncated_count_is_entries_not_the_size_of_the_loss(repo):
     preferring a wording, and this is the state, kept as a pin so the prose above
     `_MAX_REPORTED_IGNORED` cannot drift back.
 
-    What disagreed was 2 texts against 1, not one file against another: this module comment and
-    SKILL.md both said TRUE total, while SKILL.md 88 lines earlier already said the number
-    "inherits exactly the blindness of the key" BY NAME — so the rulebook contradicted itself, and
-    a cross-reference vouched for a text saying the opposite.
+    What disagreed was 3 shipped texts against 1, not one file against another — and round 1 of
+    VMCP-249 (840) wrote 2, undercounting the docstring of the function IMMEDIATELY ABOVE this one
+    in this same file. Re-read in the parent commit: the module comment said TRUE total, SKILL.md
+    said the same in Russian, and `test_the_report_is_capped_but_the_count_is_not` said truncation
+    must not hide the SIZE of the loss. Those three stood against ONE correct SKILL.md paragraph,
+    88 lines earlier than the wrong one and counting from the line that names THIS key, which
+    already said the number "inherits exactly the blindness of the key" BY NAME — so the rulebook
+    contradicted itself, a cross-reference vouched for a text saying the opposite, and the count of
+    disagreeing texts repeated this card's own defect in miniature. Counting the neighbouring key's
+    docstring as well makes it 4 against 1. The neighbour is named by POSITION rather than by a line
+    distance on purpose: round 1's 88 is exact and re-derivable, but the review that bounced it put
+    the neighbour "40 lines" away and that one does not reproduce — measured in the round-1 tree,
+    the two are 34 lines apart function to function. Position cannot go stale; a distance can.
 
     Three shapes at once: a REPRODUCIBLE ignored directory holding a hand-authored file (100
     files, one git entry, filtered away entirely), a NON-reproducible ignored directory (30 files,
@@ -3492,13 +3515,19 @@ def test_the_truncated_count_is_entries_not_the_size_of_the_loss(repo):
     to PRINT for a symlink, not about any code here, so a test on it would go red on a git change
     with nothing of ours defective. It is measured in the module comment instead.
 
-    Sweep, selection = this file, `-q` dropped so `collected` is readable: control 0 failed / 0
-    errors / 192 collected. Counting the number PRE-filter (`len(ignored)`, which is 59 on this
-    input) -> 1 failed / 0 errors / 192 collected, this test ALONE. Making
-    `_is_reproducible_ignored` return False always -> 5 failed / 0 errors / 192 collected, this
+    Sweep RE-RUN for round 2, selection = this file, `-q` dropped so `collected` is readable, and
+    each round read by counting lines beginning `FAILED ` and lines beginning `ERROR ` separately:
+    control 0 failed / 0 errors / 200 collected. Counting the number PRE-filter (`len(ignored)`,
+    which is 59 on this input) -> 1 failed / 0 errors / 200 collected, this test ALONE. Making
+    `_is_reproducible_ignored` return False always -> 5 failed / 0 errors / 200 collected, this
     test among them. Read that second round as collateral rather than as this pin's own strength:
     four of its five kills belong to the filter's existing pins, and the round is here only
     because the number this test asserts moves 58 -> 59 with the filter gone.
+
+    RE-RUN, not inherited, and the SELECTION SIZE is why: round 1 recorded 192 collected, true when
+    it measured and already stale when this round opened, siblings having landed 8 more tests in
+    this file in between. So re-measure this block rather than quoting it — what carries meaning is
+    the DELTA against a control, and a delta against someone else's control is not one.
     """
     _ignoring(repo, "*.png", ".playwright-mcp/", ".venv/")
     path = Path(ensure_workspace(42, cwd=repo)["path"])

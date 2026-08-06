@@ -979,13 +979,22 @@ _REPRODUCIBLE_IGNORED_SUFFIXES = (".pyc", ".pyo")
 # project has already lost a daemon session to an oversized read (hgdev-acp, a >24.5 KiB log pull).
 # **What the cap bounds is the NUMBER of names and NOT the size of the line, so it does not by
 # itself hold the payload under that read** — measured for VMCP-249 (840): 50 names, the cap's own
-# maximum, at 800 characters each are a 40,440-byte line, well past the >24.5 KiB read cited above.
+# maximum, of 800 characters each are 40,000 characters of NAMES, a 40,200-byte JSON array on their
+# own, against the 25,088 bytes of the >24.5 KiB read cited above. **The NAMES are the figure on
+# purpose, and round 1 of that card wrote the WHOLE payload's total instead (40,440 bytes), which is
+# not a property of this code at all**: the payload carries `path`, so the total moves with the
+# length of whatever temp directory the stand used — measured, the same content under two temp roots
+# differing by 41 characters gave totals differing by exactly 41 bytes — and the card's review
+# records three stands producing three different totals. Reachable as well as arithmetical: git
+# prints an 800-character entry whole (measured, one entry of exactly 800 characters, with a tracked
+# anchor at each level so git descends instead of collapsing — see the collapse paragraph below).
 # Whether a BYTE budget belongs beside the entry budget is filed as VMCP-260 (862) rather than
 # guessed at here; what is fixed is that the justification above no longer overstates its reach.
 #
 # Past the cap the entry also carries `removed_ignored_truncated`, so the COUNT survives even when
 # the names do not — and what that count IS is `len(destroyed)`: the length of the list AFTER the
-# filter above and AFTER git's collapse of an ignored DIRECTORY into one entry, taken before the
+# filter above and AFTER whatever collapse git applied (a directory it did not descend into is ONE
+# entry, and which those are is the paragraph below), taken before the
 # cap. **It is NOT the size of the loss, and calling it the "TRUE total" here was wrong** (VMCP-249
 # again, which settled it by construction rather than by preferring a wording): a tree holding
 # `.venv/` with 100 files (ONE entry, filtered away), `.playwright-mcp/840/` with 30 (ONE entry, and
@@ -998,18 +1007,104 @@ _REPRODUCIBLE_IGNORED_SUFFIXES = (".pyc", ".pyo")
 # directories each holding one symlink pointing OUT of the tree report 51 with ZERO ignored regular
 # files destroyed, the targets surviving intact. An entry is a POSITION git chose to print, not a
 # file. Nor is the coincidence about directories being absent: one ignored directory holding exactly
-# one file plus 50 loose files reports 51 against 51 files (measured). The condition is that no
-# printed entry stands for more than one destroyed file AND no filtered entry stood for any — which
-# a build tree that ran the gates is not, `.venv/` being there and holding more than one file (3 of
-# 3 build trees on VMCP-185's live sample, not re-measured here).
+# one file plus 50 loose files reports 51 against 51 files (measured).
+#
+# **NO EXACT CONDITION FOR COINCIDING IS STATED HERE, and the absence is a decision: round 1 of
+# VMCP-249 (840) stated one and it was neither half of a criterion.** It said no printed entry
+# stands for more than one destroyed file AND no filtered entry stood for any. NOT SUFFICIENT: an
+# entry may stand for ZERO destroyed files, and zero satisfies "no more than one" — 3 ignored
+# symlinks pointing OUT of the tree plus 2 ignored regular files under `*.png` give 5 entries with
+# nothing filtered, a count of 5 against a loss of 2 files (measured, all 3 targets alive
+# afterwards), which is the symlink fact the same paragraph states above it — so that round refuted
+# its own condition without leaving the paragraph. NOT NECESSARY either, because the errors
+# CANCEL: a filtered `.venv/` holding one hand-authored file — a filtered entry that DID stand for
+# a loss — plus one ignored symlink give 2 entries, 1 of them filtered, a count of 1 against a loss
+# of 1 file (measured). Tightening "more than one" to EXACTLY one removes the FIRST of those two and
+# leaves the cancellation standing. It is deliberately NOT called sufficient either, because
+# sufficiency needs a COVERAGE LEMMA nothing here establishes — that every destroyed ignored regular
+# file falls under exactly one entry of the post-filter list — and an independent pass broke that
+# lemma on round 1's own set in one construction: 50 loose `*.png` at the root plus an untracked
+# ignored directory of 30 sorting past the cap, where all 50 PRINTED entries stand for exactly one
+# file each, nothing is filtered, and the count is 51 against a loss of 80. The same pass reports
+# two shapes that break the lemma in `git status` outright — ignored files inside a submodule, and
+# inside a directory git cannot read — both of which `release_workspace` RAISES on rather than
+# reporting, so neither reaches this key; that is its measurement, not one re-built here. So no
+# "iff" is on offer and this comment does not offer one; a criterion would be unusable anyway, since
+# checking either conjunct needs the tree, which is gone by the time anything reads this key.
+# "PRINTED entry" was the wrong SET as well: the count is
+# `len(destroyed)`, the POST-FILTER list, while the printed names stop at 50, and on the 187-file
+# input above those two are 58 against 50. What the card established needs none of it — this is a
+# count of ENTRIES and it bounds the loss in NEITHER direction. (What that round cited for the
+# ordinary case, VMCP-185's live sample, does not support it either: that sample counted ENTRIES —
+# 7, 6 and 2 — not files inside `.venv/`. No sample is needed, but note what the replacement rests
+# on: not the mechanism, which allows an ignored directory entry standing for ZERO destroyed regular
+# files (contents only a symlink out), but what `uv` actually writes. An entry `.venv/` appears only
+# when the directory is non-empty (measured: an ignored EMPTY directory yields no entry at all) and
+# is then filtered away, and a `uv` venv is thousands of regular files — two independent checkouts
+# of this same sha gave 1811 and 1624, so the digits belong to the venv rather than to the tree and
+# the load-bearing part is only that it exceeds one — hence a build tree that ran the gates has a
+# count BELOW its loss.)
 #
 # Absence of the key means the LIST was not truncated, and NEVER that nothing beyond the names was
 # destroyed: under the cap the same collapse is still in force (measured, 2 entries named against 32
 # ignored files destroyed), so the ONE-DIRECTION reading below survives the cap unchanged in both of
-# its halves. Reaching the cap takes 51 non-reproducible ENTRIES, and only entries: one ignored
-# directory contributes ONE of them however full (measured, 30 files two levels down -> one entry),
-# so no amount of content inside a single directory gets there, while 51 SIBLING directories do
-# (measured) — which is why "it needs thousands of loose FILES" was too narrow a way to say it.
+# its halves. Tripping the truncation KEY takes 51 non-reproducible ENTRIES, and only entries —
+# re-measured, 50 entries leave the key ABSENT and 51 make it 51. (Said of the KEY on purpose: at 50
+# the printed LIST is already at its cap, so "reaching the cap" would name the wrong threshold.)
+#
+# **Whether a directory becomes ONE entry is decided PER DIRECTORY, by whether git had to WALK it:
+# it walks one the index holds a path under, and it walks one holding anything it must report
+# separately (an untracked file that is not ignored). Being ignored does not by itself collapse a
+# directory, and neither does being wholly untracked.** All of that is measured, and the shape that
+# kills the tidier phrasings is a walked directory with an unwalked child: ignored `d/` with a
+# TRACKED `d/anchor.txt` gives `['d/f0.txt', 'd/f1.txt', 'd/f2.txt', 'd/y/']` — the files at that
+# level individually, the subdirectory holding no indexed path still ONE entry — and moving the
+# anchor DEEPER, to `d/x/anchor.txt`, prints exactly the same four. "Wholly untracked" is too weak
+# for a second reason: an untracked, non-ignored file inside gives `?? notig/` BESIDE the individual
+# `!! notig/a.png`. (That shape cannot reach a release — a `??` line is what makes the tree dirty
+# and the release refuse — so what bites in practice is the indexed path.) Round 1 of the same card
+# had it as one ignored directory contributing ONE entry however full, so that no amount of content
+# inside a single directory gets there; both halves are false. Give ignored `d/` one TRACKED file
+# (`git add -f`) and its 60 ignored files sitting AT THAT LEVEL print one by one, so ONE ignored
+# directory trips the key by itself: measured, 60 entries and the key at 60, against ONE entry `d/`
+# and NO key for the same 60 files without the anchor. That shape is this repo's own `.gitignore`
+# rather than a contrivance: `.claude/*` beside a re-included `!.claude/settings.json`, which is
+# what lets that file be TRACKED without a force-add, and the tracked file is then what makes git
+# walk the directory — measured on those real rules, 3 entries out of that one prefix instead of 1.
+# Attribute it to the TRACKED file and not to the `/*` spelling: measured, the two spellings are
+# INDISTINGUISHABLE for entry counts (blanket `.claude/` with the same file force-added also gives
+# 3, and either spelling without a tracked file gives 1). The tree ROOT is never collapsible at all,
+# and **not because it holds the tracked files** — that reason was this round's own first draft and
+# a measurement killed it: on a worktree whose HEAD tree is EMPTY, 3 ignored files at the root still
+# print as 3 entries while an ignored SUBDIRECTORY beside them prints as one, so what protects the
+# root is that git's scan STARTS there. Hence 51 loose ignored files at the root are 51 entries and
+# trip the key (measured; the same 51 inside an untracked directory are ONE entry). WHICH of these
+# refutes round 1 depends on how "a single directory" there is read, and both readings are covered
+# rather than one being picked: read broadly, as any one directory, the root does it — and that is
+# the input of `test_the_report_is_capped_but_the_count_is_not` next door, so a PASSING test in the
+# file that round edited was already the counterexample; read narrowly, with the antecedent being an
+# ignored directory that collapses to ONE entry, the root is not such a directory at all and what
+# refutes it is the tracked-anchor case above. 51 entries is therefore reachable by anything — loose
+# files, 51 SIBLING directories (measured), or a mix; "it needs thousands of loose FILES" was too
+# narrow and "no amount of content inside a single directory" too strong.
+#
+# **THE OTHER SITES SPLIT IN TWO, and an earlier draft of this very paragraph got the split wrong by
+# asserting they were all of one kind.** The census is `git grep -E 'collaps|схлопн|схлопыва'` — and
+# note the Russian needs BOTH stems, a one-stem grep being what hid the twin below. EXISTENTIAL
+# uses, saying only that a loss CAN be hidden, stay true whatever git walks into and are untouched:
+# `_is_reproducible_ignored` and the emit site below, `_ignored_paths_the_ff_will_overwrite` further
+# down, three sites in `test_workspace_cmd.py`, CLAUDE.md, and SKILL.md's own «ЧЕГО ЭТО ПОЛЕ НЕ
+# ЛОВИТ». DEFINITIONAL uses, saying what the NUMBER IS, carry the universal and there are exactly
+# TWO — the paragraph above and its Russian twin in SKILL.md — so both are narrowed in this same
+# commit rather than one being left to disagree with the other, which is the whole point of the
+# card. What is NOT touched, and is filed instead of widened: `.gitignore` and
+# `test_repo_browser_isolation.py` explain this repo's `.claude/*` spelling with "git does not
+# descend into an excluded directory", which the measurements above contradict as a universal —
+# their CONCLUSION survives, and measured rather than assumed: the re-include is blocked at the
+# PATTERN level, not by any walk. Under blanket `d/` plus `!d/keep.txt`, `check-ignore -v`
+# attributes the path to `.gitignore:1:d/` and a plain `git add` refuses it, while under `d/*` the
+# same `!` line wins and the add succeeds. So the SPELLING rule there is right and only the reason
+# given for it is too strong.
 _MAX_REPORTED_IGNORED = 50
 
 
