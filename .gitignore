@@ -11,11 +11,19 @@ dist/
 # Use `.claude/*`, NOT `.claude/`: git cannot re-include a file whose PARENT
 # DIRECTORY is excluded, so under a blanket `.claude/` that directory rule
 # wins the pattern contest and `!.claude/settings.json` below it never fires
-# — `git check-ignore -v` names whichever line won. It is a fact about
-# PATTERNS, not about git refusing to WALK the directory: git descends into
-# an excluded directory whenever the index holds a path under it, and both
-# spellings behave the same there. VMCP-264 (874) corrected that reason; the
-# measurements are in test_gitignore_still_lets_the_settings_file_through.
+# — `git check-ignore --no-index -v` names whichever line won (`--no-index`
+# is REQUIRED: without it a TRACKED path answers "not ignored" and the read
+# is a tautology; measured here, bare `-v` on settings.json is rc=1 and
+# prints nothing). It is a fact about PATTERNS, not about git refusing to
+# WALK the directory — and do NOT invert that into a claim about the walk
+# either, which is the mistake VMCP-264 (874) made while fixing the first
+# one. The spelling CAN decide the walk: a tracked path under the directory
+# forces it under BOTH spellings, but so does a file git can no longer call
+# ignored, and the `!` line makes exactly one of those when the re-included
+# file is on disk and untracked. Do NOT count the levers here — every round
+# that tried found another (`--ignored=matching` alone splits a row the
+# grid calls agreeing). The grid, the levers measured so far and the entry
+# counts are in test_gitignore_still_lets_the_settings_file_through.
 # This hides machine-local runtime state (scheduled_tasks.lock, worktrees/,
 # mailbox/, settings.local.json) while keeping shared project config.
 .claude/*

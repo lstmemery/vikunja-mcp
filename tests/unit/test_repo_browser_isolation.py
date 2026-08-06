@@ -808,23 +808,83 @@ def test_gitignore_still_lets_the_settings_file_through():
     DESCENDS into an excluded directory. Measured on git 2.50.1 (Apple Git-155), it does —
     whenever the index holds a path under it. An ignored `d/` holding three ignored files, an
     ignored subdirectory and one TRACKED `d/anchor.txt` is reported by `git status --porcelain
-    --ignored` file by file, four entries; drop the tracked file and the same tree collapses to
-    one `d/`. The SPELLING does not enter into that at all — `d/` and `d/*` give the same four
-    entries with the anchor and the same single entry without it — so what decides the walk is
-    a tracked path in the index, not the rule's shape. (VMCP-249 (840) states the same fact
-    from the other side, about which entries a `removed_ignored` list can name.) What the
-    spelling really decides is the PATTERN contest, which is what the second assertion below
-    already reads out of git: `d/` plus `!d/keep.txt` answers `.gitignore:1:d/` and a plain
-    `git add d/keep.txt` is refused, leaving the index empty; change one character to `d/*` and
-    the same negation answers `.gitignore:2:!d/keep.txt`, the add succeeds and the file is
-    staged. On this repository's own rules the pair reads `.claude/settings.json` ->
-    `!.claude/settings.json` and `.claude/settings.local.json` -> `.claude/*`.
+    --ignored` as four entries; drop the tracked file and the same tree collapses to one `d/`.
+    Four ENTRIES and not four files: the fourth is `d/y/`, the subdirectory holding no indexed
+    path, reported whole. Collapsed is NOT unwalked, and calling it that was this round's own
+    first draft: measured, an EMPTY `d/y/` produces no entry at all, a file buried at `d/y/z/q`
+    still produces exactly `!! d/y/`, and `chmod 000 d/y` makes the entry VANISH behind `warning:
+    could not open directory 'd/y/'`. Git opens the subtree and then reports the topmost wholly
+    ignored directory, so what is decided per directory is the REPORTING. (VMCP-249 (840) states
+    the same fact from the other side, about which entries a `removed_ignored` list can name.)
+
+    **THE CORRECTION THEN OVERSHOT, AND THAT IS THE SECOND THING 874 FIXED — here, in the same
+    paragraph, in the round after the first.** It closed with "the SPELLING does not enter into
+    that at all … so what decides the walk is a tracked path in the index, not the rule's
+    shape", which is a fresh universal in place of the old one, and one `04c126b` (VMCP-249)
+    had already retracted IN THIS TREE one landing earlier (a bot bump between them): "the
+    spellings agree when the re-included file is tracked or absent, not always". Measured, four
+    cells, `git status --porcelain --ignored` counting `!! ` lines, `git ls-files` asked each
+    time rather than assumed:
+
+        index EMPTY under `d/`, no `!` line ................ `d/` 1    `d/*` 1    agree
+        index EMPTY, `!d/keep.txt`, keep.txt ON DISK ....... `d/` 1    `d/*` 4    DIVERGE
+        index EMPTY, `!d/keep.txt`, keep.txt ABSENT ........ `d/` 1    `d/*` 1    agree
+        tracked `d/anchor.txt`, no `!` line ................ `d/` 4    `d/*` 4    agree
+
+    So a tracked path forces the walk under EITHER spelling (row 4) — sufficient, never the
+    only trigger. Row 2 has NOTHING in the index on either side and the spelling still decides,
+    because under `d/*` the `!` line un-ignores a file that is on disk and untracked, so git can
+    no longer call that directory wholly ignored and has to enumerate it — `?? d/` sits beside
+    those four, the DIRECTORY, the file itself being named only at `-uall` — and to enumerate it
+    it must walk. Under blanket `d/` that same `!` line cannot fire, which is the pattern fact
+    above, so there is nothing to force the issue and the directory collapses.
+
+    DO NOT READ THAT GRID AS A CLOSED SET, in either direction. Further levers keep turning up
+    and each one was found by looking rather than by reasoning: `-uall`, equivalently
+    `status.showUntrackedFiles=all`, which is config anyone can set, gives 4 on BOTH spellings
+    in row 1; `--ignored=matching` makes ROW 1 ITSELF diverge, 1 against 4, with an empty index,
+    no `!` line and no `-uall` — so that row's "agree" is a property of the default `--ignored`
+    mode and not of the spellings; and `status.showUntrackedFiles=no`, the setting #766 found
+    live in this ecosystem, takes row 2 from 4 to 0 on both. Counting them in the prose is
+    exactly what this docstring must not do, and the first draft of the `.gitignore` comment
+    beside it said "all three levers" while two more were a single `status` flag away.
+    "1 entry against N" is in any case the granularity of THIS call and never "git refused to
+    walk": `git ls-files -o -i --exclude-standard` lists all four files under blanket `d/` with
+    an empty index. Even the tracked row survives only in one reading — add the `!` line to it
+    and `d/` gives 5 against `d/*`'s 4, so both spellings DESCEND there while their entries
+    differ.
+
+    What the spelling really decides is the PATTERN contest, and that one is independent of the
+    walk: `d/` plus `!d/keep.txt` answers `.gitignore:1:d/` and a plain `git add d/keep.txt` is
+    refused, leaving the index empty; change one character to `d/*` and the same negation
+    answers `.gitignore:2:!d/keep.txt`, the add succeeds and the file is staged. Re-measured
+    with a force-added anchor present, i.e. with the walk FORCED, and both answers are
+    unchanged — which is what makes it a fact about patterns rather than about walking. On this
+    repository's own rules the pair reads `.claude/settings.json` -> `!.claude/settings.json`
+    and `.claude/settings.local.json` -> `.claude/*`.
 
     NO ASSERTION WAS ADDED FOR THAT, deliberately, and the card asking for the correction asked
-    for the decision too. `_ignore_rule` IS `git check-ignore -v`, so the pattern-level fact is
-    what the second assertion below already states — it names the rule git applied and where it
-    came from — and the blanket-spelling round in the sweep below already turns it red. Only
-    the EXPLANATION was false, in three places, and only that is changed.
+    for the decision too. The pattern-level fact is carried by the MESSAGE OF THE FIRST
+    assertion below — 874 rewrote that message, and the blanket-spelling round in the sweep
+    reddens exactly it (measured: `assert not True`, quoting `.claude/` as the rule git
+    applied). Naming the SECOND assertion there was the round-one draft's third error: the
+    first assertion fails, so execution never reaches the second at all, which would have made
+    it an assertion no round reaches — the thing this docstring forbids two paragraphs down.
+    The second assertion states a different fact, provenance (the rule that let the file
+    through is a `!` line from THIS repo), and the round that FAILS it is deleting BOTH lines.
+    Not "the round that reaches it", which was the third error's own first correction: five of
+    the seven rounds reach that assertion and pass it, the delete-`.claude/*` round included,
+    where it was instrumented and answered `.gitignore` / `!.claude/settings.json` on its way to
+    failing the NEXT one. Reaching and failing are different questions and this paragraph has
+    now got the distinction wrong in both directions. `_ignore_rule` is also not "`git
+    check-ignore -v`", which was the draft's warrant: it is TWO calls, both `--no-index`, the
+    verdict from `-q` and the source from `-v` — and the helper's own docstring, far above, says
+    why each of those is load-bearing (no line count here: SKILL.md's rule, a number written
+    into prose moves with the next edit above it, and the one this sentence inherited was off by
+    some 180 lines). Measured here, a bare `check-ignore -v` on `.claude/settings.json` is rc=1
+    and prints NOTHING, so the draft's warrant does not even run. Only the EXPLANATION was ever
+    false — in three places at first landing, and in two more of its own making, this docstring
+    and that same `.gitignore` comment — and only explanations are changed.
 
     Hence assertions of three different kinds: the negation is still WRITTEN (deleting it and
     the blanket together would leave the file deliverable but no longer deliberately so), git
@@ -844,20 +904,27 @@ def test_gitignore_still_lets_the_settings_file_through():
     respelling (`!/.claude/settings.json` is equivalent to git) has to update this line on
     purpose, which is the point.
 
-    MUTATION-CHECKED (`__pycache__` cleared, exactly 1 test selected per round, .gitignore
-    restored from a COPY): control PASS; delete the `!.claude/settings.json` line -> FAIL on
-    the verdict (git now excludes it); replace `.claude/*` with a blanket `.claude/` while
-    KEEPING the `!` line -> FAIL on the verdict too, which is the round that justifies asking
-    git at all; delete the `.claude/*` line so nothing under `.claude` is hidden -> FAIL on the
-    local-state provenance (and see `_ignore_rule`: without the source this round passed);
-    delete BOTH lines -> FAIL on provenance, because no rule in this repo decides the settings
-    file's fate any more; respell the negation as `!/.claude/settings.json` -> FAIL on the
-    literal; rewrite the explanatory comment above the rules -> PASS. Two of those were RE-RUN
-    numerically on the corrected prose for VMCP-264 (874) — this test alone, `collected 1` in
-    every round, `-q` dropped, `FAILED `/`ERROR ` lines counted separately, `.gitignore` restored
-    from a copy and confirmed sha256-identical: control 0 failed, 0 errors; the blanket spelling
-    with the `!` line kept 1 failed; the negation deleted 1 failed. The last round of the list
-    above is why that card changed the comment and not the rules, and it stays a PASS.
+    MUTATION-CHECKED, and re-run WHOLE on the corrected prose for VMCP-264 (874) round 2 —
+    this test alone, `collected 1 item` in every round, `-q` dropped, `FAILED `/`ERROR ` lines
+    counted separately (never the first `N failed` in stdout, which in this file is a docstring
+    quoting its own control), `__pycache__` cleared with `PYTHONDONTWRITEBYTECODE=1`, mutations
+    in a SEPARATE clone, `.gitignore` restored from a COPY and confirmed sha256-identical.
+    Every round names WHICH assertion it reached, because round 1 got exactly that wrong:
+    control 0 failed, 0 errors; replace `.claude/*` with a blanket `.claude/` while KEEPING the
+    `!` line -> 1 failed on the FIRST assertion, the verdict, which is the round that justifies
+    asking git at all; delete the `!.claude/settings.json` line -> 1 failed, FIRST assertion
+    again; delete BOTH lines -> 1 failed on the SECOND, provenance, because no rule in this repo
+    decides the settings file's fate any more — and this is the only round that REACHES it;
+    delete the `.claude/*` line alone so nothing under `.claude` is hidden -> 1 failed on the
+    THIRD, local-state provenance (and see `_ignore_rule`: without the source this round passed,
+    via `~/.config/git/ignore` — which is what git names in the failure text ON THE MACHINE THAT
+    RAN THIS SWEEP, and nowhere near a durable fact: with no global ignore, as on CI's fresh
+    `HOME`, the same round still fails and names `None`); respell as `!/.claude/settings.json`
+    -> 1 failed on the FOURTH, the
+    literal; rewrite the explanatory comment above the rules -> 0 failed, PASS. Control re-run
+    after the last restore, 0 failed. That final PASS is why this card changed comments and not
+    rules — and it says as plainly that the prose corrected here is no more pinned than the
+    prose it replaced, which is what the second independent pass is for.
     """
     gitignore = REPO_ROOT / ".gitignore"
     assert gitignore.is_file(), ".gitignore is gone"
