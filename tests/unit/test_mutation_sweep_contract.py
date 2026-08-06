@@ -32,7 +32,10 @@ them up.
   * It reads PROSE. It sees the SHAPE of a claim, never whether a control round was actually run
     — a record that says `control 0 failed` without running one satisfies it. Nothing in a repo
     of hand-run sweeps can check that; what a scanner CAN do is make the omission impossible to
-    ship silently, which is the difference between this and a rule kept in prose alone.
+    ship silently, which is the difference between this and a rule kept in prose alone. Nor can it
+    tell USE from MENTION on its own, which is VMCP-259 (861): a sentence merely QUOTING the phrase
+    vouched for a whole record, and what separates the two is a named list of introducing words —
+    `_MENTIONED`, whose comment carries the measured price of every wider rule.
   * One control vouches for its whole PARAGRAPH, not for each number in it. That is the residual
     after VMCP-167 (688) moved the unit down from the whole RECORD, and the two are not the same
     limit: at record granularity one sentence immunised every count in a docstring, which was not
@@ -322,6 +325,47 @@ _CONTROL_COUNT = re.compile(
     r"|\b\d+\s+(?:failed|passed)\b[^.;]{0,60}?\bcontrol\b",
     re.IGNORECASE,
 )
+
+# A MENTION: a backticked span introduced as a QUOTATION OF TEXT rather than as a statement about a
+# round — `the literal` and its siblings `the string`, `the phrase`, `the word(s)`, each followed by
+# backticks. It is blanked out of BOTH predicates before either matches, and VMCP-259 (861) is the
+# card. What it found is that the largest sweep record in this repo balanced on one: the comment run
+# above `test_a_path_whose_FIRST_COMPONENT_looks_like_a_merge_stage_is_not_a_silent_miss` has no
+# blank line and no bare `#` in it, so it is ONE paragraph, and of its three `_CONTROL_COUNT` hits
+# the load-bearing one was the sentence WARNING a reader not to read a docstring's prose as a round
+# — «the docstrings here contain the literal `control 0 failed`». Cross out either of that
+# paragraph's two REAL controls, or both, and the ratchet stayed green; only crossing out all three
+# turned it red. So a paragraph whose only control is that warning passes, which is VMCP-167 (688)'s
+# own defect one level down: the immuniser is not a statement about a round at all.
+#
+# MASKING BOTH PREDICATES IS THE FIX AND NOT A TIDY SYMMETRY. The mention carries a tally, so
+# `_ROUND_COUNT` reads it as a round just as `_CONTROL_COUNT` reads it as a baseline; blank it on
+# the control side only and any paragraph that merely REPEATS the warning becomes an offender —
+# and repeating it is what CLAUDE.md and this repo's sweep records prescribe. Blanked on both
+# sides, a mention is neither. That is a ROUND rather than an argument: the control-side-only
+# variant reddens the pattern row below AND the ratchet, which then names the paragraph you are
+# reading, because it repeats the very warning it documents. Its counts sit in the pattern test's
+# own record, beside that record's control.
+#
+# WHY NOT THE OBVIOUS RULE — two candidates, both priced rather than waved off, and both rejected
+# by their price. "Do not read a control inside backticks at all" floods the ratchet, and the
+# sharpest of what it floods is a real sweep record: test_workflow_gates' per-stage-ownerless-exits
+# declares its baseline as «CONTROL ROUND FIRST and repeated between batches: `control 0 failed`
+# every time» — a DECLARATION that happens to wear backticks, which nothing lexical separates from
+# a mention except the words introducing it. Doing that to both predicates instead still costs that
+# record and additionally BLINDS the scanner to rounds this repo writes inside backticks, so legacy
+# entries would leave the list having gained no baseline at all — a shrink for the wrong reason,
+# which is worse than the hole it closes. Both are RUN, with their counts and the paragraphs they
+# name, in the pattern test's own record below, beside that record's control. The narrow form costs
+# nothing measurable: at `1fb0082` the offender set is identical with the mask and without it. Which
+# is why this exclusion is the third of its kind here rather than a new idea — `_ROUND_COUNT` above
+# carries three, each cutting one named false positive and each as narrow as its name.
+#
+# ITS TWO BOUNDS, both real and neither closable from here. The vocabulary is a LIST and a list
+# rots: a mention spelled any other way is invisible to it, so the hole is narrowed rather than
+# shut. And it needs the BACKTICKS — a mention written without them is not separable by anything
+# this scanner can see from an author declaring a baseline in plain words.
+_MENTIONED = re.compile(r"\bthe (?:literal|string|phrase|words?)\s+`[^`]*`", re.IGNORECASE)
 
 # How much of a record's opening text goes into its key. ONE constant for both halves of the key
 # — the comment run's first line and the paragraph's first characters — because it is one
@@ -818,12 +862,24 @@ def _flat(prose: str) -> str:
     )
 
 
+def _without_mentions(flat: str) -> str:
+    """Flattened prose with every MENTIONED span blanked — VMCP-259 (861).
+
+    Blanked to filler of the SAME LENGTH rather than deleted, because both patterns are
+    distance-bounded (`[^.;]{0,60}`): removing characters would pull a control and an unrelated
+    tally closer together and could vouch where the unmasked text does not, which is the one
+    direction a fix for an over-vouching defect must not travel. The filler is a non-digit,
+    non-word character, so it neither spells a tally nor bridges a `\\b`.
+    """
+    return _MENTIONED.sub(lambda m: "·" * len(m.group(0)), flat)
+
+
 def _quotes_a_round_count(prose: str) -> bool:
-    return bool(_ROUND_COUNT.search(_flat(prose)))
+    return bool(_ROUND_COUNT.search(_without_mentions(_flat(prose))))
 
 
 def _states_a_control_count(prose: str) -> bool:
-    return bool(_CONTROL_COUNT.search(_flat(prose)))
+    return bool(_CONTROL_COUNT.search(_without_mentions(_flat(prose))))
 
 
 def test_a_sweep_record_that_quotes_a_failure_count_states_its_control_count():
@@ -988,6 +1044,43 @@ def test_the_scanner_tells_a_pytest_tally_from_the_other_numbers_in_this_repo():
         rather than a number — an exit-code gloss is a named shape, `/ ` is not. The row added
         beside the flipped one (`1 failed / 47 passed`) pins the shape the loose form would
         eventually reach, since this repo writes a round with its pass total AFTER the slash
+
+    RE-MEASURED FOR VMCP-259 (861), which added `_MENTIONED` and the last two rows. Both of those
+    rows are repo strings taken VERBATIM rather than adapted — the first from the comment run above
+    `test_a_path_whose_FIRST_COMPONENT_looks_like_a_merge_stage_is_not_a_silent_miss`, the second
+    from test_workflow_gates' per-stage-ownerless-exits record — and they are a PAIR on purpose:
+    one is a mention of the phrase, the other a declaration wearing the same backticks, and the
+    whole of 861's design is that nothing but the introducing words tells them apart. A new
+    selection means a new control: this file alone, `__pycache__` deleted per round and then
+    `PYTHONDONTWRITEBYTECODE=1`, `-q` dropped and rounds read by counting lines beginning `FAILED `
+    and, separately, `ERROR `, `collected 6` cross-checked against the control in every round, each
+    round restored from a byte copy and the file confirmed sha256-identical. Control round: 0
+    failed, 0 errors.
+      * `_without_mentions` returns its argument unchanged, i.e. the fix removed -> 1 failed, and
+        on the MENTION row of this test ALONE. One and not two because the paragraph 861 was filed
+        about still holds two real controls, which is the card's own point: the ratchet cannot see
+        this defect on the tree it was found in, only a constructed reader can
+      * the mask applied to `_states_a_control_count` ALONE, leaving the round predicate reading
+        the mention -> 3 failed: the MENTION row here, plus the ratchet, which names the
+        `A MENTION` paragraph of THIS file because that paragraph repeats the warning it documents
+        — the predicted false red arriving live rather than as a claim — plus the tree-wide test,
+        whose weak readings then disagree with the strong form about it. So this round is the
+        whole argument for masking both predicates rather than only the one whose defect began the
+        card
+      * `_MENTIONED` narrowed to `the literal` alone -> 0 failed. NOT a kill, and recorded for the
+        reason the `(?<!/ )` round above is: the siblings cost nothing measurable today, so keeping
+        them is an argument about how a mention gets spelled rather than a number
+      * `_MENTIONED` widened to ANY backticked span, both sides — the second candidate the comment
+        above `_MENTIONED` rejects -> 3 failed, and the sharp one is not the ratchet (which names
+        test_workflow_gates' record, one paragraph) but THIS test's PRE-EXISTING
+        `control 2 passed; …` row: its `1 failed, 1 passed` is a real round written in backticks
+        and the widened mask blinds the scanner to it. That is the "shrinks the list for the wrong
+        reason" half of the rejection, arriving as a red on a row nobody wrote for it
+      * the same widening on the CONTROL SIDE ONLY, which is the first rejected candidate exactly
+        -> 3 failed, the ratchet naming FOURTEEN paragraphs at once. Twelve at `1fb0082`, before
+        this card's own prose existed; the other two are the `A MENTION` comment's, so the digit is
+        a round here rather than a claim up there — a count that moves when the paragraph stating
+        it is edited is the self-tally this file refuses everywhere else
     """
     # (prose, quotes a round count, states a control count)
     rows = [
@@ -1006,6 +1099,9 @@ def test_the_scanner_tells_a_pytest_tally_from_the_other_numbers_in_this_repo():
         ("control PASS. An unrelated paragraph of the same record says 0 failed", True, False),
         ("control PASS on a clause long enough to run past sixty characters of prose before it "
          "reaches 0 failed", True, False),
+        ("traceback and the docstrings here contain the literal `control 0 failed`", False, False),
+        ("CONTROL ROUND FIRST and repeated between batches: `control 0 failed` every time",
+         True, True),
     ]
     for prose, expected_round, expected_control in rows:
         assert _quotes_a_round_count(prose) is expected_round, \
@@ -1375,8 +1471,16 @@ _WEAK_CONTROL_READINGS = (
 
 
 def _reads_as_a_control(prose: str, reading) -> bool:
-    """Whether one of the weak readings accepts this prose — a pair meaning both halves must hit."""
-    flat = " ".join(prose.split())
+    """Whether one of the weak readings accepts this prose — a pair meaning both halves must hit.
+
+    It reads through `_without_mentions` for the same reason the strong form does, and that keeps
+    the tree-wide comparison about PATTERN STRENGTH alone: without it the two predicates would
+    differ in a second dimension, and the day a paragraph's only control is a mention the identity
+    assert below would fire about calibration when what actually happened is the ratchet catching
+    exactly what VMCP-259 (861) added it for. The flattening stays this function's own — adding the
+    `#` strip here is a separate change with its own price, and this one is not it.
+    """
+    flat = _without_mentions(" ".join(prose.split()))
     if isinstance(reading, tuple):
         return all(half.search(flat) for half in reading)
     return bool(reading.search(flat))
