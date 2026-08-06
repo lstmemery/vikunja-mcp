@@ -51,6 +51,13 @@ class FakeAPI:
         # #126: как max_items_per_page реального сервера — не-required бакеты усекаются до первой
         # страницы на лёгком борде (#43); дефолт 50 не трогает существующие тесты (<50 задач/бакет)
         self.page_size = 50
+        # #885: id задач, чья копия В KANBAN-ВИДЕ приезжает с ПУСТЫМ assignees, тогда как
+        # GET /tasks/<id> отдаёт их. Это НЕ удобство теста, а моделирование ИЗМЕРЕННОГО поведения
+        # живой Vikunja 2.3.0 (project 10, 2026-08-06: /tasks/854 -> [(7, 'agent-vikunja-mcp')],
+        # копия на доске -> []). Без этого knob'а расхождение здесь НЕПРЕДСТАВИМО — обе копии
+        # фейка выводятся из одного стора, — то есть весь класс дефектов «код прочитал копию с
+        # доски и решил по ней» непинуем, ровно как аliasing из _snapshot ниже.
+        self.kanban_assignee_blackout = set()
 
     # --- helpers для тестов ---
     def _task_identity(self, project=None):
@@ -330,6 +337,15 @@ class FakeAPI:
             raise AssertionError("нельзя удалять непустой бакет")
         self._buckets = [b for b in self._buckets if b["id"] != bucket_id]
 
+    def _kanban_copy(self, task_id, task):
+        """The snapshot a KANBAN read hands out. Identical to `_snapshot` unless this id is in
+        `kanban_assignee_blackout`, in which case `assignees` comes back EMPTY while
+        `get_task` keeps returning them — the #885 divergence, measured on live 2.3.0."""
+        snap = self._snapshot(task)
+        if task_id in self.kanban_assignee_blackout:
+            snap["assignees"] = []
+        return snap
+
     def view_tasks(self, project_id, view_id, require_titles=None):
         # mirror the real client (#43/#126): require_titles restricts EXHAUSTIVE paging to those
         # buckets; every OTHER bucket returns only its first page (page_size), NOT its full history
@@ -342,7 +358,7 @@ class FakeAPI:
         out = []
         for b in self._project_state(project_id)["buckets"]:
             tasks = [
-                self._snapshot(t) for tid, t in self.tasks.items()
+                self._kanban_copy(tid, t) for tid, t in self.tasks.items()
                 if self.task_bucket.get(tid) == b["id"]
             ]
             if require_titles is not None and b["title"] not in require_titles:

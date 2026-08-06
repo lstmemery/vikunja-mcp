@@ -3,6 +3,7 @@ import re
 import pytest
 
 from tests.unit.fakes import FakeAPI
+from vikunja_mcp.api import VikunjaError
 from vikunja_mcp.workflow import STAGES, Workflow, WorkflowError
 
 
@@ -282,3 +283,165 @@ def test_claim_wip_gate_still_self_heals_stuck_queue_claim():
     res = wf.claim(stuck["id"])
     assert res["claimed"] is True
     assert api.stage_of(stuck["id"]) == "Design"
+
+
+# --- #885: the kanban copy of a task can arrive WITHOUT its assignees ----------------------
+# Measured on the live tracker (project 10, 2026-08-06): claim(854) returned {"claimed": true},
+# GET /api/v1/tasks/854 answered assignees=[(7, 'agent-vikunja-mcp')] and GET /api/v1/user
+# answered id 7 — yet the copy of the same card on the KANBAN BOARD, which is what every
+# ownership gate reads, came back with assignees=[]. Six advance() attempts over ~40 minutes all
+# refused, and so did call_human/return_task/decompose: the card was workable by NO tool while
+# occupying a WIP slot, and the agent could not even ask a human ABOUT IT.
+#
+# Rare and DURABLE, both measured the same day: exactly one of the 31 cards outside Done
+# diverged, and re-assigning, moving columns and a full read-modify-write POST /tasks/854 each
+# left the board copy empty. So the fix is two halves — recovery in the gates, and a claim that
+# stops reporting silent success about a read it never made.
+
+
+def test_claim_reports_when_the_kanban_copy_lost_the_assignee(env):
+    """#885, half (b) — PREVENTION, in the sense of "stop being silent", not of refusing.
+
+    claim's own assign-then-verify reads `GET /tasks/<id>`; every later ownership gate reads the
+    KANBAN copy. Those are two different reads and #885 measured them disagreeing, so claim used
+    to report plain success about a state it had never checked — that silence is what let a rare
+    server quirk become a dead card. It now asks the second question with the SAME read the gates
+    use and names the divergence in its own payload.
+
+    It REPORTS rather than refuses on purpose: nothing on this side can repair the server's copy,
+    so a refusal would make the card unclaimable forever. The other half (below) is what makes
+    reporting sufficient. Delete the `kanban_assignee_divergence` block from claim and this test
+    goes RED while every other claim test stays green — the payload key is the only witness.
+
+    MUTATION SWEEP for the whole #885 section, selection tests/unit/test_workflow_claim.py, caches
+    cleared and PYTHONDONTWRITEBYTECODE=1, every round collecting the same 31 items as the control
+    and read by counting `FAILED `/`ERROR ` lines rather than the first `N failed` in stdout:
+    control 0 failed, 0 errors. Recovery reverted so `_require_mine` judges the board copy again
+    -> 3 failed. claim's divergence block deleted -> 1 failed. The divergence key made
+    unconditional -> 2 failed. The re-read made unconditional -> 1 failed. The verification's
+    `except` emptied so a failed board read propagates -> 1 failed. The re-read's `except` emptied
+    so a failed `/tasks/<id>` propagates -> 1 failed. No round scored zero, so every half of this
+    section is pinned by something."""
+    api, wf = env
+    t = api.add_task("diverging card", "Queue")
+    api.kanban_assignee_blackout.add(t["id"])
+    res = wf.claim(t["id"])
+    # the claim itself really did succeed — the task carries the assignee, only the board
+    # copy does not
+    assert res["claimed"] is True and api.stage_of(t["id"]) == "Design"
+    assert api.me_user["id"] in [a["id"] for a in api.tasks[t["id"]]["assignees"]]
+    note = res.get("kanban_assignee_divergence")
+    assert note, f"claim reported success about a read it never made: {res}"
+    assert "KANBAN" in note and str(t["id"]) in note
+    assert "re-create the card" in note, f"the known workaround is not named: {note}"
+
+
+def test_a_healthy_claim_carries_NO_divergence_key(env):
+    """The counterpart, and the reason the key is worth reading: it appears ONLY on the anomaly.
+    A field present on every result is the never-read signal #516 had to split `kept` in two to
+    cure. Drop the `if divergence:` guard and this goes RED."""
+    api, wf = env
+    t = api.add_task("ordinary card", "Queue")
+    res = wf.claim(t["id"])
+    assert res["claimed"] is True
+    assert "kanban_assignee_divergence" not in res, res
+
+
+def test_the_divergence_check_never_fails_the_claim_it_verifies(env):
+    """Best-effort by construction: a verification that can fail the claim is worse than none.
+    Here the board read itself blows up AFTER the card has been moved and commented — the claim
+    must still be reported as the success it is. Remove the `except` and this goes RED with the
+    raised error instead of a claim result."""
+    api, wf = env
+    t = api.add_task("verification explodes", "Queue")
+    calls = {"n": 0}
+    real_view_tasks = api.view_tasks
+
+    def flaky(*a, **kw):
+        calls["n"] += 1
+        if calls["n"] > 1:           # the FIRST board read is claim's own; this is the later one
+            raise VikunjaError(500, "board read failed")
+        return real_view_tasks(*a, **kw)
+
+    api.view_tasks = flaky
+    res = wf.claim(t["id"])
+    assert res["claimed"] is True and api.stage_of(t["id"]) == "Design"
+    assert "kanban_assignee_divergence" not in res, res
+
+
+def test_ownership_gates_RECOVER_a_card_whose_board_copy_lost_its_assignee(env):
+    """#885, half (a) — RECOVERY, and the half that actually unsticks the card.
+
+    This is the live sequence: claim succeeds, then every ownership-gated tool refuses because
+    `_require_mine` judged by the board copy. All five are driven here, not argued about, because
+    the card's cost was precisely that ALL of them refused at once — one passing tool would have
+    left a way out. Revert `_require_mine` to `self._assignee_ids(task)` and every assertion in
+    the first loop goes RED."""
+    api, wf = env
+    t = api.add_task("stuck between claim and advance", "Queue")
+    api.kanban_assignee_blackout.add(t["id"])
+    wf.claim(t["id"])
+    assert api.stage_of(t["id"]) == "Design"
+
+    # the tools that were dead on the live card
+    assert wf.advance(t["id"], to="build", spec="approach")["moved_to"] == "Build"
+    assert wf.call_human(t["id"], "a question")["moved_to"] == "Your Call"
+    api.task_bucket[t["id"]] = api.bucket_id("Build")      # the human answers, card comes back
+    assert wf.return_task(t["id"], reason="external blocker")["moved_to"] == "Backlog"
+
+
+def test_the_recovery_re_read_happens_ONLY_on_an_empty_assignee_list(env):
+    """The condition the human's answer named explicitly: re-read when the board copy is EMPTY,
+    not always. The shape is one card in 31; a gate that re-read unconditionally would pay a GET
+    per ownership check for it. Widen the guard to re-read always and the second half goes RED."""
+    api, wf = env
+    mine = api.add_task("mine", "Design", assignee=api.me_user)
+    reads = []
+    real_get_task = api.get_task
+    api.get_task = lambda tid: (reads.append(tid), real_get_task(tid))[1]
+
+    task, stage = wf._find_task(mine["id"])
+    wf._require_mine(task, stage)                       # passes, and must not have re-read
+    assert reads == [], f"a healthy card paid for a re-read it did not need: {reads}"
+
+    # ...while the empty list — and only it — reaches `/tasks/<id>`
+    orphan = api.add_task("no assignee", "Design")
+    task, stage = wf._find_task(orphan["id"])
+    with pytest.raises(WorkflowError):
+        wf._require_mine(task, stage)
+    assert reads == [orphan["id"]], reads
+
+
+def test_a_board_copy_that_lost_SOMEBODY_ELSES_assignee_is_not_read_as_ownerless(env):
+    """The interaction with #705/#734, which is not obvious and is wrong in the tempting
+    direction. Their clause fires on "no assignee AT ALL" and tells the agent a human hand-placed
+    an ownerless card. A card whose kanban copy merely LOST its assignees is not that card: the
+    exit advice would name a hand-placement that never happened. Because the clause now asks the
+    RE-READ list, such a card gets the bare "not assigned to you" — the accurate diagnosis.
+
+    Keep `_require_mine` deciding the clause from the board copy while re-reading only for the
+    ownership verdict and this goes RED."""
+    api, wf = env
+    theirs = api.add_task("their work", "Design", assignee={"id": 99, "username": "someone-else"})
+    api.kanban_assignee_blackout.add(theirs["id"])
+    with pytest.raises(WorkflowError) as exc:
+        wf.advance(theirs["id"], to="build", spec="s")
+    msg = str(exc.value)
+    assert "not assigned to you" in msg
+    assert "NO assignee at all" not in msg, f"a card with an owner got the ownerless exit: {msg}"
+
+
+def test_a_failed_re_read_falls_back_to_the_refusal_it_would_have_given(env):
+    """Best-effort, the other side: a diagnostic must not break its own gate. When `/tasks/<id>`
+    cannot be read the ownership check answers exactly as it did before #885 — an ownership
+    refusal, not a network error. Remove the `except` and this goes RED."""
+    api, wf = env
+    orphan = api.add_task("really ownerless", "Design")
+
+    def boom(task_id):
+        raise VikunjaError(503, "tracker unavailable")
+
+    api.get_task = boom
+    with pytest.raises(WorkflowError) as exc:
+        wf.advance(orphan["id"], to="build", spec="s")
+    assert "not assigned to you" in str(exc.value)

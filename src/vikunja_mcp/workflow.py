@@ -579,8 +579,49 @@ class Workflow:
         self._remove_label(task, LABEL_REVIEW_FAILED)
         self._remove_label(task, LABEL_REVIEWED)
 
-    def _require_mine(self, task: dict, stage: str | None = None) -> None:
+    def _kanban_assignees_may_be_stale(self, task: dict) -> list[int]:
+        """Assignee ids for an ownership decision, re-read from `/tasks/<id>` when the copy in
+        hand carries NONE (#885).
+
+        The copy every ownership gate judges by comes off the KANBAN BOARD (`_find_task` searches
+        `_board()`), and MEASURED on the live tracker (project 10, 2026-08-06) that copy can come
+        back with an EMPTY `assignees` while the task itself is assigned: `GET /api/v1/tasks/854`
+        answered `[(7, 'agent-vikunja-mcp')]` and the board copy of the same card answered `[]`.
+        Every ownership gate then saw an ownerless card, and #705's clause — correct for a really
+        ownerless card — told the agent to `claim` it, which refuses outside Queue. The card sat
+        in Design consuming a WIP slot with `advance`, `call_human`, `return_task` and `decompose`
+        all refusing identically, i.e. it was workable by NO tool and the agent could not even
+        ask a human ABOUT IT (`call_human` needs the same ownership).
+
+        RARE, and that is measured rather than assumed: the same day, the board copy was compared
+        against `GET /tasks/<id>` for all 31 cards outside Done and exactly ONE diverged. It is
+        also DURABLE rather than a post-claim race — re-assigning (DELETE + PUT on
+        `/tasks/854/assignees`), moving the card between columns and a full read-modify-write
+        `POST /tasks/854` were each tried on the live card and the board copy stayed empty. So
+        nothing here can heal the server's copy; the gates are made resilient to it instead.
+        WHY the server drops them is a Vikunja question and deliberately out of scope.
+
+        ONLY on an empty list, never unconditionally: an ownership gate that re-read on every call
+        would pay a GET per call for a shape seen once in 31 cards. And only from `_require_mine`,
+        never from `_find_task` — `_find_task` also serves the read paths and `claim`, where an
+        empty `assignees` is the ORDINARY state of every free card in Queue/Backlog, so the branch
+        would stop being rare at all. Here it sits on the path that is about to RAISE.
+
+        Best-effort by the same reasoning that makes it cheap: if the re-read fails, fall back to
+        the copy in hand rather than turning a clear ownership refusal into a network error."""
         assignees = self._assignee_ids(task)
+        if assignees:
+            return assignees
+        try:
+            return self._assignee_ids(self.api.get_task(task["id"]))
+        except (VikunjaError, httpx.HTTPError) as exc:
+            _stderr_note_best_effort(
+                f"vikunja-mcp: assignee re-read skipped for #{task['id']}", exc
+            )
+            return assignees
+
+    def _require_mine(self, task: dict, stage: str | None = None) -> None:
+        assignees = self._kanban_assignees_may_be_stale(task)
         if self._me()["id"] in assignees:
             return
         msg = f"task {task['id']} is not assigned to you — claim it first"
@@ -624,6 +665,11 @@ class Workflow:
         # ANOMALOUS (call_human keeps the assignee, so a parked card should have one) and Done is
         # TERMINAL (human-only both ways, same door #626/#649 already point at). So the exit
         # sentence is per stage — `_OWNERLESS_EXITS`, above.
+        #
+        # "No assignee at all" is asked of the RE-READ list, not of the board copy (#885): a card
+        # whose kanban copy lost its assignees is not ownerless, and giving it the ownerless exit
+        # would be the wrong advice twice over — it would name a human hand-placement that never
+        # happened, and it would fire on a card this method has just decided is somebody's.
         #
         # What is NOT claimed: that unfollowable advice is now impossible. The clause keys off
         # "no assignee at all", so somebody ELSE's card keeps the bare message in every stage —
@@ -1298,10 +1344,60 @@ class Workflow:
         view = self._view()
         self.api.move_task(self.project_id, view["id"], self._bucket("Design")["id"], task_id)
         self.api.add_comment(task_id, f"[claim] {me['username']} взял задачу в работу")
-        return {
+        result = {
             "claimed": True, "task": self._summary(fresh),
             "next": "describe your approach and call advance(to='build', spec=...)",
         }
+        divergence = self._kanban_assignee_divergence(task_id, me["id"])
+        if divergence:
+            result["kanban_assignee_divergence"] = divergence
+        return result
+
+    def _kanban_assignee_divergence(self, task_id: int, my_id: int) -> str | None:
+        """Does the card, read the way `advance` will read it, still show me as its assignee?
+
+        assign-then-verify above verifies through `GET /tasks/<id>`; every LATER ownership gate
+        judges by the copy on the KANBAN BOARD, and #885 measured those two disagreeing on a live
+        card — so `claim` used to report plain SUCCESS about a state it had never checked, and the
+        silence is what turned a rare server quirk into a card no tool could move. This asks the
+        second question with the same read the gates use, so the claim's own report names it.
+
+        REPORTS, never refuses. Refusing here would be the loud half of the fix and would leave
+        the card unclaimable FOREVER, because nothing on this side can repair the server's copy
+        (measured: re-assigning, moving columns and a full read-modify-write all left it empty).
+        What makes reporting sufficient is the OTHER half landing with it — `_require_mine`
+        re-reads on an empty list, so the card is workable — and what makes it necessary is that
+        `claim` must stop being silent about a state it did not verify.
+
+        `require_titles={"Design"}` and not the full board: the card was just moved into Design,
+        so THAT bucket is paged exhaustively exactly as `advance`'s own read pages it, and the
+        answer for this card is the same one `advance` would get — without paying for the
+        exhaustive Done/Backlog read `_board()` otherwise makes (#43).
+
+        Best-effort: a verification must never fail the claim it verifies. Anything raised here —
+        including `_find_task` not finding the card, itself a divergence of a kind — is swallowed
+        into "could not check", which is reported as no divergence rather than as a false alarm."""
+        try:
+            board = self._board(require_titles=frozenset({"Design"}))
+            kanban_task, _stage = self._find_task(task_id, board=board)
+            if my_id in self._assignee_ids(kanban_task):
+                return None
+        except (WorkflowError, VikunjaError, httpx.HTTPError) as exc:
+            _stderr_note_best_effort(
+                f"vikunja-mcp: kanban assignee verification skipped for #{task_id}", exc
+            )
+            return None
+        return (
+            "the claim SUCCEEDED (GET /tasks/{tid} shows you as the assignee), but the copy of "
+            "this card in the KANBAN VIEW came back WITHOUT it — and the kanban copy is what "
+            "every later ownership gate reads. Ownership gates re-read the task itself when the "
+            "board copy is empty, so this card IS workable; nothing on this side can repair the "
+            "server's copy, though (re-assigning, moving columns and a full task rewrite were all "
+            "measured leaving it empty), so if a tool still refuses this card as 'not assigned to "
+            "you', the known workaround is to re-create the card with the same content and park "
+            "the original in Backlog. Say so in your report — this is a Vikunja-side anomaly, "
+            "measured once in 31 cards, not something you did"
+        ).format(tid=task_id)
 
     def _move(self, task_id: int, stage: str) -> None:
         self.api.move_task(
