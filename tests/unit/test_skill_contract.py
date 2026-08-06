@@ -4002,7 +4002,14 @@ def _second_pass_section(text: str) -> str:
     assert end != -1, "the second-pass section no longer ends where the next section begins"
     section = text[start:end]
     assert 0 < len(section) < len(text), "the second-pass slice is not a proper subset of SKILL.md"
-    assert "Декомпозиция и файлинг" not in section, "the slice swallowed the following section"
+    # The guard names the following section's HEADING, not its NAME — the same correction #628
+    # already made to `_independent_review_section`, arrived at here by the same input. Matching
+    # the bare name fired on prose that merely CROSS-REFERENCES that section, and #902 added
+    # exactly such a reference (the filing threshold's pointer, which cites the section by the
+    # nominative title every other cross-reference in this file uses). It does NOT weaken the
+    # swallow check: a slice that really ran past the boundary necessarily contains the heading
+    # LINE, so anchoring on `\n## ` still catches it, and stops catching legitimate citations.
+    assert "\n## Декомпозиция и файлинг" not in section, "the slice swallowed the following section"
     return section
 
 
