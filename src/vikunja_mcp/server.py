@@ -611,7 +611,9 @@ def return_task(task_id: int, reason: str) -> dict:
     and a finding outside that card's slice goes in file_task. From Done — a human accepted
     that card, and moving accepted work back out is the human's call too (the Done transition
     is human-only in BOTH directions); Done work that needs redoing goes in file_task as a
-    follow-up card. It still works from Backlog/Queue/Design/Build/Your Call."""
+    follow-up card. Since #662 that Done half is ONE rule shared by every tool, not this one's
+    own: from Done you get the same refusal whatever you call, so trying the next tool after it
+    is wasted. It still works from Backlog/Queue/Design/Build/Your Call."""
     return _wf().return_task(task_id, reason)
 
 
@@ -635,10 +637,11 @@ def decompose(task_id: int, subtasks: list[dict], ordered: bool = False) -> dict
     goes back to Build first — a reviewer sends it there with
     review_task(verdict='needs_work', report=<why it should be split>) and its implementer
     decomposes from there; a finding outside that card's slice goes in file_task. From Done
-    (#649) — a human accepted that card, and splitting accepted work back out to Backlog is the
-    human's transition too; file_task the follow-ups instead (they are NEW work, not a split of
-    this one). It still works from Backlog/Queue/Design/Build/Your Call, where the ownership
-    guard applies as usual."""
+    (#649, now the shared #662 rule every tool answers with — so from Done the next tool you try
+    says the same thing) — a human accepted that card, and splitting accepted work back out to
+    Backlog is the human's transition too; file_task the follow-ups instead (they are NEW work,
+    not a split of this one). It still works from Backlog/Queue/Design/Build/Your Call, where
+    the ownership guard applies as usual."""
     return _wf().decompose(task_id, subtasks, ordered)
 
 

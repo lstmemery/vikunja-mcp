@@ -636,9 +636,22 @@ def test_decompose_refusals_describe_the_verdict_they_would_actually_clear(env):
         f"describing a state this tool does produce: {_label_titles(api, carrier['id'])}"
     )
 
-    # HALF TWO — text: neither refusal may promise the verdict SURVIVES the split.
+    # HALF TWO — text: the refusal may not promise the verdict SURVIVES the split.
+    #
+    # REVIEW ONLY since #662, and the narrowing is DELIBERATE rather than a test bending to the
+    # code. Done used to be the second half of this loop and asserted the same `CLEAR` clause on
+    # `decompose`'s own Done refusal. That refusal no longer exists: #662 put human-only Done in
+    # `_find_task` as ONE rule and deleted the per-tool gate it made dead, so from Done every
+    # tool now reads one shared message. The price is exactly the "flattened prescriptive
+    # routing" #662's description weighed and a human accepted — a shared message cannot name a
+    # consequence only ONE tool has ("this call would clear your verdict"), because it is not
+    # true of `get_task` or of `claim`. What replaces the cover is not nothing: the Done side is
+    # pinned by the meta-test over `server._DEFERRED_TOOLS`, which asks the stronger question
+    # (does EVERY mutating tool refuse from Done, and does every reading one still work) instead
+    # of this narrower one about decompose's wording. So this loop keeps the stage where the
+    # per-tool refusal is still a per-tool refusal.
     survives = ("stack `epic` on top of", "stack `epic` on the verdict", "on top of `reviewed`")
-    for stage in ("Review", "Done"):
+    for stage in ("Review",):
         card = api.add_task(f"verdict-carrying card in {stage}", stage, assignee=api.me_user)
         api.tasks[card["id"]]["labels"] = [{"id": 903, "title": "reviewed"}]
         with pytest.raises(WorkflowError) as ei:
@@ -653,6 +666,19 @@ def test_decompose_refusals_describe_the_verdict_they_would_actually_clear(env):
             f"the {stage} refusal no longer names the real consequence (the verdict is erased), "
             f"which is the whole point of rewording it rather than deleting the clause: {msg}"
         )
+
+    # ...and the Done card really does read the SHARED refusal now, so the clause above was
+    # dropped because it moved, not because nobody looked. Asserted here rather than left to the
+    # meta-test alone: this is the test whose coverage shrank, so this is where the replacement
+    # has to be visible.
+    done_card = api.add_task("verdict-carrying card in Done", "Done", assignee=api.me_user)
+    api.tasks[done_card["id"]]["labels"] = [{"id": 904, "title": "reviewed"}]
+    with pytest.raises(WorkflowError) as done_ei:
+        wf.decompose(done_card["id"], [{"title": "A"}, {"title": "B"}])
+    done_msg = str(done_ei.value)
+    assert "Done" in done_msg and "file_task" in done_msg, done_msg
+    for phrase in survives:
+        assert phrase not in done_msg, done_msg
 
 
 def test_call_human_refuses_from_review_and_the_stage_check_precedes_ownership(env):
@@ -2314,7 +2340,13 @@ def test_ownerless_card_gets_a_TRUE_exit_in_every_stage_claim_refuses_from():
                    "Review is the only non-Queue stage an agent can move this card out of"),
         "Your Call": ("Only a human moves a card out of Your Call",
                       "call_human KEEPS the assignee", "next_task offers it to nobody"),
-        "Done": ("Done is human-only in BOTH directions", "file_task("),
+        # DONE IS NOT HERE ANY MORE (#662), and it left this map because the CODE stopped
+        # having a Done row, not because the assertion got inconvenient. Human-only Done is
+        # now ONE rule in `_find_task`, which refuses before `_require_mine` runs — so the
+        # ownerless exit for Done was unreachable data, and a stale row in a table a reader
+        # trusts is worse than none. The replacement is stronger, not weaker: the shared
+        # refusal answers for an OWNED card too, which this row never covered, and the
+        # meta-test over `server._DEFERRED_TOOLS` asks it of every tool. Asserted below.
     }
     for stage, must_say in expected.items():
         orphan = api.add_task(f"ownerless in {stage}", stage)
@@ -2334,6 +2366,8 @@ def test_ownerless_card_gets_a_TRUE_exit_in_every_stage_claim_refuses_from():
             wf.advance(orphan["id"], to="build", spec="s")
         assert "refuse it identically" not in str(exc.value), \
             f"{stage}: claims four tools answer alike, but call_human refuses by STAGE there"
+        if stage == "Done":
+            continue    # from Done nothing reaches call_human's stage gate any more (#662)
         # ...and the stage gate really is what call_human answers with, so the pin is about a
         # real divergence and not about a phrase nobody would have written
         with pytest.raises(WorkflowError) as ch:
@@ -2355,7 +2389,7 @@ def test_ownerless_card_gets_a_TRUE_exit_in_every_stage_claim_refuses_from():
     # test measures the counter-example: needs_work + claim leaves the card mine.
     assert "no call of yours can make it yours" not in str(rev.value), \
         f"Review contradicts itself: the clause is back in the shared prefix: {rev.value}"
-    for stage in ("Backlog", "Design", "Build", "Your Call", "Done"):
+    for stage in ("Backlog", "Design", "Build", "Your Call"):   # Done: see the note above
         orphan = api.add_task(f"ownerless in {stage}", stage)
         with pytest.raises(WorkflowError) as exc:
             wf.advance(orphan["id"], to="build", spec="s")
@@ -2371,11 +2405,21 @@ def test_ownerless_card_gets_a_TRUE_exit_in_every_stage_claim_refuses_from():
     # UNCHANGED 2 — somebody ELSE'S card, byte for byte, in EVERY stage. The clause keys off "no
     # assignee at all", never off "claim would refuse from here" — even though claim refuses from
     # Backlog/Your Call/Done for an owned card just the same.
+    # DONE IS THE ONE EXCEPTION SINCE #662, and it is the RIGHT direction: there the card is
+    # refused by STAGE before ownership is consulted at all, so a Done card belonging to
+    # someone else reads "this is the human's transition" instead of "claim it first" —
+    # which for an accepted card was never an answer that could be acted on. Both halves are
+    # asserted, because "not the bare message" alone would pass on any wording at all.
     for stage in STAGES:
         theirs = api.add_task(f"their work in {stage}", stage,
                               assignee={"id": 99, "username": "someone-else"})
         with pytest.raises(WorkflowError) as other:
             wf.advance(theirs["id"], to="build", spec="s")
+        if stage == "Done":
+            msg = str(other.value)
+            assert "Done" in msg and "file_task" in msg, msg
+            assert "not assigned to you" not in msg, msg
+            continue
         assert str(other.value) == _BARE.format(id=theirs["id"]), (stage, other.value)
 
 

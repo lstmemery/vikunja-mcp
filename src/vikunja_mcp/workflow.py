@@ -101,17 +101,38 @@ _OWNERLESS_EXITS: dict[str, str] = {
         "ownerless, and when the human answers and moves this one back to Design/Build it will "
         "still have no owner, where next_task offers it to nobody"
     ),
-    # Done is terminal and human-only in BOTH directions — the same answer #626/#649 already
-    # give from return_task and decompose, which is why this text points at the same door they
-    # do. Reached by `advance` only, for the same reason as Review.
-    "Done": (
-        ", so no call of yours can make it yours. Done is human-only in BOTH directions, so this "
-        "card is not yours to move no matter "
-        "who owns it. Work that a Done card revealed is NEW work rather than this card: file_task(…, "
-        "related_task_id=<this task>) for a human to triage; a human can also move this card "
-        "back themselves"
-    ),
+    # DONE HAS NO ENTRY, and its absence means something different from Queue's (#662). Queue is
+    # absent because the bare advice is CORRECT there. Done is absent because this map can no
+    # longer be consulted from Done at all: the shared guard in `_find_task` refuses before
+    # `_require_mine` is ever reached, so the row #734 wrote here became DEAD DATA — measured,
+    # every one of `_require_mine`'s four callers takes the default `allow_done=False`, and the
+    # four that pass True never ask about ownership. Deleting it is the same honesty the two
+    # personal gates got: a stale row in a table a reader trusts is worse than no row. Nothing is
+    # lost from the message — the shared refusal says what this row said, and says it for EVERY
+    # tool and for an OWNED card too, which this row never covered.
 }
+
+# human-only Done, said ONCE (#662). Before this, six tools refused a Done card and each said so
+# in its own words — four by deriving it from their own starting stage, two (`return_task` #626,
+# `decompose` #649) from a personal `if stage == "Done"`. The class stayed open because nothing
+# expressed the RULE: the next mutating tool that moved a card without checking its stage would
+# reopen it and no test would notice. The guard now sits in `_find_task`, so this is what all six
+# say, and the collapse is the price the card's own analysis named. Two things it therefore has
+# to carry, because the six carried them between them and the pins on #626/#649 assert them as
+# TOKENS rather than as whole strings — by construction, not by luck: the word DONE (the
+# transition is the human's in BOTH directions, which is what makes it a rule and not a
+# preference) and `file_task`, the door that does work from here. Anything a Done card revealed
+# is NEW work; this card is finished and not the agent's to reopen.
+_DONE_IS_THE_HUMANS = (
+    "task {task_id} is in Done, and a card only gets there because a HUMAN put it there — the "
+    "Done transition is human-only in BOTH directions, so no agent tool moves it, changes it or "
+    "takes it back out. That is one rule rather than a habit of each tool: whatever you were "
+    "about to call, the answer from Done is the same. Work that a Done card revealed is NEW "
+    "work, not a change to this one — file_task(…, related_task_id={task_id}) puts it in front "
+    "of a human for triage. If this card itself is wrong, only a human can move it back. "
+    "Reading it is still open: get_task, comment, attach_file and download_attachment all work "
+    "on an accepted card"
+)
 
 # --- вложения: временные файлы (download_attachment, #139) ---
 # Скачанные вложения кладём в один выделенный temp-каталог, КАЖДОЕ скачивание — в свой
@@ -474,11 +495,45 @@ class Workflow:
         Thin view over _wip_limit_with_origin, which owns the precedence."""
         return self._wip_limit_with_origin()[0]
 
-    def _find_task(self, task_id: int, board: list[dict] | None = None) -> tuple[dict, str]:
+    def _find_task(
+        self, task_id: int, board: list[dict] | None = None, *, allow_done: bool = False,
+    ) -> tuple[dict, str]:
+        """Locate a task on the board and answer (task, stage) — and, unless the caller opts out,
+        REFUSE a card in Done (#662).
+
+        This is the one chokepoint every card-touching tool shares, which is why the human-only
+        Done rule lives here now instead of in a per-tool `if stage == "Done"`. Before #662 it was
+        an ENUMERATION: four tools happened to refuse because Done is not their starting stage
+        (`claim` wants Queue, `advance` its own `from_stage`, `call_human` Design/Build,
+        `review_task` Review) and two carried a personal gate (`return_task` #626, `decompose`
+        #649). A sweep of all 12 registered tools was clean — but the next mutating tool that
+        moves a card without checking its stage reopened the hole, and NO test asked the question,
+        because every pin checked its own tool. FAIL-CLOSED replaces that: a new tool that says
+        nothing refuses from Done by default, so a new author's omission becomes a loud refusal
+        rather than a silent hole. What that does NOT buy is inexpressibility — this guard can
+        still be deleted or opted out of; it is one place instead of six, not a law.
+
+        `allow_done=True` is the READ paths, and they are the reason a bare guard here was
+        rejected in #649: an accepted card must stay READABLE and COMMENTABLE. Four callers pass
+        it — get_task, comment, attach_file, download_attachment — and that list is the fail-closed
+        rule's price, paid in the other direction: the author of a new READING tool gets a
+        surprising refusal until they opt in. That is the better of the two errors, not the
+        absence of one.
+
+        The cost was measured rather than waved through: six per-tool Done refusals collapse into
+        the ONE message below, which is the "flattened prescriptive routing" #662's description
+        held against the rejected `_refuse_if_done` helper. It is cheaper than it looked (the
+        two dead gates go with it, so the landing is net NEGATIVE lines), but it is real, so the
+        message has to carry what the six carried between them: that the transition is the
+        human's in BOTH directions, and the door that does work. `advance(to='done')` is NOT in
+        the collapse — it refuses before this method is ever called and keeps its own wording."""
         for bucket in (board if board is not None else self._board()):
             for task in bucket.get("tasks") or []:
                 if task["id"] == task_id:
-                    return task, bucket["title"]
+                    stage = bucket["title"]
+                    if stage == "Done" and not allow_done:
+                        raise WorkflowError(_DONE_IS_THE_HUMANS.format(task_id=task_id))
+                    return task, stage
         raise WorkflowError(f"task {task_id} not found on the board of project {self.project_id}")
 
     def _unfinished_predecessors(
@@ -1833,39 +1888,21 @@ class Workflow:
                 "outside the card's slice goes to file_task. Anything else genuinely blocked in "
                 "Review takes that same door back to Build first."
             )
-        # Done (#626): the Done transition is human-only BY DESIGN, and an invariant that only
-        # holds one way is not an invariant. Measured on a card driven the normal way (Queue ->
-        # claim -> Design -> Build -> Review -> approve -> a human moves it to Done): return_task
-        # did not refuse, and left the card in Backlog with NO assignee, carrying `reviewed` AND
-        # `blocked` at once — the "approved and blocked" board state. That pair is #626'S OWN, and
-        # this line credited it to #590 until #693's sweep re-checked it: #590's repro adds a BARE
-        # card straight into Review, so what it measured is `blocked` landing ALONE, on a card with
-        # no label at all. The correction is not this comment's to argue — the decompose pin in
-        # tests/unit/test_workflow_gates.py settles it with git and exists to stop this exact
-        # collapse. The #693 block below names #626 correctly — but only as of `2d4d2cd`, the round
-        # that put the credit there; at `5389be0` it cited THIS refusal's own words instead, which
-        # #693 then rewrote. So the two blocks disagreed about one pair until this line was fixed.
-        # The gate belongs HERE rather than in one shared stage rule because human-only
-        # Done is not expressed anywhere as a rule: every tool re-derives it from its own source
-        # stage (advance from_stage, claim Queue, review_task Review, call_human Design/Build),
-        # so a tool that moves a card without a stage check reproduces the hole. `decompose` was
-        # exactly that tool — measured on the same card, it walked the parent to Backlog with
-        # `epic` — hence #626 did NOT claim to be the last one; that sibling was gated by #649,
-        # which closed the last instance known then WITHOUT closing the class: the rule is still
-        # nowhere written once, so the next mutating tool reopens it and nothing catches that.
-        # Ownership cannot stand in for the check either: a human moving a card
-        # into Done does not unassign it, so `_require_mine` passes on the very card that must be
-        # untouchable.
-        if stage == "Done":
-            raise WorkflowError(
-                "return_task is not available from Done: a human accepted this card, and walking "
-                "accepted work back out to Backlog is the human's call too — the Done transition "
-                "is human-only in BOTH directions. It would also unassign the card and CLEAR the "
-                "`reviewed` label on the way out, so the human's acceptance would vanish from the "
-                "board altogether. If Done work needs redoing, file_task a follow-up card "
-                "(related_task_id=<this task>) for a human to triage — call_human refuses from "
-                "Done as well; a human can also move this card back themselves."
-            )
+        # Done is NOT gated here any more (#662). #626's personal `if stage == "Done"` stood at
+        # exactly this spot and became DEAD CODE the moment the shared guard went into
+        # `_find_task` five lines above this method's own first statement — measured with
+        # trace.Trace, it never executed again. Removing it is what makes the landing honest:
+        # leaving a gate that can no longer fire would mean the tree carries a rule nobody can
+        # tell is live. What #626 MEASURED is not repealed and is worth keeping in view: on a
+        # card driven the normal way (Queue -> claim -> Design -> Build -> Review -> approve ->
+        # a human moves it to Done) the ungated tool left the card in Backlog with NO assignee,
+        # and #693 later narrowed the end state it lands in from `reviewed` + `blocked` to
+        # `blocked` alone — the acceptance ERASED rather than contradicted, which is what the
+        # shared refusal now says for every tool at once. Ownership could never have stood in
+        # for the check: a human moving a card into Done does not unassign it, so `_require_mine`
+        # passes on the very card that must be untouchable — which is also why the shared guard
+        # runs BEFORE it and a Done card belonging to someone else reads the stage refusal
+        # rather than "claim it first".
         self._require_mine(task, stage)
         self.api.add_comment(task_id, f"[blocked] {reason.strip()}")
         # #693: the card LEAVES the pipeline unassigned, so any prior verdict has stopped
@@ -1920,45 +1957,16 @@ class Workflow:
                 "decomposes from there; a human can also move it back themselves. A finding "
                 "outside this card's slice goes to file_task instead."
             )
-        # Done (#649): the second half of the same bypass #626 closed for `return_task`, and the
-        # LAST measured instance of it. Measured on a card driven the normal way (Queue -> claim
-        # -> Design -> Build -> Review -> approve -> a human moves it to Done): decompose did not
-        # refuse and walked the parent to Backlog with NO assignee, carrying `reviewed` AND `epic`
-        # at once, with two fresh children in Queue — the board claiming a card a human accepted
-        # is now an unfinished container. Not a regression: at 51ab50d^ (the parent of #590's
-        # commit) decompose reads the same `_find_task` -> `_require_mine` with no stage check at
-        # all. The gate is per-tool for the same reason #626's is: human-only Done is nowhere
-        # expressed as ONE rule, and the only chokepoint every card-touching tool shares is
-        # `_find_task`, which also serves the READ paths (get_task/comment/download_attachment/
-        # attach_file) — shutting Done there would make an accepted card unreadable, a worse
-        # regression than the hole. A guard inside `_move` would fire only AFTER the children
-        # exist and `epic`/unassign have landed, which is not a guard. So the CLASS stays open by
-        # construction — the next mutating tool that moves a card without checking its stage
-        # reopens it, and nothing catches that — and is filed for a human's ruling as #662; what
-        # is closed here is the last instance known TODAY, and that was SWEPT, not assumed: all 12
-        # registered tools were run against one such card and NONE walks it out — the five that
-        # refuse (advance, claim, call_human, review_task, return_task) plus this one, and the six
-        # that never move it (next_task, get_task, comment, file_task, attach_file,
-        # download_attachment). The count is spelled out because #626 shipped this same claim off
-        # a sweep of 5 of 12. Review WAS a different question, left open here and filed as #663;
-        # the gate directly above shut it, so this block is now the SECOND of decompose's two
-        # stage gates rather than its only one, and five stages stay open, not six.
-        # Ownership cannot stand in: a human moving a card into Done does not unassign it, so
-        # `_require_mine` passes on the very card that must be untouchable — and it runs SECOND
-        # here so that a Done card belonging to someone else reads the stage refusal instead of
-        # "claim it first", which for an accepted card is the one answer that can never be right.
-        if stage == "Done":
-            raise WorkflowError(
-                "decompose is not available from Done: a human accepted this card, and splitting "
-                "accepted work back out into Backlog is the human's call too — the Done "
-                "transition is human-only in BOTH directions. It would also unassign the card and "
-                "CLEAR the `reviewed` label on the way out, so the human's acceptance would vanish "
-                "from the board altogether — leaving an `epic` container and fresh children in "
-                "Queue where accepted work used to be. Work that a "
-                "Done card revealed is NEW work, not a split of this one: file_task the "
-                "follow-ups (related_task_id=<this task>) for a human to triage — call_human "
-                "refuses from Done as well; a human can also move this card back themselves."
-            )
+        # Done is NOT gated here any more (#662), for the same reason as in `return_task`:
+        # #649's personal gate stood here and became DEAD CODE under the shared guard in
+        # `_find_task` (measured with trace.Trace — never executed again), so the honest landing
+        # removes it. #649's own measurement stands as history: on an accepted card the ungated
+        # tool walked the parent to Backlog carrying `reviewed` AND `epic` at once, with two
+        # fresh children in Queue — the board claiming work a human accepted is now an
+        # unfinished container. Its closing caveat is what #662 acted on: the class stayed open
+        # because the rule was nowhere written ONCE, so the next mutating tool reopened it and
+        # nothing caught that. It is written once now, in `_find_task`, and the meta-test over
+        # `server._DEFERRED_TOOLS` is what makes a new tool ask the question out loud.
         self._require_mine(task, stage)
 
         created: list[dict] = []
@@ -2186,7 +2194,10 @@ class Workflow:
     def comment(self, task_id: int, text: str) -> dict:
         if not (text or "").strip():
             raise WorkflowError("an empty comment is not needed")
-        self._find_task(task_id)
+        # allow_done (#662): READING an accepted card stays open — the guard in `_find_task`
+        # is fail-closed, so a reader has to say so. Refusing here would make a human's own
+        # accepted card unreadable, the regression #649 measured as worse than the hole.
+        self._find_task(task_id, allow_done=True)
         self.api.add_comment(task_id, text.strip())
         return {"commented": task_id}
 
@@ -2196,7 +2207,7 @@ class Workflow:
         attachments lists each file's METADATA only ({id, name, mime, size}) — no bytes, so a
         card that is nothing but a screenshot is SEEN, not guessed at; fetch the bytes with
         download_attachment(task_id, attachment_id) using the `id` here."""
-        _, stage = self._find_task(task_id)
+        _, stage = self._find_task(task_id, allow_done=True)   # a READ path (#662)
         task = self.api.get_task(task_id)
         raw_comments = self.api.comments(task_id)
         related_raw = task.get("related_tasks") or {}
@@ -2244,7 +2255,8 @@ class Workflow:
         context). `attachment_id` is the id from get_task's attachments[] (NOT the filename).
         Fails in agent-actionable ways: a wrong/absent id lists the task's real attachments; an
         oversized file (metadata size > cap) is refused BEFORE downloading, naming the size."""
-        self._find_task(task_id)  # same board membership check as get_task/comment
+        # same board-membership check as get_task/comment, and the same #662 read opt-in
+        self._find_task(task_id, allow_done=True)
         task = self.api.get_task(task_id)
         attachments = task.get("attachments") or []
         match = next((a for a in attachments if a.get("id") == attachment_id), None)
@@ -2321,7 +2333,8 @@ class Workflow:
         name (never the full path) and the MIME is guessed from the extension. Needs the
         tasks_attachments:create token scope — a 401 means the token is read-only for attachments
         and a human must add the `create` op (verified on real 2.3.0: create governs the upload)."""
-        self._find_task(task_id)  # same board-membership check as comment/download_attachment
+        # same board-membership check as comment/download_attachment, same #662 read opt-in
+        self._find_task(task_id, allow_done=True)
         try:
             real = os.path.realpath(path)
         except ValueError as exc:
