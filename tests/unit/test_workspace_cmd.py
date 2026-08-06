@@ -5691,9 +5691,37 @@ def test_a_failing_half_apply_check_costs_the_report_and_never_the_verdict(repo,
 
     AND IT PINS THE SEPARATE `except`, which is the part worth having a test for: the two snapshots
     are caught INDEPENDENTLY, so losing the tracked one costs the `half_applied` key and NOT the
-    ignored evidence — the mistake `_ignored_paths_the_ff_will_overwrite` documents against itself
-    ("one unreadable path returns [] for the WHOLE batch, discarding names already found"). Wrap
-    both in one `try` and this file's most important report disappears whenever `git diff` hiccups.
+    ignored evidence. Wrap both in one `try` and this file's most important report disappears
+    whenever `git diff` hiccups.
+
+    THE EXAMPLE THIS POINTED AT IS HISTORY NOW, and this sentence went on asserting it in the
+    PRESENT tense for a whole card after it stopped being true — VMCP-270 (886), filed by the
+    round-one independent review of VMCP-246 (837). It used to call the same mistake one
+    `_ignored_paths_the_ff_will_overwrite` "documents against itself", quoting a line that function
+    no longer carries: 837 made that give-up LOCAL by splitting the batch, and it historicised BOTH
+    twins of this sentence in `workspace_cmd.py` in the same commit — leaving this third site
+    untouched while its own report said the fix had been made, which is exactly why a later reader
+    would not re-check it.
+
+    Dated with `git log -S`, run in both case forms because that search is CASE-SENSITIVE and the
+    two can disagree (here they do not): "documents against itself" appears in one commit,
+    `6231c85`, the landing of 835 that wrote it, and in none after it; "One unreadable path used to
+    return" and "used to have a live example one function over" both appear in `8a77387`, the
+    landing of 837. Needles have to be picked line by line — the phrase as written here wraps, and
+    `-S` compares blob content, so a needle spanning a line break matches nothing and reads exactly
+    like "never touched".
+
+    THE ARGUMENT IS UNCHANGED AND STRONGER, which is why only the attribution moves: 837 applied
+    this very principle — one probe's failure must not discard what another already found — to
+    `check-ignore` itself. What was wrong was the tense and the pointer, never the reasoning.
+
+    NO GATE SEES THIS CLASS and none is added here, deliberately.
+    `tests/unit/test_repo_quotation_claims.py` asks whether a quoted string OCCURS somewhere in the
+    tree, and this one did occur — in `workspace_cmd.py`, in its historicised form — so the gate
+    was green while the sentence around it was false. A stale ATTRIBUTION is a claim about what a
+    NEIGHBOURING file says, and presence cannot see it. The habit is the remedy: quoting a
+    neighbour's prose, say what it says NOW, or mark the quotation as historical and name the card
+    that changed it.
     """
     _api, wf = tracker
     _half_applying_stand(repo, tmp_path)
