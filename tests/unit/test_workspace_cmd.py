@@ -4522,13 +4522,21 @@ def test_a_REAL_subdirectory_inside_the_expansion_is_not_named_only_its_files_ar
 # here.
 
 def test_an_unreadable_FILE_is_destroyed_by_the_merge_and_named_anyway(repo, tracker, tmp_path):
-    """VMCP-253 (852). The ONE permission shape where the fast-forward GOES and something dies —
-    and the reason the conclusion "nothing dies unnamed" needed a second mechanism to stand on.
+    """VMCP-253 (852). The one permission shape where the fast-forward GOES and BYTES die — and
+    the reason "nothing carrying bytes dies unnamed" needed a second mechanism to stand on. Do NOT
+    carry that phrase anywhere as a guarantee, on this axis or off it — round 3 measured it false
+    three ways. An EMPTY unreadable directory also lets the ff through and dies, carrying no bytes;
+    a `PATH_MAX` band destroys bytes and names none of them (VMCP-281 (940)); and ON this axis a
+    victim whose NAME the regenerable filter drops dies with no key at all, which both of this
+    round's independent passes built. What is below is a measured ROW.
 
     Four DIRECTORY shapes (`000`, `100`, `400`, `500`), a `000` directory two levels down and one
-    under a `600` PARENT all make `merge --ff-only` refuse, leaving that directory's own victim
-    alive and no `overwritten_ignored` key for it. A FILE is the shape that goes the other way —
-    permissions on a file do not affect the enumeration of its directory ENTRY, so git unlinks a
+    under a `600` PARENT all make `merge --ff-only` refuse, leaving that directory's own DIRECT
+    CHILD alive and no `overwritten_ignored` key for it. Round 3 measured what those two
+    qualifiers are worth: an EMPTY such directory stops refusing at `400`/`500`, and bytes one
+    level DEEPER in a `700` subdirectory are unlinked at `500` while the direct child is not.
+    A FILE is the shape that goes the other way — permissions on a file do not affect the
+    enumeration of its directory ENTRY, so git unlinks a
     `chmod 000` file without a word. What saves this row is not the refusal but the NAMING:
     `os.walk` lists the entry regardless of its mode, so the casualty reaches
     `overwritten_ignored`.
@@ -4543,7 +4551,7 @@ def test_an_unreadable_FILE_is_destroyed_by_the_merge_and_named_anyway(repo, tra
     `_expand_if_directory`'s own docstring: which `code` comes back, and whether a key comes with
     it — a multi-path incoming commit turns every one of these refusals into `half-applied`, and
     one that also displaces an ignored path can carry `overwritten_ignored` and a real loss
-    ELSEWHERE while this directory's victim sits untouched.
+    ELSEWHERE while this directory's DIRECT CHILD sits untouched.
 
     Pinned because the whole grid's conclusion rests on this row alone — the four refusing shapes
     prove nothing about it, and it was the only shape in the grid that was unpinned.
@@ -4558,12 +4566,16 @@ def test_an_unreadable_FILE_is_destroyed_by_the_merge_and_named_anyway(repo, tra
       * the walk names no plain files at all .................. control 0 failed; 6 failed
       * `os.walk(onerror=raise)` instead of the silent default . control 0 failed; 0 failed
     Row one is the pin, and it is the sharp one: it changes exactly the mechanism this test is
-    about and kills exactly this test. Row two is blunt — it kills all six, so it says the walk
-    matters and nothing about WHICH property. Row three is the honest remainder: nothing in the
-    suite makes the walk hit an unreadable directory, so the four REFUSING shapes of the grid stay
-    unpinned. That is deliberate rather than missing — on those the merge refuses, no
-    `overwritten_ignored` key is emitted for the locked path, and the card asked for the grid to
-    be measured and written down, explicitly NOT for a guard."""
+    about and, ON THIS SELECTION, kills exactly this test. That qualifier was missing for two
+    rounds and it is what the row is worth — re-run on the WHOLE file, control 0 failed at the
+    start and again at the end, the same mutation reads 3 failed, taking the symlink-to-a-file
+    test and the round-2 pin below with it, both of them the same stat-blind mechanism. A kill
+    count belongs to the selection it was read on. Row two is blunt — it kills all six, so it
+    says the walk matters and nothing about WHICH property. Row three is the honest remainder:
+    nothing in the suite makes the walk hit an unreadable directory, so the four REFUSING shapes
+    of the grid stay unpinned. That is deliberate rather than missing — on those the merge
+    refuses, no `overwritten_ignored` key is emitted for the locked path, and the card asked for
+    the grid to be measured and written down, explicitly NOT for a guard."""
     _api, wf = tracker
     _ignoring(repo, "out/")
     (repo / "out").mkdir()

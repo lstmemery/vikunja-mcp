@@ -1937,14 +1937,49 @@ def _expand_if_directory(root: Path, rel: str, gitlinks: frozenset[str] = frozen
     exact repeats (`if candidate not in seen`), so a genuine DUPLICATE from in here would be
     invisible end to end — measured by the second pass — while an EXTRA one is not.
 
-    ONE GAP MEASURED HERE THAT IS, END TO END, NOT A LOSS CHANNEL — and what saves it is TWO
-    different things, which is the whole of VMCP-253 (852) and the part any one-line summary of
-    this paragraph gets wrong. `os.walk` defaults to `onerror=None`, so a subdirectory the walk
-    cannot DESCEND into is skipped in silence: `out/` holding `a.txt` plus a `chmod 000` `locked/`
-    expands to `['out/a.txt']`, naming neither `out/locked` nor its content. An earlier draft
-    called that a second route to a silent present-and-incomplete report; the second pass refuted
-    it and the refutation reproduces — on that tree `out` is still a directory afterwards, the
-    victim is alive and NO key is emitted (what the sync CALLS it is the paragraph below).
+    THIS GAP IS A LOSS CHANNEL, AND ROUND 2's HEADING FOR IT — "NOT A LOSS CHANNEL" — IS
+    WITHDRAWN RATHER THAN QUALIFIED. That heading named the MECHANISM, `onerror=None`, while it
+    was measured only on permission shapes, and the mechanism swallows EVERY `OSError`. What
+    varies across the gap is whether the casualty is NAMED, and no axis measured so far answers
+    that with a clean yes. On the PERMISSION axis two different things do the saving on the rows
+    below — which is the whole of VMCP-253 (852) and the part any one-line summary gets wrong —
+    but they are not everything, and the last paragraph here names what gets past them. `os.walk`
+    defaults to `onerror=None`, so a subdirectory the walk cannot DESCEND
+    into is skipped in silence: `out/` holding `a.txt` plus a `chmod 000` `locked/` expands to
+    `['out/a.txt']`, naming neither `out/locked` nor its content. An earlier draft called THAT
+    tree a second route to a silent present-and-incomplete report; the second pass refuted it and
+    the refutation reproduces — `out` is still a directory afterwards, the victim is alive and no
+    `overwritten_ignored` key is emitted (what the sync CALLS it is the paragraph below).
+
+    THE OTHER AXIS IS WHERE THE BYTES GO UNNAMED, AND IT NEEDS NO `chmod` AT ALL. This walk joins
+    `root` to `rel`, so every syscall it makes carries the ABSOLUTE path, while git does not fail
+    on the same tree — so there is a band of lengths where git deletes the file and `os.walk` takes
+    ENAMETOOLONG on it and skips it in silence. WHERE git's immunity comes from is not established
+    here, and do not write that `_run_git`'s cwd is what buys it: that was this paragraph's first
+    guess, and the second pass refuted it by running git from `/` with an absolute `-C`, rc=0.
+    TWO STANDS, and do not weld them. The MECHANISM one, no git in it: 24 nested directories built
+    by descending with `chdir` so every name stays short, `PATH_MAX` 1024, deepest path 939
+    relative and 1062 absolute — `os.scandir` on the absolute form raises errno 63, `os.listdir` on
+    the relative one from the checkout succeeds, `os.walk` rooted AT that overlong
+    directory names nothing at the default and reports exactly one error when given an
+    error-RECORDING `onerror`. Read that silence as being about the ERROR and not about names:
+    rooted at `out/`, which is what this function actually walks, the same default still names the
+    shallower files and loses only what lies past the limit. The END-TO-END one
+    is a separate tree with no `chmod` anywhere, checkout root 122 characters, deepest path 947
+    relative and 1070 absolute: the merge GOES, `updated: True`, `out` becomes a plain file, all 25
+    files holding bytes are destroyed, `overwritten_ignored` names 24 and
+    `overwritten_ignored_truncated` is ABSENT — one file with bytes died unnamed. Git starts
+    failing too once the RELATIVE path passes 1024: at 26 levels the answer is `half-applied` with
+    `out` still a directory. Do NOT read the far side of that as safe — this stand did not check
+    survival there, and the second pass did and reports unnamed byte losses continuing beyond it
+    and growing with depth. So `overwritten_ignored`
+    comes back PRESENT and INCOMPLETE with nothing saying so, which is a loss of the #710/#806
+    class. Measured on three different trees by three readers — both of this card's reviewers and
+    again here — with a different file count each time and the same shape: one casualty per run
+    reaching NEITHER key. Read this as a THIRD built road to present-and-incomplete, sister to
+    VMCP-245 (836)'s symlink in `dirnames`, and not as a census — roads are counted by who has
+    built one. The behaviour fix and the product choice under it are VMCP-281 (940); the slice here
+    is prose, so nothing below guards it.
 
     TWO OMISSIONS COMPOUND THERE, and naming only one of them is where the round-1 text went
     wrong. The CONTENT is lost to `onerror=None`. The directory ENTRY `out/locked` is lost to the
@@ -1968,21 +2003,31 @@ def _expand_if_directory(root: Path, rel: str, gitlinks: frozenset[str] = frozen
     SPENT. Shapes built end to end through `sync_main_checkout` against a real bare origin, git
     2.50.1 on macOS/APFS, victims re-checked with the modes RESTORED (`lexists` answers False on
     EACCES, so the obvious probe reports a live file as dead):
-      * a DIRECTORY at `000`, `100`, `400` or `500`, a `000` directory two levels down, and a
-        directory whose PARENT is `600`: the merge REFUSES, `updated: False`, `out` is still a
-        directory and the victim is ALIVE. Say "no `overwritten_ignored` key" and never "no key",
+      * a DIRECTORY HOLDING A FILE AS A DIRECT CHILD at `000`, `100`, `400` or `500`, a `000`
+        such directory two levels down, and one whose PARENT is `600`: the merge REFUSES,
+        `updated: False`, `out` is still a directory, that child is ALIVE and no
+        `overwritten_ignored` key comes back for it. Never shorten that last part to "no key",
         which the last paragraph makes into a self-contradiction: on a multi-path incoming commit
-        these same rows DO carry `half_applied`. The expansion is short in all of them EXCEPT
-        `400` and `500`, which name `out/locked/precious.txt` perfectly well;
+        these same rows DO carry `half_applied`. BOTH qualifiers in the opening clause are part
+        of the row and not scene-setting, each measured by removing it. Strip the CONTENT and
+        `400`/`500` stop refusing at all. Move the bytes one level DEEPER, into a `700`
+        subdirectory of the restricted one, and at `500` git unlinks them: `updated: False` and
+        `out` still a directory hold as before and the direct child is untouched, but the code is
+        `half-applied` on a SINGLE-path commit and `overwritten_ignored` names the deep casualty.
+        The expansion is short in all of them EXCEPT `400` and `500`, which name
+        `out/locked/precious.txt` perfectly well;
       * an unreadable FILE inside a READABLE directory: the merge GOES, `updated: True`, the file
         is DESTROYED — and `overwritten_ignored` NAMES it. Measured at `000`, `400` and `100`
         alike, so it is the SHAPE and not the bits.
-    So the answer is NO, not every shape refuses — and "nothing dies unnamed" survives anyway, by
-    a DIFFERENT mechanism on that one row: the walk NAMES the dead file, because permissions on a
-    FILE do not affect the enumeration of its directory ENTRY while permissions on a DIRECTORY do.
-    Keep the two apart. The file row is the one the conclusion rests on and the only one where
-    anything dies, so it is pinned by
-    `test_an_unreadable_FILE_is_destroyed_by_the_merge_and_named_anyway`.
+    So the answer is NO, not every shape refuses — and "nothing carrying BYTES dies unnamed"
+    survives anyway ON THIS AXIS, by a DIFFERENT mechanism on that one row: the walk NAMES the
+    dead file, because permissions on a FILE do not affect the enumeration of its directory ENTRY
+    while permissions on a DIRECTORY do.
+    Keep the two apart. The file row is the one the conclusion rests on and the only row IN THE
+    LIST ABOVE where anything dies, so it is pinned by
+    `test_an_unreadable_FILE_is_destroyed_by_the_merge_and_named_anyway`. Do not drop that
+    qualifier to "the only shape where anything dies": the DEEP variant of the first row kills
+    bytes too — and names them — and the empty-directory row kills a directory that holds none.
 
     WHY EACH DIRECTORY SHAPE REFUSES IS NOT ONE REASON, AND "GIT CANNOT DELETE WHAT IT CANNOT
     READ" REACHES TWO OF THE FOUR MODES — three of the six rows above. That sentence stood over
@@ -1995,25 +2040,59 @@ def _expand_if_directory(root: Path, rel: str, gitlinks: frozenset[str] = frozen
     TRAVERSE refusal, `cannot lstat`: `400`, where readdir SUCCEEDS and `os.listdir` returns
     `precious.txt` and so does git's message — and ALSO the `600`-PARENT row, whose bits are not
     on the doomed directory at all, which is why it needed naming here rather than being left to
-    the reader. WRITE refusal, `cannot unlink`: `500`, where git reads all of it (`listdir`,
-    `stat` and `cat` inside all succeed) and dies on the write bit. Even for the read pair
+    the reader. WRITE refusal at `500`, where git reads all of it (`listdir`, `stat` and `cat`
+    inside all succeed) and dies on the write bit — `cannot unlink` when the entry it must remove
+    is a file or a symlink, and `cannot rmdir` when that entry is itself a directory, which is a
+    FOURTH message and one bucket, since the denied bit is the same. Even for the read pair
     "cannot read" wants care: `100` denies the LISTING while leaving a known name readable.
 
-    WHY NO SHAPE ON THIS AXIS IS EXPECTED TO GO THE OTHER WAY — an ARGUMENT, flagged as one
-    because it is not a measurement. The walk needs `r` on the directory plus `x` on its
-    ancestors; git needs to unlink the entries and rmdir it, so it needs `r`, `w` and `x` there
-    plus `x` on the ancestors — a strict SUPERSET. So on the permission axis "the walk came up
-    short while the merge succeeded" is structurally hard rather than merely unobserved. The
-    second pass tried four further shapes to break it and could not (an EMPTY unreadable
-    directory, on the guess that `rmdir` needs no read — git still opendirs first and refuses; one
-    holding only an empty subdirectory; one holding only a symlink, which `unlink` could remove
-    without reading its target; and a second ignored directory the half-apply might have reached).
-    What the argument does NOT cover is TOCTOU — modes changing between the probe and the merge —
-    and that gap belongs to no key in particular.
+    WHY MOST SHAPES ON THIS AXIS DO NOT GO THE OTHER WAY — an ARGUMENT, flagged as one because it
+    is not a measurement, and narrowed TWICE: round 2 gave it the whole axis, and its premise
+    understated what the walk itself needs. The walk needs `r` on the directory to LIST it and
+    `x` to DESCEND, which is measured rather than reasoned — at `400` the expansion names a direct
+    child FILE and never reaches a file inside a `700` subdirectory of it, while at `500` it names
+    that deep file too. Say FILE: a direct child that is a DIRECTORY is named nowhere at either
+    mode, by the real-subdirectory omission rather than by any bit. Git must unlink the entries
+    before it can rmdir the directory, so
+    for a directory with CONTENT it wants `r`, `w` and `x` there plus `x` on the ancestors, which
+    is still a superset, and that is what those rows refuse on. It does NOT extend to an EMPTY
+    directory — and NOT because git needs less there, which is the tempting way to write this and
+    is false. Measured with `os.rmdir` alone, an empty directory at `000`, `100`, `400` or `500` is
+    removed FINE under a `700` parent and refuses EACCES under a `500` one, while under that same
+    `700` parent a non-empty one is ENOTEMPTY at all four until its entries go. Two parent modes
+    were put to it and not a survey of them: so the extra bits are bits for the
+    ENTRIES, and the bare SYSCALL wants `w` and `x` on the PARENT and nothing on the directory. GIT
+    is not the bare syscall — it opendirs first, which is exactly why the empty rows at `000` and
+    `100` still refuse with `cannot opendir`. What the argument misses sits on the WALK's side
+    instead: at `400` and `500` the walk reads that directory perfectly well and still names
+    nothing, because it is EMPTY and an empty real subdirectory is what the filter drops. The two
+    permission sets never diverge there at all — the short expansion has no permission cause.
 
-    HONEST BOUND: those are `chmod` shapes on APFS, one owner. ACLs (`chmod +a`), `chflags`, and
-    running as another user or as root are NOT measured and their semantics differ, so this is
-    "none of these" and never "none at all". What to REPORT for a directory nobody can read stays
+    AND THE EMPTY DIRECTORY IS A ROW MEASURED THE OTHER WAY, which round 2 recorded backwards. It
+    wrote that the second pass had tried four further shapes and broken none; rebuilt here on the
+    same end-to-end stand over the four modes above, three refuse in every one of them and the
+    fourth refuses in two and not in the other two — so read 3/1 as a count of SHAPES and never of
+    cells, and the modes put to it are those four. Refusing at all four modes: one holding
+    only an EMPTY SUBDIRECTORY (`cannot lstat` at `400`, `cannot rmdir` at `500`), one holding only
+    a SYMLINK (`cannot lstat`, then `cannot unlink`), and a SECOND ignored directory sorting after
+    the blocker, whose own bytes come through untouched. The EMPTY unreadable directory refuses at
+    `000` and `100` with `cannot opendir` — and at `400` and `500` the merge GOES: `updated: True`,
+    `out` becomes a file, `out/locked` is destroyed and `overwritten_ignored` holds `['out/a.txt']`
+    alone, so that directory is named NOWHERE. Its expansion is short for a reason that is NOT
+    `onerror`: `scandir` on it SUCCEEDS and returns nothing, and the name is dropped by the
+    EMPTY-real-subdirectory omission this docstring already records near the top. No BYTES go with
+    it, an empty directory having none — so what this row corrects is a recorded MEASUREMENT, not
+    the byte reading of the row. What the argument does NOT cover is TOCTOU — modes changing
+    between the probe and the merge — and that gap belongs to no key in particular.
+
+    HONEST BOUND, AND ITS FIRST WORD IS THE AXIS RATHER THAN THE MODE LIST — round 2's version
+    listed only other spellings of PERMISSIONS, which reads as "the unexplored part is more
+    permissions". It is not: `onerror=None` is indifferent to which `OSError` it eats, and the
+    `PATH_MAX` band above is one non-permission errno already measured going the other way, so
+    the list here bounds the AXIS and not the gap. Within the axis: those are `chmod` shapes on
+    APFS, one owner; ACLs (`chmod +a`), `chflags`, and running as another user or as root are NOT
+    measured and their semantics differ, so this is "none of these" and never "none at all".
+    What to REPORT for a directory nobody can read stays
     a product question and is deliberately not answered here — but do NOT restate the reason for
     that as "the human already sees `blocked` carrying git's own message". THAT IS A PROPERTY OF
     THE STAND rather than of the permission shape: those rows were built with an incoming commit
@@ -2034,13 +2113,28 @@ def _expand_if_directory(root: Path, rel: str, gitlinks: frozenset[str] = frozen
     second is #806's own shape rather than a contrivance: upstream force-adds `img.png` into a
     checkout that ignores `*.png` and holds its own file there, `git status` empty beforehand,
     afterwards `half_applied: ['README.md', 'other.txt']`, `overwritten_ignored: ['img.png']`, the
-    human's bytes gone — while `out` is still a directory and the locked victim is still alive. So
+    human's bytes gone — while `out` is still a directory and the locked directory's DIRECT CHILD
+    is still alive (its own DEEPER content is a separate row above). So
     a tick that REFUSES on this directory can still carry a loss somewhere else in the same
     commit; that loss is #835's half-apply and not this gap, and it is NAMED, which is why the
-    conclusion above survives it. What survives on every shape and every flavour measured is
-    narrower and is the part the conclusion actually rests on: `updated: False`, `out` still a
-    directory, and THIS directory's own victim ALIVE. The cost of doing nothing is about the
-    legibility of THIS gap — not a promise about the tick.
+    conclusion above survives it. Round 2 closed on a universal over "every shape and every
+    flavour measured" — `updated: False`, `out` still a directory, this directory's victim alive
+    — and TWO rows above break it in different clauses, so read it by rows rather than closing on
+    one sentence. The EMPTY directory at `400`/`500` breaks the first two: the ff COMPLETES and
+    takes a directory carrying no bytes. The DEEP victim at `500` breaks the third: the bytes go
+    while `updated: False` and `out` still a directory both hold, which is why "the victim is
+    alive" needed the word DIRECT CHILD rather than a mode.
+
+    AND THERE IS NO SURVIVING UNIVERSAL TO PUT IN ITS PLACE. "Nothing holding bytes dies unnamed"
+    fails ON this axis and not only off it, and the input is a RENAME rather than a mode: call the
+    deep victim `precious.pyc` and the same `500` row destroys it with NO `overwritten_ignored` key
+    at all, because the regenerable-name filter drops it before the probe can report it — the bound
+    this docstring already records as present-and-FILTERED under `.venv/`, reached from a second
+    direction. The filter moves the CODE too, not just the name: `half-applied` with a `.txt`
+    victim, `blocked` with the `.pyc` one, the file equally dead either way. So read the rows
+    rather than a summary, and read `blocked` as "both probes stayed silent", never as "nothing was
+    destroyed". The cost of doing nothing is about the legibility of THIS gap — not a promise
+    about the tick.
     """
     full = os.path.join(root, rel)
     if os.path.islink(full) or not os.path.isdir(full) or rel in gitlinks:
