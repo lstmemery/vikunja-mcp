@@ -5841,8 +5841,9 @@ def test_a_failing_half_apply_check_costs_the_report_and_never_the_verdict(repo,
     whenever `git diff` hiccups.
 
     THE EXAMPLE THIS POINTED AT IS HISTORY NOW, and this sentence went on asserting it in the
-    PRESENT tense for a whole card after it stopped being true — VMCP-270 (886), filed by the
-    round-one independent review of VMCP-246 (837). It used to call the same mistake one
+    PRESENT tense for a whole card after it stopped being true — VMCP-270 (886), which recreates
+    the VMCP-254 (854) that the round-one independent review of VMCP-246 (837) filed. It used to
+    call the same mistake one
     `_ignored_paths_the_ff_will_overwrite` "documents against itself", quoting a line that function
     no longer carries: 837 made that give-up LOCAL by splitting the batch, and it historicised BOTH
     twins of this sentence in `workspace_cmd.py` in the same commit — leaving this third site
@@ -5886,16 +5887,33 @@ def test_a_failing_half_apply_check_costs_the_report_and_never_the_verdict(repo,
     this very principle — one probe's failure must not discard what another already found — to
     `check-ignore` itself. What was wrong was the tense and the pointer, never the reasoning.
 
-    NO GATE SEES THIS CLASS and none is added here, deliberately.
-    `tests/unit/test_repo_quotation_claims.py` asks whether a quoted string OCCURS somewhere in the
-    tree, and this one did occur — in `workspace_cmd.py`, in its historicised form — so the gate
-    was green while the sentence around it was false. A stale ATTRIBUTION is a claim about what a
-    NEIGHBOURING file says, and presence cannot see it. The habit is the remedy: quoting a
-    neighbour's prose, say what it says NOW, or mark the quotation as historical and name the card
-    that changed it. `tests/unit/test_measured_figure_anchors.py` does not cover the gap either,
-    and where it stops lands exactly on the advice above: it reads the preposition "at" before a
-    backticked sha, so the one anchor here is guarded while both datings written with "in" — the
-    very form this paragraph prescribes — are checked by nothing at all.
+    NO GATE SEES THIS CLASS and none is added here, deliberately — but the reason this paragraph
+    gave for two rounds was false, and the correction runs the OPPOSITE way. It used to say that
+    `tests/unit/test_repo_quotation_claims.py` stayed green because the quoted string OCCURRED
+    elsewhere, in `workspace_cmd.py`, in its historicised form. Measured by importing that file's
+    own predicates and running them over the old docstring read out of `6231c85`: the gate never
+    looked at the sentence at all — `_CLAIM_TRIGGERS` fires on NONE of it and
+    `_quotations_a_claim_makes` yields NOTHING, the old wording carrying not one of the four
+    assertive idioms, so no claim was ever raised to check. Nor was the quotation anywhere else to
+    be found: flattened over every path of `6231c85`, of `8a77387` and of `bc960b2^` alike it
+    occurs exactly ONCE, in THIS file, and never once in `workspace_cmd.py` — though grepping
+    there at `6231c85` does meet a twin, differing by exactly the two backticks around `[]`
+    (verbatim 0, backticks-stripped 1, and gone by `8a77387`): near enough to mislead a reader
+    re-checking by hand, nowhere near enough for a gate that matches exactly. What 837 put there
+    is a DIFFERENT string, "One unreadable path used to return". So the counterfactual inverts:
+    `_occurs_elsewhere` answers 0 for it at each of those three revisions and that gate flags at
+    `<= 0`, i.e. with a trigger present it would have gone RED on the very sentence it is cited
+    here for missing.
+
+    WHAT IT GENUINELY CANNOT SEE OUTLIVES THAT CORRECTION, and it is the part worth keeping: a
+    stale ATTRIBUTION is a claim about what a NEIGHBOURING file says, and presence cannot see it —
+    trigger or no trigger, because a quotation still standing in the tree says nothing about
+    whether the sentence around it still describes its neighbour. The habit is the remedy: quoting
+    a neighbour's prose, say what it says NOW, or mark the quotation as historical and name the
+    card that changed it. `tests/unit/test_measured_figure_anchors.py` does not cover that gap
+    either, and where it stops lands on the APPEARED-in rule above: it reads the preposition "at"
+    before a backticked sha, so a dating written that way is guarded here while every dating
+    written with "in" — the form that rule prescribes — is checked by nothing at all.
     """
     _api, wf = tracker
     _half_applying_stand(repo, tmp_path)
