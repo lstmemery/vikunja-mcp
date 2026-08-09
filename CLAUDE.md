@@ -796,6 +796,31 @@ measured here rather than assumed: `-q` prints NO `collected` line, so a script 
 under `-q` gets nothing back and the cross-check quietly never runs — the same shape as the naive
 parser it is meant to catch. Drop `-q` in a scripted sweep and read the summary yourself.
 
+**That `collected` cross-check survives the sweep and dies on the way to `main` — and what kills
+it is the workflow this file mandates** (tracker #888). The record is written on the tree the sweep
+ran on; the push then goes through `git fetch origin && git rebase origin/main && <re-run the
+gates> && git push`, and the re-run covers the GATES and not the PROSE. So the absolute lands
+describing a tree that is in no history, and it does so through the one step nobody can skip. The
+"last change" the paragraph above tells you to measure after is not YOURS — at `wip_limit = 3` two
+siblings are landing beside you and the release bot bumps after every green one, so staleness is
+the ordinary case, not the edge. Measured on card 840's landing at `04c126b`: the commit message
+says `1136 passed` and the docstring record says `200 collected`, while that card's own reviewer
+re-ran both on that very sha and got 1139 and 203, a sibling with three tests having landed in
+between — and the same card's `[worklog]` carries the right 1139, so the author DID re-measure, for
+the tracker and not for the prose. The sweep's own deltas reproduced exactly and no pin was blind:
+what breaks is only the figure that certifies round and control measured the same tree, which is
+the whole point of the cross-check. Two remedies, and the second is not the one that suggests
+itself. The rule — measure a tree-property figure AFTER the last rebase, immediately before the
+push — now lives in SKILL.md beside that chain, where the re-run is already prescribed. And the
+ANCHOR: `N at `<sha>`` extends to sweep records, so `test_measured_figure_anchors.py` can resolve
+the tree; it checks the LABEL and not the value, which is enough, because a named tree is one a
+reader can open. **A gate that DERIVES `collected` and compares it to the record is deliberately
+NOT built** — the form is already priced and rejected two paragraphs down (red on arrival, and it
+turns an unrelated card's docstring edit into a red suite in a hot file), and here it would cost a
+second full pytest run on top. Already-landed records in other cards are left alone: where they
+carry an anchor it is honest for its own tree, and where they do not, the rule is for FUTURE
+records.
+
 **And inflation is the friendlier half.** That stand was rebuilt on 2026-08-02:
 the same pre-622 sha exported twice, once with `.git` and once without, one
 mutation (drop `.playwright-mcp/` from `.gitignore`), one selection
