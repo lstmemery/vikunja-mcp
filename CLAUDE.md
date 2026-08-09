@@ -143,6 +143,32 @@ assertion in `tests/unit/test_line_length_gate.py`, which pyproject must agree w
   done — both would strand reviewed work. `worktree_root` /
   `VIKUNJA_WORKTREE_ROOT` (where per-task worktrees materialise, default a `<repo>.worktrees`
   sibling) is MACHINE-local, so unlike `wip_limit` the env layers DO win over the toml.
+  **`require_review_independence` is a THIRD key on `wip_limit`'s side of that split — repo toml
+  ONLY, never env, default FALSE** (tracker #37, the human's own answer picking a flag over an
+  unconditional gate). On, `review_task` refuses a verdict from anyone in the card's own
+  assignees; off, it does not resolve `me()` at all, so the behaviour and the request trail are
+  what they were before the gate existed. **The default is the feature, not a soft rollout, and
+  reading it as a hole gets the setup backwards.** In a SOLO setup one scoped token is the whole
+  fleet — the orchestrator and every per-task agent it dispatches, reviewers included,
+  authenticate as ONE assignee — so the ABSENCE of an authorship check is the CONDITION OF
+  OPERATION; independence there is carried by the agents' separated CONTEXTS (push model, a
+  sibling reviewer with a fresh context), which nothing server-side can observe. Turn it on
+  without a second identity and NOBODY can review anything, here or at any consumer on `stable`,
+  which is why this repo's own toml deliberately does NOT set it and why the refusal names the
+  way back out. What it closes is the MULTI-IDENTITY hole, measured by BEHAVIOUR rather than
+  read off the call graph: before the gate, a verdict from the card's own assignee was ACCEPTED
+  on both verdicts, `approve` landing the `reviewed` label a human reads for Done — because
+  `review_task` is the ONE mutating tool that never calls `_require_mine`, its `_assignee_ids`
+  read being #705's ownerless ROUTING and never an authorship check. So "you don't review your
+  own work" rested ENTIRELY on `next_task`'s OFFER filter, and an offer filter is a hint, not a
+  gate: it is not consulted by a direct call, and #885's kanban blackout DELETES it outright.
+  That last shape is why the gate reads assignees through `_kanban_assignees_may_be_stale`
+  rather than raw — judged off the board copy it would find nobody and pass precisely the card
+  whose other protection is already gone. A genuinely ownerless card still passes (no author to
+  exclude) and its `needs_work` still routes to Queue. Wired in `server._build_workflow` only,
+  NOT in `claimable_cmd`'s Workflow: that one runs `next_task` and nothing else, so the flag
+  could never be consulted there and passing it would be dead wiring on the one path that must
+  stay read-only and cheap.
 - `src/vikunja_mcp/api.py` — REST client. **Vikunja gotchas are codified here:
   PUT = create, POST = FULL-REPLACE update** → every update is
   read-modify-write; kanban view updates must always send

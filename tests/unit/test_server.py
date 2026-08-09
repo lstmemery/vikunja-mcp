@@ -183,7 +183,10 @@ def test_reload_rebuilds_workflow_with_the_fresh_on_disk_token(monkeypatch):
     )
     monkeypatch.setattr(
         server, "Workflow",
-        lambda api, pid, enforce_single_wip=False, notifier=None, wip_limit=None: ("wf", api, pid),
+        # mirrors the real Workflow signature — a kwarg missing here makes _build_workflow
+        # raise TypeError, which _reload_workflow_from_disk swallows into a silent False
+        lambda api, pid, enforce_single_wip=False, notifier=None, wip_limit=None,
+        require_review_independence=False: ("wf", api, pid),
     )
     server._reset_workflow_cache()
     try:

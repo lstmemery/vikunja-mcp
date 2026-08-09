@@ -391,6 +391,7 @@ class Workflow:
     def __init__(
         self, api: Any, project_id: int, enforce_single_wip: bool = False,
         notifier: WebhookNotifier | None = None, wip_limit: int | None = None,
+        require_review_independence: bool = False,
     ):
         self.api = api
         self.project_id = project_id
@@ -406,6 +407,11 @@ class Workflow:
         # means the repo toml set no wip_limit — NOT "no gate": the fallback is the legacy flag (1)
         # or DEFAULT_WIP_LIMIT. See _effective_wip_limit for the precedence.
         self.wip_limit = wip_limit
+        # committed team policy (#37): when true, review_task refuses a verdict from a caller
+        # listed in the card's own assignees. DEFAULT FALSE and inert — see review_task's gate
+        # and config.Config for why "no authorship check" is the CONDITION OF OPERATION in a
+        # solo setup rather than a hole in one. Off, review_task does not even resolve `me()`.
+        self.require_review_independence = require_review_independence
         self._me_cache: dict | None = None
         self._view_cache: dict | None = None
         self._buckets_cache: dict[str, dict] | None = None
@@ -755,6 +761,66 @@ class Workflow:
                 f"vikunja-mcp: assignee re-read skipped for #{task['id']}", exc
             )
             return assignees
+
+    def _require_review_independence(self, task: dict) -> None:
+        """Refuse a verdict from the card's OWN assignee — but only where a repo asked for it
+        (`require_review_independence` in the repo toml, tracker #37). Default OFF and INERT.
+
+        WHY IT IS A FLAG AND NOT THE RULE. Measured on the fake before this gate existed, both
+        verdicts, two identities: `review_task` accepted a verdict from the card's own assignee
+        (`approve` -> the `reviewed` label lands, card stays in Review for the human), and it is
+        the ONLY mutating tool that never calls `_require_mine` at all — the `_assignee_ids` it
+        does read routes an OWNERLESS bounce to Queue (#705), it has never been an authorship
+        check. Two OPPOSITE readings follow, and shipping either one alone would be wrong:
+
+        * In a SOLO setup that absence is the CONDITION OF OPERATION, not a hole. One scoped
+          token is the whole fleet, so the orchestrator and every per-task agent it dispatches —
+          reviewers included — authenticate as the SAME assignee. Independence there is carried
+          by the agents' separated CONTEXTS (push model: a sibling reviewer with a fresh context
+          reviews from the same identity), which nothing server-side can observe. Make this
+          unconditional and solo review stops working outright, for this repo and for every
+          consumer on `stable` — the reason the human chose the flag (option B) over a hard gate.
+        * In MULTI-IDENTITY it IS the hole this card was filed for. There "you don't review your
+          own work" rests ENTIRELY on next_task's OFFER filter, which hands out only cards that
+          are not yours. An offer filter is a hint, not a gate: it never sees a direct
+          `review_task` call. And a self-approval is not cosmetic — `approve` writes `reviewed`,
+          the label a human reads when deciding Done, so afterwards it is INDISTINGUISHABLE from
+          an independently accepted card.
+
+        THE ASSIGNEE READ IS THE STALE-TOLERANT ONE, deliberately. Ownership is judged off the
+        KANBAN copy, and #885 measured that copy coming back with an EMPTY `assignees` while the
+        card really is assigned. Read raw, this gate would then find nobody in the list and PASS
+        precisely the card whose blackout also DELETES next_task's offer filter — i.e. it would
+        be absent on the one shape where both other protections are already gone. Reusing
+        `_kanban_assignees_may_be_stale` re-reads `/tasks/<id>` only when the copy is empty, so
+        the cost is one GET on a shape seen once in 31 cards, and only when the flag is on.
+
+        A GENUINELY OWNERLESS CARD STILL PASSES, and that is correct rather than a leak: with no
+        assignee there is no author to exclude, so the card stays reviewable and its `needs_work`
+        still routes to Queue (#705). What the gate excludes is a caller who is ON the card.
+
+        WHAT IT COSTS WHERE IT IS ON, named rather than hidden: in a solo setup the only token
+        IS the assignee, so with the flag on NOBODY can review anything. That is the flag doing
+        its job, not a defect — it is why the default is off and why the human's answer ties
+        turning it on to the step that provisions a second identity. The refusal says so."""
+        if not self.require_review_independence:
+            # Off: not even `me()` is resolved, so the request trail and behaviour are what they
+            # were before this gate existed, byte for byte.
+            return
+        assignees = self._kanban_assignees_may_be_stale(task)
+        if self._me()["id"] not in assignees:
+            return
+        raise WorkflowError(
+            f"you are an assignee of task {task['id']}, so you cannot review it: this project "
+            f"sets require_review_independence = true in its .vikunja-mcp.toml, which makes "
+            f"independent review a GATE rather than a convention. A verdict has to come from an "
+            f"identity that is not on the card — dispatch the reviewer against a second token "
+            f"(its own `tracker-reviewer` entry in .mcp.json, overriding VIKUNJA_TOKEN via that "
+            f"entry's env block). If this project has no separate reviewer identity yet, the "
+            f"flag is premature: with one token the assignee is always the caller, so nobody "
+            f"can review anything — remove the key (the default is off, and review independence "
+            f"then rests on dispatching a sibling agent with its own context, as before)."
+        )
 
     def _require_mine(self, task: dict, stage: str | None = None) -> None:
         assignees = self._kanban_assignees_may_be_stale(task)
@@ -1815,6 +1881,7 @@ class Workflow:
         task, stage = self._find_task(task_id)
         if stage != "Review":
             raise WorkflowError(f"only tasks in Review can be reviewed; this one is in {stage}")
+        self._require_review_independence(task)
 
         if verdict == "approve":
             self.api.add_comment(task_id, f"[review] APPROVE\n{report.strip()}")

@@ -333,6 +333,61 @@ def test_the_below_one_refusal_names_the_default_and_not_no_limit(tmp_path):
     assert "for no limit" not in str(err.value)
 
 
+# --- #37: require_review_independence (committed team policy, toml ONLY, default off) ---
+
+def test_require_review_independence_defaults_false(tmp_path):
+    """Absent from the toml -> the gate ships INERT, and that default is load-bearing rather
+    than cautious: in a solo setup one token is both implementer and reviewer, so a gate that
+    were on by default would refuse EVERY review here and at every consumer on `stable`."""
+    _write_toml(tmp_path)
+    cfg = load_config(cwd=tmp_path, environ={"VIKUNJA_TOKEN": "tk"})
+    assert cfg.require_review_independence is False
+
+
+def test_require_review_independence_reads_true_from_toml(tmp_path):
+    tmp_path.joinpath(".vikunja-mcp.toml").write_text(
+        '[tracker]\nurl = "http://x"\nproject_id = 3\nrequire_review_independence = true\n'
+    )
+    cfg = load_config(cwd=tmp_path, environ={"VIKUNJA_TOKEN": "tk"})
+    assert cfg.require_review_independence is True
+
+
+def test_require_review_independence_is_never_read_from_env(tmp_path):
+    """Committed TEAM POLICY of the wip_limit class, NOT a machine-local knob like
+    worktree_root: whether review independence is enforced is a property of the PROJECT, so it
+    lives in a file the whole team reviews. Both directions are pinned, because either one
+    alone would pass a broken implementation: an env var must not turn the gate ON where the
+    toml is silent (below), and must not turn it OFF where the toml says true (second half) —
+    a machine that could opt out of its team's gate by exporting a variable would make the
+    gate worthless exactly where it matters."""
+    (tmp_path / ".vikunja-mcp.toml").write_text('[tracker]\nurl = "http://x"\nproject_id = 3\n')
+    (tmp_path / ".vikunja-mcp.env").write_text("VIKUNJA_TOKEN=t\n")
+    cfg = load_config(
+        cwd=tmp_path, environ={"VIKUNJA_REQUIRE_REVIEW_INDEPENDENCE": "true"}
+    )
+    assert cfg.require_review_independence is False
+
+    (tmp_path / ".vikunja-mcp.toml").write_text(
+        '[tracker]\nurl = "http://x"\nproject_id = 3\nrequire_review_independence = true\n'
+    )
+    cfg = load_config(
+        cwd=tmp_path, environ={"VIKUNJA_REQUIRE_REVIEW_INDEPENDENCE": "false"}
+    )
+    assert cfg.require_review_independence is True
+
+
+def test_the_repo_env_file_cannot_set_review_independence_either(tmp_path):
+    """The repo-local .vikunja-mcp.env is an ENV layer (it carries the token), so it is on the
+    secret side of the split, not the policy side. Pinned separately from the process env
+    because it sits in the repo DIRECTORY and so reads like a committed file — it is not one
+    (it is gitignored), and policy must not be settable from it."""
+    (tmp_path / ".vikunja-mcp.toml").write_text('[tracker]\nurl = "http://x"\nproject_id = 3\n')
+    (tmp_path / ".vikunja-mcp.env").write_text(
+        "VIKUNJA_TOKEN=t\nVIKUNJA_REQUIRE_REVIEW_INDEPENDENCE=true\n"
+    )
+    assert load_config(cwd=tmp_path, environ={}).require_review_independence is False
+
+
 def test_wip_limit_non_numeric_is_a_config_error(tmp_path):
     (tmp_path / ".vikunja-mcp.toml").write_text(
         '[tracker]\nurl = "http://x"\nproject_id = 3\nwip_limit = "many"\n'

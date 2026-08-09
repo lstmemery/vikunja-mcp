@@ -52,6 +52,25 @@ class Config:
     # HERE is exactly what keeps that precedence expressible (resolve the default in this
     # dataclass and the legacy flag could never be reached).
     wip_limit: int | None = None
+    # committed TEAM POLICY of the same class as wip_limit — repo toml ONLY, never env, never a
+    # secret: when true, review_task refuses a verdict from someone listed in the card's own
+    # assignees ("your own work is not yours to review", tracker #37).
+    #
+    # DEFAULT FALSE, and that default is the feature rather than a soft rollout. In a SOLO setup
+    # one token is the whole fleet — the orchestrator and every per-task agent it dispatches,
+    # reviewers included, authenticate as ONE assignee — so the ABSENCE of an authorship check is
+    # what makes solo review work at all, not a hole in it. Independence there rests on the
+    # agents' separated CONTEXTS (push model: the orchestrator dispatches a sibling reviewer),
+    # which no server-side identity check can see. Turn this on without a second identity
+    # provisioned and NOBODY can review anything: the only token there is is always the assignee.
+    # So it ships INERT and a repo flips it true in the same step it provisions a reviewer token.
+    #
+    # What it closes is the MULTI-IDENTITY hole (measured, see review_task): there "you don't
+    # review your own work" rests ENTIRELY on next_task's OFFER filter, which hands out only other
+    # people's cards — a hint, not a gate, since it does not stop a direct review_task call. And
+    # `approve` writes the `reviewed` label a human reads when deciding Done, so a self-approved
+    # card is indistinguishable after the fact from an independently accepted one.
+    require_review_independence: bool = False
     # Slack-compatible incoming-webhook URL pinged when call_human parks a card in
     # Your Call (#252). A secret of the token's class — whoever holds the URL can post
     # into the humans' channel — so like the token it is NEVER read from the committed
@@ -236,6 +255,11 @@ def load_config(cwd: Path | None = None, environ: Mapping[str, str] | None = Non
         url=str(url), token=str(token),
         project_id=project_id, project_name=repo.get("project"),
         enforce_single_wip=bool(repo.get("enforce_single_wip", False)),
+        # `repo` ONLY — the same one-source read as enforce_single_wip above, and deliberately
+        # NOT joined to any env layer: committed team policy, like wip_limit and unlike the
+        # machine-local worktree_root. A project that wants the gate says so in a file its
+        # whole team reviews, not in one machine's environment.
+        require_review_independence=bool(repo.get("require_review_independence", False)),
         notify_webhook=notify_webhook,
         wip_limit=wip_limit,
         worktree_root=worktree_root,

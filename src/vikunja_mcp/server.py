@@ -241,11 +241,15 @@ def _build_workflow(cfg) -> Workflow:
         WebhookNotifier(cfg.notify_webhook, tracker_url=cfg.url)
         if cfg.notify_webhook else None
     )
+    # require_review_independence is wired HERE and deliberately NOT in claimable_cmd's Workflow:
+    # that one runs `next_task` and nothing else, so the flag could never be consulted there —
+    # passing it would be dead wiring on the one path that must stay read-only and cheap (#37).
     return Workflow(
         VikunjaAPI(cfg.url, cfg.token), cfg.project_id,
         enforce_single_wip=cfg.enforce_single_wip,
         wip_limit=cfg.wip_limit,
         notifier=notifier,
+        require_review_independence=cfg.require_review_independence,
     )
 
 
@@ -581,7 +585,16 @@ def review_task(task_id: int, verdict: str, report: str) -> dict:
     to QUEUE as free work — in Design/Build an ownerless card can be read and commented
     on but no agent tool can MOVE it or make it anyone's, so your report would sit there
     unanswered. Either way the report stays on the card for whoever picks it up. report
-    is required: what you checked, what you observed, why this verdict."""
+    is required: what you checked, what you observed, why this verdict.
+    "You must NOT be the author" is a RULE here and, in most projects, only a rule: by
+    default this tool does not check who you are, because in a solo setup one token is the
+    whole fleet — author and reviewer authenticate as the SAME assignee, and independence
+    comes from a sibling agent reviewing with its own fresh context. A project that has
+    provisioned a SECOND reviewer identity can promote the rule to a GATE by setting
+    require_review_independence = true in its .vikunja-mcp.toml (tracker #37); then a
+    verdict from anyone listed in the card's assignees is refused outright, and the refusal
+    tells you to review under the reviewer token instead. Do not set that flag before a
+    second identity exists — with one token nobody would be able to review anything."""
     return _wf().review_task(task_id, verdict, report)
 
 
