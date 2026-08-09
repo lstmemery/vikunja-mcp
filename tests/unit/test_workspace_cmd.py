@@ -5838,12 +5838,37 @@ def test_a_failing_half_apply_check_costs_the_report_and_never_the_verdict(repo,
     would not re-check it.
 
     Dated with `git log -S`, run in both case forms because that search is CASE-SENSITIVE and the
-    two can disagree (here they do not): "documents against itself" appears in one commit,
-    `6231c85`, the landing of 835 that wrote it, and in none after it; "One unreadable path used to
-    return" and "used to have a live example one function over" both appear in `8a77387`, the
-    landing of 837. Needles have to be picked line by line — the phrase as written here wraps, and
-    `-S` compares blob content, so a needle spanning a line break matches nothing and reads exactly
-    like "never touched".
+    two can disagree (here they do not — the upper-case spelling is in no commit on any ref):
+    "documents against itself" APPEARED in `6231c85`, the landing of 835 that wrote it, and has
+    been in every commit since. `8a77387` is absent from that search because it moved the count
+    NOWHERE, and it takes BOTH halves to say so. The phrase has only ever lived in THIS file — one
+    path, over every object reachable from `origin/main`, scanned FLATTENED so the wrap trap below
+    cannot bite the check itself, measured at `077d5aa`. And 837's own 405 lines here added no
+    fresh quotation of it: one before, one after. File-exclusivity ALONE would not do, because 837
+    was IN this file — which also kills the tempting story about how this third site survived. Its
+    whole edit here was ONE hunk appended past the end of a 5038-line file, 405 insertions and
+    ZERO deletions, so nothing already standing was ever in its author's diff. "One unreadable
+    path used to return" and "used to have a live example one function over" both appear in
+    `8a77387`, the landing of 837. Needles have to be picked line by line — the phrase as written
+    here wraps, and `-S` compares blob content, so a needle spanning a line break matches nothing
+    and reads exactly like "never touched".
+
+    "APPEARED IN" IS THE LOAD-BEARING WORD THERE, and putting it where "and in none after it" used
+    to stand is the whole of VMCP-270 (886) round two. That clause was not stale, it was false AT
+    BIRTH: `bc960b2` wrote a fresh quotation of the phrase into this docstring while asserting no
+    commit after `6231c85` carried one, so it put a second commit into its own search before any
+    reader could run it — and the reader it misleads is the one who does the right thing and
+    re-runs the command. SKILL.md's second `-S` gotcha, in this file, about this file.
+
+    AND THAT COUNT IS NOT MERELY STALE, IT IS BLIND, which is why the remedy is the FORM and not a
+    fresher number. Date a needle by the commit it APPEARED in — no later quotation moves that.
+    Never by how many commits `-S` returns, because that answer turns on typography as much as on
+    content — and the paragraph above is its own demonstration. `bc960b2` quoted BOTH neighbouring
+    needles there, one clause apart, and `-S` reports that commit for "used to have a live example
+    one function over" and NOT for the other one, whose copy it wrote straddling a line break.
+    One commit, one sentence, a quotation each, opposite answers; a later reflow altering not one
+    word can swap them back. A ruler that swings on where the line happens to break cannot date
+    the sentence it is measuring.
 
     THE ARGUMENT IS UNCHANGED AND STRONGER, which is why only the attribution moves: 837 applied
     this very principle — one probe's failure must not discard what another already found — to
@@ -5855,7 +5880,10 @@ def test_a_failing_half_apply_check_costs_the_report_and_never_the_verdict(repo,
     was green while the sentence around it was false. A stale ATTRIBUTION is a claim about what a
     NEIGHBOURING file says, and presence cannot see it. The habit is the remedy: quoting a
     neighbour's prose, say what it says NOW, or mark the quotation as historical and name the card
-    that changed it.
+    that changed it. `tests/unit/test_measured_figure_anchors.py` does not cover the gap either,
+    and where it stops lands exactly on the advice above: it reads the preposition "at" before a
+    backticked sha, so the one anchor here is guarded while both datings written with "in" — the
+    very form this paragraph prescribes — are checked by nothing at all.
     """
     _api, wf = tracker
     _half_applying_stand(repo, tmp_path)
