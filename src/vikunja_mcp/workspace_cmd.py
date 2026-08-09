@@ -989,14 +989,14 @@ _REPRODUCIBLE_IGNORED_SUFFIXES = (".pyc", ".pyo")
 # differing by 41 characters gave totals differing by exactly 41 bytes — and the card's review
 # records three stands producing three different totals. Reachable as well as arithmetical: git
 # prints an 800-character entry whole (measured, one entry of exactly 800 characters, with a tracked
-# anchor at each level so git descends instead of collapsing — see the collapse paragraph below).
+# anchor at each level so git enumerates instead of collapsing — see the collapse paragraph below).
 # Whether a BYTE budget belongs beside the entry budget is filed as VMCP-260 (862) rather than
 # guessed at here; what is fixed is that the justification above no longer overstates its reach.
 #
 # Past the cap the entry also carries `removed_ignored_truncated`, so the COUNT survives even when
 # the names do not — and what that count IS is `len(destroyed)`: the length of the list AFTER the
-# filter above and AFTER whatever collapse git applied (a directory THIS CALL's `git status` did not
-# descend into is ONE entry, and which those are is the paragraph below), taken before the
+# filter above and AFTER whatever collapse git applied (a directory THIS CALL's `git status`
+# reported WHOLE is ONE entry, and which those are is the paragraph below), taken before the
 # cap. **It is NOT the size of the loss, and calling it the "TRUE total" here was wrong** (VMCP-249
 # again, which settled it by construction rather than by preferring a wording): a tree holding
 # `.venv/` with 100 files (ONE entry, filtered away), `.playwright-mcp/840/` with 30 (ONE entry, and
@@ -1068,20 +1068,40 @@ _REPRODUCIBLE_IGNORED_SUFFIXES = (".pyc", ".pyo")
 # re-measured, 50 entries leave the key ABSENT and 51 make it 51. (Said of the KEY on purpose: at 50
 # the printed LIST is already at its cap, so "reaching the cap" would name the wrong threshold.)
 #
-# **Whether a directory becomes ONE entry is decided PER DIRECTORY, by whether git had to WALK it:
-# it walks one the index holds a path under, and it walks one holding anything it must report
-# separately (an untracked file that is not ignored). Being ignored does not by itself collapse a
-# directory, and neither does being wholly untracked.** Read that as a property of THIS CALL and not
-# of git — the third lever is the one `_inspect_status` pins below, and round 2 asserted the two
-# above as if they were the whole of it. Measured on ignored `d/` with 60 files and NEITHER of them
-# present: `--porcelain --ignored` gives ONE entry, and `-uall` — equivalently
+# **Whether a directory becomes ONE entry is decided PER DIRECTORY, and what those criteria decide
+# is the REPORT: git ENUMERATES one the index holds a path under, and one holding anything it must
+# report separately (an untracked file that is not ignored). Being ignored does not by itself
+# collapse a directory, and neither does being wholly untracked.** Read that as a property of THIS
+# CALL and not of git — the third lever is the one `_inspect_status` pins below, and round 2
+# asserted the two above as if they were the whole of it. Measured on ignored `d/` with 60 files and
+# NEITHER of them present: `--porcelain --ignored` gives ONE entry, and `-uall` — equivalently
 # `status.showUntrackedFiles=all`, which is config anyone can set — gives 60. What holds the
 # condition true here is `_inspect_status` forcing `status.showUntrackedFiles=normal` on this single
 # command, added by #766 for exactly that reason. All of that is measured, and the shape that
-# kills the tidier phrasings is a walked directory with an unwalked child: ignored `d/` with a
-# TRACKED `d/anchor.txt` gives `['d/f0.txt', 'd/f1.txt', 'd/f2.txt', 'd/y/']` — the files at that
-# level individually, the subdirectory holding no indexed path still ONE entry — and moving the
-# anchor DEEPER, to `d/x/anchor.txt`, prints exactly the same four. "Wholly untracked" is too weak
+# kills the tidier phrasings is a directory whose own files are listed INDIVIDUALLY beside a
+# subdirectory reported WHOLE: ignored `d/` with a TRACKED `d/anchor.txt` gives `['d/f0.txt',
+# 'd/f1.txt', 'd/f2.txt', 'd/y/']` — the files at that level one by one, the subdirectory holding no
+# indexed path still ONE entry — and moving the anchor DEEPER, to `d/x/anchor.txt`, prints exactly
+# the same four. **That said "a walked directory with an UNWALKED child" until VMCP-274 (897): the
+# entry COUNT was never the wrong part, the mechanism under it was.** Re-measured under this same
+# call on git 2.50.1 (Apple Git-155), on that same shape: an EMPTY `d/y/` prints no entry at all; a
+# file two levels down at `d/y/z/q` still prints exactly the one `!! d/y/`; and `chmod 000 d/y`
+# makes that entry VANISH behind `warning: could not open directory 'd/y/'` at rc 0 (`chmod 700`
+# brings it back). What the entry tracks is whether git REACHED A FILE down there, NOT whether it
+# opened the child: at `chmod 400 d/y` — readable, not traversable — the entry is gone while the
+# warning names the GRANDCHILD `d/y/z/`, which git could only learn by reading `d/y`, and putting a
+# FILE directly into `d/y` at that same mode brings the entry back with no warning at all. With
+# nothing indexed under `d/`, the collapsed `!! d/` goes the same way when its only child is
+# unreadable. **Do NOT invert any of that into "the walk does not enter into it" — that was this
+# card's own first draft, and a nested REPOSITORY refutes it:** `d/nested/` carrying its own `.git`
+# is ONE entry while `chmod 000 d/nested/sub` draws NO warning, where the identical tree without
+# that `.git` warns. In THAT cell the retracted wording is literally true; what stays false is
+# reading it off the entry count on the shape above.
+# `test_gitignore_still_lets_the_settings_file_through` in `test_repo_browser_isolation.py` made
+# this same correction FIRST and from these same cells, and SKILL.md's Russian twin is narrowed in
+# the same commit as this paragraph — which is what the DEFINITIONAL split below asks for. That
+# docstring's own closing generalises further than the nested-repository cell allows, and is left
+# for its own card rather than widened into this one. "Wholly untracked" is too weak
 # for a second reason: an untracked, non-ignored file inside gives `?? notig/` BESIDE the individual
 # `!! notig/a.png`. (That shape cannot reach a release — a `??` line is what makes the tree dirty
 # and the release refuse — so what bites in practice is the indexed path.) Round 1 of the same card
@@ -1092,15 +1112,15 @@ _REPRODUCIBLE_IGNORED_SUFFIXES = (".pyc", ".pyo")
 # and NO key for the same 60 files without the anchor. That shape is this repo's own `.gitignore`
 # rather than a contrivance: `.claude/*` beside a re-included `!.claude/settings.json`, which is
 # what lets that file be TRACKED without a force-add, and the tracked file is then what makes git
-# walk the directory — measured on those real rules, 3 entries out of that one prefix instead of 1.
+# ENUMERATE the directory — measured on those real rules, 3 entries out of that prefix instead of 1.
 # Attribute it to the TRACKED file and not to the `/*` spelling — but only so far, and **round 2's
 # "the two spellings are INDISTINGUISHABLE for entry counts" is false in one of its two arms**
 # (VMCP-249 round 3, the full 2x3 matrix, same content in every cell). TRACKED: `.claude/*` with the
 # `!` line gives 3 and blanket `.claude/` with the same file force-added also gives 3, so there the
 # spellings really do agree. ABSENT from disk: both give 1. But ON DISK AND UNTRACKED they DIVERGE —
 # `.claude/*` gives 3 (plus `?? .claude/`) against blanket `.claude/`'s 1 — because the `!` line
-# un-ignores `settings.json`, which is the SECOND walk trigger named above, the `notig/` shape
-# verbatim. Round 2 laid exactly that charge at round 1 four paragraphs up ("refuted its own
+# un-ignores `settings.json`, which is the SECOND enumeration trigger named above, the `notig/`
+# shape verbatim. Round 2 laid exactly that charge at round 1 four paragraphs up ("refuted its own
 # condition without leaving the paragraph") and then did it. Nothing behaves wrongly: that cell is
 # `??`, so it makes the tree dirty and the release refuses. What must not be repeated is the
 # UNIVERSAL — the spellings agree when the re-included file is tracked or absent, not always. The
