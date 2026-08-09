@@ -465,7 +465,10 @@ def test_a_board_copy_that_lost_SOMEBODY_ELSES_assignee_is_not_read_as_ownerless
     direction. Their clause fires on "no assignee AT ALL" and tells the agent a human hand-placed
     an ownerless card. A card whose kanban copy merely LOST its assignees is not that card: the
     exit advice would name a hand-placement that never happened. Because the clause now asks the
-    RE-READ list, such a card gets the bare "not assigned to you" — the accurate diagnosis.
+    RE-READ list, such a card gets the OWNED refusal — the accurate diagnosis, which since #742
+    also carries the foreign-card clause outside Queue. What is asserted here is the routing and
+    not the wording (the byte-for-byte pins on both texts live in `test_workflow_gates.py`), so
+    the two asserts below stay exactly as narrow as the thing this test is about.
 
     Keep `_require_mine` deciding the clause from the board copy while re-reading only for the
     ownership verdict and this goes RED."""

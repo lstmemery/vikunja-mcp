@@ -112,6 +112,43 @@ _OWNERLESS_EXITS: dict[str, str] = {
     # tool and for an OWNED card too, which this row never covered.
 }
 
+# #742: what a card owned by SOMEBODY ELSE gets outside Queue. ONE text rather than a per-stage
+# map like `_OWNERLESS_EXITS` above, and the asymmetry is measured rather than lazy: for an
+# OWNERLESS card the true exit really does differ by stage (an agent can walk one out of Review
+# and out of none of the others), while for a card with an OWNER the stage axis COLLAPSES —
+# `claim` refuses from all seven, and "leave it to its owner" is the same right action in each.
+#
+# This REVERSES a decision #705 and #734 each took deliberately — keep the bare message here,
+# since "not assigned to you" is already an accurate diagnosis and "leave it alone" an unchanged
+# right action. The reversal is the HUMAN's, on their `[ответ человека]` answer to VMCP-202 (742)
+# (landed 2026-08-10), taken against a recommendation its own author called WEAK and with the
+# price named out loud: two pins on STRING EQUALITY had to be rewritten for it. What moved the
+# balance is exactly two measurements neither earlier card had, and no third argument:
+# (1) `claim` refuses a card that HAS an owner from QUEUE TOO (`already taken (…) — grab the next
+# one via next_task`), so "claim it first" is unfollowable for a foreign card in all seven stages
+# rather than in the six outside Queue; and (2) the refusal an agent gets when it follows the
+# advice outside Queue — `task is in '<stage>', you can only claim from Queue` — says nothing
+# about the owner at all. Correct, and not about the thing the agent needs to know.
+#
+# Queue is excluded, like it is from `_OWNERLESS_EXITS`, but NOT for that map's reason. There the
+# bare advice is CORRECT (claim on an ownerless Queue card succeeds); here it is not correct at
+# all — it is merely already ANSWERED, because claim's own Queue refusal names the owner and the
+# next move. A second sentence would only repeat it. Done is excluded vacuously: `_find_task`'s
+# human-only guard (#662) refuses before `_require_mine` runs, so no foreign card in Done ever
+# reaches this text — measured on this tree, all five ownership-gated forms and `claim` answer
+# with the Done rule instead, which is also why the sweep this card is titled from finds the
+# foreign-card message in SIX stages and not seven.
+#
+# The last sentence is load-bearing and is NOT padding: #734 deliberately refused to promise a
+# card will not become claimable, because a human can clear the assignee. This text stops at
+# "a human's call" for that reason and must keep doing so.
+_OTHER_OWNER_EXIT = (
+    " — and claim() would refuse here anyway: it works only from Queue, and this card already "
+    "has an owner, so claim() refuses it from Queue too (`already taken`). Leave it to its owner "
+    "and take the next task; a finding about it goes in file_task(…, related_task_id=…). Whether "
+    "it ever becomes claimable is a human's call, not a promise this refusal can make."
+)
+
 # human-only Done, said ONCE (#662). Before this, six tools refused a Done card and each said so
 # in its own words — four by deriving it from their own starting stage, two (`return_task` #626,
 # `decompose` #649) from a personal `if stage == "Done"`. The class stayed open because nothing
@@ -706,12 +743,16 @@ class Workflow:
         msg = f"task {task['id']} is not assigned to you — claim it first"
         # #705, residual half: "claim it first" is UNFOLLOWABLE for an OWNERLESS card outside
         # Queue — claim only works from Queue, so the advice names the one call that is guaranteed
-        # to refuse. Both conditions carry weight: with an assignee (someone else's card) "not
-        # assigned to you" is the accurate diagnosis and the right action — leave it alone — is
-        # unchanged, while in Queue "claim it first" is simply correct (measured: claim from Queue
-        # on such a card SUCCEEDS). Those two are the refusals that stay byte for byte what they
-        # were, and both are pinned that way. `stage` is optional so a caller without one in hand
-        # keeps the plain message rather than guessing.
+        # to refuse. Both conditions carried weight, and ONE of the two still does: in Queue
+        # "claim it first" is simply correct for an ownerless card (measured: claim from Queue on
+        # such a card SUCCEEDS), so that refusal stays byte for byte what it was and is pinned
+        # that way. The OTHER — somebody else's card keeping the bare message because "not
+        # assigned to you" is already an accurate diagnosis — was reversed by the human on #742
+        # and now has its own clause, `_OTHER_OWNER_EXIT`; the reasoning and the two measurements
+        # that bought the reversal are recorded above that constant. `stage` is optional so a
+        # caller without one in hand keeps the plain message rather than guessing — which is why
+        # BOTH clauses require a known stage, neither guesses one, and a stage-less caller still
+        # gets exactly the bare sentence.
         #
         # #734 widened it from Design/Build to EVERY stage claim refuses from — that is all six
         # non-Queue stages — but NOT with one shared text, because one text is measurably false.
@@ -722,7 +763,10 @@ class Workflow:
         # card-moving calls. It is what MOTIVATES the map, not what the code does now, and saying
         # so is this card's own second-pass finding: read undated under a "#734 widened it"
         # heading, 12 of its 35 cells contradict the module they sit in. AFTER the change every
-        # `bare` below outside the Queue row reads `clause`; nothing else moves.
+        # `bare` below outside the Queue row reads `clause`; nothing else moved THEN. #742 later
+        # moved the one thing #734 left alone — the CONTROL round, the foreign card, which now
+        # carries `_OTHER_OWNER_EXIT` in the same six rows — so read the table for the ownerless
+        # card it tabulates and not as a picture of the module.
         #
         #   Backlog    bare bare STAGE-GATE bare bare      claim REFUSED  movable-by-agent: none
         #   Queue      bare bare STAGE-GATE bare bare      claim OK       claim -> Design
@@ -750,11 +794,12 @@ class Workflow:
         # would be the wrong advice twice over — it would name a human hand-placement that never
         # happened, and it would fire on a card this method has just decided is somebody's.
         #
-        # What is NOT claimed: that unfollowable advice is now impossible. The clause keys off
-        # "no assignee at all", so somebody ELSE's card keeps the bare message in every stage —
-        # deliberately, since "not assigned to you" is then the accurate diagnosis and "leave it
-        # alone" the unchanged right action, even though `claim` would refuse from Backlog/Your
-        # Call/Done just the same. And the table is today's tool set, not a law (#649/#662).
+        # What is NOT claimed: that unfollowable advice is now impossible. What used to close this
+        # paragraph — "somebody ELSE's card keeps the bare message in every stage, deliberately" —
+        # is no longer true and no longer the decision: #742 gave the foreign card its own clause
+        # outside Queue, so the ONE refusal left bare is a Queue card, where the advice works
+        # (ownerless) or is answered by claim itself (owned). And the table is today's tool set,
+        # not a law (#649/#662).
         #
         # REACHABILITY is not uniform across the six, which is why Backlog's exit reads "this is
         # normal" and Design/Build's reads "tell a human". Reaching the DESIGN/BUILD branch takes
@@ -777,6 +822,8 @@ class Workflow:
                 f" — except that is UNFOLLOWABLE here: this card has NO assignee at all and is "
                 f"already in {stage}, and claim() works only from Queue"
             ) + exit_advice
+        elif assignees and stage and stage != "Queue":
+            msg += _OTHER_OWNER_EXIT
         raise WorkflowError(msg)
 
     @staticmethod

@@ -2167,6 +2167,21 @@ def test_needs_work_still_sends_an_ASSIGNED_card_back_to_its_own_implementer():
     assert not wf.next_task().get("task")
 
 
+# #742: the clause a card owned by SOMEBODY ELSE gets outside Queue, since a HUMAN reversed the
+# decision #705 and #734 each took to leave that refusal bare. Both tests below pin it on STRING
+# EQUALITY, and the string is spelled out HERE rather than imported from `vikunja_mcp.workflow`
+# deliberately: an equality pin that imports the very constant it pins passes on any rewording of
+# it, which is the fake-pin shape this repo has measured itself into twice already. Keep the two
+# copies in step by hand — that divergence is the whole thing being pinned. (`_BARE`, the message
+# this is appended to, is spelled out the same way further down, in the #734 block.)
+_OTHER_OWNER_CLAUSE = (
+    " — and claim() would refuse here anyway: it works only from Queue, and this card already "
+    "has an owner, so claim() refuses it from Queue too (`already taken`). Leave it to its owner "
+    "and take the next task; a finding about it goes in file_task(…, related_task_id=…). Whether "
+    "it ever becomes claimable is a human's call, not a promise this refusal can make."
+)
+
+
 def test_ownerless_card_in_an_active_stage_gets_a_refusal_it_can_act_on():
     """#705 gate 2 — the residual case, and the one thing every tool used to say about it.
 
@@ -2179,11 +2194,20 @@ def test_ownerless_card_in_an_active_stage_gets_a_refusal_it_can_act_on():
     repo's own pre-existing sweep only ever measured Build; re-measured here, an ownerless card
     in DESIGN is moved by nothing either.
 
-    Narrow on purpose, and both conditions are asserted: in QUEUE "claim it first" is correct
-    advice, and for SOMEONE ELSE'S card "not assigned to you" is the accurate diagnosis — both
-    keep the bare message. Delete the `if stage in ACTIVE_STAGES and not assignees` clause and
-    the first loop goes RED; drop either conjunct from it and one of the two byte-for-byte
-    asserts below goes RED."""
+    Narrow on purpose, and both conditions are asserted — but only ONE of them still ends in the
+    bare message, and that is #742. In QUEUE "claim it first" is correct advice for an ownerless
+    card (claim from there succeeds), so that refusal is still pinned byte for byte. SOMEONE
+    ELSE'S card used to be pinned bare too, on the reasoning that "not assigned to you" is
+    already an accurate diagnosis; a HUMAN reversed that on VMCP-202 (742) and it now carries
+    `_OTHER_OWNER_CLAUSE` outside Queue, so this test pins the NEW string byte for byte instead
+    of the old one. Not a wording tidy-up: it overrides a choice #705 and #734 each made on
+    purpose, bought by two measurements those cards did not have (claim refuses an owned card
+    from Queue TOO, and the refusal an agent then gets outside Queue never mentions the owner).
+
+    Delete the `if stage in ACTIVE_STAGES and not assignees` clause and the first loop goes RED;
+    drop either conjunct from it and one of the byte-for-byte asserts below goes RED. Delete the
+    `elif` that appends `_OTHER_OWNER_CLAUSE` and the foreign-card assert goes RED; let it fire
+    in Queue as well and the sibling test's Queue assert goes RED."""
     api = FakeAPI(buckets=STAGES)
     wf = Workflow(api, project_id=3)
     bare = "task {id} is not assigned to you — claim it first"
@@ -2214,11 +2238,14 @@ def test_ownerless_card_in_an_active_stage_gets_a_refusal_it_can_act_on():
         wf.advance(queued["id"], to="build", spec="s")
     assert str(queue_own.value) == bare.format(id=queued["id"]), queue_own.value
 
-    # somebody ELSE's card in Build: the bare diagnosis, unchanged
+    # somebody ELSE's card in Build: the diagnosis is still accurate, and since #742 it no longer
+    # stops there — the human's reversal appends what to DO about it. Byte for byte, because the
+    # pin it replaces was byte for byte and the point of that is unchanged: a reworded refusal
+    # must be a decision somebody took, not a drift nobody noticed.
     theirs = api.add_task("their work", "Build", assignee={"id": 99, "username": "someone-else"})
     with pytest.raises(WorkflowError) as other:
         wf.call_human(theirs["id"], "q")
-    assert str(other.value) == bare.format(id=theirs["id"]), other.value
+    assert str(other.value) == bare.format(id=theirs["id"]) + _OTHER_OWNER_CLAUSE, other.value
 
 
 def test_needs_work_routes_on_a_FRESH_read_not_the_board_snapshot():
@@ -2312,9 +2339,13 @@ def test_ownerless_card_gets_a_TRUE_exit_in_every_stage_claim_refuses_from():
     #705's parenthetical and the Review universal outright and the whole 865-test suite stayed
     green, so a phrase can easily have its absence pinned and its presence pinned nowhere.
 
-    The two stages that must NOT change are asserted byte for byte: QUEUE, where "claim it first"
-    is simply correct, and SOMEBODY ELSE'S card in every stage, where "not assigned to you" is
-    the accurate diagnosis and "leave it alone" the unchanged right action.
+    QUEUE is asserted byte for byte, because there "claim it first" is simply correct. SOMEBODY
+    ELSE'S card used to be asserted byte for byte AS THE BARE MESSAGE, in every stage, on the
+    reasoning that "not assigned to you" is the accurate diagnosis and "leave it alone" the
+    unchanged right action. #742 reversed that half — the reversal is a HUMAN's, not this
+    module's — so outside Queue the foreign card is now pinned byte for byte as the bare message
+    PLUS `_OTHER_OWNER_CLAUSE`. The direction of the pin did not change and neither did its
+    reason: whatever the refusal says, it says because somebody chose it.
 
     MUTATION-CHECKED — see the record in the sibling test below; the rounds are shared."""
     api = FakeAPI(buckets=STAGES)
@@ -2402,14 +2433,26 @@ def test_ownerless_card_gets_a_TRUE_exit_in_every_stage_claim_refuses_from():
         wf.advance(queued["id"], to="build", spec="s")
     assert str(queue_own.value) == _BARE.format(id=queued["id"]), queue_own.value
 
-    # UNCHANGED 2 — somebody ELSE'S card, byte for byte, in EVERY stage. The clause keys off "no
-    # assignee at all", never off "claim would refuse from here" — even though claim refuses from
-    # Backlog/Your Call/Done for an owned card just the same.
-    # DONE IS THE ONE EXCEPTION SINCE #662, and it is the RIGHT direction: there the card is
-    # refused by STAGE before ownership is consulted at all, so a Done card belonging to
-    # someone else reads "this is the human's transition" instead of "claim it first" —
-    # which for an accepted card was never an answer that could be acted on. Both halves are
-    # asserted, because "not the bare message" alone would pass on any wording at all.
+    # CHANGED BY #742 — somebody ELSE'S card, still byte for byte, in EVERY stage, but no longer
+    # bare outside Queue. This block used to assert `== _BARE` everywhere, on the deliberate #705/
+    # #734 choice that an accurate diagnosis needs no exit; a HUMAN reversed that on VMCP-202
+    # (742) and it is rewritten here EXPLICITLY rather than loosened to a substring, so the next
+    # reader can see a decision was overridden and by whom.
+    #
+    # Both halves stay pinned as equalities, and the SPLIT is the pin: in Queue the message must
+    # not grow at all (claim's own refusal there already names the owner and the next move —
+    # `already taken (…) — grab the next one via next_task`), outside Queue it must grow by
+    # exactly this clause and nothing else. Together they catch the two mutations that matter in
+    # opposite directions: drop the clause, and every non-Queue row goes RED; fire it everywhere,
+    # and the Queue row goes RED.
+    #
+    # DONE IS STILL THE ONE STAGE THAT NEVER GETS HERE, since #662, and it is the RIGHT
+    # direction: there the card is refused by STAGE before ownership is consulted at all, so a
+    # Done card belonging to someone else reads "this is the human's transition" instead of
+    # "claim it first" — which for an accepted card was never an answer that could be acted on.
+    # That is also why the foreign-card clause is reachable in SIX stages, not seven, even though
+    # `claim` refuses such a card from all seven. Both halves are asserted, because "not the bare
+    # message" alone would pass on any wording at all.
     for stage in STAGES:
         theirs = api.add_task(f"their work in {stage}", stage,
                               assignee={"id": 99, "username": "someone-else"})
@@ -2420,7 +2463,10 @@ def test_ownerless_card_gets_a_TRUE_exit_in_every_stage_claim_refuses_from():
             assert "Done" in msg and "file_task" in msg, msg
             assert "not assigned to you" not in msg, msg
             continue
-        assert str(other.value) == _BARE.format(id=theirs["id"]), (stage, other.value)
+        want = _BARE.format(id=theirs["id"])
+        if stage != "Queue":
+            want += _OTHER_OWNER_CLAUSE
+        assert str(other.value) == want, (stage, other.value)
 
 
 def test_the_per_stage_ownerless_exits_state_only_what_the_board_really_does():
@@ -2494,7 +2540,34 @@ def test_the_per_stage_ownerless_exits_state_only_what_the_board_really_does():
       * one NO-OP round, recorded because it is NOT a fake pin: `_OWNERLESS_EXITS.get(stage or "")`
         -> `.get(stage)` -> 0 failed. `stage` is `str | None` and a dict lookup of None behaves
         exactly like "" on a str-keyed map, so the `or ""` is defensive cosmetics with no
-        behaviour behind it — there is nothing there for a test to hold."""
+        behaviour behind it — there is nothing there for a test to hold.
+
+    MUTATION-CHECKED AGAIN FOR #742, with its own control, because that card rewrote the
+    foreign-card rows above and an inherited record is not evidence about new code. Method: a
+    `git clone --no-hardlinks` of the work tree with its own `uv sync` (two writers in one
+    directory is the hazard the rulebook's second-pass section measures), `__pycache__` deleted
+    AND PYTHONDONTWRITEBYTECODE=1 in every round, `vikunja_mcp.__file__` printed every round and
+    pointing inside the clone, source restored from a pristine copy and verified by sha256 with
+    `git status` clean after each. ONE selection, `-k "ownerless or FRESH_read"` over this file,
+    reporting `collected 102 items / 97 deselected / 5 selected` in EVERY round including both
+    controls. Rounds are read by COUNTING lines that begin `FAILED `, with lines beginning
+    `ERROR ` counted SEPARATELY (0 in every round) — never off the first `N failed` in stdout,
+    which in this file is a docstring being quoted back by a traceback. Control ran FIRST and
+    again LAST: `control 0 failed` both times, and every row is a delta against it:
+      * delete the `elif` that appends `_OTHER_OWNER_EXIT` -> 2 failed: this test's foreign-card
+        equality row and #705's foreign-card assert. The clause's PRESENCE is pinned in both.
+      * let the clause fire in Queue as well -> 1 failed, and only here: the Queue row of the
+        foreign-card loop below. #705's Queue assert uses an OWNERLESS card, so it cannot see
+        this mutant at all — which is why the SPLIT had to be pinned in this test and not there.
+      * drop the clause's closing sentence, the one #734's refusal-to-promise argument put there
+        ("it ever becomes claimable is a human's call") -> 2 failed, both equality rows. So the
+        WORDING is pinned, not merely the presence of some clause.
+      * two INHERITED rounds re-run, because #742 could have changed their verdict and a record
+        that goes stale in silence is worse than none: add "Queue" to `_OWNERLESS_EXITS` -> 2
+        failed, and drop the `not assignees` conjunct -> 2 failed. Both still 2, as recorded
+        above — but the second now goes red for a DIFFERENT reason: an owned card takes the
+        ownerless exit and therefore MISSES `_OTHER_OWNER_EXIT`, where before it merely grew a
+        clause it was supposed not to have."""
     # --- Backlog: the agent's own tool produces this state, and the exit really is Queue ---
     api = FakeAPI(buckets=STAGES)
     wf = Workflow(api, project_id=3)
