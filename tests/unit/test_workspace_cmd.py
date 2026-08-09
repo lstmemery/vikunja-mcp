@@ -6172,7 +6172,7 @@ def test_a_failing_half_apply_check_costs_the_report_and_never_the_verdict(repo,
     AND IT PINS THE SEPARATE `except`, which is the part worth having a test for: the two snapshots
     are caught INDEPENDENTLY, so losing the tracked one costs the `half_applied` key and NOT the
     ignored evidence. Wrap both in one `try` and this file's most important report disappears
-    whenever `git diff` hiccups.
+    whenever `_tracked_changes` (`git diff-index`) hiccups.
 
     THE EXAMPLE THIS POINTED AT IS HISTORY NOW, and this sentence went on asserting it in the
     PRESENT tense for a whole card after it stopped being true — VMCP-270 (886), which recreates
