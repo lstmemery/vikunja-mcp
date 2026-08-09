@@ -805,8 +805,13 @@ def test_gitignore_still_lets_the_settings_file_through():
 
     THAT REASON WAS WRONG UNTIL VMCP-264 (874), here, in the assertion message below and in
     `.gitignore` itself, and the wrong one is the tempting one: all three said git NEVER
-    DESCENDS into an excluded directory. Measured on git 2.50.1 (Apple Git-155), it does —
-    whenever the index holds a path under it. An ignored `d/` holding three ignored files, an
+    DESCENDS into an excluded directory. Measured on git 2.50.1 (Apple Git-155), it does — under
+    the call this grid makes, `git status --porcelain --ignored`, it opens the directory with
+    NOTHING in the index at all (`chmod 000 d`, warning printed, 5 fresh repos out of 5, both
+    spellings). Naming the index as the trigger, which this sentence did until round 3, is wrong
+    in both directions: not necessary, by that cell, and not sufficient, because with a tracked
+    anchor present a plain `status --porcelain` under blanket `d/` does NOT open it (0 of 5).
+    What the index changes is the REPORTING. An ignored `d/` holding three ignored files, an
     ignored subdirectory and one TRACKED `d/anchor.txt` is reported by `git status --porcelain
     --ignored` as four entries; drop the tracked file and the same tree collapses to one `d/`.
     Four ENTRIES and not four files: the fourth is `d/y/`, the subdirectory holding no indexed
@@ -831,13 +836,23 @@ def test_gitignore_still_lets_the_settings_file_through():
         index EMPTY, `!d/keep.txt`, keep.txt ABSENT ........ `d/` 1    `d/*` 1    agree
         tracked `d/anchor.txt`, no `!` line ................ `d/` 4    `d/*` 4    agree
 
-    So a tracked path forces the walk under EITHER spelling (row 4) — sufficient, never the
-    only trigger. Row 2 has NOTHING in the index on either side and the spelling still decides,
+    So a tracked path forces the ENUMERATION under EITHER spelling (row 4) — sufficient UNDER
+    THE CALL THIS GRID MAKES, never the only trigger, and not a fact about the walk at all.
+    Both of those need the call named, and round 3 had to make that correction TWICE, the
+    second time in the sentence that made it the first time: `status.showUntrackedFiles=no`,
+    the setting #766 found live in this ecosystem and the levers paragraph names below, takes
+    this very row to 0 entries on BOTH spellings, so there the tracked path forces nothing; and
+    under a plain `status --porcelain` that same anchor leaves blanket `d/` unopened while
+    `d/*` opens it (0 of 5 against 5 of 5, fresh repos). Row 2 has NOTHING
+    in the index on either side and the spelling still decides,
     because under `d/*` the `!` line un-ignores a file that is on disk and untracked, so git can
     no longer call that directory wholly ignored and has to enumerate it — `?? d/` sits beside
     those four, the DIRECTORY, the file itself being named only at `-uall` — and to enumerate it
     it must walk. Under blanket `d/` that same `!` line cannot fire, which is the pattern fact
-    above, so there is nothing to force the issue and the directory collapses.
+    above, so there is nothing to force the ENUMERATION and the directory collapses to one
+    entry. It is still walked: that is the same cell, and `chmod 000` on a SUBDIRECTORY of it
+    prints the warning while the one entry survives. Collapsing is what the `!` line stops
+    forcing here, never the opening.
 
     DO NOT READ THAT GRID AS A CLOSED SET, in either direction. Further levers keep turning up
     and each one was found by looking rather than by reasoning: `-uall`, equivalently
@@ -845,14 +860,18 @@ def test_gitignore_still_lets_the_settings_file_through():
     in row 1; `--ignored=matching` makes ROW 1 ITSELF diverge, 1 against 4, with an empty index,
     no `!` line and no `-uall` — so that row's "agree" is a property of the default `--ignored`
     mode and not of the spellings; and `status.showUntrackedFiles=no`, the setting #766 found
-    live in this ecosystem, takes row 2 from 4 to 0 on both. Counting them in the prose is
+    live in this ecosystem, takes row 2 to 0 on BOTH — but from 4 on the `d/*` side and from 1
+    on the blanket one, which are the two numbers row 2 already carries.
+    Counting them in the prose is
     exactly what this docstring must not do, and the first draft of the `.gitignore` comment
     beside it said "all three levers" while two more were a single `status` flag away.
     "1 entry against N" is in any case the granularity of THIS call and never "git refused to
     walk": `git ls-files -o -i --exclude-standard` lists all four files under blanket `d/` with
     an empty index. Even the tracked row survives only in one reading — add the `!` line to it
-    and `d/` gives 5 against `d/*`'s 4, so both spellings DESCEND there while their entries
-    differ.
+    AND put `keep.txt` on disk and `d/` gives 5 against `d/*`'s 4, so both spellings DESCEND
+    there while their entries differ. The `!` line ALONE does not do it: with `keep.txt` absent
+    that row is 4 against 4, so the on-disk file is half the trigger and naming only the line
+    would be the same overshoot in miniature.
 
     What the spelling really decides is the PATTERN contest, and that one is independent of the
     walk: `d/` plus `!d/keep.txt` answers `.gitignore:1:d/` and a plain `git add d/keep.txt` is
@@ -869,11 +888,18 @@ def test_gitignore_still_lets_the_settings_file_through():
     reddens exactly it (measured: `assert not True`, quoting `.claude/` as the rule git
     applied). Naming the SECOND assertion there was the round-one draft's third error: the
     first assertion fails, so execution never reaches the second at all, which would have made
-    it an assertion no round reaches — the thing this docstring forbids two paragraphs down.
+    it an assertion no round reaches — the thing the git-first-and-literal-last paragraph below
+    forbids (named, not counted: this used to say "two paragraphs down" and the count was
+    already wrong before round 3's own edits moved it again).
     The second assertion states a different fact, provenance (the rule that let the file
     through is a `!` line from THIS repo), and the round that FAILS it is deleting BOTH lines.
     Not "the round that reaches it", which was the third error's own first correction: five of
-    the seven rounds reach that assertion and pass it, the delete-`.claude/*` round included,
+    the seven rounds REACH that assertion and FOUR of them pass it — the fifth is delete-BOTH,
+    the round the previous sentence names as failing it, so reach and pass are not the same
+    count and the first correction's own "reach that assertion and pass it" welded them into
+    one. Instrumented per round (each round's `.gitignore` written, then the four assertions
+    evaluated in source order): reached by 5 of 7, passed by 4, failed by 1. The
+    delete-`.claude/*` round is among the four that pass,
     where it was instrumented and answered `.gitignore` / `!.claude/settings.json` on its way to
     failing the NEXT one. Reaching and failing are different questions and this paragraph has
     now got the distinction wrong in both directions. `_ignore_rule` is also not "`git
@@ -914,7 +940,9 @@ def test_gitignore_still_lets_the_settings_file_through():
     `!` line -> 1 failed on the FIRST assertion, the verdict, which is the round that justifies
     asking git at all; delete the `!.claude/settings.json` line -> 1 failed, FIRST assertion
     again; delete BOTH lines -> 1 failed on the SECOND, provenance, because no rule in this repo
-    decides the settings file's fate any more — and this is the only round that REACHES it;
+    decides the settings file's fate any more — the only round that FAILS it, and NOT the only
+    one that REACHES it, which is what the NO ASSERTION WAS ADDED paragraph retracts:
+    instrumented, five of the seven rounds reach that assertion and four pass it;
     delete the `.claude/*` line alone so nothing under `.claude` is hidden -> 1 failed on the
     THIRD, local-state provenance (and see `_ignore_rule`: without the source this round passed,
     via `~/.config/git/ignore` — which is what git names in the failure text ON THE MACHINE THAT
@@ -922,7 +950,22 @@ def test_gitignore_still_lets_the_settings_file_through():
     `HOME`, the same round still fails and names `None`); respell as `!/.claude/settings.json`
     -> 1 failed on the FOURTH, the
     literal; rewrite the explanatory comment above the rules -> 0 failed, PASS. Control re-run
-    after the last restore, 0 failed. That final PASS is why this card changed comments and not
+    after the last restore, 0 failed. Re-run WHOLE a third time on THIS prose (round 3): control
+    0 failed at the start AND at the end, `collected 1 item` in all eight rounds, 0 `ERROR `
+    lines throughout, `.gitignore` restored from a copy and confirmed sha256-identical after
+    every round, and the same six attributions — but read from pytest's own failing LINE under
+    `--tb=line` (two rounds on the first assertion, then one each on the second, third and
+    fourth; the numbers themselves are not written down, having moved once already under this
+    card's own edits) rather than by grepping stdout, which does NOT work
+    here and silently agrees with you: the traceback prints the test's source UP TO the failing
+    statement, so every PRECEDING assertion's message is in the output as source, and a grep
+    for the first one therefore matches in every round that gets past it — which tagged all
+    five failures as the first assertion. Not "every message in every round", which was this
+    sentence's own first try: measured by occurrence count, the blanket round carries the first
+    message TWICE (source plus failure) and the other three not at all, while the
+    delete-`.claude/*` round carries the first two once each and the third twice. So the
+    discriminator, for anyone who insists on grepping, is the COUNT and not the presence.
+    That final PASS is why this card changed comments and not
     rules — and it says as plainly that the prose corrected here is no more pinned than the
     prose it replaced, which is what the second independent pass is for.
     """

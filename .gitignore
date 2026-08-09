@@ -17,13 +17,39 @@ dist/
 # prints nothing). It is a fact about PATTERNS, not about git refusing to
 # WALK the directory — and do NOT invert that into a claim about the walk
 # either, which is the mistake VMCP-264 (874) made while fixing the first
-# one. The spelling CAN decide the walk: a tracked path under the directory
-# forces it under BOTH spellings, but so does a file git can no longer call
-# ignored, and the `!` line makes exactly one of those when the re-included
-# file is on disk and untracked. Do NOT count the levers here — every round
+# one. Keep three questions apart: whether git OPENS the directory, how
+# many ENTRIES it then reports, and which pattern WINS. Only the third
+# decides this file, and it takes TWO measurements on git 2.50.1 to
+# separate all three. First: under blanket `d/`, with a tracked anchor,
+# `!d/keep.txt` and keep.txt on disk, `git status --porcelain --ignored`
+# prints `!! d/keep.txt` BY NAME — git opened the directory AND
+# enumerated it per file — while `check-ignore --no-index -v` still
+# attributes that path to `.gitignore:1:d/` and a plain `git add` refuses
+# it. Change the one character to `d/*` and the `!` line wins instead and
+# the add succeeds. That splits the pattern contest off from both of the
+# others, and NOT them from each other: in that cell the only evidence of
+# opening IS the per-file listing. Second, the cell where those two come
+# apart: blanket `d/`, EMPTY index, no `!` line, `chmod 000 d/y` prints
+# `warning: could not open directory 'd/y/'` — opened — beside a single
+# `!! d/` — not enumerated. So where the spelling shows up under this
+# call it shows up as the ENTRY COUNT and not as the opening — and only
+# in SOME rows: 1 against 4 with an EMPTY index, the `!` line and
+# keep.txt on disk (the anchored cell just named is 5 against 4), against
+# 1/1, 1/1 and 4/4 in the grid's other three. Do not promote any of that into "the
+# spelling never decides the walk" either — opening is joint with the
+# CALL: drop `--ignored`, or ask `--ignored=matching`, and `d/*` opens
+# the directory where `d/` does not (five fresh repos per cell, 5/5
+# against 0/5). Measure each cell in a FRESH repo, and say WHICH path you
+# blocked: `chmod 000` on the directory itself leaves blanket `d/` with
+# NO entry at all, blocking a SUBDIRECTORY leaves the one entry, and
+# welding the warning from the first to the count from the second is how
+# the sentence that stood here in round 3 went wrong.
+# Do NOT count the levers here — every round
 # that tried found another (`--ignored=matching` alone splits a row the
 # grid calls agreeing). The grid, the levers measured so far and the entry
-# counts are in test_gitignore_still_lets_the_settings_file_through.
+# counts are in test_gitignore_still_lets_the_settings_file_through; the
+# OPENING cells above are measured here and not there, so this comment is
+# the source for those and the test is the source for the counts.
 # This hides machine-local runtime state (scheduled_tasks.lock, worktrees/,
 # mailbox/, settings.local.json) while keeping shared project config.
 .claude/*
