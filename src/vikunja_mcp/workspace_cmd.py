@@ -1158,13 +1158,23 @@ _REPRODUCIBLE_IGNORED_SUFFIXES = (".pyc", ".pyo")
 # did not apply to these. Counting them is also not a census to lean on: the grep returns five hits
 # in `test_workspace_cmd.py`, not three, and one of them is definitional without being false. What
 # is NOT touched, and is filed instead of widened: `.gitignore` and
-# `test_repo_browser_isolation.py` explain this repo's `.claude/*` spelling with "git does not
-# descend into an excluded directory", which the measurements above contradict as a universal —
-# their CONCLUSION survives, and measured rather than assumed: the re-include is blocked at the
-# PATTERN level, not by any walk. Under blanket `d/` plus `!d/keep.txt`, `check-ignore -v`
-# attributes the path to `.gitignore:1:d/` and a plain `git add` refuses it, while under `d/*` the
-# same `!` line wins and the add succeeds. So the SPELLING rule there is right and only the reason
-# given for it is too strong.
+# `test_repo_browser_isolation.py` EXPLAINED this repo's `.claude/*` spelling with "git does not
+# descend into an excluded directory" until VMCP-264 (874) corrected the reason in BOTH. Measured
+# here, that quotation is now absent from both of those files — read WHOLE and whitespace-flattened,
+# because where it does survive it is line-broken and a per-line grep returns nothing — so it lives
+# on only in this sentence quoting it, and a reader who greps for it cannot tell a stale pointer
+# from a bad grep. The measurements above contradicted it as a universal and their CONCLUSION
+# always survived: the re-include is blocked at the PATTERN level. Under blanket `d/` plus
+# `!d/keep.txt`, `check-ignore --no-index -v` attributes the path to `.gitignore:1:d/` and a plain
+# `git add` refuses it, while under `d/*` the same `!` line wins and the add succeeds; `--no-index`
+# because on a TRACKED path the bare form is rc 1 printing NOTHING, which reads like "not ignored".
+# So the SPELLING rule there was right and only its stated reason was too strong. What 874 put in
+# its place keeps THREE questions apart — whether git OPENS the directory, how many ENTRIES it
+# reports, and which pattern WINS — and only the third decides that file; neither universal about
+# the walk may be promoted out of it. `.gitignore` is the source for the OPENING cells by its own
+# division of labour, and records them as joint with the CALL and the SPELLING — that one is cited,
+# not re-measured here. What IS measured here is the other side: the collapse paragraph above has
+# the nested REPOSITORY git really does not descend into.
 _MAX_REPORTED_IGNORED = 50
 
 
