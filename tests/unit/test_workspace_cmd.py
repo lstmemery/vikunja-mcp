@@ -5301,9 +5301,18 @@ def _unwritable_dir(path: Path):
     return _cm()
 
 
-def _half_applying_stand(repo, tmp_path, extra_local=(), extra_incoming=()):
+def _half_applying_stand(repo, tmp_path, extra_local=(), extra_incoming=(), ignored_victim=True):
     """The card's own stand: tracked `aaa.txt` plus a tracked file inside a directory git will not
-    be able to write, an IGNORED `shot.png` of the human's, and a sibling landing all of them."""
+    be able to write, an IGNORED `shot.png` of the human's, and a sibling landing all of them.
+
+    `ignored_victim=False` drops that screenshot from BOTH sides, which leaves the pre-merge probe
+    with nothing at risk and therefore `doomed == []`. That is not an edge of the stand, it is the
+    checkout with NO ignored casualty — how common that is relative to the other shape is not
+    measured anywhere here, so it is described and not ranked — and VMCP-258 (860) round 2 needed
+    it because an empty `doomed` is exactly where "the probe returned" stopped implying "the probe
+    compared something". The tracked half-write still happens, so the checkout is half-applied
+    either way; only the ignored half of the report goes away.
+    """
     _ignoring(repo, "*.png")
     (repo / "aaa.txt").write_text("v1\n")
     (repo / "ro").mkdir()
@@ -5313,10 +5322,13 @@ def _half_applying_stand(repo, tmp_path, extra_local=(), extra_incoming=()):
     _git(repo, "add", "-A")
     _git(repo, "commit", "-m", "the state the human is sitting on")
     _git(repo, "push", "origin", "main")
-    (repo / "shot.png").write_bytes(b"\x89PNG the human's own evidence screenshot")
+    if ignored_victim:
+        (repo / "shot.png").write_bytes(b"\x89PNG the human's own evidence screenshot")
     assert _git(repo, "status", "--porcelain") == "", "the ignored file is invisible, as always"
 
-    incoming = {"aaa.txt": "v2\n", "ro/bbb.txt": "v2\n", "shot.png": "UPSTREAM\n"}
+    incoming = {"aaa.txt": "v2\n", "ro/bbb.txt": "v2\n"}
+    if ignored_victim:
+        incoming["shot.png"] = "UPSTREAM\n"
     incoming.update({rel: "v2\n" for rel in extra_incoming})
     return _land_on_origin(tmp_path, "halfapply", incoming, force=True)
 
@@ -5910,17 +5922,75 @@ def test_a_failing_half_apply_check_costs_the_report_and_never_the_verdict(repo,
 
 # VMCP-258 (860): THE TWO AFTER-REFUSAL DIAGNOSTICS ARE GUARDED TOO, EACH ON ITS OWN.
 #
-# MUTATION SWEEP. One selection throughout — `tests/unit/test_workspace_cmd.py`, whole file, no
-# `-q` — `collected 203 items` and `0` ERROR lines in EVERY round, each round read by counting
-# lines that begin `FAILED ` and lines that begin `ERROR ` separately; control 0 failed:
-#   * the after-refusal `_tracked_changes` guard removed ....... control 0 failed; 2 failed
+# MUTATION SWEEP, RE-RUN WHOLE FOR ROUND 2. The round-1 numbers this block used to carry are
+# REPLACED rather than appended to, and the reason is ordinary decay, NOT the measure-before-rebase
+# class: re-measured, round 1's `collected 203` was CORRECT at its own landing commit `c460190`,
+# and five sibling landings have touched this file and the module since. Read every count below as
+# a property of the tree at `684bb21` plus this card's diff — the whole sweep was RE-RUN there,
+# after a rebase, rather than carried over from the tree it was first cheap on.
+#
+# THAT ANCHOR IS THE POINT, and this block demonstrates its own subject: between that sweep and
+# this landing another sibling arrived, so the SHIPPED tree collects 211 rather than 210, the one
+# extra being #852's `test_a_symlink_under_a_NON_TRAVERSABLE_parent_is_still_named`. Re-measured on
+# the shipped tree, that control is `collected 211 items`, 0 failed, 0 errors. The rounds below are
+# NOT restated against it: with six agents pushing, a count re-derived after every rebase is a
+# treadmill, and the honest fix is to NAME the tree a number belongs to rather than to keep chasing
+# one. What makes the delta safe to read across the two trees is that the sibling touches none of
+# the four mutation anchors and no test this sweep kills.
+#
+# One selection throughout — `tests/unit/test_workspace_cmd.py`, whole file, `-q` DROPPED —
+# `collected 210 items` and `0` ERROR lines in EVERY round. Each round is read by COUNTING lines
+# that begin `FAILED ` and, separately, lines that begin `ERROR `, never by the first `N failed` in
+# stdout, which lands inside the literal `control 0 failed` these very comments carry and so reads
+# DOWNWARD. Mutations are applied in a SEPARATE clone by EXACT-STRING replacement, each anchor
+# asserted to occur exactly once, the source restored after every round and confirmed
+# sha256-identical to the pristine copy:
+#   * the after-refusal `_tracked_changes` guard removed ....... control 0 failed; 4 failed
 #   * the after-refusal `_fingerprints` guard removed .......... control 0 failed; 2 failed
-#   * `looked` read off the BEFORE snapshots again ............. control 0 failed; 1 failed
-#   * BOTH after-refusal guards removed ....................... control 0 failed; 3 failed
-# The third row is the one worth reading: it is not a guard at all, it is the guard's COST, and
-# without that row the fix would trade a lost report for a FALSE one. Rows one and two kill two
-# tests each rather than one because the both-probes-died test reaches its state through either
-# guard; the paired single-guard tests are what separate them.
+#   * BOTH after-refusal guards removed ........................ control 0 failed; 5 failed
+#   * `looked` back to round 1's disjunction over the CALLS .... control 0 failed; 3 failed
+#   * that disjunction with `prints_answered` deleted .......... control 0 failed; 1 failed
+#   * that disjunction with `tracked_after is not None` gone ... control 0 failed; 3 failed
+#   * that disjunction tightened by `and bool(doomed)` ......... control 0 failed; 2 failed
+#   * conjunct `tracked_compared` dropped ...................... control 0 failed; 3 failed
+#   * `bool(doomed)` dropped from `ignored_compared` ........... control 0 failed; 1 failed
+#   * `doomed_answered` dropped from `ignored_compared` ........ control 0 failed; 1 failed
+# Control re-run after the last restore: 0 failed.
+#
+# THE MIDDLE THREE ROWS ARE THE POINT OF ROUND 2, because they are exactly the three forms that
+# were GREEN when round 1 shipped. Measured by this round rather than inherited from the review
+# that found them, on round 1's own landing commit `c460190` (same selection, `collected 203
+# items`, control 0 failed at the start and after the last restore): deleting EITHER disjunct of
+# `looked = tracked_after is not None or prints_answered` left the suite at 0 failed, and so did
+# tightening it to `or (prints_answered and bool(doomed))`. TWO tests asserted on that branch's
+# wording there — `test_when_BOTH_after_probes_die_the_refusal_says_it_could_not_look` and the
+# pre-existing `test_a_refusal_that_could_not_be_CHECKED_does_not_claim_it_was` — and NEITHER could
+# tell the three forms apart, which is how a defect the reviewer then built by hand (the
+# reassurance printed over a half-applied checkout) shipped under a green suite. A guard added to a
+# diagnostic changes what the sentences ABOUT that diagnostic may claim, and round 1 moved the
+# guard without moving the claim or pinning it.
+#
+# Rows one and two kill more than one test each because the both-probes-died test reaches its state
+# through either guard; the paired single-guard tests are what separate them. Row one kills four
+# rather than two because two of round 2's new pins also drive the tracked probe to its death
+# (`test_an_empty_doomed_list_…` and `test_an_answered_ignored_probe_…` both monkeypatch it).
+# No row singles out a DIFFERENT one of round 2's new tests: the last two rows and the
+# `ignored_compared`-dropped form all land on
+# `test_a_doomed_list_the_PRE_MERGE_probe_never_computed_cannot_vouch_for_anything` ALONE, so that
+# one test carries the whole ignored-half conjunct — real work, and a single point of failure worth
+# knowing about.
+#
+# AND ONE ROW IS ABOUT THE OPPOSITE DIRECTION, over-tightening, because without it the fourth new
+# test — `test_looked_still_says_CHECKED_when_both_halves_really_were_compared` — is killed by NO
+# row at all, which is this repo's "negative pin that pins nothing" shape. Dropping the empty-
+# `doomed` alternative outright (`ignored_compared = (prints_answered and bool(doomed))`) makes the
+# honest branch start claiming it could not look. Measured on the tree this card SHIPS, control
+# first and last, same selection:
+#   * empty-`doomed` alternative dropped ....................... control 0 failed; 2 failed
+# Honest bound on that row: the second test it kills is the PRE-EXISTING
+# `test_the_fast_forward_refuses_rather_than_overwriting_uncommitted_work`, which already pins the
+# same property — so no mutation here separates the new test from the old one, and the new test's
+# value is that it names the input rather than that it is uniquely load-bearing.
 #
 # TWO NOTES ON THE STAND ITSELF, both worth more than the numbers. The monkeypatch has to let the
 # FIRST call through — a `_tracked_changes` that throws on every call kills the BEFORE snapshot,
@@ -6034,6 +6104,143 @@ def test_when_BOTH_after_probes_die_the_refusal_says_it_could_not_look(
         "genuinely half-applied checkout is the one outcome worse than saying nothing"
     )
     assert (repo / "aaa.txt").read_text() == "v2\n", "the checkout really is half-applied"
+
+
+def test_an_empty_doomed_list_is_not_a_comparison_so_it_cannot_vouch_for_the_tracked_half(
+        repo, tracker, tmp_path, monkeypatch):
+    """VMCP-258 (860) ROUND 2, and the input its round 1 shipped a FALSE report on.
+
+    Round 1 read `looked = tracked_after is not None or prints_answered`. `prints_answered` is set
+    from `_fingerprints(...) is not None`, and `_fingerprints(root, [])` returns `{}` — which IS
+    "not None". So over an empty `doomed` the ignored probe answers TRUE having compared ZERO
+    paths, the disjunction is satisfied by that alone, and `looked` becomes unconditionally true
+    whenever the human has no ignored casualty. Which is the checkout with no ignored casualty —
+    the shape this branch was written for, and the one where the reassuring sentence then printed
+    over a half-applied tree. `looked = False` needed the tracked half to be dead AS WELL as one of
+    the two `_fingerprints` calls having failed, so it was two conditions and not one probe.
+
+    That trade is strictly worse than the defect the card was filed for. Unguarded, the same input
+    RAISED and `gc_workspaces` said `MAIN_SYNC_ERROR` — a loud, honest nothing. Round 1 turned it
+    into a quiet "nothing half-written was found afterwards — which is what was CHECKED" over a
+    checkout where `aaa.txt` really had gone v1 -> v2.
+
+    So this pin is about the WORD, not the guard: `looked` must mean a comparison HAPPENED, never
+    that a call returned. What removes each conjunct in turn is the mutation sweep recorded ABOVE,
+    not the siblings below — those are the other inputs it kills — because a gate nothing can
+    redden is the defect this repository keeps re-filing."""
+    _api, wf = tracker
+    _half_applying_stand(repo, tmp_path, ignored_victim=False)
+    seen = _real_once_then_raises(monkeypatch, "_tracked_changes",
+                                  WorkspaceError("git diff-index … timed out after 600s"))
+
+    with _unwritable_dir(repo / "ro"):
+        res = gc_workspaces(cwd=repo, workflow=wf)
+
+    assert len(seen) == 2, "the after-refusal call really was reached"
+    state = res["main_checkout"]
+    assert (repo / "aaa.txt").read_text() == "v2\n", "the checkout really is half-applied"
+    assert state["code"] == workspace_cmd.MAIN_SYNC_BLOCKED, state
+    assert "which is what was CHECKED" not in state["reason"], (
+        "an empty `doomed` compares nothing, so it cannot stand in for the tracked probe that "
+        "died — this is the borrowed reassurance #806 shipped, over the commonest checkout there "
+        f"is: {state['reason']}"
+    )
+    assert "could NOT be checked" in state["reason"], state["reason"]
+
+
+def test_an_answered_ignored_probe_cannot_vouch_for_a_tracked_probe_that_died(
+        repo, tracker, tmp_path, monkeypatch):
+    """The same defect as the test above with the two halves SWAPPED, and the reviewer's second
+    finding: it is not confined to an empty `doomed`.
+
+    Here the ignored casualty EXISTS and its probe really did compare it — one path, fingerprint
+    taken on both sides — while the tracked probe timed out. `over` is empty because this refusal
+    is an ordinary UP-FRONT one (the human is sitting on an uncommitted `aaa.txt` that the update
+    has to write, so git aborts before touching anything). Note what that costs the claim and what
+    it does not: NOTHING is half-applied on this input, so the round-1 report was unearned here
+    rather than false about the disk — the sibling above is the one where a tracked file really
+    had moved.
+
+    Round 1's `looked` was an OR across the two halves, so the ignored half answering satisfied it
+    by itself and the report said "which is what was CHECKED" over a tracked half nobody looked at
+    after the merge. One half of "half-written" is not the half."""
+    _api, wf = tracker
+    _half_applying_stand(repo, tmp_path)
+    # Uncommitted work on a path the incoming commit modifies -> git refuses BEFORE writing, so
+    # nothing is half-applied and the ignored fingerprint is unchanged: `over` and `half` both [].
+    (repo / "aaa.txt").write_text("the human was editing this\n")
+    seen = _real_once_then_raises(monkeypatch, "_tracked_changes",
+                                  WorkspaceError("git diff-index … timed out after 600s"))
+
+    state = gc_workspaces(cwd=repo, workflow=wf)["main_checkout"]
+
+    assert len(seen) == 2, "the after-refusal call really was reached"
+    assert state["code"] == workspace_cmd.MAIN_SYNC_BLOCKED, state
+    assert "which is what was CHECKED" not in state["reason"], (
+        "the ignored probe answering says nothing about the TRACKED half, and this sentence "
+        f"speaks for both of them: {state['reason']}"
+    )
+    assert "could NOT be checked" in state["reason"], state["reason"]
+
+
+def test_a_doomed_list_the_PRE_MERGE_probe_never_computed_cannot_vouch_for_anything(
+        repo, tracker, tmp_path, monkeypatch):
+    """The third conjunct, and the nastiest input on this branch — the reviewer's composite.
+
+    `_ignored_paths_the_ff_will_overwrite` is best-effort too, so an empty `doomed` is MANY states
+    and not one. Here the human's ignored `shot.png` really IS in the incoming commit, the probe
+    that would have named it RAISED, and the report is then the only thing anyone will read about
+    it. The name of this test describes THAT input — a list the probe never got to compute — and
+    the input is built by making it throw.
+
+    READ THE SCOPE OFF THE INPUT AND NOT OFF THE NAME, because the conjunct is narrower than the
+    English: `doomed_answered` closes the RAISE, which is the route the after-probe guards made
+    reachable, and NOT the probe's several NON-raising give-ups, which arrive as the same bare
+    `[]` and are indistinguishable here. Those predate this card and are unchanged by it; the
+    measured residue, including the parent it reproduces on, is written beside `looked`.
+
+    Every other consumer of `doomed` may keep conflating all of them — the keys built from it are
+    one-way by design and absence never proved anything — but this sentence claims a check was
+    RUN, so it is the one place any part of the difference has to be carried. Without the
+    `doomed_answered` conjunct the empty list reads as "nothing at risk, so nothing to compare, so
+    the ignored half is clean", which is the same borrowed reassurance one level further back."""
+    _api, wf = tracker
+    _half_applying_stand(repo, tmp_path)
+    # Up-front refusal: the human is sitting on `aaa.txt`, so git aborts before writing anything
+    # and both halves of the report are legitimately empty — the sentence is all that is left.
+    (repo / "aaa.txt").write_text("the human was editing this\n")
+    monkeypatch.setattr(workspace_cmd, "_ignored_paths_the_ff_will_overwrite",
+                        lambda *a, **k: (_ for _ in ()).throw(WorkspaceError("ls-tree fell over")))
+
+    state = gc_workspaces(cwd=repo, workflow=wf)["main_checkout"]
+
+    assert state["code"] == workspace_cmd.MAIN_SYNC_BLOCKED, state
+    assert "which is what was CHECKED" not in state["reason"], (
+        "the ignored half was never even asked about — an empty `doomed` the probe RAISED "
+        f"instead of returning is not a finding: {state['reason']}"
+    )
+    assert "could NOT be checked" in state["reason"], state["reason"]
+
+
+def test_looked_still_says_CHECKED_when_both_halves_really_were_compared(repo, tracker, tmp_path):
+    """Input B of the pair above, as its own test because it needs no monkeypatch at all.
+
+    The refusal here is an ordinary up-front one with nothing half-written and no ignored casualty,
+    so both probes ran and both found nothing. If a tightening of `looked` ever makes THIS input
+    say "could NOT be checked", the gate has stopped distinguishing anything and the sentence goes
+    back to being the never-read field this module keeps splitting keys to avoid."""
+    _api, wf = tracker
+    _half_applying_stand(repo, tmp_path, ignored_victim=False)
+    # The human's own uncommitted work on a path the update touches: git refuses BEFORE writing.
+    (repo / "aaa.txt").write_text("the human was editing this\n")
+
+    state = gc_workspaces(cwd=repo, workflow=wf)["main_checkout"]
+
+    assert state["code"] == workspace_cmd.MAIN_SYNC_BLOCKED, state
+    assert "which is what was CHECKED" in state["reason"], (
+        "both probes ran and both compared what there was to compare; refusing to say so would "
+        f"make the honest branch fire on every ordinary refusal: {state['reason']}"
+    )
 
 
 def test_the_partial_apply_probes_do_not_REFRESH_a_refused_checkouts_index(repo, tracker, tmp_path):

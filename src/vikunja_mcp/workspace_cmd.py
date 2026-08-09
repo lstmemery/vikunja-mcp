@@ -2794,6 +2794,29 @@ def sync_main_checkout(root: Path) -> dict | None:
     not guessed at here; the measurements, including the shapes that are NOT losses, live in this
     card's section of `tests/unit/test_workspace_cmd.py`.
 
+    A DIFFERENT CLAUSE OF THAT SAME PARAGRAPH TOOK ITS OWN CORRECTION, and it is NOT a fourth link
+    in the 806/835/838 chain above — those three narrow what the CONTRAST promises, this one is
+    about what `blocked` is entitled to SAY. "And says outright when it could not look" is only as
+    good as the predicate under it, and VMCP-258 (860) shipped that predicate false for one round.
+    `looked` decides the clause, and it has to mean A COMPARISON HAPPENED — never "a call
+    returned". Round 1 wrote it as a disjunction over the two CALLS, so either half answering
+    vouched for the other, and `_fingerprints(root, [])` returns `{}`, which IS "not None", so the
+    ignored half answered TRUE having compared ZERO paths. On the ORDINARY checkout — the one with
+    no ignored casualty — that made the disjunction unconditionally true, and the reassuring
+    sentence printed over a tree where a tracked file really had gone v1->v2. That is the borrowed
+    reassurance #806 was filed for, reached by the fix for a LOST report: a loud nothing traded for
+    a quiet falsehood, which is worse than the defect the card was opened on. It is now a
+    CONJUNCTION over the two HALVES of "half-written", each counted by what it COMPARED, with an
+    empty `doomed` counting only when the pre-merge probe returned it WITHOUT RAISING. Read that
+    last clause exactly: NOT "computed it". That probe gives up in several non-raising ways too
+    (its own docstring lists them), so the conjunct closes the RAISE the guards made reachable and
+    not the whole class — a half-apply whose only casualty the regenerable-name filter dropped
+    still prints the reassuring sentence, measured, with no injection. That residue is NAMED rather
+    than fixed because it predates the guards: the same stand on the pre-guard parent `1fb0082`
+    gives the same code, sentence and dead file. The general lesson outlives the instance: a guard
+    added to a diagnostic changes what the sentences ABOUT that diagnostic are entitled to claim,
+    and the round that adds one owes the predicate a pin.
+
     RETURNS None WHEN THERE IS NOTHING TO SAY — already current, or opted out. The key it feeds
     is therefore ABSENT on the boring path and PRESENT whenever a reader has something to read.
     That direction is deliberate and is the lesson `removed_ignored` and VMCP-68's `kept`/
@@ -2877,8 +2900,20 @@ def sync_main_checkout(root: Path) -> dict | None:
     # the feature and was working before the report existed.
     try:
         doomed = _ignored_paths_the_ff_will_overwrite(root, remote)
+        doomed_answered = True
     except Exception:                               # noqa: BLE001 — a diagnostic, never a gate
         doomed = []
+        # This flag says the probe RAISED, and that is ALL it says. Reading it as "computed an
+        # answer" is the overclaim VMCP-258 (860) round 2 was very nearly bounced a second time
+        # for: an empty `doomed` is MANY states, not two — this `except`, plus every NON-raising
+        # give-up the probe's own docstring enumerates (the `_is_reproducible_ignored` filter,
+        # each `return []` in it and in the two functions it calls, a walk stopped at
+        # `_MAX_DIR_EXPANSION`, `_ignored_of` exhausting `_MAX_CHECK_IGNORE_CALLS`). Only the RAISE
+        # is new, because only the RAISE became reachable when the after-probes were guarded; the
+        # rest predate this card and are unchanged by it. So this conjunct closes the raise and not
+        # the class, and nothing downstream may say otherwise — see `looked`, which carries the
+        # measurement.
+        doomed_answered = False
     # The two partial-apply snapshots (VMCP-244), taken here for the same reason as the probe
     # above — afterwards the answer is unrecoverable — and caught SEPARATELY on purpose: one of
     # them failing must not discard what the other already knows. The mistake that shape avoids
@@ -2930,8 +2965,12 @@ def sync_main_checkout(root: Path) -> dict | None:
         # `prints_answered`, not `prints_before is not None`, and the distinction is what the guard
         # COSTS if it is added carelessly: with the after-call able to give up, "I took a before
         # snapshot" stops implying "I compared". `_fingerprints` swallows `OSError` per path, so
-        # this branch is far less reachable than its neighbour — it is here because the pair, not
-        # the call, is what the report below is allowed to speak for.
+        # this branch is far less reachable than its neighbour — it is here because the rule is
+        # per-CALL, and because a guard on one of two symmetrical calls invites the next reader to
+        # conclude the other was left bare deliberately. Note what this flag does NOT say: it is
+        # true when `doomed` was EMPTY and nothing was compared at all, `{}` being "not None". Round
+        # 1 of VMCP-258 (860) read it as a comparison and that is the whole of what round 2 fixed —
+        # see `looked` below, which is where the difference is finally carried.
         prints_answered = False
         if prints_before is not None:
             try:
@@ -2942,21 +2981,61 @@ def sync_main_checkout(root: Path) -> dict | None:
                 prints_answered = True
                 over = [p for p in doomed if prints_after.get(p) != prints_before.get(p)]
         if not half and not over:
-            # "Found nothing" is not "nothing happened", and when BOTH probes were unavailable it
-            # is not even that. Saying so is the whole subject of this card: a report that borrows
-            # the reassurance of a check it did not run is how #806 shipped its own overclaim.
-            # The PAIR, never one end of it: a before-snapshot with no after-snapshot compared
-            # nothing, and saying "which is what was CHECKED" over that state would be the exact
-            # kind of borrowed reassurance the paragraph below names. Reading `tracked_before`
-            # here was correct until the two after-calls could give up (VMCP-258, 860) and is not
-            # any more; `tracked_after is not None` already implies its own before-half, since it
-            # is only assigned inside that branch.
-            looked = tracked_after is not None or prints_answered
+            # "Found nothing" is not "nothing happened", and when a probe was unavailable it is not
+            # even that. Saying so is the whole subject of this card: a report that borrows the
+            # reassurance of a check it did not run is how #806 shipped its own overclaim.
+            #
+            # `looked` must mean A COMPARISON HAPPENED — never "a call returned", and never "one of
+            # them returned". Round 1 of VMCP-258 (860) wrote `tracked_after is not None or
+            # prints_answered` and shipped BOTH of those errors at once. "or" is wrong because this
+            # one sentence speaks for the two INDEPENDENT halves of "half-written", tracked and
+            # ignored: let the ignored probe answer while `diff-index` times out and the report
+            # vouched for a tracked half nobody looked at after the merge. And `prints_answered`
+            # alone is wrong because `_fingerprints(root, [])` returns `{}`, which IS "not None", so
+            # over an empty `doomed` it answered TRUE having compared ZERO paths — which made the
+            # whole disjunction unconditionally true on the ORDINARY checkout, the one with no
+            # ignored casualty, leaving `looked = False` reachable only when the TRACKED half was
+            # dead AS WELL and one of the two `_fingerprints` calls had failed — either one, since
+            # the guarded before-call leaving `prints_before is None` skips the after-call outright.
+            # Both states are pinned next door, and they differ in a way worth keeping straight:
+            # the first printed the reassurance over a genuinely HALF-APPLIED tree, the second over
+            # an INTACT one, that refusal being an ordinary up-front abort where nothing is written
+            # — so there the claim was unearned rather than false about the disk.
+            #
+            # Hence a conjunction, and each half counted by what it COMPARED. The tracked half:
+            # `tracked_after is not None`, which already implies its own before-snapshot, being
+            # assigned only inside that branch. The ignored half: paths compared when there were
+            # paths to compare, and otherwise the pre-merge probe having returned an empty list
+            # WITHOUT RAISING.
+            #
+            # Say "without raising", never "having computed one" — the second is false, and it is
+            # the correction this round took from its own independent pass. That probe gives up in
+            # several NON-raising ways, which its docstring enumerates, and every one of them
+            # arrives here as a plain `[]` this conjunct reads as an answer. So `looked` closes the
+            # RAISE and NOT the class. The residue is real and was MEASURED rather than conceded: a
+            # half-apply whose only casualty is an ignored path the regenerable-name FILTER dropped
+            # still prints the reassuring sentence over destroyed bytes, no key naming them and
+            # `git status` empty on both sides — reachable with no injection at all. It is named
+            # here instead of fixed because it PREDATES this card: on the pre-guard parent
+            # `1fb0082` the same stand gives the same code, the same sentence and the same dead
+            # file, so the guards neither introduced it nor widened it. Closing it needs the probe
+            # to report its own confidence instead of a bare list — that probe's contract, and
+            # another card's slice. Nor does a NON-empty `doomed` make this half complete: that
+            # list is a lower bound by the probe's own docstring (same filter, `_MAX_DIR_EXPANSION`,
+            # the `check-ignore` bisect all produce present-and-SHORT lists), and `_fingerprints`
+            # swallows `OSError` per path, so a path whose `lstat` fails on both sides compares
+            # equal. Neither is new here; both are why this sentence says what was CHECKED and
+            # never what SURVIVED. One-way either way: an unanswered read must read as "cannot
+            # say", never as "checked and clean".
+            tracked_compared = tracked_after is not None
+            ignored_compared = ((prints_answered and bool(doomed))
+                                or (doomed_answered and not doomed))
+            looked = tracked_compared and ignored_compared
             found = ("nothing half-written was found afterwards — which is what was CHECKED, not a "
                      "promise about the checkout"
                      if looked else
                      "and whether it had already written PART of the update could NOT be checked "
-                     "on this run at all")
+                     "on this run")
             return {"updated": False, "code": MAIN_SYNC_BLOCKED, "branch": branch,
                     "path": str(root),
                     "reason": f"`git merge --ff-only {remote}` refused; {found}: "

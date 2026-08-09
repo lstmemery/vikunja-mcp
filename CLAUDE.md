@@ -394,7 +394,33 @@ assertion in `tests/unit/test_line_length_gate.py`, which pyproject must agree w
   decision parked for a human rather than guessed at, with the discriminator that would settle it
   (`git rev-parse <remote>:<path>` vs `git hash-object <path>`, differing before the first attempt
   and matching after) measured and written down where the code is. So what `blocked` no longer does is assert "NOTHING was
-  discarded"; it reports what the two probes FOUND, and says outright when it could not look. Those
+  discarded"; it reports what the two probes FOUND, and says outright when it could not look —
+  **a clause that is only as good as the predicate under it, and #860 shipped it FALSE for one
+  round while fixing a neighbouring defect.** Those after-refusal probes each sat OUTSIDE the
+  `try` that the three before-merge ones each have, so a `diff-index` timeout escaped
+  `sync_main_checkout` entirely and took the whole state dict with it, `overwritten_ignored`
+  included — a LOST report, loudly, as `MAIN_SYNC_ERROR`. Guarding them made "I took a before
+  snapshot" stop implying "I compared", and round 1's `looked` did not move with them: written as
+  a disjunction over the two CALLS, either half answering vouched for the other, and
+  `_fingerprints(root, [])` returns `{}`, which IS "not None", so the ignored half answered TRUE
+  over ZERO paths — on the ORDINARY checkout, the one with no ignored casualty. A lost report
+  became a QUIET FALSE one, "which is what was CHECKED" over a tree where a tracked file really
+  had gone v1→v2, which is worse and is exactly the borrowed reassurance #806 was filed for. It
+  is now a CONJUNCTION over the two HALVES of "half-written", each counted by what it COMPARED,
+  with an empty `doomed` counting only when the pre-merge probe returned it WITHOUT RAISING —
+  **and "without raising" is NOT "computed", which is round 2's own correction from its own second
+  pass.** That probe gives up in several non-raising ways as well (its docstring enumerates them),
+  so the conjunct closes the RAISE the guards made reachable, never the class: a half-apply whose
+  only casualty is an ignored path the regenerable-name filter dropped still prints the reassuring
+  sentence over destroyed bytes, no key naming them, `git status` empty on both sides, and NO
+  injection needed. That one is named rather than fixed because it PREDATES the guards — the same
+  stand on the pre-guard parent `1fb0082` gives the same code, the same sentence and the same dead
+  file — and closing it would mean making that probe report its own confidence instead of a bare
+  list. Read the general lesson rather than the instance: a guard added to a diagnostic changes
+  what the sentences ABOUT that diagnostic are entitled to say, and the round that adds one owes
+  the predicate a pin — measured on the tree round 1 shipped, NEITHER disjunct of `looked` was
+  load-bearing there, and neither deleting either one nor tightening it moved the suite off 0
+  failed. Those
   probes are the tree, never the message (locale and git version make the text unparseable —
   though NOT because the three messages are unlike each other: two of them share the whole phrase
   "would be overwritten by merge"): a set-difference of `git diff-index --name-only HEAD` taken
