@@ -3792,9 +3792,11 @@ def test_the_dirty_guard_survives_status_showUntrackedFiles_no(repo):
     The setting is reachable from ANY config level and a linked worktree shares `.git/config`
     with the main checkout, so an agent cannot rule it out by looking at its own tree.
 
-    This is NOT VMCP-221 (764), the open question of whether `dirty` should be WIDENED to hold a
-    tree for IGNORED files. The guard already claimed untracked-and-not-ignored; the knob was
-    taking that claim away. The sibling test below is the other half of the same fix.
+    This is NOT VMCP-221 (764), which asked whether `dirty` should be WIDENED to hold a tree for
+    IGNORED files — no longer an open question either way: a human answered it, report and never
+    hold, and the accepted price is recorded beside the filter in `workspace_cmd.py`. The guard
+    already claimed untracked-and-not-ignored; the knob was taking that claim away. The sibling
+    test below is the other half of the same fix.
 
     MUTATION-CHECKED, selection `tests/unit/test_workspace_cmd.py`, `__pycache__` deleted and then
     PYTHONDONTWRITEBYTECODE=1, each round restored from a byte copy and the file confirmed

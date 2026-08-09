@@ -944,8 +944,29 @@ def _last_activity(wt_path: Path) -> float | None:
 # argv. So the tree is still removed, and what changes is that the removal STOPS BEING SILENT.
 #
 # SAY THAT PLAINLY RATHER THAN OVERSELL IT: naming a loss is not preventing one. The work is gone
-# either way; only the silence is fixed. Whether the guard should also HOLD is a product decision
-# left to a human (filed separately), not guessed at here.
+# either way; only the silence is fixed.
+#
+# WHETHER THE GUARD SHOULD ALSO HOLD IS ANSWERED, AND THE ANSWER IS NO. That is a HUMAN's decision
+# on VMCP-221 (764), the card 710 filed to ask it, recorded here 2026-08-10 as FINAL so it stops
+# being re-opened — it had already been restated as an open question in four places. Report, never
+# hold. Both alternatives were put to that human with their prices and both were declined. HOLDING
+# on unrecognised ignored content pays with a permanently non-empty `kept` the day the filter below
+# goes out of date, which is the never-read-signal disease #516 had to split `kept` in two to cure,
+# and the human who meets it turns the guard off outright. SALVAGING — copy the unrecognised paths
+# aside, then reap as today — escapes that paralysis, but adds a third refusal branch to the one
+# module in this package that runs git at all, and leaves a dump nothing prunes. Re-open this on a
+# NEW measurement that moves those prices, and on nothing else.
+#
+# THE PRICE IS ACCEPTED WITH ITS NAME, because a decision recorded without its cost is one that
+# gets re-litigated. Two things are bought. Agent work that is ignored and unrecognised is still
+# DESTROYED: the field is a post-mortem, and the paths in it are gone rather than saved. And that
+# report does not even bound the loss from BELOW — `--ignored` collapses an ignored DIRECTORY into
+# one entry, so a file left inside `.venv/` dies with no mention of its own (measured). The
+# one-way reading of the field, spelled out above, is a consequence of this accepted price and not
+# a separate caveat. What stands between an agent and this loss is the RULE and not this code:
+# SKILL.md's standing instruction to carry anything needed AFTER the task out of the tree BEFORE
+# `advance`. Paraphrased and not quoted, deliberately — the rulebook says it in Russian, and an
+# English sentence in quotation marks would send a reader looking for a string that is not there.
 #
 # THE FILTER BELOW IS A LIST, AND A LIST ROTS — SO IT WAS PUT WHERE ROT IS CHEAP. It decides only
 # what gets REPORTED, never what gets removed. A build tool this set has never heard of appears ->
@@ -1267,10 +1288,13 @@ def _inspect_status(path: Path) -> tuple[list[str], list[str]]:
     whole rather than at an edge, and `--gc` does it unattended, on every tick.
 
     WHY THIS IS A FIX AND NOT THE PRODUCT DECISION 710 WAS TOLD TO LEAVE ALONE, because the two
-    look alike and the difference is the whole justification. The open question (VMCP-221, 764)
-    is whether `dirty` should be WIDENED to hold a tree for IGNORED files — today it deliberately
-    does not, and changing that has a price (a tree that passed every gate would be held by its
-    own `.venv`). That question is untouched here. This one is the opposite direction: the guard
+    look alike and the difference is the whole justification. VMCP-221 (764) asked whether `dirty`
+    should be WIDENED to hold a tree for IGNORED files; a human ANSWERED it — no, report and never
+    hold — so it is a settled decision rather than an open question, and the price that settled it
+    is recorded with the filter near the top of this module. It deliberately does not widen, and
+    widening would have held a tree that passed every gate by its own `.venv`. That decision is
+    untouched here, in the sense that matters: this fix does not lean on it and does not revisit
+    it. This one is the opposite direction: the guard
     already CLAIMS untracked-and-not-ignored, that claim is its entire reason to exist, and a
     performance knob was silently taking it away. Restoring a claimed scope is not widening one.
     Measured rather than argued: with the setting at its DEFAULT the prefix changes nothing —

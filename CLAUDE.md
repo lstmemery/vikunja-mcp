@@ -612,8 +612,17 @@ assertion in `tests/unit/test_line_length_gate.py`, which pyproject must agree w
   a loss is not preventing one, and the key reads in ONE direction only:** present ⇒ something
   unrecognised was destroyed; absent ⇒ NOT a proof that nothing was, because `--ignored` collapses
   an ignored DIRECTORY into one entry, so a file left inside `.venv/` dies unnamed (measured).
-  Whether the guard should also HOLD is a product question left to
-  a human, not guessed at in code (#764). **Only ONE of the two refusal channels is
+  **Whether the guard should also HOLD is ANSWERED, and the answer is NO** — a human's decision
+  on #764, the card #710 filed to ask it, recorded as FINAL rather than left open for another
+  round. Report, never hold. Holding on unrecognised ignored content was declined for a measured
+  price (a permanently non-empty `kept` the day the filter dates, i.e. #516's disease, after which
+  the next human turns the guard off outright), and so was salvaging those paths aside (a third
+  refusal branch in the only module that runs git, plus a dump nothing prunes). The cost bought is
+  named where the decision lives, beside the filter in `workspace_cmd.py`: the work is still
+  DESTROYED and the field is a post-mortem, so what protects an agent is SKILL.md's
+  carry-it-out-of-the-tree-before-`advance` rule and not this code. Re-open it on a NEW
+  measurement that moves those prices, not on the argument again.
+  **Only ONE of the two refusal channels is
   coded, and the split is deliberate — do not restate it as "every refusal".** A `--release`/`--gc`
   refusal is exit 0 + `released: false` + a machine-readable `code` beside the prose `reason` ("the
   tool RAN and is protecting your work"). The invariant is over `released: false`, NOT over the word
