@@ -831,7 +831,7 @@ wheels = [
 
 [[package]]
 name = "vikunja-mcp"
-version = "0.2.293"
+version = "0.2.294"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
