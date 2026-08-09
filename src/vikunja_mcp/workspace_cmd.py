@@ -1919,40 +1919,108 @@ def _expand_if_directory(root: Path, rel: str, gitlinks: frozenset[str] = frozen
 
     ONE GAP MEASURED HERE THAT IS, END TO END, NOT A LOSS CHANNEL — and what saves it is TWO
     different things, which is the whole of VMCP-253 (852) and the part any one-line summary of
-    this paragraph gets wrong. `os.walk` defaults to `onerror=None`, so an UNREADABLE subdirectory
-    is skipped in silence: `out/` holding `a.txt` plus a `chmod 000` `locked/` expands to
-    `['out/a.txt']`, naming neither `out/locked` nor its content. An earlier draft called that a
-    second route to a silent present-and-incomplete report; the second pass refuted it and the
-    refutation reproduces — `sync_main_checkout` on that tree answers
-    `{'updated': False, 'code': 'blocked'}` with `fatal: cannot opendir 'out/locked': Permission
-    denied`, `out` is still a directory, nothing is destroyed and NO key is emitted.
+    this paragraph gets wrong. `os.walk` defaults to `onerror=None`, so a subdirectory the walk
+    cannot DESCEND into is skipped in silence: `out/` holding `a.txt` plus a `chmod 000` `locked/`
+    expands to `['out/a.txt']`, naming neither `out/locked` nor its content. An earlier draft
+    called that a second route to a silent present-and-incomplete report; the second pass refuted
+    it and the refutation reproduces — on that tree `out` is still a directory afterwards, the
+    victim is alive and NO key is emitted (what the sync CALLS it is the paragraph below).
+
+    TWO OMISSIONS COMPOUND THERE, and naming only one of them is where the round-1 text went
+    wrong. The CONTENT is lost to `onerror=None`. The directory ENTRY `out/locked` is lost to the
+    deliberate real-subdirectory filter above, which omits it because its contents are named
+    INSTEAD — sound whenever the descent works, and exactly wrong when it does not, since then
+    there are no contents to stand in for it. "An UNREADABLE subdirectory" is also the wrong axis
+    for the failing descent, because the bits that stop it need not sit on the directory that goes
+    unnamed: measured, `out/mid` at `600` (readable, NOT traversable) has its own `scandir` SUCCEED
+    and enumerate `locked`, which reaches `dirnames` from `d_type` with no stat at all, while the
+    descent into `out/mid/locked` fails on the PARENT's missing `+x`. That is VMCP-245 (836)'s
+    `dirnames` road reached a second way, and the card named the shape as unmeasured. A SYMLINK
+    under that same parent is still named, which is measured rather than assumed and came out
+    against the guess. The asymmetry is `d_type`: asked about the two entries under that `600`
+    parent, `is_dir()` answers True for the real directory straight from the readdir record, while
+    for the symlink it must resolve, and that stat is DENIED — it RAISES EACCES rather than
+    returning False, and `os.walk` files the entry as not-a-directory. So `out/mid/to_dir` lands
+    in `filenames` and is named from THERE instead of through the `links` pick: the classification
+    moves, the name survives.
 
     THE HEDGE THAT USED TO CLOSE THIS PARAGRAPH — whether EVERY permission shape refuses — IS
-    SPENT. Eight shapes, each built end to end through `sync_main_checkout` against a real bare
-    origin, git 2.50.1 on macOS/APFS:
-      * a DIRECTORY at `000`, `111`, `444` or `500`, and a `000` directory two levels down: the
-        merge REFUSES, `updated: False`, `code: 'blocked'`, `out` is still a directory, the victim
-        is ALIVE and no key is emitted at all. Three different git messages, which is why this is
-        a row and not one input — `cannot opendir` at `000` and `111`, `cannot lstat` at `444`,
-        `cannot unlink` at `500` — and the expansion is short only in the first two (`444` and
-        `500` name `out/locked/precious.txt` perfectly well);
-      * an unreadable FILE inside a READABLE directory: the merge GOES, `updated: True`, and the
-        file is DESTROYED. Measured at `000`, `444` and `111` alike, so it is the SHAPE and not
-        the bits.
+    SPENT. Shapes built end to end through `sync_main_checkout` against a real bare origin, git
+    2.50.1 on macOS/APFS, victims re-checked with the modes RESTORED (`lexists` answers False on
+    EACCES, so the obvious probe reports a live file as dead):
+      * a DIRECTORY at `000`, `100`, `400` or `500`, a `000` directory two levels down, and a
+        directory whose PARENT is `600`: the merge REFUSES, `updated: False`, `out` is still a
+        directory and the victim is ALIVE. Say "no `overwritten_ignored` key" and never "no key",
+        which the last paragraph makes into a self-contradiction: on a multi-path incoming commit
+        these same rows DO carry `half_applied`. The expansion is short in all of them EXCEPT
+        `400` and `500`, which name `out/locked/precious.txt` perfectly well;
+      * an unreadable FILE inside a READABLE directory: the merge GOES, `updated: True`, the file
+        is DESTROYED — and `overwritten_ignored` NAMES it. Measured at `000`, `400` and `100`
+        alike, so it is the SHAPE and not the bits.
     So the answer is NO, not every shape refuses — and "nothing dies unnamed" survives anyway, by
     a DIFFERENT mechanism on that one row: the walk NAMES the dead file, because permissions on a
     FILE do not affect the enumeration of its directory ENTRY while permissions on a DIRECTORY do.
-    Keep the two apart. "Git cannot delete what it cannot read" is what saves the four directory
-    shapes and is FALSE as a general rule — measured, git unlinks an unreadable file without a
-    word. The file row is the one the conclusion rests on and the only one where anything dies, so
-    it is pinned by `test_an_unreadable_FILE_is_destroyed_by_the_merge_and_named_anyway`.
+    Keep the two apart. The file row is the one the conclusion rests on and the only one where
+    anything dies, so it is pinned by
+    `test_an_unreadable_FILE_is_destroyed_by_the_merge_and_named_anyway`.
+
+    WHY EACH DIRECTORY SHAPE REFUSES IS NOT ONE REASON, AND "GIT CANNOT DELETE WHAT IT CANNOT
+    READ" REACHES TWO OF THE FOUR MODES — three of the six rows above. That sentence stood over
+    all of them for one round while the same paragraph listed three different git messages, i.e.
+    it carried its own refutation; keep the denominator explicit, because "two" and "three" are
+    both right here for different readings and a bare count invites the wrong one. Read off the
+    syscall that fails, modes left in place. READ refusal, `cannot opendir`: `000` and `100`, and
+    the two-level row, which is the same `000` one level deeper — the denied operation is READDIR,
+    the very one the walk loses, so there the short expansion and the refusal have ONE cause.
+    TRAVERSE refusal, `cannot lstat`: `400`, where readdir SUCCEEDS and `os.listdir` returns
+    `precious.txt` and so does git's message — and ALSO the `600`-PARENT row, whose bits are not
+    on the doomed directory at all, which is why it needed naming here rather than being left to
+    the reader. WRITE refusal, `cannot unlink`: `500`, where git reads all of it (`listdir`,
+    `stat` and `cat` inside all succeed) and dies on the write bit. Even for the read pair
+    "cannot read" wants care: `100` denies the LISTING while leaving a known name readable.
+
+    WHY NO SHAPE ON THIS AXIS IS EXPECTED TO GO THE OTHER WAY — an ARGUMENT, flagged as one
+    because it is not a measurement. The walk needs `r` on the directory plus `x` on its
+    ancestors; git needs to unlink the entries and rmdir it, so it needs `r`, `w` and `x` there
+    plus `x` on the ancestors — a strict SUPERSET. So on the permission axis "the walk came up
+    short while the merge succeeded" is structurally hard rather than merely unobserved. The
+    second pass tried four further shapes to break it and could not (an EMPTY unreadable
+    directory, on the guess that `rmdir` needs no read — git still opendirs first and refuses; one
+    holding only an empty subdirectory; one holding only a symlink, which `unlink` could remove
+    without reading its target; and a second ignored directory the half-apply might have reached).
+    What the argument does NOT cover is TOCTOU — modes changing between the probe and the merge —
+    and that gap belongs to no key in particular.
 
     HONEST BOUND: those are `chmod` shapes on APFS, one owner. ACLs (`chmod +a`), `chflags`, and
     running as another user or as root are NOT measured and their semantics differ, so this is
-    "none of these eight" and never "none at all". What to REPORT for a directory nobody can read
-    stays a product question and is deliberately not answered here — with the merge refusing on
-    every such shape the key is not emitted at all, so a human already sees `blocked` carrying
-    git's own message, and the cost of doing nothing is close to zero.
+    "none of these" and never "none at all". What to REPORT for a directory nobody can read stays
+    a product question and is deliberately not answered here — but do NOT restate the reason for
+    that as "the human already sees `blocked` carrying git's own message". THAT IS A PROPERTY OF
+    THE STAND rather than of the permission shape: those rows were built with an incoming commit
+    touching the ONE path `out`, and giving it two more ordinary paths — what a real main-checkout
+    ff looks like — makes every refusing shape above answer `half-applied` instead, with
+    `half_applied: ['README.md', 'other.txt']` already written, a code SKILL.md routes differently
+    because it means a human must go look. Git's message survives into THAT reason and then stops:
+    sweeps 2 and 3 over the same checkout answer `blocked` again carrying "Your local changes …
+    would be overwritten", which says nothing about the unreadable directory at all, while the
+    single-path stand repeats `blocked` with the message intact. So the two flavours differ in
+    what a human is told on every tick after the first.
+
+    AND "NO KEY EMITTED" IS A PROPERTY OF THE STAND TOO — do not close this on "the cost of doing
+    nothing is about legibility rather than loss", which is where round 2's own draft landed one
+    rung below the correction it was making. Add ONE more incoming path that displaces IGNORED
+    content and sorts BEFORE the blocker, and the same refusing shapes answer `half-applied`
+    carrying `overwritten_ignored` with a human's bytes already replaced. Measured twice, and the
+    second is #806's own shape rather than a contrivance: upstream force-adds `img.png` into a
+    checkout that ignores `*.png` and holds its own file there, `git status` empty beforehand,
+    afterwards `half_applied: ['README.md', 'other.txt']`, `overwritten_ignored: ['img.png']`, the
+    human's bytes gone — while `out` is still a directory and the locked victim is still alive. So
+    a tick that REFUSES on this directory can still carry a loss somewhere else in the same
+    commit; that loss is #835's half-apply and not this gap, and it is NAMED, which is why the
+    conclusion above survives it. What survives on every shape and every flavour measured is
+    narrower and is the part the conclusion actually rests on: `updated: False`, `out` still a
+    directory, and THIS directory's own victim ALIVE. The cost of doing nothing is about the
+    legibility of THIS gap — not a promise about the tick.
     """
     full = os.path.join(root, rel)
     if os.path.islink(full) or not os.path.isdir(full) or rel in gitlinks:

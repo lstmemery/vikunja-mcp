@@ -4525,12 +4525,25 @@ def test_an_unreadable_FILE_is_destroyed_by_the_merge_and_named_anyway(repo, tra
     """VMCP-253 (852). The ONE permission shape where the fast-forward GOES and something dies —
     and the reason the conclusion "nothing dies unnamed" needed a second mechanism to stand on.
 
-    Four DIRECTORY shapes (`000`, `111`, `444`, `500`) and a `000` directory two levels down all
-    make `merge --ff-only` refuse: `blocked`, the victim alive, no key emitted. That is what
-    "git cannot delete what it cannot read" covers, and it is FALSE of a FILE — permissions on a
-    file do not affect the enumeration of its directory ENTRY, so git unlinks a `chmod 000` file
-    without a word. What saves this row is not the refusal but the NAMING: `os.walk` lists the
-    entry regardless of its mode, so the casualty reaches `overwritten_ignored`.
+    Four DIRECTORY shapes (`000`, `100`, `400`, `500`), a `000` directory two levels down and one
+    under a `600` PARENT all make `merge --ff-only` refuse, leaving that directory's own victim
+    alive and no `overwritten_ignored` key for it. A FILE is the shape that goes the other way —
+    permissions on a file do not affect the enumeration of its directory ENTRY, so git unlinks a
+    `chmod 000` file without a word. What saves this row is not the refusal but the NAMING:
+    `os.walk` lists the entry regardless of its mode, so the casualty reaches
+    `overwritten_ignored`.
+
+    DO NOT SUMMARISE THOSE FOUR AS "git cannot delete what it cannot read" — this docstring did,
+    and round two measured it false for half of them with the modes left in place. At `000` and
+    `100` READDIR is denied and git says `cannot opendir`; at `400` readdir SUCCEEDS, `os.listdir`
+    returns the victim's name and so does git (`cannot lstat`); at `500` git reads all of it and
+    dies on the WRITE bit (`cannot unlink`). Two of the four MODES are read refusals — three of
+    the six ROWS, since the two-level row is `000` again; keep the denominator explicit. Two
+    further things belong to the STAND rather than to the mode and are spelled out in
+    `_expand_if_directory`'s own docstring: which `code` comes back, and whether a key comes with
+    it — a multi-path incoming commit turns every one of these refusals into `half-applied`, and
+    one that also displaces an ignored path can carry `overwritten_ignored` and a real loss
+    ELSEWHERE while this directory's victim sits untouched.
 
     Pinned because the whole grid's conclusion rests on this row alone — the four refusing shapes
     prove nothing about it, and it was the only shape in the grid that was unpinned.
@@ -4538,7 +4551,9 @@ def test_an_unreadable_FILE_is_destroyed_by_the_merge_and_named_anyway(repo, tra
     MUTATION SWEEP, one selection throughout — this file with `-k "unreadable_FILE or
     real_subdirectory or NESTED_symlink or two_spellings or HARDLINKS"`, no `-q`, `collected 206
     items` / `6 selected` / 0 `ERROR ` lines in every round, rounds read by counting `FAILED ` and
-    `ERROR ` lines separately; control 0 failed:
+    `ERROR ` lines separately (206 was this file's total when that sweep ran; the round-2 test
+    below took it to 207 without changing THIS selection, which is why the cross-check that
+    matters is control and rounds agreeing rather than the number); control 0 failed:
       * the walk names only READABLE files ..................... control 0 failed; 1 failed
       * the walk names no plain files at all .................. control 0 failed; 6 failed
       * `os.walk(onerror=raise)` instead of the silent default . control 0 failed; 0 failed
@@ -4546,9 +4561,9 @@ def test_an_unreadable_FILE_is_destroyed_by_the_merge_and_named_anyway(repo, tra
     about and kills exactly this test. Row two is blunt — it kills all six, so it says the walk
     matters and nothing about WHICH property. Row three is the honest remainder: nothing in the
     suite makes the walk hit an unreadable directory, so the four REFUSING shapes of the grid stay
-    unpinned. That is deliberate rather than missing — on those the merge refuses, no key is
-    emitted, and the card asked for the grid to be measured and written down, explicitly NOT for a
-    guard."""
+    unpinned. That is deliberate rather than missing — on those the merge refuses, no
+    `overwritten_ignored` key is emitted for the locked path, and the card asked for the grid to
+    be measured and written down, explicitly NOT for a guard."""
     _api, wf = tracker
     _ignoring(repo, "out/")
     (repo / "out").mkdir()
@@ -4567,6 +4582,77 @@ def test_an_unreadable_FILE_is_destroyed_by_the_merge_and_named_anyway(repo, tra
                                       "the shape that disproves the general rule", state)
     assert sorted(state["overwritten_ignored"]) == ["out/a.txt", "out/locked_file"], state
     assert not doomed.exists(), "and it really is destroyed; naming is not saving"
+
+
+def test_a_symlink_under_a_NON_TRAVERSABLE_parent_is_still_named(tmp_path):
+    """VMCP-253 (852) round 2. A BLINDED `is_dir()` does not cost a symlink its name — and the
+    real directory beside it is lost, which is VMCP-245 (836)'s road reached a second way.
+
+    The shape is the one 852 listed as unmeasured: the bits sit on the PARENT (`out/mid` at
+    `600`, readable but NOT traversable), not on the path that goes unnamed. So "an UNREADABLE
+    subdirectory is skipped" is the wrong description of it — `scandir(out/mid)` SUCCEEDS and
+    enumerates both entries; what fails is everything one level further in.
+
+    THE ASYMMETRY IS `d_type`, and it is why the two entries end up in different lists. A real
+    directory answers `is_dir()` straight from the readdir record with no stat at all, so
+    `out/mid/real` reaches `dirnames`, the loop reads `filenames + links`, and it is not named —
+    nor is its content, since the descent into it is denied and `onerror=None` swallows that.
+    A SYMLINK has to be RESOLVED to answer the same question, and that stat is denied: asked
+    directly, `entry.is_dir(follow_symlinks=False)` answers False from `d_type` while the default
+    `entry.is_dir()` RAISES EACCES — `os.walk` swallows that into "not a directory", so
+    `out/mid/to_dir` lands in `filenames` and IS named. Measured, not reasoned, twice over: the
+    guess going in was that the symlink would be lost too, and the first draft of this paragraph
+    then said `is_dir()` "answers False", which the direct probe corrected to a raise.
+
+    WHAT THIS PINS THAT 836's TEST DOES NOT — dropping the `links` pick (836's whole fix) leaves
+    this test GREEN, because this symlink never travelled that road. Recorded as a sweep row
+    below rather than asserted, since a negative is the only thing that shows the two tests cover
+    different mechanisms instead of one twice.
+
+    MUTATION SWEEP, one selection throughout — this file with `-k "NON_TRAVERSABLE or
+    unreadable_FILE or real_subdirectory or NESTED_symlink or symlink_to_a_file"`, no `-q`,
+    `6 selected` and 0 `ERROR ` lines in every round, rounds read by counting `FAILED ` and
+    `ERROR ` lines separately, control run at the START and again at the END (0 both times) and
+    the source sha256-verified identical to its backup afterwards; control 0 failed:
+      * `filenames` filtered by `os.path.isfile` ............... control 0 failed; 2 failed
+      * the loop reads `filenames` only, dropping `links` ...... control 0 failed; 2 failed
+      * the loop reads `links` only, dropping `filenames` ...... control 0 failed; 6 failed
+    Row one is the sharp one and it is what kills THIS test: a stat-based filter cannot see past
+    the blinded parent either, so the symlink is dropped — it takes the dangling/symlink-to-file
+    test with it, which is the same mechanism and honest to report as two. Row two is the
+    negative described above, and note WHICH two died — `NESTED_symlink` and the walk-direct test,
+    i.e. 836's pair — while this test stayed GREEN, which is the measurement showing the two
+    cover different roads. Row three is blunt, killing all six, so it says the walk matters and
+    nothing about which property. The three counts were written from the run: a draft of this
+    docstring guessed 1 and 5 for rows two and three before the sweep and both were wrong.
+    The `collected` total is NOT recorded as a durable figure — it agreed across control and every
+    round, which is what the cross-check needs, and it moves with every test this file gains (207
+    while this sweep ran, six agents landing beside it)."""
+    root = tmp_path
+    out = root / "out"
+    (out / "mid").mkdir(parents=True)
+    (out / "a.txt").write_text("a plain neighbour, named on every road\n")
+    target = root / "target_dir"
+    target.mkdir()
+    (target / "precious.txt").write_text("lives outside the walk\n")
+    (out / "mid" / "to_dir").symlink_to(Path("..") / ".." / "target_dir")
+    (out / "mid" / "real").mkdir()
+    (out / "mid" / "real" / "buried.txt").write_text("the human's bytes, one level too deep\n")
+    (out / "mid").chmod(0o600)
+    try:
+        got = workspace_cmd._expand_if_directory(root, "out")
+    finally:
+        # RESTORE before the fixture tears the tree down: a directory without `+x` cannot be
+        # walked into, so `tmp_path` cleanup would fail and take unrelated tests with it.
+        (out / "mid").chmod(0o700)
+
+    assert "out/mid/to_dir" in got, (
+        "the symlink is named even though its parent denies the stat that would classify it", got)
+    assert "out/mid/real" not in got and "out/mid/real/buried.txt" not in got, (
+        "and the real directory beside it is the documented gap — named nowhere, its content "
+        "unreachable, which is what makes the list a lower bound on the loss", got)
+    assert "out/a.txt" in got, ("the readable neighbour is unaffected — the blinding is local to "
+                               "what sits under `mid`", got)
 
 
 def _case_insensitive(path: Path) -> bool:
