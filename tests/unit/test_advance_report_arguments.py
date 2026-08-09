@@ -105,6 +105,7 @@ stated that a REQUIRED `worklog` would change this very behaviour.
 """
 import asyncio
 import io
+import itertools
 import json
 import os
 import pathlib
@@ -167,23 +168,38 @@ def test_review_refusal_lists_both_fields_when_both_are_unusable(env):
 
 
 def test_review_refusal_offers_the_workaround_instead_of_an_identical_retry(env):
-    """The old text sent agents to retry an identical call — the filing card did it 3x.
+    """VMCP-279 (938) INVERTED this pin, and the inversion is the deliberate kind this file's
+    neighbour demands: "a card that does want to reword the refusal has to edit the expected
+    substrings here in the same commit".
 
-    Pinned as "NOT the fix" rather than "will not help", which is what this file said first and
-    is stronger than anything measured: the loss was never reproduced, and WHICH KIND of loss it
-    is was never established either. The filing card's success came from replacing the ~7 KB
-    worklog with `worklog="probe"`, not from repeating the identical call, so its evidence does
-    NOT show non-determinism — three failures at ~7 KB then a success at 5 characters is what a
-    SIZE-DEPENDENT, deterministic loss looks like. The successes bound nothing in either
-    direction, and nobody knows whether a retry would be futile or merely lucky; either way it is
-    not the fix, because it addresses no cause and the next long report meets the same wire. That
-    weaker claim is the one the measurements support."""
+    What it used to hold was "an identical retry is NOT the fix", and that was the honest
+    reading for as long as the mechanism was unknown — the loss had never been reproduced, so
+    a retry addressed no cause. It is reproduced now, and the cause makes a re-issue the
+    RIGHT move rather than a gamble: the value is dropped in the CALLER's emission, by an
+    opening tag written without its namespace prefix, which is never recognised as a parameter
+    and so never becomes a JSON key. Nothing about the content, the size or the position was
+    ever the problem, so re-sending the same text is what fixes it.
+
+    The discriminator behind the flip holds POSITION and LENGTH constant and varies only the
+    tag — long `worklog` first, a 40-space `evidence` second, answering `arrived as null` with
+    the tag malformed and `passed, but empty or whitespace-only` with it correct — with the
+    same 40 spaces sent ALONE arriving blank, which is what makes the sentinel readable at all.
+    Its neighbour test_argument_ORDER_does_not_change_what_arrives closes the other half.
+
+    Both directions stay pinned, because this text has now been wrong in BOTH: the retired
+    "NOT the fix" must not creep back, and neither may the older over-claim it replaced. The
+    fallback has to survive too — a re-issue is not guaranteed, and an agent whose second
+    attempt also loses the tag still needs the chunking route."""
     api, wf, t = env
     wf.advance(t["id"], to="build", spec="s")
     with pytest.raises(WorkflowError) as exc:
         wf.advance(t["id"], to="review", evidence="a" * 40)
     msg = str(exc.value)
-    assert "an identical retry is NOT the fix" in msg
+    assert "RE-ISSUE THE CALL" in msg, "the refusal must name the fix the measurement supports"
+    assert "an identical retry is NOT the fix" not in msg, (
+        "the pre-#938 advice is back: the loss is a caller-side tag, so re-issuing DOES "
+        f"address it, and telling agents otherwise sends them straight to chunking: {msg}"
+    )
     assert "will not change that" not in msg, "the old over-claim must not creep back"
     assert "comment()" in msg and "[worklog]" in msg
 
@@ -284,6 +300,73 @@ def test_large_worklog_crosses_the_mcp_boundary_byte_exact(payload):
     assert got["worklog_len"] == len(payload)
     assert got["worklog_head"] == payload[:24]
     assert got["worklog_tail"] == payload[-24:]
+
+
+def test_argument_ORDER_does_not_change_what_arrives():
+    """VMCP-279 (938): #657 measured byte-exactness by SIZE and never permuted the key ORDER.
+
+    That gap let a hypothesis run for three cards: three agents independently reported that
+    `advance` "drops the TRAILING argument" when the report is long, and each read the fix as
+    reordering the call. The predicate is testable exactly here, and here it is FALSE — the
+    ten cases below cover both two-argument orders under BOTH length assignments (long
+    `worklog` + short `evidence`, and the mirror) plus all six permutations of the three
+    report fields, and every argument arrives byte-exact in every one. Order cannot matter
+    below this line by construction — pydantic hands the tool a dict — but "by construction"
+    is what the three cards also believed about the transport, so it is measured instead.
+
+    What that leaves is the CALLER's emission, and #938 caught it there: in this harness a
+    tool call is tag-structured, and an opening tag written without its namespace prefix is
+    not recognised as a parameter at all, so the value never becomes a JSON key and reaches
+    the tool as None — silently, and indistinguishably from an argument nobody passed. Held
+    at one position and one length and varying only that tag, the same call flips between
+    `arrived as null` and `passed, but empty or whitespace-only`. It CORRELATES with a long
+    preceding value, which is why it reads as "the last argument is lost": the parameter that
+    follows a long block is the one whose tag gets malformed. So the loss is real, it is
+    above this server, and it is not about order — which is why the workaround written on
+    both doc surfaces is now "re-issue the call", not "reorder it".
+
+    Two landed artifacts corroborate the tag mechanism outside any stand of ours, and they
+    are the reason it is described as emission and not as speculation: the `[worklog]` on
+    VMCP-260 (862) carries a literal `</root_cause>` inside its root_cause VALUE, and the
+    `[состояние]` comment on 938 itself ends with a literal `</text>`. Both are tool-call tag
+    text that leaked into a parameter value — the same defect caught mid-emission rather than
+    dropping a key outright."""
+    long_v = "отчёт: проверено запуском, строка\n" * 256
+    short_v = "a" * 40
+    tiny_v = "причина" * 4
+
+    cases, expected = [], []
+    for label, pairs in [
+        ("long-worklog-first", [("worklog", long_v), ("evidence", short_v)]),
+        ("long-worklog-last", [("evidence", short_v), ("worklog", long_v)]),
+        ("long-evidence-first", [("evidence", long_v), ("worklog", short_v)]),
+        ("long-evidence-last", [("worklog", short_v), ("evidence", long_v)]),
+    ]:
+        args = {"task_id": 938, "to": "review"}
+        args.update(pairs)
+        cases.append(("advance", args))
+        expected.append((label, dict(pairs)))
+
+    trio = {"worklog": long_v, "evidence": short_v, "root_cause": tiny_v}
+    for perm in itertools.permutations(("worklog", "evidence", "root_cause")):
+        args = {"task_id": 938, "to": "review"}
+        for key in perm:
+            args[key] = trio[key]
+        cases.append(("advance", args))
+        expected.append((">".join(perm), trio))
+
+    results = _drive_probe_server(cases)
+    assert len(results) == 10
+    for (is_error, got), (label, sent) in zip(results, expected):
+        assert not is_error, (label, got)
+        for name, value in sent.items():
+            assert got[f"{name}_len"] == len(value), (
+                f"{label}: {name} did not arrive intact — order changed what reached the tool"
+            )
+        # The one field a permutation can leave unsent must still read as absent, not as junk.
+        for name in ("worklog", "evidence", "root_cause"):
+            if name not in sent:
+                assert got[f"{name}_len"] == -1, (label, name, got)
 
 
 def test_a_dropped_optional_argument_reaches_the_tool_body_as_none():

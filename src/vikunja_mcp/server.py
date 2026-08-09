@@ -533,11 +533,16 @@ def advance(
     ordered-epic step) is still below Review: if a predecessor was bounced Review→Build,
     finish its rework back to Review before this successor may advance (the refusal names it).
     IF A REFUSAL SAYS YOUR REPORT IS MISSING WHEN YOU DID WRITE ONE, read which STATE it
-    names. 'arrived as null' means no text reached this tool, and an identical retry is NOT
-    the fix: measured (#657) this server carries a 4 MiB argument byte-exact over its own
-    stdio transport, so a kilobyte report hits no limit here and the loss is above it, where it
-    was never reproduced — and the filing card's own success came from a SHORT worklog, not
-    from repeating the call, so nothing says a retry would work. A MISSPELLED parameter name is
+    names. 'arrived as null' means no text reached this tool, and since #938 the fix is to
+    RE-ISSUE THE CALL: measured (#657) this server carries a 4 MiB argument byte-exact over its
+    own stdio transport, and (#938) argument ORDER changes nothing either — ten permutations
+    across the real boundary, all byte-exact — so a kilobyte report hits no limit here and the
+    loss is above it, in YOUR OWN EMISSION. A parameter whose opening TAG is malformed (the
+    namespace prefix dropped) is never recognised as a parameter, so it never becomes a JSON
+    key; hold position and length fixed, vary only that tag, and the same call flips between
+    this refusal and a delivered value. It correlates with a long PRECEDING value, which is why
+    three cards read it as 'the trailing argument is dropped' and reordered the call —
+    reordering is not the fix, writing the tag correctly is. A MISSPELLED parameter name is
     no longer one of the possibilities: since #720 an unknown argument is refused at the boundary
     BY NAME, before this tool runs, so reading 'arrived as null' rules that cause out instead of
     leaving it first in line — best-effort, like the gate itself, which reaches into the SDK and
@@ -550,7 +555,8 @@ def advance(
     to go looking in — it is the SERVER's startup stderr, which no tool here shows you). What
     still arrives as null — an
     explicit null, a dropped key and an omitted argument — the tool can report as a STATE but
-    never tell apart as a cause. Advance
+    never tell apart as a cause (a malformed tag is how the dropped key actually happens).
+    If re-issuing keeps failing, the older workaround still stands: advance
     with a SHORT worklog and post the full
     text as separate comment() calls marked [worklog] (say so in the short one, so the
     journal does not read as a placeholder)."""

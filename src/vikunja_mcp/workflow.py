@@ -215,13 +215,26 @@ _ARG_STATE_BLANK = "passed, but empty or whitespace-only"
 #  * These are ceilings that were TESTED on one transport, not proof that none exists above.
 #  * "advance behaves like review_task" holds only for a PRESENT, non-empty argument. For a
 #    MISSING one they are opposite, and that opposition is the whole point below.
-#  * The threshold in the ORIGINAL report was never reproduced, so nothing here locates one —
-#    and WHICH KIND of failure it is was never established either. "Known to be
-#    non-deterministic (three refusals, then a success)" is what this bullet claimed first, and
-#    it MISREADS the card: the success came from replacing the ~7 KB worklog with
-#    `worklog="probe"`, not from repeating the identical call. Three failures at ~7 KB then a
-#    success at 5 characters is what a SIZE-DEPENDENT, deterministic loss looks like. So the
-#    successes bound nothing in either direction, which is the honest form of this limit.
+#  * There is NO THRESHOLD, because there is no size mechanism — VMCP-279 (938) closed this
+#    bullet, which until then read "never reproduced … WHICH KIND of failure was never
+#    established". It is reproduced now, and the cause is in the CALLER's emission: in a
+#    tag-structured tool call an opening tag written without its namespace prefix is not
+#    recognised as a parameter, so the value never becomes a JSON key and the tool sees None.
+#    The discriminator that settles it holds POSITION and LENGTH constant and varies only the
+#    tag: the identical call (long `worklog` first, a 40-space `evidence` second) answers
+#    `evidence — arrived as null` with the tag malformed and `evidence — passed, but empty or
+#    whitespace-only` with it correct. The control that makes the sentinel readable at all:
+#    the same 40 spaces sent alone arrive as BLANK, so whitespace is not what is being eaten.
+#    Order was closed separately and below this line — ten permutations over the real stdio
+#    boundary, all byte-exact, pinned by test_argument_ORDER_does_not_change_what_arrives.
+#  * Read that as a cause, NOT as a frequency. The correlation with a long preceding value is
+#    an inference from three of this repo's own cards plus two landed artifacts (a literal
+#    `</root_cause>` inside 862's root_cause VALUE, a literal `</text>` closing 938's own
+#    `[состояние]` comment) — no rate was measured, and no prior card's call was re-run, so
+#    what is shown is that this cause PRODUCES their symptom and that their stated predicate
+#    (order) does not. "Three refusals then a success" still proves nothing about retrying:
+#    that success came from replacing the ~7 KB worklog with `worklog="probe"`, not from
+#    repeating the call. What DID change is that a re-issue now addresses the cause.
 #  * "No content fails" is the one an earlier draft actually got WRONG rather than merely
 #    overstated. Constructed on this probe server, controls in the SAME run: Cyrillic, NUL and
 #    CRLF cross byte-exact, and a LONE SURROGATE (a truncated astral pair) does not — the call
@@ -232,11 +245,11 @@ _ARG_STATE_BLANK = "passed, but empty or whitespace-only"
 #    Loud either way, so it is NOT this card's silent symptom — but it is a content that
 #    fails, which is what the sentence above had denied.
 _LOST_ARGUMENT_HINT = (
-    "If you DID pass a long value and still read this, it did not reach this tool, and an "
-    "identical retry is NOT the fix — what dropped it was never reproduced (#657), and the "
-    "filing card never retried the identical call either: its success came from a SHORT "
-    "worklog. So nobody knows whether a retry is futile or merely lucky, and either way it "
-    "addresses no cause. DO NOT GO HUNTING A TYPO IN THE PARAMETER NAME — that used to be the "
+    "If you DID pass a long value and still read this, it did not reach this tool — and since "
+    "#938 the cause is MEASURED rather than open, so the advice has CHANGED: RE-ISSUE THE "
+    "CALL. What dropped the value was your own emission, not its size and not its position, "
+    "so the content you already wrote is fine and re-sending it is the fix rather than a "
+    "gamble. DO NOT GO HUNTING A TYPO IN THE PARAMETER NAME — that used to be the "
     "first thing to check, and of the four causes this text used to list it is the one that "
     "reading this now RULES OUT: an "
     "unknown argument is now refused AT THE BOUNDARY, by name ('wroklog … Extra inputs are "
@@ -246,16 +259,23 @@ _LOST_ARGUMENT_HINT = (
     "say so in one line on stderr at startup — only tries: with fd 2 closed it says nothing at "
     "all (measured), and that is the SERVER's startup stream, which no tool here shows you. So "
     "read it as a residual risk you cannot check from inside a call, not as a signal to go "
-    "looking for. What is left: "
-    "measured (#657), this server takes a 4 MiB argument "
-    "byte-exact over its own stdio transport, so a kilobyte-sized report is nowhere near any "
-    "limit here, and a value you did pass that arrives as null was dropped ABOVE this server "
-    "where this tool cannot see it. (Null still does not name a cause, but the list is now "
+    "looking for. WHERE IT ACTUALLY GOES: measured (#657), this server takes a 4 MiB argument "
+    "byte-exact over its own stdio transport, and argument ORDER changes nothing here either "
+    "— ten permutations across the real boundary, every one byte-exact (#938) — so a "
+    "kilobyte-sized report is nowhere near any limit here, and a value you did pass that "
+    "arrives as null was dropped ABOVE this server. In a tag-structured tool call, a parameter "
+    "whose OPENING TAG is malformed (namespace prefix dropped) is not recognised as a "
+    "parameter at all, so it never becomes a JSON key. Held at one position and one length, "
+    "varying only that tag, the same call flips between this refusal and a delivered value "
+    "(#938). It CORRELATES with a long PRECEDING value — the parameter written just after a "
+    "long block is the one whose tag gets malformed — which is why three cards read this as "
+    "'the trailing argument is dropped' and reordered the call. Reordering is not the fix; "
+    "writing the tag correctly is. (Null still does not name a cause, but the list is now "
     "THREE and no longer four: a key dropped in transit, an argument you never passed and an "
     "EXPLICIT null you did pass all arrive here as null — measured; the first two are one and "
-    "the same on the wire.) "
-    "Workaround that is known to work: advance with a SHORT value, then post the full text as "
-    "separate comment() calls marked [worklog]."
+    "the same on the wire, and a malformed tag is how the first one actually happens.) "
+    "Still available if re-issuing keeps failing: advance with a SHORT value, then post the "
+    "full text as separate comment() calls marked [worklog]."
 )
 
 
