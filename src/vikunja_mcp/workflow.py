@@ -644,9 +644,33 @@ class Workflow:
         answered `[(7, 'agent-vikunja-mcp')]` and the board copy of the same card answered `[]`.
         Every ownership gate then saw an ownerless card, and #705's clause — correct for a really
         ownerless card — told the agent to `claim` it, which refuses outside Queue. The card sat
-        in Design consuming a WIP slot with `advance`, `call_human`, `return_task` and `decompose`
-        all refusing identically, i.e. it was workable by NO tool and the agent could not even
-        ask a human ABOUT IT (`call_human` needs the same ownership).
+        in Design with `advance`, `call_human`, `return_task` and `decompose` all refusing
+        identically, so no tool could MOVE it or make it anyone's, and the agent could not even
+        ask a human ABOUT IT (`call_human` needs the same ownership). Precisely that, not
+        "workable by no tool": `get_task`, `comment`, `attach_file` and `file_task` need no
+        ownership and all still work on such a card (measured), and `get_task` reports the real
+        assignee — which is what makes the `file_task` workaround below reachable at all.
+
+        What such a card does NOT do is HOLD a WIP slot — it LOSES one, and this docstring said
+        the opposite for a round. `_my_active_tasks` counts off that same board copy, so the card
+        is invisible to the counter: measured at `wip_limit = 3` with three cards claimed and ONE
+        blacked out, the gate reads `{'active': 2, 'limit': 3, 'free': 1}` while THREE really are
+        assigned to me in Design/Build, so a FOURTH claim is ACCEPTED and leaves four against a
+        limit of three (the healthy control refuses it, `WIP limit reached (3/3)`).
+
+        In Design/Build `next_task` does not hand such a card back either — `task=None`, against
+        `task=<id>`/`resume=True` on that control — so nothing re-offers it and a per-task agent
+        that dies on one is not replaced automatically. What is gone is the OFFER, not the card:
+        an orchestrator still holding the id can read it, and `claim` named the divergence when it
+        happened.
+
+        Do NOT widen that to "never offered again", because IN REVIEW the same blackout INVERTS
+        it. The review branch skips cards whose assignees — read off that same board copy — are
+        me, so a blacked-out card in Review IS offered, to its own AUTHOR (`review=True`), where
+        the healthy control correctly answers `task=None`. Measured on both sides.
+
+        All of this is PRE-EXISTING and stays unfixed here (the human's answer scoped this card to
+        the gates); what may not stand is describing it backwards.
 
         RARE, and that is measured rather than assumed: the same day, the board copy was compared
         against `GET /tasks/<id>` for all 31 cards outside Done and exactly ONE diverged. It is

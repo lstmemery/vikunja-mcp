@@ -290,8 +290,22 @@ def test_claim_wip_gate_still_self_heals_stuck_queue_claim():
 # GET /api/v1/tasks/854 answered assignees=[(7, 'agent-vikunja-mcp')] and GET /api/v1/user
 # answered id 7 — yet the copy of the same card on the KANBAN BOARD, which is what every
 # ownership gate reads, came back with assignees=[]. Six advance() attempts over ~40 minutes all
-# refused, and so did call_human/return_task/decompose: the card was workable by NO tool while
-# occupying a WIP slot, and the agent could not even ask a human ABOUT IT.
+# refused, and so did call_human/return_task/decompose: no tool could MOVE the card or make it
+# anyone's, and the agent could not even ask a human ABOUT IT. Not "workable by no tool", though —
+# get_task, comment, attach_file and file_task need no ownership and all still work on it
+# (measured), which is what leaves the file_task workaround reachable.
+#
+# It does NOT occupy a WIP slot while it sits there — it LOSES one, and this header asserted the
+# opposite for a round. `_my_active_tasks` reads the same board copy, so the card is invisible to
+# the counter: measured at wip_limit = 3 with three cards claimed and ONE blacked out, the gate
+# reads {'active': 2, 'limit': 3, 'free': 1} while three really are assigned, and a FOURTH claim
+# is then ACCEPTED — four against a limit of three, where the healthy control refuses it with
+# "WIP limit reached (3/3)". In Design/Build next_task does not offer such a card back either
+# (task=None, against task=<id>/resume=True on that control), so a dead agent on one is not
+# replaced automatically. That does NOT generalise to "never offered": in REVIEW the same blackout
+# INVERTS it — the review branch skips cards the board copy calls mine, so a blacked-out card in
+# Review is offered to its own AUTHOR (review=True) where the healthy control answers task=None.
+# All of it is PRE-EXISTING and out of this card's scope; what was wrong was only the description.
 #
 # Rare and DURABLE, both measured the same day: exactly one of the 31 cards outside Done
 # diverged, and re-assigning, moving columns and a full read-modify-write POST /tasks/854 each
@@ -321,7 +335,10 @@ def test_claim_reports_when_the_kanban_copy_lost_the_assignee(env):
     unconditional -> 2 failed. The re-read made unconditional -> 1 failed. The verification's
     `except` emptied so a failed board read propagates -> 1 failed. The re-read's `except` emptied
     so a failed `/tasks/<id>` propagates -> 1 failed. No round scored zero, so every half of this
-    section is pinned by something."""
+    section is pinned by something. Re-run WHOLE at round two, after the RECOVER test below grew
+    from three driven forms to five, this time with a control at BOTH ends: control 0 failed /
+    0 errors at each end, the same six counts between them and the same 31 collected in every
+    round, so widening that body moved nothing and this record needed no new numbers."""
     api, wf = env
     t = api.add_task("diverging card", "Queue")
     api.kanban_assignee_blackout.add(t["id"])
@@ -373,10 +390,25 @@ def test_ownership_gates_RECOVER_a_card_whose_board_copy_lost_its_assignee(env):
     """#885, half (a) — RECOVERY, and the half that actually unsticks the card.
 
     This is the live sequence: claim succeeds, then every ownership-gated tool refuses because
-    `_require_mine` judged by the board copy. All five are driven here, not argued about, because
-    the card's cost was precisely that ALL of them refused at once — one passing tool would have
-    left a way out. Revert `_require_mine` to `self._assignee_ids(task)` and every assertion in
-    the first loop goes RED."""
+    `_require_mine` judged by the board copy. All FIVE ownership-gated forms are driven here, not
+    argued about, because the card's cost was precisely that ALL of them refused at once — one
+    passing tool would have left a way out. Five is the whole surface, not a sample: four tools
+    call `_require_mine`, and `advance` reaches it in two of its three named forms — `review_task`
+    needs no ownership by design, `to='done'` raises "only a human moves a task to Done" before
+    the gate, and `to='design'` is not a transition at all.
+
+    They do NOT all fit on one card, and that is the reason for the three below rather than a
+    contrived ordering: `advance(to='review')` and `decompose` each END a card's usable life here
+    — in Review, and in Backlog as an epic — so each gets a card of its own. An earlier round
+    drove only the first three while this docstring claimed five, and named a "first loop" the
+    body has never had.
+
+    Revert `_require_mine` to `self._assignee_ids(task)` and this test goes RED at the FIRST of
+    the five — asserts are sequential, so that one mutation shows you one red, not five. The
+    property really is all five: driven independently under that same mutant, every one of them
+    refuses with "not assigned to you" (measured). An earlier round wrote "every one of the five
+    goes RED", which is the same over-read of one's own body this docstring already apologises
+    for."""
     api, wf = env
     t = api.add_task("stuck between claim and advance", "Queue")
     api.kanban_assignee_blackout.add(t["id"])
@@ -388,6 +420,22 @@ def test_ownership_gates_RECOVER_a_card_whose_board_copy_lost_its_assignee(env):
     assert wf.call_human(t["id"], "a question")["moved_to"] == "Your Call"
     api.task_bucket[t["id"]] = api.bucket_id("Build")      # the human answers, card comes back
     assert wf.return_task(t["id"], reason="external blocker")["moved_to"] == "Backlog"
+
+    # ...and the two forms that cannot follow those on the same card
+    to_review = api.add_task("blacked out, taken to Review", "Queue")
+    api.kanban_assignee_blackout.add(to_review["id"])
+    wf.claim(to_review["id"])
+    wf.advance(to_review["id"], to="build", spec="approach")
+    assert wf.advance(
+        to_review["id"], to="review", worklog="what was done", evidence="deadbeef",
+    )["moved_to"] == "Review"
+
+    to_split = api.add_task("blacked out, decomposed", "Queue")
+    api.kanban_assignee_blackout.add(to_split["id"])
+    wf.claim(to_split["id"])
+    assert wf.decompose(
+        to_split["id"], [{"title": "A"}, {"title": "B"}],
+    )["parent"]["moved_to"] == "Backlog"
 
 
 def test_the_recovery_re_read_happens_ONLY_on_an_empty_assignee_list(env):
