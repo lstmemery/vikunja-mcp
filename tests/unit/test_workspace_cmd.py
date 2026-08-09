@@ -3488,6 +3488,123 @@ def test_the_report_is_capped_but_the_count_is_not(repo):
     assert res["removed_ignored_truncated"] == total
 
 
+# MUTATION SWEEP for the byte budget (VMCP-260, 862). One selection throughout
+# (`tests/unit/test_workspace_cmd.py -k 'capped or cap or truncated or byte or BYTES'`, no `-q`),
+# `collected 223 items / 210 deselected / 13 selected` and `0 ERROR lines` in EVERY round, each
+# round read by COUNTING lines beginning `FAILED ` and lines beginning `ERROR ` separately — never
+# by the first `N failed` in stdout, which in this file lands inside a printed docstring. Run in a
+# `git clone --no-hardlinks` of its own with `__pycache__` deleted and `PYTHONDONTWRITEBYTECODE=1`,
+# `vikunja_mcp.__file__` printed each round and resolving into the clone every time; control at the
+# START and at the END, restore verified byte-identical. Control 0 failed:
+#   * `_cap_reported` consults no byte budget (entry cap alone) . control 0 failed; 3 failed
+#   * `_truncated` marks only ENTRY cuts, so a byte cut is silent  control 0 failed; 2 failed
+#   * the never-empty rule dropped (`and kept` deleted) ......... control 0 failed; 1 failed
+#   * CHARACTERS counted instead of serialized bytes ............ control 0 failed; 1 failed
+# Control 0 failed at the end as well, on the restored tree and the same selection.
+def test_the_report_is_capped_in_BYTES_too_and_not_only_in_entries(repo):
+    """The entry cap alone does not hold the line under the read it is justified by, which is the
+    whole of VMCP-260 (862) and is measured rather than argued.
+
+    BEFORE the byte budget, on this same construction: 50 names — the entry cap's own maximum, so
+    nothing was violated — came out as a 40,200-byte array on a 40,376-byte line, against the
+    25,088 bytes that the sibling's fatal ">24.5 KiB" is the FLOOR of. What makes the names long
+    here is a TRACKED anchor at each level: without it git reports the directory as ONE `!! d/`
+    entry and the input collapses (the paragraph above `_MAX_REPORTED_IGNORED` builds that).
+
+    The assertion is on the SERIALIZED array and not on the whole line on purpose: the line also
+    carries `path`, whose length is a property of whatever temp root the run got and not of this
+    code — measured for VMCP-249, two temp roots differing by 41 characters moved the total by
+    exactly 41 bytes.
+    """
+    _ignoring(repo, "*.png")
+    seg = "d" * 200
+    deep = Path(seg) / seg / seg
+    (repo / deep).mkdir(parents=True)
+    cur = repo
+    for part in deep.parts:                      # a tracked anchor at EVERY level, so git
+        cur = cur / part                         # enumerates the ignored files one by one
+        (cur / "anchor.txt").write_text("x\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "deep anchors")
+    _git(repo, "push", "origin", "main")
+    path = Path(ensure_workspace(42, cwd=repo)["path"])
+    total = workspace_cmd._MAX_REPORTED_IGNORED + 10
+    for n in range(total):
+        pad = 800 - len(str(deep)) - 1 - 4 - len(".png")
+        (path / deep / f"{n:04d}{'n' * pad}.png").write_bytes(b"\x89PNG")
+
+    res = release_workspace(42, cwd=repo)
+
+    assert res["released"] is True
+    named = res["removed_ignored"]
+    assert len(named) < workspace_cmd._MAX_REPORTED_IGNORED, (
+        "the ENTRY cap is not what has to bind here — that is the defect 862 was filed for")
+    assert len(json.dumps(named)) <= workspace_cmd._MAX_REPORTED_IGNORED_BYTES + 1024, (
+        "one entry over budget is allowed (never an empty list); a second is not")
+    assert len(json.dumps(res)) < 25088, "the whole line must clear the consumer floor"
+    assert res["removed_ignored_truncated"] == total, (
+        "a BYTE cut raises the same sibling an ENTRY cut does, still `len(destroyed)`")
+
+
+def test_the_byte_budget_never_leaves_the_key_present_and_empty(repo):
+    """A key present with an EMPTY list is the never-read field VMCP-68 had to split `kept` in two
+    to cure, and it would strip the one-way reading — present ⇒ something unrecognised died — of
+    the only thing it says. So the FIRST entry is kept even where it alone busts the budget; the
+    overshoot is bounded by `PATH_MAX` rather than by hope.
+
+    Driven through `_add_capped`, the shape `overwritten_ignored` and `half_applied` share.
+    """
+    huge = "z" * (workspace_cmd._MAX_REPORTED_IGNORED_BYTES + 200)
+
+    one = {}
+    workspace_cmd._add_capped(one, "overwritten_ignored", [huge])
+    assert one["overwritten_ignored"] == [huge], "never empty, never absent"
+    assert "overwritten_ignored_truncated" not in one, "nothing was dropped, so no sibling"
+
+    two = {}
+    workspace_cmd._add_capped(two, "overwritten_ignored", [huge, huge + "y"])
+    assert two["overwritten_ignored"] == [huge], "the first survives, the second does not"
+    assert two["overwritten_ignored_truncated"] == 2
+
+    empty = {}
+    workspace_cmd._add_capped(empty, "overwritten_ignored", [])
+    assert empty == {}, "the only-when-non-empty rule is untouched by the byte budget"
+
+
+def test_the_byte_budget_counts_serialized_bytes_and_not_characters(repo):
+    """`json.dumps` prints at its default `ensure_ascii=True`, so a Cyrillic path costs SIX bytes
+    per character. Counting characters would understate by 6x, and UTF-8 bytes by 3x, the very
+    thing the budget exists to hold down — measured, 100 Cyrillic characters are 100 chars, 200
+    UTF-8 bytes and 602 serialized.
+
+    The ASCII half is the CONTROL: the same CHARACTER count, uncut. Without it a red here would
+    not say which of the two axes did the cutting.
+    """
+    cyr, ascii_ = {}, {}
+    workspace_cmd._add_capped(cyr, "half_applied", ["ф" * 100] * 6)
+    workspace_cmd._add_capped(ascii_, "half_applied", ["f" * 100] * 6)
+
+    assert len(cyr["half_applied"]) == 2, "602 serialized bytes each, so two fit in 1568"
+    assert cyr["half_applied_truncated"] == 6
+    assert len(ascii_["half_applied"]) == 6, "102 serialized bytes each — same chars, no cut"
+    assert "half_applied_truncated" not in ascii_
+
+
+def test_the_entry_cap_still_binds_where_the_byte_budget_does_not(repo):
+    """The byte budget is a SECOND floor, not a replacement: on the short realistic names this
+    repo's own recipes write (`shot-<id>.png`, `.playwright-mcp/<id>/…`) it never fires at all, and
+    the report is byte-identical to what it was before 862 — measured end to end, 50 names on a
+    1,376-byte line before AND after."""
+    names = [f"shot-{n:04d}.png" for n in range(workspace_cmd._MAX_REPORTED_IGNORED + 7)]
+    state = {}
+    workspace_cmd._add_capped(state, "overwritten_ignored", names)
+
+    assert len(state["overwritten_ignored"]) == workspace_cmd._MAX_REPORTED_IGNORED
+    assert state["overwritten_ignored_truncated"] == len(names)
+    assert len(json.dumps(state["overwritten_ignored"])) < \
+        workspace_cmd._MAX_REPORTED_IGNORED_BYTES, "so it was the ENTRY cap that cut this one"
+
+
 def test_the_truncated_count_is_entries_not_the_size_of_the_loss(repo):
     """`removed_ignored_truncated` is `len(destroyed)` — POST-filter, POST-collapse — so it is not
     the size of the loss, and it is not a bound on it in EITHER direction (below it here; above it

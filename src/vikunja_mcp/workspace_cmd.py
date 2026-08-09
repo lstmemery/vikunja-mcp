@@ -1182,6 +1182,61 @@ _REPRODUCIBLE_IGNORED_SUFFIXES = (".pyc", ".pyo")
 # not re-measured here. What IS measured here is the other side: the collapse paragraph above has
 # the nested REPOSITORY git really does not descend into.
 _MAX_REPORTED_IGNORED = 50
+# And a SECOND budget, in BYTES, because the first one does not bound what the consumer reads —
+# VMCP-260 (862), the card the paragraph above filed, answered by a human choosing a byte budget
+# over narrowing the justification. Re-measured here at `1a26130` with the real
+# `release_workspace` on the card's own construction (a tracked anchor at each level so git
+# ENUMERATES, 60 ignored `*.png` at 800-character paths): 50 names, the entry cap's own maximum,
+# came out as a 40,200-byte array on a 40,376-byte line — 1.6x the 25,088 bytes that ">24.5 KiB"
+# is the FLOOR of. Nothing was violated; the entry cap was simply never what stood between that
+# line and the hub.
+#
+# 1,568 is 25,088 // 16, and the division IS the justification — a round number picked by eye is
+# what the card refused. The budget is PER KEY and one payload carries the shape several times
+# (one `removed_ignored` per released worktree, up to two more under `main_checkout`), so EIGHT
+# of them spend 12,544 bytes: half the floor, with the other half left for the frame and for
+# whatever key comes next. Eight is twice the four trees this repo's `wip_limit = 3` drain
+# produces.
+#
+# **SO IT BOUNDS ONE KEY AND NOT THE PAYLOAD, and stating that is the point rather than a
+# caveat**: a per-list cut cannot bound a line assembled from lists that never see each other,
+# and reading it as though it could is exactly the overstatement 862 was filed against. What it
+# buys is that `N x B + frame` is an arithmetic bound with a SMALL B, where before B had no
+# bound at all.
+#
+# The cost counted is the SERIALIZED one, `len(json.dumps(p))`, and not `len(p)`: the line is
+# printed by `json.dumps` at its default `ensure_ascii=True`, so a Cyrillic path costs SIX bytes
+# per character — measured, 100 Cyrillic characters are 100 chars, 200 UTF-8 bytes and 602
+# serialized. Counting characters would understate by 6x, and counting UTF-8 bytes by 3x, the
+# very thing the budget exists to hold down. The `+ 1` per entry is the separating comma; it
+# over-counts the whole array by one byte, which is the safe direction.
+_MAX_REPORTED_IGNORED_BYTES = 1568
+
+
+def _cap_reported(paths: list[str]) -> list[str]:
+    """`paths` cut to BOTH budgets: at most `_MAX_REPORTED_IGNORED` entries AND at most
+    `_MAX_REPORTED_IGNORED_BYTES` of serialized names.
+
+    THE FIRST ENTRY IS ALWAYS KEPT, even where it alone busts the byte budget. The alternative
+    is a key PRESENT with an EMPTY list, which is the never-read field VMCP-68 had to split
+    `kept` in two to cure and which would strip the one-way reading — key present ⇒ something
+    unrecognised died — of the only thing it says. What that costs is bounded by the filesystem
+    rather than by hope: one entry is one path, so the overshoot cannot exceed `PATH_MAX`
+    (measured 1024 here), a twenty-fifth of the floor above.
+
+    The CALLER decides what a short answer means. `len(out) < len(paths)` is the truncation
+    signal, so a BYTE cut raises the same `<key>_truncated` sibling an ENTRY cut does — which is
+    what the human's answer on 862 asked for, and it keeps that sibling's documented meaning
+    (`len(paths)`, the length before either cut) unchanged.
+    """
+    kept: list[str] = []
+    spent = 0
+    for p in paths[:_MAX_REPORTED_IGNORED]:
+        spent += len(json.dumps(p)) + 1
+        if spent > _MAX_REPORTED_IGNORED_BYTES and kept:
+            break
+        kept.append(p)
+    return kept
 
 
 def _inspect_status(path: Path) -> tuple[list[str], list[str]]:
@@ -1421,8 +1476,8 @@ def _release_locked(root: Path, task_id: int, role: str) -> dict:
         # unrecognised was destroyed, but its ABSENCE does not prove nothing was. `--ignored`
         # collapses an ignored DIRECTORY into a single entry, so a file an agent left inside
         # `.venv/` is covered by `.venv/`, filtered as routine, and destroyed unnamed (measured).
-        result["removed_ignored"] = destroyed[:_MAX_REPORTED_IGNORED]
-        if len(destroyed) > _MAX_REPORTED_IGNORED:
+        result["removed_ignored"] = _cap_reported(destroyed)
+        if len(result["removed_ignored"]) < len(destroyed):
             result["removed_ignored_truncated"] = len(destroyed)
     if wt["branch"]:
         try:
@@ -2931,11 +2986,15 @@ def _add_capped(state: dict, key: str, paths: list[str]) -> None:
     `<key>_truncated` is the length of the list BEFORE the cap and AFTER every filter and give-up
     that produced it, so it inherits exactly the blindness of the key it sits beside — it is not a
     measure of the loss. Read the way SKILL.md states it to agents.
+
+    "Capped" is TWO budgets since VMCP-260 (862), entries and bytes, and this key raises the same
+    `_truncated` sibling whichever one cut it — see `_cap_reported`, which both this and
+    `removed_ignored` go through so the two cannot drift apart again.
     """
     if not paths:
         return
-    state[key] = paths[:_MAX_REPORTED_IGNORED]
-    if len(paths) > _MAX_REPORTED_IGNORED:
+    state[key] = _cap_reported(paths)
+    if len(state[key]) < len(paths):
         state[f"{key}_truncated"] = len(paths)
 
 
