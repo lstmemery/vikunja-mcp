@@ -75,6 +75,7 @@ import inspect
 import json
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -2037,6 +2038,38 @@ def _publishable_copies(root: Path, *, prefix: int | None = None):
     "could not look" stays distinguishable from "looked and found nothing"; in the default mode
     such a copy is dropped silently, exactly as it was before this parameter existed.
 
+    A GITLINK (index mode 160000) is not a candidate for its INDEX half — VMCP-248 (839). The
+    entry names a COMMIT, so there are no bytes there for `git add -A` to publish as content, and
+    both index reads refuse it: the magic-bytes caller then reported the submodule in
+    `unreadable`, saying "format UNKNOWN" of a thing that has no format. That made this file RED
+    in any checkout carrying a submodule, and this repository escaped only by having none —
+    measured at `4f1dae7`, `git ls-files -s | awk '$1=="160000"'` is empty, which is the right
+    evidence because a gitlink lives in the INDEX and `.gitmodules` is merely a file. Dropped by
+    MODE, and the object-TYPE spelling that looks equivalent is not: an ordinary submodule's
+    commit lives in the SUBMODULE's object store, so from up here `cat-file -t :./sub` cannot
+    name a type at all and a type filter leaves the submodule reported exactly as before, while
+    additionally reddening both rows of
+    `test_an_index_entry_whose_OBJECT_IS_NOT_A_BLOB_is_reported`.
+
+    THE WORKTREE HALF IS DELIBERATELY KEPT, which is why this cuts at the index read instead of
+    subtracting gitlinks from `tracked`. For an ordinary submodule that costs nothing — the path
+    is a DIRECTORY, `is_file()` is False, and nothing is yielded either way. But a gitlink whose
+    working copy is a plain FILE is real and PUBLISHABLE, and it was built rather than reasoned
+    about (git 2.50.1): replace the submodule directory with a file of PNG bytes and git reports
+    ` T`, `git add -A --dry-run` answers `add 'sub'`, and the shipped scan names it a PNG
+    offender. `ls-files --others` does NOT list that path, so subtracting from `tracked` would
+    have dropped it from the walk entirely and lost a catch this gate has today.
+
+    What no version of this reaches is the submodule's CONTENT — a BORDER, not a gap. A
+    superproject does not publish the bytes of files inside a live gitlink, measured four ways: a
+    PNG under `sub/` uncommitted, the same PNG committed inside the submodule, and the submodule
+    with its own `.git` deleted all leave `git add -A --dry-run` empty up here. The natural
+    counter-example completes it rather than breaking it — `git rm --cached sub` makes `sub/` an
+    ordinary untracked directory, and that same PNG is caught. So the moment those bytes become
+    publishable there is no gitlink left, and dropping mode 160000 costs no coverage. A submodule
+    is its own repository with its own gate; this one cannot cover its content and does not
+    pretend to.
+
     TRACKED and UNTRACKED are kept apart, which VMCP-141 (630) is about. The candidate LIST
     always came from git; the BYTES came from the worktree, and where the two disagree the scan
     went quiet. Built rather than reasoned about, on a clean clone: a shaped file `git add -f`ed
@@ -2091,8 +2124,22 @@ def _publishable_copies(root: Path, *, prefix: int | None = None):
         assert listed.returncode == 0, f"git {' '.join(args)} failed: {listed.stderr.strip()}"
         into.update(p for p in listed.stdout.split("\0") if p)
 
+    staged = _git("ls-files", "-s", "-z", cwd=root)
+    assert staged.returncode == 0, f"git ls-files -s failed: {staged.stderr.strip()}"
+    gitlinks = set()
+    for record in staged.stdout.split("\0"):
+        # `<mode> <object> <stage>\t<path>`; the TAB is the separator and a path may itself hold
+        # SPACES, so partition on the tab rather than splitting on whitespace. Borrowed from
+        # `workspace_cmd._index_gitlink_paths` (VMCP-246 / 837) — the PARSE, deliberately not its
+        # CONTRACT: there a failed read returns the empty set, best-effort, because it runs on
+        # every sweep tick in `src/`. Here the empty set is SILENT BLINDNESS, so this read is as
+        # loud as the two above it.
+        meta, tab, path = record.partition("\t")
+        if tab and path and meta.startswith("160000 "):
+            gitlinks.add(path)
+
     for rel in sorted(tracked | untracked):
-        if rel in tracked:
+        if rel in tracked and rel not in gitlinks:
             # `:./` and NOT `:` — VMCP-243 (820). `:<rel>` is a REVSPEC, so when a path's FIRST
             # COMPONENT begins with a digit 0-3 and a colon, git reads `:2:cred.json` as "merge
             # stage 2 of the path `cred.json`" — and it goes wrong TWO ways, not one. No such
@@ -2191,11 +2238,16 @@ def _scan_for_browser_binary_signature(root: Path) -> tuple[list[str], list[str]
 
     `unreadable` is a candidate for which a read was ATTEMPTED on both copies and answered by
     neither, which is narrower than "came back from neither" and is the narrower one on purpose.
-    Two states are outside it, and each is a decision rather than an oversight. An EMPTY file is
+    THREE states are outside it, and each is a decision rather than an oversight. An EMPTY file is
     yielded by nothing and reported as nothing: no signature to match, and no page content for
     git to publish. An UNTRACKED candidate that vanished between `git ls-files` and the read is
     likewise nothing — that is the old loop's `else: continue  # untracked and already gone:
     nothing git could publish either`, kept as behaviour once this sentence stopped saying so.
+    The third is a GITLINK, and it is the one that was WRONG rather than merely quiet: an index
+    entry of mode 160000 names a commit, not bytes, so "could not look" was never the right
+    answer about it — VMCP-248 (839). The walk drops that entry's index half; the reasoning, the
+    axis it is dropped on, and the border it leaves (a submodule's own content is not this gate's
+    to cover) are in `_publishable_copies`, where the drop lives.
     """
     offenders: list[str] = []
     seen: list[str] = []
@@ -3391,6 +3443,98 @@ def test_an_index_entry_whose_OBJECT_IS_NOT_A_BLOB_is_reported(clone, oid):
     # walk's own docstring defines publishable by `add -A`, and the neighbouring pins inherit that
     # looser wording; measured on this state rather than reasoned from the shared phrasing.
     assert offenders == [], f"nothing was classified, so nothing should be named: {offenders}"
+
+
+@pytest.mark.parametrize("state", ["live-submodule", "gitlink-path-holds-a-file"])
+def test_a_GITLINK_is_not_unreadable_and_a_FILE_at_its_path_still_is(clone, tmp_path, state):
+    """Both halves of VMCP-248 (839) in one construction, because they are one trade.
+
+    ROW 1 is the card: a REAL submodule made this whole file red. `git ls-files` carries `sub`,
+    the worktree copy is a directory, and the index entry names a commit living in the
+    SUBMODULE's object store — so `cat-file -s :./sub` is rc 128 `could not get object info` and
+    the walk's `-s`-failed branch reported `unreadable=['sub']`. Measured on a real clone of this
+    repository with one `git submodule add`, against a control of 0 failed on that same clone
+    WITHOUT the submodule: before the fix, 1 failed here, reading `['sub'] — … their format is
+    UNKNOWN`. That message is false about a gitlink in the way that matters — a commit has no
+    format to be unknown.
+
+    ROW 2 is what keeps the fix from being a weakening, and it is why the drop cuts at the INDEX
+    read rather than removing gitlinks from `tracked`. Put a plain FILE of PNG bytes where the
+    submodule directory was and git says ` T sub` while `git add -A --dry-run` says `add 'sub'`:
+    those bytes really would be published, `ls-files --others` does not list the path, and the
+    gate catches them today. A `tracked`-subtraction passes row 1 and silently loses row 2 —
+    which is the mutation this parametrisation exists to fail on, since row 1 alone cannot see it.
+
+    Neither row asserts a `cat-file -t`, deliberately: the type is exactly what an ordinary
+    submodule denies from up here, and pinning the axis the fix does NOT use belongs next door,
+    in `test_an_index_entry_whose_OBJECT_IS_NOT_A_BLOB_is_reported`, whose two rows this fix
+    leaves green.
+    """
+    upstream = tmp_path / "upstream"
+    upstream.mkdir()
+    for args in (("init", "-b", "main"), ("config", "user.email", "t@e.com"),
+                 ("config", "user.name", "T")):
+        subprocess.run(["git", *args], cwd=upstream, check=True, capture_output=True)
+    (upstream / "u.txt").write_text("upstream\n")
+    for args in (("add", "u.txt"), ("commit", "-m", "init")):
+        subprocess.run(["git", *args], cwd=upstream, check=True, capture_output=True)
+    # `protocol.file.allow=always` is required from git 2.38 on: a submodule over a local path is
+    # refused by default (CVE-2022-39253). `subprocess.run` rather than the `_git` helper, like
+    # every other clone-driven pin here — that spelling is one of GIT_CALL_MARKERS, and this test
+    # builds its own throwaway repo rather than needing this checkout.
+    subprocess.run(["git", "-c", "protocol.file.allow=always", "submodule", "add",
+                    str(upstream), "sub"], cwd=clone, check=True, capture_output=True)
+    staged = subprocess.run(["git", "ls-files", "-s", "--", "sub"], cwd=clone, check=True,
+                            capture_output=True, text=True).stdout
+    assert staged.startswith("160000 "), \
+        f"this round measures nothing unless the index holds a gitlink, and it holds {staged!r}"
+
+    if state == "gitlink-path-holds-a-file":
+        shutil.rmtree(clone / "sub")
+        (clone / "sub").write_bytes(_PNG)
+        publishes = subprocess.run(["git", "add", "-A", "--dry-run"], cwd=clone, check=True,
+                                   capture_output=True, text=True).stdout
+        assert "sub" in publishes, (
+            "this row measures nothing unless git really would publish those bytes, and "
+            f"`git add -A --dry-run` said {publishes!r}"
+        )
+
+    offenders, unreadable = _scan_for_browser_binary_signature(clone)
+    assert unreadable == [], (
+        f"a gitlink names a COMMIT, so there are no bytes here for `git add -A` to publish as "
+        f"content and 'could not look' is the wrong answer about it. The scan reported {unreadable}"
+    )
+    expected = ["sub (PNG)"] if state == "gitlink-path-holds-a-file" else []
+    assert offenders == expected, (
+        f"dropping the gitlink must not drop the PATH: a plain file sitting where the submodule "
+        f"was IS publishable. Expected {expected}, got {offenders}"
+    )
+
+
+# MUTATION-CHECKED for VMCP-248 (839), selection `tests/unit/test_repo_browser_isolation.py`, in a
+# separate clone, `__pycache__` deleted and PYTHONDONTWRITEBYTECODE=1 every round,
+# `vikunja_mcp.__file__` printed every round, each round restored from a byte copy and confirmed
+# sha256-identical, rounds read by COUNTING `^FAILED ` and `^ERROR ` lines (never the first
+# `N failed` in stdout, which in this repo is a mutant's own docstring) and `collected`
+# cross-checked against the control at 124 every time: control 0 failed / 0 errors, and it was run
+# again at the END with the same 0 failed / 0 errors, so nothing drifted across the rounds. Round
+# ONE, the fix removed outright (`rel not in gitlinks` dropped from the index-half condition):
+# 1 failed, and precisely `[live-submodule]`. Round TWO, the same goal spelled as a
+# `tracked -= gitlinks` subtraction BEFORE the walk: 1 failed, and precisely
+# `[gitlink-path-holds-a-file]`, with `[live-submodule]` still GREEN — which is the whole argument
+# for parametrising rather than pinning the submodule alone, since that spelling passes the card's
+# own row while silently dropping a publishable file from the walk.
+#
+# What was verified by RUNNING rather than by these rounds, because it needs a real checkout the
+# sweep clone is not: the gate still CATCHES. On a throwaway repo holding a live gitlink plus four
+# planted states — a PNG under the foreign name `wt-only.bin` reachable only through the WORKTREE,
+# the same PNG under `idx-only.bin` reachable only through the INDEX (staged, then the worktree
+# copy overwritten with prose), and a storage-state document in each of those two halves — the
+# pre-fix and post-fix scanners answer IDENTICALLY on every offender list: both name both PNGs,
+# both name both credentials. The single difference across the whole comparison is `unreadable`,
+# `['sub']` before and `[]` after. And on a real clone of this repository with one
+# `git submodule add`, this file went from 1 failed to 124 passed, against a control of 0 failed
+# on that same clone without the submodule, green on both sides of the fix.
 
 
 # MUTATION-CHECKED for VMCP-242 (819), selection `tests/unit/test_repo_browser_isolation.py`,
