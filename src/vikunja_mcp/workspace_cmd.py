@@ -73,6 +73,7 @@ CODE_DIRTY = "dirty"
 CODE_UNPUSHED = "unpushed"
 CODE_UNREACHABLE_HEAD = "unreachable-head"
 CODE_DETACHED_BUILD = "detached-build"
+CODE_POPULATED_GITLINK = "populated-gitlink"   # VMCP-266 — see _populated_gitlinks
 CODE_SELF_TREE = "self-tree"          # --gc only: the tree gc itself is standing in
 CODE_RELEASE_ERROR = "release-error"  # --gc only: _release_locked raised, sweep continued
 
@@ -1060,13 +1061,22 @@ _REPRODUCIBLE_IGNORED_SUFFIXES = (".pyc", ".pyo")
 # to end rather than inherited). A directory git cannot read: `status` warns and omits it, then
 # `git worktree remove` fails "Directory not empty" and this function RAISES, so nothing is
 # reported. A submodule: true only while it is POPULATED, where `remove` refuses outright ("working
-# trees containing submodules cannot be moved or removed"). UNINITIALISED it does not raise at all —
+# trees containing submodules cannot be moved or removed"). UNINITIALISED it did not raise at all —
 # and uninitialised is exactly what `ensure_workspace` leaves, since `git worktree add` does not
-# init submodules. Measured: a `sub/` gitlink whose directory the new worktree leaves EMPTY, one
-# ignored `sub/EVIDENCE.png` written into it and 60 loose ignored `*.png` beside it — the
-# superproject's `status --porcelain --ignored` says NOTHING about `sub/`, the release returns
-# `released: True` with `removed_ignored_truncated` 60 and 50 names, and `EVIDENCE.png` is in
+# init submodules. Measured then: a `sub/` gitlink whose directory the new worktree leaves EMPTY,
+# one ignored `sub/EVIDENCE.png` written into it and 60 loose ignored `*.png` beside it — the
+# superproject's `status --porcelain --ignored` says NOTHING about `sub/`, the release returned
+# `released: True` with `removed_ignored_truncated` 60 and 50 names, and `EVIDENCE.png` was in
 # neither: 61 ignored files destroyed, 60 counted, one of them unnamed, uncounted and unraised.
+# **THE SUBMODULE HALF OF THAT PAIR NO LONGER REACHES THIS KEY, and the past tense above is
+# VMCP-266 rather than a re-measurement of the same code**: a gitlink whose directory holds
+# anything — `EVIDENCE.png` included — is now refused before the removal with
+# CODE_POPULATED_GITLINK, so that input returns `released: false` and destroys nothing. What was
+# a lemma-breaking shape is a guarded one, in BOTH submodule states (populated and not), and it
+# is the only one of the two that moved: a directory git cannot READ still breaks the lemma
+# exactly as described above, and still by raising. The gitlink was never the interesting half
+# for this key anyway — its casualty there was IGNORED, while what forced the refusal is that the
+# same blindness swallows untracked-and-NOT-ignored content the dirty guard promises to hold.
 # Latent HERE (this repo has no gitlink) and ordinary in the consumer checkout `--gc` runs in. So no
 # "iff" is on offer and this comment does not offer one; a criterion would be unusable anyway, since
 # checking either conjunct needs the tree, which is gone by the time anything reads this key.
@@ -1342,6 +1352,78 @@ def _is_reproducible_ignored(entry: str) -> bool:
     return leaf in _REPRODUCIBLE_IGNORED_LEAVES or leaf.endswith(_REPRODUCIBLE_IGNORED_SUFFIXES)
 
 
+def _populated_gitlinks(path: Path) -> list[str]:
+    """Every gitlink in THIS worktree's index whose directory on disk is not empty (VMCP-266).
+
+    THE GUARD BELOW IS BLIND UNDER A GITLINK, AND NOT ONLY FOR IGNORED FILES — which is what
+    separates this from the `removed_ignored` chain and is the whole warrant for REFUSING here
+    rather than reporting. `git status` does not answer about paths under a gitlink at all, so
+    `_inspect_status` returns `([], [])` over a file the guard elsewhere PROMISES to hold: measured
+    on a real submodule, a worktree the module itself created, an untracked-and-NOT-ignored
+    `sub/precious.txt` written into it — `dirty` empty, `release_workspace` `{"released": true}` with
+    no `code` and no `removed_ignored`, the file gone, rc 0, no `--force`. POSITIVE CONTROL on the
+    same probe in the same tree: an untracked `control-at-root.txt` at the ROOT gives
+    `['?? control-at-root.txt']` and the tree is held. So the probe is sound and the blindness is
+    exactly the gitlink's shadow. That is the shape of VMCP-223 (766) — one mechanism silently
+    switching off a claimed guarantee — and it gets the same answer: make the guard work, do not
+    narrow the promise. VMCP-221 (764)'s "report, never hold" is untouched, because that decision is
+    about IGNORED files, which the guard never claimed.
+
+    WHY AN EMPTY-DIRECTORY TEST IS ENOUGH, and why it needs no `--no-index`, no `check-ignore` and no
+    walk INSIDE: this pipeline never populates a submodule. There is no `git submodule` call in the
+    package and no `--recurse-submodules` on any of the three `worktree add` forms, so `git worktree
+    add` leaves a gitlink's directory EMPTY (measured: exists YES, contents `[]`, `sub/.git` NO).
+    A non-empty one therefore means somebody put something there, and that IS the signal. Cost
+    accepted deliberately: a directory holding only regenerable debris is refused too. The refusal
+    falls the safe way — an unreleased tree is recoverable, a removed one is not.
+
+    THE TEST IS THE INDEX, never `.gitmodules` and never `.git` on disk. A gitlink lives in the
+    index (`.gitmodules` is ordinary tracked content and can disagree with it), and a DEINITIALISED
+    submodule has no `.git` anywhere while still being a gitlink — which is precisely the state this
+    guard exists for. Same reading `_index_gitlink_paths` takes, for the same reason.
+
+    FAIL-CLOSED IN BOTH DIRECTIONS, since this decides whether work is destroyed rather than how it
+    is reported. A directory that cannot be READ counts as populated: `os.scandir` raising EACCES
+    means there is something there we cannot see, and `os.path.lexists`-style probing answers False
+    on exactly that case. A failed `ls-files` RAISES (`_git_inspect`, like every other read in
+    `_release_locked`), which `--gc` records as `release-error` -> `kept`; it must never degrade to
+    an empty list, because an empty list here means "remove the tree".
+
+    Not populated, deliberately: a gitlink path that is absent, or is not a directory at all (a
+    typechange left a file or a symlink there). Neither can hide an agent's files, and treating them
+    as populated would hold ordinary trees for nothing.
+
+    THE WHOLE INDEX, where `_index_gitlink_paths` scopes itself to pathspecs, and the difference is
+    the call SITE rather than a disagreement: that one runs per sweep tick over a diff's paths, this
+    one runs once per tree that has already passed every other guard, i.e. only for trees about to
+    be removed. Cost is one git process, not a walk — measured 15.8-16.8 ms over 5 runs on this
+    checkout (74 tracked files), which is process spawn rather than index size.
+
+    `_git_inspect` because this reads INSIDE a tree it may end up refusing, so VMCP-90's rule
+    applies: measured on a real worktree, neither grace marker moves across this call (tree
+    directory and index mtimes byte-identical before and after), while the POSITIVE CONTROL — a
+    plain `git status --porcelain` in the same tree straight afterwards — does move the index. So
+    the probe is footprint-free by measurement, not merely by inheriting the helper.
+    """
+    found: list[str] = []
+    for record in _git_inspect("ls-files", "-s", "-z", cwd=path).split("\0"):
+        # `<mode> <object> <stage>\t<path>`, and `-z` means git does NOT quote the path — the TAB
+        # separates them and a path may contain spaces, so partition rather than split.
+        meta, tab, rel = record.partition("\t")
+        if not (tab and rel and meta.startswith(_GITLINK_MODE + " ")):
+            continue
+        try:
+            with os.scandir(path / rel) as entries:
+                populated = any(True for _ in entries)
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        except OSError:
+            populated = True
+        if populated:
+            found.append(rel)
+    return found
+
+
 def _release_locked(root: Path, task_id: int, role: str) -> dict:
     _check_role(role)
     _git("worktree", "prune", cwd=root)
@@ -1484,6 +1566,28 @@ def _release_locked(root: Path, task_id: int, role: str) -> dict:
             return {"released": False, "task_id": task_id, "role": role, "path": str(path),
                     "code": CODE_UNREACHABLE_HEAD,
                     "reason": f"detached HEAD {head} is reachable from no ref"}
+    # VMCP-266, and the PLACEMENT is the decision: LAST, immediately before the removal, rather
+    # than beside `dirty` where the other content guard sits. Three things follow, and only this
+    # position gives all three. It fires on exactly the trees that would otherwise be DESTROYED, so
+    # it costs nothing anywhere else. It cannot be bypassed by any of the branches above (branch /
+    # detached-build / review HEAD), which each `return` on their own and would each need their own
+    # copy of it. And it never displaces a code that already has its own cure — a `dirty` tree is
+    # still reported `dirty`, which matters because "commit and retry" would be advice that does not
+    # empty a submodule directory, and the retry lands here anyway.
+    gitlinks = _populated_gitlinks(path)
+    if gitlinks:
+        named = ", ".join(gitlinks[:_MAX_REPORTED_IGNORED])
+        more = (f" (and {len(gitlinks) - _MAX_REPORTED_IGNORED} more)"
+                if len(gitlinks) > _MAX_REPORTED_IGNORED else "")
+        return {"released": False, "task_id": task_id, "role": role, "path": str(path),
+                "code": CODE_POPULATED_GITLINK,
+                "reason": f"gitlink director{'y is' if len(gitlinks) == 1 else 'ies are'} not "
+                          f"empty ({named}{more}) — `git status` says nothing about paths under a "
+                          f"gitlink, so the dirty guard cannot see what is in there and removing "
+                          f"the tree would destroy it unnamed. Nothing was removed and nothing was "
+                          f"lost. `git worktree add` never populates a submodule, so something put "
+                          f"that content there: save what is wanted out of {path}, empty the "
+                          f"director{'y' if len(gitlinks) == 1 else 'ies'}, then release again"}
     _git("worktree", "remove", str(path), cwd=root)
     result = {"released": True, "task_id": task_id, "role": role,
               "path": str(path), "branch": wt["branch"]}
@@ -1674,20 +1778,21 @@ def _build_workflow(root: Path) -> tuple:
 #     directly (test_keep_grading_of_unreachable_head_still_turns_on_the_role) rather than through
 #     a sweep, precisely because no sweep can construct it any more.
 # Neither set contains CODE_DETACHED_BUILD, CODE_HALF_CREATED, CODE_LOCKED, CODE_NO_WORKTREE,
-# CODE_RELEASE_ERROR or CODE_SELF_TREE — all six, and that membership is DERIVED rather than
-# restated: test_the_policy_comment_enumerations_are_derived_from_the_code reads the RUN OF NAMES
-# above — the list itself, not this paragraph, because prose down here mentions some of them again
-# — and fails unless it is exactly the codes in neither set. Derived because as a hand-kept copy it
-# rotted twice, silently and in two different ways. It opened (VMCP-68) naming four and closing
-# cleanly on "the other three"; VMCP-142 inserted CODE_LOCKED at position two and rewrote that to
-# "the LAST three", which slid the referent past the new member and left it in a list with no bin at
-# all. The other rot is older and simpler: VMCP-86 declared CODE_DETACHED_BUILD and never added it
-# here, so the list was already short by one when VMCP-142 arrived. Neither rot was caught by the
+# CODE_POPULATED_GITLINK, CODE_RELEASE_ERROR or CODE_SELF_TREE — all seven, and that membership is
+# DERIVED rather than restated: test_the_policy_comment_enumerations_are_derived_from_the_code
+# reads the RUN OF NAMES above — the list itself, not this paragraph, because prose down here
+# mentions some of them again — and fails unless it is exactly the codes in neither set. Derived
+# because as a hand-kept copy it rotted twice, silently and in two different ways. It opened
+# (VMCP-68) naming four and closing cleanly on "the other three"; VMCP-142 inserted CODE_LOCKED
+# at position two and rewrote that to "the LAST three", which slid the referent past the new
+# member and left it in a list with no bin at all. The other rot is older and simpler: VMCP-86
+# declared CODE_DETACHED_BUILD and never added it here, so the list was already short by one
+# when VMCP-142 arrived. Neither rot was caught by the
 # card that caused it; both were caught by VMCP-91, which was rewriting a DIFFERENT closed
 # enumeration further down this block (the four bins under the grid), so what this needs is not
 # more care but an assert.
 #
-# A parked card must not launder any of the six, and each has its own reason to shout. Read the
+# A parked card must not launder any of the seven, and each has its own reason to shout. Read the
 # bins as WHY-NOT-ROUTINE, not as a taxonomy: CODE_LOCKED also happens to be cleared by a git
 # command (`git worktree unlock`), so "needs a git command" is not what separates the groups.
 # CODE_HALF_CREATED and CODE_DETACHED_BUILD are the two whose refusal is a HANDOFF of specific
@@ -1697,6 +1802,12 @@ def _build_workflow(root: Path) -> tuple:
 # CODE_LOCKED has the paragraph directly below to itself, and that pointer is the repair for the
 # orphaning: it was never unexplained, only unreferenced. CODE_NO_WORKTREE, CODE_RELEASE_ERROR and
 # CODE_SELF_TREE describe gc itself, not the work in the tree.
+# CODE_POPULATED_GITLINK (VMCP-266) is `kept` for the reason the human who chose this refusal gave:
+# a human has to look, and the entry disappears the moment they have. No BOARD state can clear it —
+# a parked card excuses the agent's OWN unsaved work, and says nothing whatever about content in a
+# submodule directory this pipeline never populated — so no cell of its row may be routine. It is
+# also the one code here protecting content that `git status` cannot describe to anybody, which is
+# why leaving it out of `kept` would be leaving it out of every signal there is.
 #
 # CODE_LOCKED (VMCP-142) is the one whose grading was an actual decision rather than a reading, so
 # say why it is `kept`. A human `git worktree lock` IS an explicit human action, which sounds like
@@ -1729,6 +1840,7 @@ def _build_workflow(root: Path) -> tuple:
 #     unpushed                E          K          K           K
 #     unreachable-head        K          K          E           E
 #     detached-build          K          K          K           K
+#     populated-gitlink       K          K          K           K
 #     half-created            K          K          K           K
 #     locked                  K          K          K           K
 #     no-worktree             K          K          K           K
@@ -1745,7 +1857,7 @@ def _build_workflow(root: Path) -> tuple:
 # rather than counting it as a third defect: every `_release_locked` return and both entries `--gc`
 # synthesises carry a `role`, so nothing in production reaches that column today.
 #
-# THREE of the ten rows above are not all-`K` — the two codes excused in a parked BUILD tree, plus
+# THREE of the eleven rows above are not all-`K` — the two codes excused in a parked BUILD tree, plus
 # `unreachable-head` in a review tree — and they come from TWO sets because the first two share
 # theirs. The conjuncts differ in NUMBER, not just in content, and that asymmetry is the policy
 # rather than an accident: the build pair needs THREE conditions (code, role, and the card in Your

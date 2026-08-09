@@ -349,6 +349,117 @@ def test_release_refuses_unpushed_commits(repo):
     assert _git(path, "log", "--oneline", "-1")
 
 
+def _commit_a_gitlink(work: Path, path: str = "sub") -> None:
+    """Put a GITLINK (mode 160000) in the index and on origin, WITHOUT populating it.
+
+    Plumbing rather than `git submodule add`, like `_bump_gitlink_on_origin` far below and for its
+    reasons: the local-protocol config stays out of the shape, and the index IS what the guard
+    reads. Measured equivalent to a real submodule on both facts this depends on — `git worktree
+    add` materialises an EMPTY directory at the gitlink's path, and the new worktree's own index
+    carries the same `160000` entry.
+    """
+    sha = _git(work, "rev-parse", "HEAD")          # any commit object serves as the pointer
+    _git(work, "update-index", "--add", "--cacheinfo", f"160000,{sha},{path}")
+    _git(work, "commit", "-m", "add a gitlink")
+    _git(work, "push", "origin", "HEAD:main")
+
+
+def test_release_refuses_a_tree_whose_gitlink_directory_is_not_empty(repo):
+    """VMCP-266. The victim here is untracked AND NOT ignored — precisely what the dirty guard
+    PROMISES to hold — and before this refusal it died at rc 0 with no `--force` and no report.
+
+    Why the ordinary guard cannot see it: `git status` does not answer about paths under a gitlink,
+    so `_inspect_status` returns `([], [])` and `release_workspace` answered `{"released": true}`
+    with no `code` and no `removed_ignored`. Measured end to end on a real submodule and a worktree
+    the module itself created, plus the POSITIVE CONTROL that keeps the empty `dirty` honest: the
+    same probe in the same tree DOES report an untracked file at the tree ROOT (`?? ...`), so the
+    blindness is the gitlink's shadow and not a broken probe.
+
+    The neighbouring test is the other half of this pin and must stay next to it: an EMPTY gitlink
+    directory still releases, so this guard cannot be satisfied by refusing everything.
+
+    MUTATION-CHECKED in a separate clone, one selection (`tests/unit/test_workspace_cmd.py`), `-q`
+    dropped so `collected` is readable, `FAILED `- and `ERROR `-prefixed lines counted separately,
+    `__pycache__` purged and `PYTHONDONTWRITEBYTECODE=1` each round, `vikunja_mcp.__file__` printed
+    each round, control at BOTH ends. **control 0 failed (0 ERROR, collected 226)** and every count
+    here is a delta on it, same selection size in every round: delete the refusal and leave the
+    probe -> 1 failed (this test); make the probe return `[]` always -> 1 failed (this test); drop
+    the code from the grid test's row list -> 1 failed (the grid test, on its `declared <= grid`
+    assertion); drop it from the derived policy-comment list -> 1 failed
+    (test_the_policy_comment_enumerations_are_derived_from_the_code); **control 0 failed** at the
+    end, clone left clean.
+
+    THE EACCES BRANCH WAS FOUND UNPINNED BY THAT SWEEP AND IS PINNED NOW, which is why the round
+    for it is reported separately and against its OWN control: at the state the run above measured
+    (collected 225 throughout, control 0 failed both ends), flipping the unreadable-directory
+    branch to `populated = False` gave **0 failed** — nothing in the file objected to a guard that
+    releases a tree it could not look inside. With
+    test_a_gitlink_directory_that_cannot_be_READ_counts_as_populated added, the same mutation on
+    the rebased tree reads **control 0 failed (collected 226) -> 1 failed**, that test alone. Two
+    runs rather than one table because the selection SIZE moved between them, and a count only
+    means something against the control that shares its selection.
+    """
+    _commit_a_gitlink(repo)
+    path = Path(ensure_workspace(42, cwd=repo)["path"])
+    (path / "sub").mkdir(exist_ok=True)
+    (path / "sub" / "precious.txt").write_text("untracked AND NOT ignored\n")
+
+    res = release_workspace(42, cwd=repo)
+
+    assert res["released"] is False
+    assert res["code"] == workspace_cmd.CODE_POPULATED_GITLINK
+    assert "sub" in res["reason"]
+    assert path.exists()
+    # BY CONTENT, never `exists()`: a probe that only asks whether the path resolves answers False
+    # on an unreadable directory too, which is the one case this guard treats as populated.
+    assert (path / "sub" / "precious.txt").read_text() == "untracked AND NOT ignored\n"
+
+
+def test_a_gitlink_directory_that_cannot_be_READ_counts_as_populated(repo, monkeypatch):
+    """The fail-closed direction, pinned because the sweep found it unpinned: flip that one branch
+    to `populated = False` and every other test in this file stays green (control 0 failed,
+    mutation 0 failed) — the guard would then release a tree whose gitlink directory it could not
+    look inside, which is the one reading that destroys work.
+
+    `os.scandir` raising rather than a real `chmod 000`, deliberately: measured on the stand, the
+    real thing does raise PermissionError here and the release IS refused, but as a unit pin it
+    would depend on the test not running as root — root reads a 000 directory perfectly well, so
+    the pin would silently invert in exactly the environment nobody checks. The branch under test
+    is "scandir raised", so raise it."""
+    _commit_a_gitlink(repo)
+    path = Path(ensure_workspace(42, cwd=repo)["path"])
+    real = os.scandir
+
+    def refuse(target):
+        if Path(target) == path / "sub":
+            raise PermissionError(13, "Permission denied")
+        return real(target)
+
+    monkeypatch.setattr(workspace_cmd.os, "scandir", refuse)
+    res = release_workspace(42, cwd=repo)
+
+    assert res["released"] is False
+    assert res["code"] == workspace_cmd.CODE_POPULATED_GITLINK
+    assert path.exists()
+
+
+def test_release_still_removes_a_tree_whose_gitlink_directory_is_empty(repo):
+    """The control for the guard above: the state the pipeline ACTUALLY produces must still reap.
+
+    `git worktree add` never populates a submodule (no `git submodule` call in the package, no
+    `--recurse-submodules` on any of the three add forms), so an empty gitlink directory is the
+    normal condition of every tree in a consumer checkout that has one. If this went red the guard
+    would have stopped the reaper on every such tree, which is how `--gc` gets turned off."""
+    _commit_a_gitlink(repo)
+    path = Path(ensure_workspace(42, cwd=repo)["path"])
+    assert (path / "sub").is_dir() and not list((path / "sub").iterdir())
+
+    res = release_workspace(42, cwd=repo)
+
+    assert res["released"] is True and "code" not in res
+    assert not path.exists()
+
+
 def test_release_of_a_missing_tree_is_not_an_error(repo):
     res = release_workspace(999, cwd=repo)
     assert res["released"] is False and "no worktree" in res["reason"]
@@ -2253,7 +2364,7 @@ def test_the_grading_grid_is_all_kept_outside_the_four_named_cells():
     checked it".
 
     Every code the module declares, both roles PLUS a role-less entry, both board states. FOUR of
-    the 66 cells are routine, spread over THREE codes and coming from TWO sets (the two the parked
+    the 72 cells are routine, spread over THREE codes and coming from TWO sets (the two the parked
     build tree excuses share one); every other cell is `kept`. Counted as CELLS on purpose — this
     pin's first wording said "two rows", which is the miscount-inside-a-closed-enumeration that the
     card it belongs to was filed against. The `declared <= grid` assertion is the part that survives
@@ -2269,7 +2380,7 @@ def test_the_grading_grid_is_all_kept_outside_the_four_named_cells():
              workspace_cmd.CODE_UNREACHABLE_HEAD, workspace_cmd.CODE_DETACHED_BUILD,
              workspace_cmd.CODE_HALF_CREATED, workspace_cmd.CODE_LOCKED,
              workspace_cmd.CODE_NO_WORKTREE, workspace_cmd.CODE_SELF_TREE,
-             workspace_cmd.CODE_RELEASE_ERROR,
+             workspace_cmd.CODE_RELEASE_ERROR, workspace_cmd.CODE_POPULATED_GITLINK,
              "a-code-nobody-declared", None]           # the fail-toward-shouting fallbacks
     declared = {v for k, v in vars(workspace_cmd).items()
                 if k.startswith("CODE_") and isinstance(v, str)}
@@ -7335,14 +7446,31 @@ def test_one_unaskable_path_costs_only_itself_and_not_the_paths_around_it(repo, 
 # ("Untracked-но-НЕигнорируемое (`??`) гвард при НАСТРОЙКАХ ПО УМОЛЧАНИЮ видит и дерево держит — то
 # есть дыра ровно на игнорируемом"). Two measured reasons stand in its place. For the FF it asserts
 # nothing to correct: its `blocked` bullet already says "git отказался, И ЭТОТ ПРОГОН НЕ НАШЁЛ
-# недописанного" and "Не пересказывай это человеку как гарантию". For the RELEASE guard the
-# sentence survives a live gitlink for a reason of GIT's rather than the guard's — with ` M sub`
-# switched off all three ways above, `_inspect_status` returns `([], [])`, i.e. BLIND, while
-# `git worktree remove` refuses outright (`fatal: working trees containing submodules cannot be
-# moved or removed`, rc=128, the file intact) and this module never passes `--force`; verified here
-# on a real worktree, including that `--force` DOES destroy it, which is why the absent flag is
-# load-bearing. The residue there — that refusal is a RAISE, so it lands in `kept` as
-# `release-error` on every sweep — is filed as VMCP-261 (863).
+# недописанного" and "Не пересказывай это человеку как гарантию". For the RELEASE guard this
+# section used to say the sentence survives a live gitlink "for a reason of GIT's rather than the
+# guard's" — `_inspect_status` BLIND at `([], [])` while `git worktree remove` refuses outright
+# (`fatal: working trees containing submodules cannot be moved or removed`, rc=128, the file
+# intact), this module never passing `--force`, and `--force` measured to destroy it, so the
+# absent flag was load-bearing.
+#
+# **THAT WARRANT WAS FALSE, and VMCP-266 (878) is the correction — filed by this card's own
+# independent reviewer, whose two halves were both right and whose PREMISE was not.** Git's
+# refusal exists only on an INITIALISED submodule, and this pipeline never creates one: there is
+# no `git submodule` call in the package and no `--recurse-submodules` on any of the three
+# `worktree add` forms, so a gitlink's directory comes up EMPTY. Re-measured on real git 2.50.1,
+# both states, same repo: POPULATED -> `git worktree remove` rc=128, the file intact;
+# NOT populated -> **rc=0, the directory and the file gone**, no `--force` anywhere. So on the
+# only configuration the drain produces, the guard was not saved by git at all, and the victim was
+# not even limited to ignored content — an untracked-and-NOT-ignored `sub/precious.txt`, the exact
+# thing the SKILL.md sentence PROMISES to hold, died at rc 0 with `released: true` and no key.
+# `_inspect_status` returning `([], [])` was the only true half.
+#
+# What stands in its place is not prose: `_release_locked` now REFUSES a tree whose gitlink
+# directory is non-empty (CODE_POPULATED_GITLINK, graded `kept`), pinned by
+# test_release_refuses_a_tree_whose_gitlink_directory_is_not_empty and its empty-directory
+# control. That also retires the residue this paragraph filed as VMCP-261 (863) — the rc=128 raise
+# surfacing as `release-error` on every sweep — because the populated tree is now answered by the
+# coded refusal BEFORE the removal is attempted, so the raise is no longer reached.
 # ONE CLAIM OF THAT WARRANT WAS ALSO TOO WIDE and the second pass caught it: "the loss changes no
 # agent ACTION, since there is nothing for the agent to name" holds on the rc=0 branch ONLY. Reached
 # through #835's half-applying ff (a `chflags uchg` neighbour, built with it sorting before AND
