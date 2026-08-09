@@ -330,11 +330,17 @@ def _run_git(
     args: tuple[str, ...], cwd: Path | None, timeout: float | None,
     env_extra: dict[str, str] | None = None, stdin_text: str | None = None,
 ) -> subprocess.CompletedProcess:
-    r"""`stdin_text` REPLACES the standing `stdin=DEVNULL`, and only one caller wants it.
+    r"""`stdin_text` REPLACES the standing `stdin=DEVNULL`, and few callers want it.
+
+    "Only one caller" is what this line said until VMCP-252 (851) added two more — `git cat-file
+    --batch-check` and `git hash-object --stdin-paths`, both in
+    `_paths_already_holding_incoming_bytes` — so it is three, and the count is left out rather than
+    corrected upward, since the next one would stale it again. What all three share is the shape
+    the paragraph below is really about: the INPUT is a path list.
 
     DEVNULL is the default for a reason worth keeping: a git subcommand that decides to ask a
     question would otherwise inherit this process's stdin, which for the MCP server is the
-    TRANSPORT. `git check-ignore --stdin` is the one call here whose input IS a path list, and
+    TRANSPORT. `git check-ignore --stdin` is the call this was built for, and
     it is fed this way rather than through argv because the alternative has two edges this one
     does not — ARG_MAX on a large incoming diff, and `-z`, which git refuses without `--stdin`
     (measured: `fatal: -z only makes sense with --stdin`). What `-z` buys is narrower than an
@@ -1778,9 +1784,12 @@ MAIN_SYNC_BLOCKED = "blocked"
 # WHAT got written decides everything after that, and the two forms have OPPOSITE properties, which
 # is VMCP-252 (851): this comment used to end "your checkout now mixes two commits and `git status`
 # attributes upstream's content to you", and that is the TRACKED form only. When the only casualty
-# is an IGNORED path, `git status` says nothing at all, there is nothing to commit or drop, and the
-# ff completes on the very next sweep once the blocker is gone — while the human's bytes at that
-# path are already unrecoverable. One code, two reports: see `_partial_apply_reason`.
+# is an IGNORED path, `git status` says nothing at all and there is nothing to commit or drop —
+# while the human's bytes at that path are already unrecoverable. Whether the ff then completes on
+# its own is NOT a property of the form, which is what this comment claimed for one round and what
+# the independent review falsified: a part-way merge also drops NEW incoming files on the disk
+# without tracking them, and git refuses over those forever after. So the report asks, per run.
+# One code, two reports, and a healing claim that is conditional: see `_partial_apply_reason`.
 MAIN_SYNC_PARTIAL = "half-applied"
 MAIN_SYNC_ERROR = "error"          # the best-effort wrapper in gc: anything unforeseen
 
@@ -2246,7 +2255,7 @@ _GITLINK_MODE = "160000"
 _MAX_CHECK_IGNORE_CALLS = 64
 
 
-def _incoming_displacing_paths(root: Path, remote: str) -> list[str]:
+def _incoming_displacing_paths(root: Path, remote: str) -> list[str] | None:
     """The incoming path set, minus the entries that DISPLACE NOTHING in the working tree.
 
     WHY THIS IS NOT JUST `--name-only`, and it is VMCP-246 (837): a SUBMODULE pointer move is an
@@ -2292,13 +2301,20 @@ def _incoming_displacing_paths(root: Path, remote: str) -> list[str]:
     a field that does not open with `:` where metadata is due is passed through as a path instead
     of being discarded. That direction is deliberate for a diagnostic: an extra candidate costs
     one `check-ignore` answer ("not ignored") and a dropped one costs a silence.
+
+    A FAILED READ IS `None`, NOT `[]` (VMCP-252, round four). The two used to be the same value, so
+    a caller could not tell "the incoming range displaces nothing" from "git would not tell me".
+    `_ignored_paths_the_ff_will_overwrite` folds `None` back to `[]` on purpose — an empty answer is
+    exactly its documented give-up, and the key it feeds is read one-way for precisely this reason —
+    while `_incoming_paths_absent_here` propagates it, because the sentence IT feeds makes a
+    positive claim and must be able to withhold it.
     """
     changed = _run_git(
         ("diff", "--raw", "-z", "--no-renames", "--diff-filter=ACMT", f"HEAD..{remote}"),
         root, None, env_extra={"GIT_OPTIONAL_LOCKS": "0"},
     )
     if changed.returncode != 0:
-        return []
+        return None
     fields = [field for field in changed.stdout.split("\0") if field]
     paths: list[str] = []
     at = 0
@@ -2539,7 +2555,9 @@ def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str) -> list[str]:
         directions are now stated, and 836 merged what used to be a second present-key bullet here
         into the one above rather than leave the tree asserting two provenances for one bound.
     """
-    changed = _incoming_displacing_paths(root, remote)
+    # `or []` restores this function's own contract: an unreadable diff is one of its documented
+    # give-ups, and its key is read one-way so that an empty answer proves nothing (VMCP-252).
+    changed = _incoming_displacing_paths(root, remote) or []
     # GIT_OPTIONAL_LOCKS=0 there is the module's standing rule (see `_git_inspect`) applied by
     # habit, and it is BELT — say so rather than let a reader think it is doing the work. This
     # probe runs BEFORE the merge, including on the run where the merge is then REFUSED, where
@@ -2582,6 +2600,184 @@ def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str) -> list[str]:
                 seen.add(key)
                 present.append(candidate)
     return [p for p in _ignored_of(root, present) if not _is_reproducible_ignored(p)]
+
+
+def _paths_already_holding_incoming_bytes(root: Path, remote: str,
+                                          paths: list[str]) -> set[str]:
+    """Of `paths`, the ones whose bytes on disk ALREADY equal the incoming blob — VMCP-252 (851).
+
+    THE REPEAT THIS EXISTS TO STOP, measured on a real stand before it was written: while the
+    blocker stands, `--gc` runs every tick and `overwritten_ignored` named `shot.png` on sweep 1,
+    sweep 2 AND sweep 3 (inodes 212809910 -> 212810669 -> 212811229), because each failed
+    `merge --ff-only` unlinks and recreates that path, so the FINGERPRINT moves again over content
+    that has been upstream's since sweep 1. Four messages for one loss, counting the `updated: true`
+    sweep that finally heals it. That is the never-read failure VMCP-68 had to split `kept`/
+    `expected` to cure. A human chose this fix over living with the noise (851's `call_human`), and
+    the reason it is not merely "quieter" is that the same read also stops naming a path where
+    nothing died: an ignored file whose bytes already equalled upstream's was named before this
+    (measured, stand D). Read that as the key's meaning CHANGING on this branch, not as a false
+    positive being removed — the paragraph below says why the difference matters.
+
+    THE READ HAS TO HAPPEN BEFORE THE MERGE, which is the whole discriminator and is easy to get
+    backwards: `git rev-parse <remote>:<path>` and `git hash-object <path>` DIFFER before the first
+    attempt and MATCH after it. Ask afterwards and every sweep looks like sweep 2, including the one
+    where the bytes really died. The caller therefore takes this snapshot beside the fingerprints,
+    on the same "afterwards the answer is unrecoverable" reasoning.
+
+    IT FILTERS ONLY THE REFUSAL BRANCH. `updated: true` keeps its UNFILTERED list, which its own
+    docstring defends (the merge completed, so everything incoming was written) — so the fourth
+    message survives this fix by decision rather than by oversight, and the count goes 4 -> 2, not
+    4 -> 1. Widening it there was explicitly not asked for.
+
+    EVERY UNANSWERABLE READ FALLS TOWARDS REPORTING, and that direction is the reason the shape is
+    a positive set rather than a filter predicate: a path only leaves the report when this run can
+    POSITIVELY show it already held the incoming bytes. Measured routes to "cannot say", each
+    keeping the name: a doomed ANCESTOR is not a blob in the incoming tree at all (stand E's local
+    ignored FILE `out` under an incoming `out/x.txt` — `cat-file` answers `tree`, so nothing is
+    compared and the ancestor is reported, which is right, because it is exactly the path about to
+    die); a path git cannot read; a batch whose reply does not line up one-for-one with the ask;
+    a symlink or a directory on this disk; and `git hash-object` failing, which costs the WHOLE
+    batch rather than one name — the opposite trade from `_ignored_of`'s bisect, and affordable
+    only because failing here means reporting MORE.
+
+    "ALREADY HOLDS THE INCOMING BYTES" MEANS RAW BYTES, WHICH IS WHY THE HASH IS TAKEN WITH
+    `--no-filters`, and the first draft had this exactly backwards. It hashed the way `git
+    hash-object <path>` does — through this checkout's filters — reasoning that the incoming side
+    is git's STORED form and only a filtered hash compares like with like. The independent second
+    pass built two inputs where that DROPS A PATH WHOSE BYTES REALLY DIED, because a `clean` filter
+    need not be invertible: a lossy one (`filter.redact.clean` reducing `SECRET-hunter2` to
+    `SECRET`) hashed EQUAL while the file on disk changed, and — needing no filter configuration at
+    all, just a committed `.gitattributes` — `notes.txt text eol=lf` against a CRLF working copy did
+    the same. Re-measured directly on git 2.50.1: the CRLF file hashes to `fbbee861…` with filters,
+    byte-identical to the LF blob, and to `17f2fc0a…` with `--no-filters`. So the comparison is now
+    raw, and the residual error runs the SAFE way: where a SMUDGE filter is configured, a file that
+    already equals what the merge will write hashes differently and is reported anyway — noise
+    rather than silence. Git still does the hashing, so a non-sha1 object format needs no care here.
+
+    IT ALSO CHANGES WHAT THE KEY MEANS, ON THIS BRANCH ONLY, and that must not be filed under
+    "false positive removed" without saying so: `_ignored_paths_the_ff_will_overwrite`'s own bounds
+    list documents that the key names paths that were WRITTEN and not that their bytes differed, so
+    a byte-identical incoming file being named there is the documented behaviour, not a defect. It
+    still is on `updated: true`. On the refusal branch the key now means WRITTEN AND DIFFERENT.
+    One key, two meanings, split by branch — deliberate, and pinned on both sides.
+
+    ONE COST, ACCEPTED KNOWINGLY BY THE HUMAN WHO CHOSE THIS: if the sweep-1 message is lost to a
+    probe failure, no later REFUSAL sweep names it — today's repeat was its only second chance on
+    that branch. Not "never named again", which the second pass refuted with the obvious neighbour:
+    the sweep that finally completes the fast-forward still names it off the unfiltered list, so
+    the name returns there, and only if the fast-forward ever happens.
+    """
+    if not paths:
+        return set()
+    askable = [p for p in paths
+               if "\n" not in p
+               and os.path.isfile(os.path.join(root, p))
+               and not os.path.islink(os.path.join(root, p))]
+    if not askable:
+        return set()
+    listing = _run_git(("cat-file", "--batch-check=%(objectname) %(objecttype)"), root, None,
+                       env_extra={"GIT_OPTIONAL_LOCKS": "0"},
+                       stdin_text="".join(f"{remote}:{p}\n" for p in askable))
+    lines = listing.stdout.splitlines()
+    if listing.returncode != 0 or len(lines) != len(askable):
+        return set()
+    # A missing or non-blob entry answers `<input> missing` / `<oid> tree`, so it simply never
+    # enters this dict and its path keeps its place in the report.
+    incoming = {path: line.split()[0]
+                for path, line in zip(askable, lines)
+                if len(line.split()) == 2 and line.split()[1] == "blob"}
+    if not incoming:
+        return set()
+    named = list(incoming)
+    # `--no-filters` IS THE CORRECTION, and it went in the opposite direction to the first draft's
+    # reasoning ("only git's own filtered answer compares like with like"). A `clean` filter need
+    # not be invertible, so a filtered hash matching the incoming blob does NOT mean the bytes on
+    # disk survive. Both counterexamples were built by the independent second pass and are in this
+    # function's docstring; the second needs no filter configuration at all. Git's own hashing is
+    # still what answers, so a repo on a non-sha1 object format needs no special case here.
+    hashed = _run_git(("hash-object", "--no-filters", "--stdin-paths"), root, None,
+                      env_extra={"GIT_OPTIONAL_LOCKS": "0"},
+                      stdin_text="".join(f"{p}\n" for p in named))
+    local = hashed.stdout.split()
+    if hashed.returncode != 0 or len(local) != len(named):
+        return set()
+    return {path for path, sha in zip(named, local) if sha == incoming[path]}
+
+
+def _incoming_paths_absent_here(root: Path, remote: str) -> list[str] | None:
+    """Incoming paths this disk does NOT have yet — the ones a part-way ff can leave behind.
+
+    VMCP-252 (851), round three, and it exists because the round-two fix shipped a fresh overclaim
+    that the independent review built: the quiet-tracked-tree branch told a human that clearing the
+    blocker was enough and the next sweep would finish the fast-forward. `_tracked_changes` reads
+    `git diff-index`, which is blind to UNTRACKED paths, and a merge that fails PART-WAY writes new
+    incoming files to disk without moving the index — so those files sit there untracked, and git
+    then refuses every later merge over them. Measured (stand C: incoming `ro/bbb.txt` + a
+    force-added `shot.png` + a NEW `brandnew.txt`, `chmod 500 ro`): sweep 1 `half-applied` with the
+    healing sentence, `status` `?? brandnew.txt`, `ls-files` empty; then with the blocker CLEARED,
+    sweeps 2-5 all `blocked` on `The following untracked working tree files would be overwritten by
+    merge: brandnew.txt`, HEAD never reaching the remote. Removing that file is what unblocks it,
+    and the report named neither the file nor the need.
+
+    ABSENT-BEFORE is the cheap half of the discriminator and it is pure `lstat` at compare time:
+    whatever of this list EXISTS after a refused merge was put there by that merge. Paths already
+    on disk are not asked about, because git's up-front check already refuses over those, which is
+    why they cannot be the residue of a PART-WAY failure.
+
+    NOT "paths already on disk cannot be the residue of a part-way failure", which this docstring
+    said for one round and the second pass refuted with this card's OWN stand A: the human's ignored
+    `shot.png` was on disk, git's up-front check does not refuse over an ignored path, and the
+    part-way merge wrote it — residue by any reading. The true reason for asking only about absent
+    paths is narrower: a path already on disk can only be left in a BLOCKING state by being
+    tracked-and-modified, and `_tracked_changes` covers that half; git overwrites the ignored ones
+    silently and never refuses over them.
+
+    NONE, NOT `[]`, WHEN THE READ FAILS — the whole point of the round it belongs to. An empty list
+    and an unanswered probe reach the same caller, and letting them look alike is how the sentence
+    this fixes came to promise healing it had not checked. The neighbouring `blocked` branch has
+    carried that distinction for two cards (`looked = tracked_after is not None or
+    prints_answered`).
+
+    ITS OWN GIT CALL RATHER THAN A SHARED ONE, deliberately: threading `_incoming_displacing_paths`
+    through `_ignored_paths_the_ff_will_overwrite` would save one tree-to-tree diff and couple two
+    probes whose whole design is that either may fail without costing the other (the caller's three
+    separate `try` blocks say the same thing). `git diff --raw HEAD..<remote>` compares two TREES
+    and leaves a human's index alone, which is the property this module never spends — re-measured
+    on the whole refusal branch, with a control proving the stand can see an index move at all.
+    """
+    changed = _incoming_displacing_paths(root, remote)
+    if changed is None:
+        return None
+    return [p for p in changed if not os.path.lexists(os.path.join(root, p))]
+
+
+def _untracked_left_behind(root: Path, absent_before: list[str] | None) -> list[str] | None:
+    """Of the paths that were absent before the merge, the ones now here that git will NOT ignore.
+
+    These are what a later `merge --ff-only` refuses over, so they are the difference between "this
+    heals once the blocker is cleared" and "a human has to remove something first" — VMCP-252 (851).
+    The ignored ones are dropped because git overwrites those silently instead of refusing; that is
+    the whole subject of `_ignored_paths_the_ff_will_overwrite` and not a blocker.
+
+    `_ignored_of` is bounded and bisects, and where it gives up a path is simply absent from its
+    answer — which lands that path HERE, in the warn list. Same direction as everything else on this
+    branch: an unanswerable read must not talk a human out of looking. Measured by the second pass:
+    a path beyond a symlink makes `check-ignore` exit 128, `_ignored_of` answers `[]`, and the path
+    is reported as a blocker.
+
+    `None` in, `None` out, for the reason the other probe returns it: the caller's reassurance may
+    only be printed when somebody actually looked.
+
+    "Put there by that merge" is the ordinary reading and not a proof — a human or an agent saving
+    a file into the main checkout during those milliseconds is a race this cannot distinguish, the
+    same caveat `_tracked_changes` and `_fingerprints` both carry about themselves."""
+    if absent_before is None:
+        return None
+    appeared = sorted(p for p in absent_before if os.path.lexists(os.path.join(root, p)))
+    if not appeared:
+        return []
+    ignored = set(_ignored_of(root, appeared))
+    return [p for p in appeared if p not in ignored]
 
 
 def _same_object_key(root: Path, rel: str) -> tuple | str:
@@ -2744,7 +2940,8 @@ def _add_capped(state: dict, key: str, paths: list[str]) -> None:
 
 
 def _partial_apply_reason(root: Path, remote: str, half: list[str], over: list[str],
-                          tracked_after: set[str] | None, message: str) -> str:
+                          tracked_after: set[str] | None, blockers: list[str] | None,
+                          message: str) -> str:
     """The `half-applied` prose, SPLIT by what the run actually established — VMCP-252 (851).
 
     ONE sentence used to be emitted on both forms of this state, written for the TRACKED one, and
@@ -2778,10 +2975,42 @@ def _partial_apply_reason(root: Path, remote: str, half: list[str], over: list[s
     errs towards "cannot say" and never towards safety: it also fires when the human simply had an
     unrelated file modified, where nothing tracked was written at all.
 
+    AND THE QUIET BRANCH'S OWN HEALING CLAIM WAS ROUND THREE, filed against this function by the
+    independent review of the round-two fix and reproduced here on stand C before anything moved.
+    It read "nothing is left here to block the merge again: clearing whatever stopped it is enough,
+    and the next sweep completes the fast-forward (measured)" — and "(measured)" was doing the
+    damage, since it was measured on a stand whose incoming commit touches EXACTLY two paths. Add a
+    third, a NEW non-ignored file, and the part-way merge writes it to disk without touching the
+    index: `diff-index` stays empty (so this is still the branch), `git status` says
+    `?? brandnew.txt`, and git then refuses EVERY later merge over it — sweeps 2-5 `blocked`, HEAD
+    never reaching the remote, with the blocker long since cleared. So on that input the round-two
+    fix REPLACED A TRUE VERDICT WITH A FALSE ONE: the pre-851 sentence happened to be right about
+    healing there. The claim now rests on a probe (`_incoming_paths_absent_here` plus
+    `_untracked_left_behind`) instead of on the shape of one stand, it NAMES the files a human has
+    to remove, and where it still says "expected to complete" it says over what it looked.
+
+    ROUND FOUR IS THAT SAME MISTAKE ONE LAYER IN, and it is the reason this branch has THREE arms
+    rather than two. The round-three probe returned `[]` on failure, so an unanswerable read printed
+    the full reassurance — the second pass built all three silent routes (both `except` wrappers and
+    an unreadable `git diff`) and got "no incoming path was left behind untracked either … that is
+    what was CHECKED" over a checkout that then answered `blocked` forever. A probe that cannot
+    distinguish "looked, found none" from "could not look" is exactly what the round-two fix was
+    bounced for at the TRACKED half, where `looked` has guarded that distinction since #835. So the
+    probes answer `None`, and `None` prints a refusal to claim. Two smaller narrowings from the same
+    pass: "no incoming path left behind UNTRACKED" was literally false whenever the merge left an
+    ignored one (true but irrelevant — git overwrites those), and "every later sweep will report
+    `blocked`" ignored an upstream commit that later drops the path, which was built and heals with
+    no human at all.
+
     Not split further, on purpose. `over` non-empty rides along with the tracked form as its own
     sentence (the `checkout --` advice cannot reach an untracked path, so it is named as
     inapplicable rather than left to be misread), and the tracked form keeps every word of what
-    #835 measured about it — narrowing a sentence must not cost the form it was true of.
+    #835 measured about it — narrowing a sentence must not cost the form it was true of. The
+    left-behind blockers are named ONLY on the quiet branch: it is the only one that ever claimed
+    healing, while the tracked form already says it does not heal and the other two already refuse
+    to say. They ride in the prose rather than in a payload key of their own, because what a reader
+    does with them is a command, not a list to grade — `half_applied` and `overwritten_ignored` are
+    keys because they are capped, one-way-read inventories of LOSS, and this is neither.
     """
     opening = (f"`git merge --ff-only {remote}` FAILED PART-WAY: HEAD did not move, but part of "
                f"the update was already written")
@@ -2791,14 +3020,21 @@ def _partial_apply_reason(root: Path, remote: str, half: list[str], over: list[s
     # anything this branch can see. `git add -f <path>` followed by `git rm --cached <path>` leaves
     # `git status --porcelain` empty and the human's blob in the object store, so after that
     # sentence `git cat-file -p` handed the bytes straight back and `git fsck` called it a dangling
-    # blob. And an ignored file whose bytes ALREADY equalled upstream's lost nothing at all — the
-    # probe reports paths that were WRITTEN, never that their content differed.
+    # blob. The SECOND caveat has since been NARROWED by this card's own filter rather than
+    # deleted, which is the honest move and not a tidy-up: "an ignored file whose bytes already
+    # equalled upstream's lost nothing" used to be an ordinary state here, and
+    # `_paths_already_holding_incoming_bytes` now drops exactly the paths it can PROVE are in it.
+    # What is left is the shapes that probe cannot ask about — a symlink, a directory, a name it
+    # could not read — plus the one it asks and gets wrong in the safe direction: with a SMUDGE
+    # filter configured, raw bytes differ from the blob while the file already equals what the
+    # merge writes. Rare, still reachable, so still said.
     lost = ("The ignored path(s) in `overwritten_ignored` now hold upstream's bytes, and what was "
             "there before is not recoverable from anything HERE: this tool keeps no copy, and git "
             "keeps none of a file it was never asked to track. Two states this cannot tell apart, "
             "both measured: if that path was ever staged, the old blob may still be in the object "
-            "store (`git fsck --lost-found`), and if the human's bytes already equalled "
-            "upstream's, nothing was lost at all.")
+            "store (`git fsck --lost-found`), and a path whose bytes this run could not compare "
+            "against the incoming blob may have equalled it already, in which case nothing was "
+            "lost there at all.")
     if half:
         parts = [f"{opening}, so this checkout now mixes two commits and `git status` shows the "
                  f"incoming content as the human's own uncommitted work (`half_applied` names "
@@ -2815,10 +3051,33 @@ def _partial_apply_reason(root: Path, remote: str, half: list[str], over: list[s
     elif not tracked_after:
         parts = [f"{opening}. Nothing tracked differs from HEAD at all afterwards (`git "
                  f"diff-index` came back empty), so no TRACKED path was half-written and `git "
-                 f"status` has no modification of this to show, commit or drop.", lost,
-                 "And unlike the tracked form nothing is left here to block the merge again: "
-                 "clearing whatever stopped it is enough, and the next sweep completes the "
-                 "fast-forward (measured)."]
+                 f"status` has no modification of this to show, commit or drop.", lost]
+        if blockers is None:
+            parts.append("Whether the failed merge ALSO left an incoming path here untracked — "
+                         "which would refuse every later merge until a human removes it — could "
+                         "NOT be checked on this run, so nothing is claimed about whether this "
+                         "heals once the blocker is cleared. Read `git status` in that checkout "
+                         "for `??` entries.")
+        elif blockers:
+            named = ", ".join(blockers[:_MAX_REPORTED_IGNORED])
+            more = (f" (and {len(blockers) - _MAX_REPORTED_IGNORED} more)"
+                    if len(blockers) > _MAX_REPORTED_IGNORED else "")
+            parts.append(f"This will NOT heal on its own: the failed merge also left "
+                         f"{len(blockers)} incoming path(s) on this disk WITHOUT tracking them "
+                         f"— {named}{more} — and git refuses to merge over an untracked file, so "
+                         f"later sweeps will report `blocked` even after whatever stopped the "
+                         f"merge is cleared, for as long as that path is here AND the incoming "
+                         f"range still carries it. A HUMAN moving or removing them is the way out "
+                         f"that is in anybody's hands here; an upstream commit that drops the "
+                         f"path would also do it.")
+        else:
+            parts.append("Nothing TRACKED is left here to block the merge again, and no incoming "
+                         "path was left behind in a state git would refuse to merge over — "
+                         "ignored ones are excluded, since git overwrites those silently instead "
+                         "of refusing. So once whatever stopped the merge is cleared the next "
+                         "sweep is expected to complete the fast-forward: that is what was "
+                         "CHECKED on this run, over tracked paths and over the incoming path "
+                         "list, and not a promise about the checkout.")
     else:
         parts = [f"{opening}. What ELSE it wrote is UNCLEAR rather than nothing: "
                  f"{len(tracked_after)} tracked path(s) differ from HEAD and none of them appeared "
@@ -2959,18 +3218,31 @@ def sync_main_checkout(root: Path) -> dict | None:
     paths whose fingerprint actually moved. Same verb, same key, and the branch that cannot know
     is the one that checks.
 
-    WHAT THAT ONE-WAY READING COSTS ON THE HALF-APPLIED PATH IS AN OPEN QUESTION, NOT A SOLVED ONE
-    (VMCP-252, 851). `--gc` runs every tick, so while the blocker stands the key rings on EVERY
-    sweep for a loss that happened on the FIRST — measured, three consecutive sweeps naming
-    `shot.png`, plus a FOURTH on the `updated: true` sweep that finally heals it. That is the
-    never-read failure VMCP-68 had to split `kept`/`expected` to cure, and quietly suppressing the
-    repeat is the one-way reading the whole #710 -> #806 -> #835 chain defends, so which of the two
-    to give up is a product decision parked for a human rather than guessed at here. The
-    discriminator that would settle it is measured and cheap if it is ever wanted: `git rev-parse
-    <remote>:<path>` against `git hash-object <path>` differ BEFORE the first attempt and match
-    after it, i.e. a sweep can tell "this path already holds the incoming bytes" from "the human's
-    bytes are about to go" — with an unanswerable branch (`rc=128` for a doomed ANCESTOR, which is
-    no blob in the incoming tree at all) that would have to fail towards reporting.
+    THAT ONE-WAY READING USED TO COST A RING ON EVERY TICK, AND A HUMAN CHOSE WHAT TO SPEND
+    (VMCP-252, 851). `--gc` runs every tick, so while the blocker stood the key named the same path
+    on EVERY sweep for a loss that happened on the FIRST — measured, three consecutive sweeps naming
+    `shot.png` (inodes 212809910 -> 212810669 -> 212811229, because each failed attempt unlinks and
+    recreates it), plus a FOURTH on the `updated: true` sweep that finally heals it. That is the
+    never-read failure VMCP-68 had to split `kept`/`expected` to cure, while quietly suppressing a
+    repeat is the one-way reading the whole #710 -> #806 -> #835 chain defends — so it was parked
+    for a human, who took the filter. `_paths_already_holding_incoming_bytes` drops a path this run
+    can POSITIVELY show already held the incoming bytes, read BEFORE the merge, on the REFUSAL
+    branch only. Three things about it that are decisions rather than details: it makes the report
+    truer and not merely quieter, because a path where nothing died was a false positive against
+    this key's own documented meaning; every unanswerable read still REPORTS (a doomed ANCESTOR is
+    no blob in the incoming tree at all, so nothing is compared and it keeps its name); and the
+    `updated: true` sweep still names the path, so one loss costs TWO messages, not one. What it
+    buys is a message per LOSS rather than per TICK, and what it costs is the second chance: if the
+    first sweep's message is lost to a probe failure, nothing names it later.
+
+    THE HEALING CLAIM IS PER RUN, NOT PER FORM, and that is round three of the same card — the
+    round-two fix asserted that the ignored-only form heals once the blocker is cleared, its
+    independent review falsified it by adding ONE path to the stand, and the correction rests on
+    `_incoming_paths_absent_here` + `_untracked_left_behind` rather than on a stand's shape. A merge
+    that fails part-way writes NEW incoming files to disk without moving the index, `diff-index` is
+    blind to them, and git refuses over them for good; the report now names them and says a human
+    has to remove them. Where it still says the ff is expected to complete, it says over what it
+    looked.
     """
     if os.environ.get(_MAIN_SYNC_OPT_OUT):
         return None
@@ -3054,6 +3326,21 @@ def sync_main_checkout(root: Path) -> dict | None:
         prints_before = _fingerprints(root, doomed)
     except Exception:                               # noqa: BLE001 — a diagnostic, never a gate
         prints_before = None
+    # BEFORE the merge because that is the entire discriminator, not because it is convenient:
+    # a path the last failed sweep already rewrote holds the incoming bytes ALREADY, and only a
+    # read taken now can tell that from a path whose bytes are about to die (VMCP-252). Its own
+    # `try` for the reason the three above have theirs, and the failure direction is REPORT.
+    try:
+        already_upstream = _paths_already_holding_incoming_bytes(root, remote, doomed)
+    except Exception:                               # noqa: BLE001 — a diagnostic, never a gate
+        already_upstream = set()
+    # Also before, and for the mirror reason: what a PART-WAY failure leaves behind untracked is
+    # exactly the incoming paths that were not on this disk yet, and afterwards they are
+    # indistinguishable from files the human had all along.
+    try:
+        absent_before = _incoming_paths_absent_here(root, remote)
+    except Exception:                               # noqa: BLE001 — a diagnostic, never a gate
+        absent_before = None
     merged = _run_git(("merge", "--ff-only", remote), root, None)
     if merged.returncode != 0:
         # git refused. Which of TWO states that leaves is measured off the TREE and never read out
@@ -3103,7 +3390,12 @@ def sync_main_checkout(root: Path) -> dict | None:
                 prints_after = None
             if prints_after is not None:
                 prints_answered = True
-                over = [p for p in doomed if prints_after.get(p) != prints_before.get(p)]
+                # The fingerprint says the file was REWRITTEN; `already_upstream` says it was
+                # rewritten with the bytes it already had, i.e. nobody's content died here. Both
+                # halves are needed and neither implies the other (VMCP-252).
+                over = [p for p in doomed
+                        if prints_after.get(p) != prints_before.get(p)
+                        and p not in already_upstream]
         if not half and not over:
             # "Found nothing" is not "nothing happened", and when a probe was unavailable it is not
             # even that. Saying so is the whole subject of this card: a report that borrows the
@@ -3164,8 +3456,19 @@ def sync_main_checkout(root: Path) -> dict | None:
                     "path": str(root),
                     "reason": f"`git merge --ff-only {remote}` refused; {found}: "
                               f"{(merged.stderr or merged.stdout).strip()}"}
+        # Asked only once the state IS half-applied — a SCOPE decision, and the comment here used
+        # to justify it with something false: "on the `blocked` fall-through nothing was written".
+        # `blocked` is the fall-through where both probes were SILENT, which is not the same thing,
+        # and the second pass built the difference — a part-way failure whose only residue is a new
+        # untracked path grades `blocked` while having written that path. Naming a residue there
+        # was not what this card was asked for, and that branch already says outright that it
+        # reports only what it found; from sweep 2 on, git's own message names the path anyway.
+        try:
+            blockers = _untracked_left_behind(root, absent_before)
+        except Exception:                           # noqa: BLE001 — a diagnostic, never a gate
+            blockers = None
         state = {"updated": False, "code": MAIN_SYNC_PARTIAL, "branch": branch, "path": str(root),
-                 "reason": _partial_apply_reason(root, remote, half, over, tracked_after,
+                 "reason": _partial_apply_reason(root, remote, half, over, tracked_after, blockers,
                                                  (merged.stderr or merged.stdout).strip())}
         _add_capped(state, "half_applied", half)
         _add_capped(state, "overwritten_ignored", over)

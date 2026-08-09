@@ -358,14 +358,38 @@ assertion in `tests/unit/test_line_length_gate.py`, which pyproject must agree w
   ignored path written: `git status` says nothing about the CASUALTY before or after (an ignored file
   is invisible to it, which is what makes this shape undetectable by a tracked-diff probe), there is
   nothing of it to commit or drop, `git checkout -- <that path>` is `error: pathspec … did not match
-  any file(s) known to git` rc=1 because it is not tracked locally, and the ff COMPLETES on the next
-  sweep once the blocker is gone (`chmod 700` + one sweep → `updated: true`). What is common is the
+  any file(s) known to git` rc=1 because it is not tracked locally. **Whether the ff then COMPLETES
+  on the next sweep is NOT a property of that form, and saying it was is the third correction this
+  same sentence has taken** — round two wrote "and the ff completes once the blocker is gone
+  (`chmod 700` + one sweep → `updated: true`)", true of the stand it was measured on and false as
+  soon as the incoming commit carries one more path. A merge that fails PART-WAY also writes NEW
+  incoming files to disk WITHOUT putting them in the index, `git diff-index` is blind to untracked
+  paths by its own docstring, and git then refuses over them for good: measured, a stand adding one
+  ordinary `brandnew.txt` gives sweep 1 `half-applied` with the healing sentence and
+  `?? brandnew.txt`
+  in `status`, then sweeps 2-5 `blocked` on "The following untracked working tree files would be
+  overwritten by merge" with the original blocker CLEARED since sweep 2 and HEAD never reaching the
+  remote — unblocked only by a human deleting that file. Worse than an inherited blind spot on two
+  counts its own review measured: on that input the pre-#851 sentence ("it does NOT heal … every
+  later sweep reports `blocked`") was CORRECT, so round two replaced a true verdict with a false
+  one; and a test asserted the false phrase, so no mutation could have killed it. The claim now
+  rests on a probe taken BEFORE the merge (the incoming paths absent from this disk, minus the
+  ones git ignores,
+  since those get overwritten rather than refused) — it NAMES the files a human must remove, and
+  where it still says the ff is expected to complete it says over what it looked. What is common
+  is the
   loss itself, which the old sentence never mentioned at all: the paths now hold upstream's bytes and
   what was there is not recoverable from anything here. **Hedged, because BOTH halves of the flat
   version were disproved by construction:** `git add -f` then `git rm --cached` leaves `status` empty
   and the human's blob in the object store, so `git cat-file -p` handed the bytes back and `fsck`
   called it dangling; and an ignored file whose bytes already equalled upstream's lost nothing — the
-  probe names paths that were WRITTEN, never that their content differed. `_partial_apply_reason` is
+  probe names paths that were WRITTEN, never that their content differed. **That second caveat has
+  since been NARROWED by #851's own filter rather than dropped**: on the REFUSAL branch the paths it
+  can prove already hold the incoming bytes are no longer named at all, so what survives is the
+  shapes it cannot ask about (a symlink, a directory, an unreadable name) plus the one it gets wrong
+  safely — with a SMUDGE filter configured, raw bytes differ from the blob while the file already
+  equals what the merge writes. On `updated: true`, where nothing is filtered, it stands
+  unnarrowed. `_partial_apply_reason` is
   the split, and it branches on what `git diff-index` says AFTERWARDS rather than on an empty
   `half_applied`, which is round two of the same card: an empty `half_applied` is THREE states, and
   besides "the probe failed" there is "the probe answered and was BLIND", because `half` is a SET
@@ -381,19 +405,36 @@ assertion in `tests/unit/test_line_length_gate.py`, which pyproject must agree w
   content) — but read those as three measured MESSAGES, not as the code's meaning: `blocked` is the
   FALL-THROUGH when both probes are silent, which is also what the checkout half-applied in its
   TRACKED paths reports on every later sweep, and what a half-apply whose only casualty got filtered
-  as regenerable detritus reports on the first sweep. That first clause needs the word TRACKED
-  (#851): on the ignored-only form the fingerprint probe is NOT silent on a later sweep — each failed
-  attempt unlinks and recreates the file, so its inode moves again over content that has been
-  upstream's since sweep 1 — so those sweeps report `half-applied` and re-list the path, for as long
-  as nothing else changes there (let the human delete that now-foreign file and the next sweep is
-  `blocked` again, because the path leaves the probe's list — so "never `blocked`" would be one more
-  universal). Which
-  makes the key ring on EVERY tick for a loss that happened on the FIRST (three sweeps measured,
-  plus a fourth on the `updated: true` sweep that heals it): the never-read failure VMCP-68 split
-  `kept`/`expected` to cure, against the one-way reading this whole chain defends — a product
-  decision parked for a human rather than guessed at, with the discriminator that would settle it
-  (`git rev-parse <remote>:<path>` vs `git hash-object <path>`, differing before the first attempt
-  and matching after) measured and written down where the code is. So what `blocked` no longer does is assert "NOTHING was
+  as regenerable detritus reports on the first sweep — and, since #851's third round, what the
+  ignored-only form reports on every sweep AFTER the one that lost the bytes. That last clause is
+  the fix to a ring the fingerprint probe could not help making: it asks whether the file was
+  REWRITTEN, and each failed attempt unlinks and recreates it, so the inode moved again (three
+  sweeps, 212809910 → 212810669 → 212811229) over content that had been upstream's since sweep 1 —
+  four messages for one loss, counting the `updated: true` sweep. A never-read field is the failure
+  VMCP-68 split `kept`/`expected` to cure, silencing a repeat is the one-way reading this whole
+  chain
+  defends, so which to spend was parked for a human, **who took the filter**: on the REFUSAL branch
+  only, drop a path this run can POSITIVELY show already holds the incoming bytes (`git cat-file` on
+  `<remote>:<path>` against `git hash-object <path>`, read BEFORE the merge — they differ before the
+  first attempt and match after). **It CHANGES what the key means, on that branch only, and calling
+  that "removing a false positive" was the framing its own second pass sent back**: the bounds list
+  above documents that this key names paths that were WRITTEN and not that their bytes DIFFERED, so
+  naming a byte-identical file is behaviour, not a defect — and `updated: true` still does exactly
+  that. Refusal branch: WRITTEN AND DIFFERENT. One key, two meanings, split by branch, pinned on
+  both sides. **RAW bytes, `--no-filters`, and that is a correctness fix rather than a detail** —
+  the first version hashed through the checkout's filters on the reasoning that the incoming side is
+  git's stored form, and a `clean` filter need not be invertible, so an equal hash did NOT mean
+  equal bytes: measured, a plain committed `.gitattributes` with `text eol=lf` against a CRLF
+  working copy hashes to the LF blob exactly (`fbbee861…` filtered, `17f2fc0a…` with
+  `--no-filters`), i.e. the filter would have swallowed a real loss. Three more properties are
+  decisions, not details. Every unanswerable read still REPORTS — a doomed ANCESTOR is no blob in
+  the incoming tree, so nothing is compared and the name stays (measured: a local ignored FILE `out`
+  under an incoming `out/x.txt` is still named, which is right, since `out` is what dies). The
+  `updated: true` branch keeps its UNFILTERED list, so one loss costs TWO messages and not one. And
+  the price, accepted in those words: a first-sweep message lost to a probe failure is not re-sent
+  by any later REFUSAL sweep — not "never named again", since the sweep that finally completes the
+  fast-forward still names it off the unfiltered list, if that ever happens. So what `blocked`
+  no longer does is assert "NOTHING was
   discarded"; it reports what the two probes FOUND, and says outright when it could not look —
   **a clause that is only as good as the predicate under it, and #860 shipped it FALSE for one
   round while fixing a neighbouring defect.** Those after-refusal probes each sat OUTSIDE the

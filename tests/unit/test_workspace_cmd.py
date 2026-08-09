@@ -5530,14 +5530,19 @@ def test_a_half_apply_whose_only_casualty_is_an_IGNORED_file_is_still_reported(r
 # equalled upstream's lost nothing at all. `test_the_overwritten_ignored_bytes_are_not_always_
 # unrecoverable` is the first of those, built rather than argued.
 #
-# WHAT IS DELIBERATELY NOT FIXED HERE: `overwritten_ignored` rings on EVERY sweep while the blocker
-# stands (measured: three consecutive sweeps, `['shot.png']` each time, because every failed attempt
-# unlinks and recreates the file so the fingerprint moves again), and a FOURTH time on the
-# `updated: true` sweep that finally heals it — four reports for one loss. That is the never-read
-# failure VMCP-68 had to split `kept`/`expected` to cure, and silencing it is the one-way reading
-# the whole #710 -> #806 -> #835 chain defends, so WHICH of the two to give up is a product
-# decision and 851 parked it for a human (`call_human`). The pin below records the status quo and
-# says so; whichever way the answer goes, it is that assertion that has to move.
+# WHAT ROUND TWO PARKED AND A HUMAN THEN ANSWERED: `overwritten_ignored` rang on EVERY sweep while
+# the blocker stood (measured: three consecutive sweeps, `['shot.png']` each time, because every
+# failed attempt unlinks and recreates the file so the fingerprint moves again), and a FOURTH time
+# on the `updated: true` sweep that finally heals it — four reports for one loss. That is the
+# never-read failure VMCP-68 had to split `kept`/`expected` to cure, while silencing it is the
+# one-way reading the whole #710 -> #806 -> #835 chain defends, so WHICH of the two to give up was
+# a product decision and 851 parked it (`call_human`). The answer was to filter, on the REFUSAL
+# branch only, a path this run can positively show already holds the incoming bytes — accepted
+# because it also removes a FALSE POSITIVE (an ignored file whose bytes already equalled
+# upstream's), i.e. it makes the key truer rather than merely quieter. The pin that recorded the
+# status quo said in its own docstring that this answer would have to move it; it did, and it is
+# now `test_the_ignored_only_loss_is_reported_ONCE_and_not_on_every_later_sweep`. Four reports
+# become two: the `updated: true` branch keeps its unfiltered list by decision, pinned next door.
 #
 # MUTATION SWEEP. One selection throughout — `tests/unit/test_workspace_cmd.py -p no:randomly -k
 # "half_appl or ignored_only or IGNORED_file or up_front_refusal or partial_apply or overwritten or
@@ -5580,7 +5585,13 @@ def test_the_ignored_only_half_applys_reason_says_what_actually_happened(repo, t
     assert "every later sweep reports" not in reason, reason
     assert "Nothing tracked differs from HEAD at all" in reason, reason
     assert "not recoverable from anything HERE" in reason, reason
-    assert "nothing is left here to block the merge again" in reason, reason
+    # ROUND THREE moved this one line. It used to read "nothing is left here to block the merge
+    # again … the next sweep completes the fast-forward (measured)", which the independent review
+    # falsified on a stand this one is one file away from — see the C-stand test below. The claim
+    # is now conditional on a probe and says what it looked at.
+    assert "Nothing TRACKED is left here to block the merge again" in reason, reason
+    assert "no incoming path was left behind in a state git would refuse to merge over" in reason
+    assert "that is what was CHECKED on this run" in reason, reason
     assert "unable to unlink old" in reason, "git's own message still rides along"
 
 
@@ -5628,18 +5639,23 @@ def test_the_ignored_only_half_apply_HEALS_once_the_blocker_is_cleared(repo, tra
     assert (repo / "ro" / "bbb.txt").read_text() == "v2\n", "the ff really finished"
 
 
-def test_a_LATER_sweep_on_the_ignored_only_form_is_half_applied_again(repo, tracker, tmp_path):
-    """The second sweep on this form, which NO test ran before — and it is not `blocked`.
+def test_the_ignored_only_loss_is_reported_ONCE_and_not_on_every_later_sweep(repo, tracker,
+                                                                             tmp_path):
+    """DEFECT 2, and the assertion this replaces was written to be replaced by exactly this.
 
-    `blocked` is the fall-through when both probes are silent, and on the TRACKED form that is what
-    sweeps 2 and 3 give (835 measured it). Here the fingerprint probe is not silent: each failed
-    attempt unlinks and recreates the ignored path, so its inode moves again (measured, three
-    different inodes over three sweeps) even though the CONTENT has been upstream's since sweep 1.
+    It used to pin the status quo — sweeps 1, 2 and 3 all `half-applied` and all naming `shot.png`
+    — and said in its own docstring that if the answer came back "filter a path that already holds
+    the incoming bytes", the list becomes absent from sweeps 2 and 3 and the pin has to move
+    deliberately. That is the answer a human gave (851's `call_human`, option C), so it moved.
 
-    So the code repeats — which refutes the universal — and so does `overwritten_ignored`, which is
-    the noise 851 parked for a human. THIS ASSERTION IS THE STATUS QUO, NOT A RULING: if the answer
-    is "filter a path that already holds the incoming bytes", the list here becomes absent from
-    sweeps 2 and 3 and this test must be changed deliberately, which is the point of pinning it."""
+    THE REPEAT WAS NEVER A SECOND LOSS. Each failed attempt unlinks and recreates the ignored path,
+    so the FINGERPRINT moves again (measured before the fix: three sweeps, inodes 212809910 ->
+    212810669 -> 212811229) over content that has been upstream's since sweep 1. The fingerprint is
+    still the right question — it is what a REWRITE looks like — and `_paths_already_holding_
+    incoming_bytes` is the second half it never had: was anybody's content actually displaced?
+
+    `blocked` afterwards is the documented fall-through (both probes silent), the same answer this
+    module already gives a half-apply whose only casualty was filtered as regenerable detritus."""
     _api, wf = tracker
     _ignored_only_stand(repo, tmp_path)
 
@@ -5648,18 +5664,324 @@ def test_a_LATER_sweep_on_the_ignored_only_form_is_half_applied_again(repo, trac
                   workspace_cmd.sync_main_checkout(repo),
                   workspace_cmd.sync_main_checkout(repo)]
 
-    assert [s["code"] for s in states] == [workspace_cmd.MAIN_SYNC_PARTIAL] * 3, states
-    assert [s.get("overwritten_ignored") for s in states] == [["shot.png"]] * 3, states
+    assert states[0]["code"] == workspace_cmd.MAIN_SYNC_PARTIAL, states[0]
+    assert states[0]["overwritten_ignored"] == ["shot.png"], "sweep 1 is where the bytes died"
+    assert [s["code"] for s in states[1:]] == [workspace_cmd.MAIN_SYNC_BLOCKED] * 2, states
+    assert all("overwritten_ignored" not in s for s in states[1:]), (
+        "one loss, one message — and an absent key rather than an empty one, which is the "
+        "never-read field this module keeps having to rescue"
+    )
+    # The ground truth, so this cannot pass on a payload alone: the file really was rewritten again
+    # on every sweep, which is why the fingerprint alone could never have told them apart.
+    assert (repo / "shot.png").read_text() == "UPSTREAM\n"
     assert _git(repo, "status", "--porcelain") == "", "and the tracked tree is still not mixed"
     assert (repo / "ro" / "bbb.txt").read_text() == "v1\n"
 
-    # ...and "never `blocked`" would be one universal too many, which the second pass caught: let
-    # the human do the obvious thing with a file that is now somebody else's content and the path
-    # leaves the probe's list, both probes go quiet, and the fall-through fires honestly.
-    (repo / "shot.png").unlink()
+
+def test_a_RESTORED_ignored_file_dying_a_second_time_is_reported_afresh(repo, tracker, tmp_path):
+    """The other half of DEFECT 2's fix, and the reason it is not just "report once".
+
+    Silence has to be a property of the CONTENT, not a latch on the path: if the human puts their
+    own bytes back and the next sweep destroys them again, that is a NEW loss and it is named. The
+    discriminator gives this for free — before that sweep the file no longer equals the incoming
+    blob — where a "seen it already" memo would have swallowed it."""
+    _api, wf = tracker
+    _ignored_only_stand(repo, tmp_path)
+
     with _unwritable_dir(repo / "ro"):
-        after_delete = workspace_cmd.sync_main_checkout(repo)
-    assert after_delete["code"] == workspace_cmd.MAIN_SYNC_BLOCKED, after_delete
+        first = gc_workspaces(cwd=repo, workflow=wf)["main_checkout"]
+        quiet = workspace_cmd.sync_main_checkout(repo)
+        (repo / "shot.png").write_bytes(b"\x89PNG the human put it back")
+        again = workspace_cmd.sync_main_checkout(repo)
+
+    assert first["overwritten_ignored"] == ["shot.png"], first
+    assert "overwritten_ignored" not in quiet, quiet
+    assert again["code"] == workspace_cmd.MAIN_SYNC_PARTIAL, again
+    assert again["overwritten_ignored"] == ["shot.png"], "their bytes died a second time"
+    assert (repo / "shot.png").read_text() == "UPSTREAM\n"
+
+
+def test_an_ignored_file_that_ALREADY_held_upstreams_bytes_is_no_longer_a_false_positive(
+        repo, tracker, tmp_path):
+    """The second false positive the same discriminator removes — this one is not about repeats.
+
+    A human whose ignored file happens to hold exactly what upstream is bringing loses NOTHING when
+    the merge rewrites it, and the key named it anyway on the FIRST sweep. `_partial_apply_reason`
+    already had to hedge for this input ("if the human's bytes already equalled upstream's, nothing
+    was lost at all") because the probe could not tell; now it can, on the refusal branch. So this
+    is what makes the fix TRUTHFUL rather than merely quieter, which is the ground the human's
+    answer stood on."""
+    _api, wf = tracker
+    _ignoring(repo, "*.png")
+    (repo / "ro").mkdir()
+    (repo / "ro" / "bbb.txt").write_text("v1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "before")
+    _git(repo, "push", "origin", "main")
+    (repo / "shot.png").write_text("UPSTREAM\n")            # byte-identical to what is coming
+    _land_on_origin(tmp_path, "sameb", {"ro/bbb.txt": "v2\n", "shot.png": "UPSTREAM\n"}, force=True)
+
+    with _unwritable_dir(repo / "ro"):
+        state = gc_workspaces(cwd=repo, workflow=wf)["main_checkout"]
+
+    assert "overwritten_ignored" not in state, state
+    assert state["code"] == workspace_cmd.MAIN_SYNC_BLOCKED, (
+        "with nothing lost and nothing tracked written, both probes are silent and the "
+        "documented fall-through is the honest answer"
+    )
+    assert (repo / "ro" / "bbb.txt").read_text() == "v1\n", "the ff really did not finish"
+
+
+def test_a_doomed_ANCESTOR_is_still_reported_because_the_discriminator_cannot_be_asked(
+        repo, tracker, tmp_path):
+    """EVERY UNANSWERABLE READ FALLS TOWARDS REPORTING, built rather than asserted.
+
+    The human's answer named this branch explicitly: a doomed ANCESTOR is not a blob in the incoming
+    tree at all, so the two halves cannot be compared and the path must keep its place. Here the
+    human's own ignored FILE `out` is what dies to make room for the incoming `out/x.txt`, and
+    `git cat-file` answers `tree` for `<remote>:out` — no blob, no comparison, and `out` is named,
+    which is right, because `out` is precisely the thing about to be destroyed."""
+    _api, wf = tracker
+    _ignoring(repo, "out\nout/\n")
+    (repo / "ro").mkdir()
+    (repo / "ro" / "bbb.txt").write_text("v1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "before")
+    _git(repo, "push", "origin", "main")
+    (repo / "out").write_text("the human's own ignored FILE\n")
+    _land_on_origin(tmp_path, "ancest", {"ro/bbb.txt": "v2\n", "out/x.txt": "hi\n"}, force=True)
+
+    with _unwritable_dir(repo / "ro"):
+        state = gc_workspaces(cwd=repo, workflow=wf)["main_checkout"]
+
+    assert state["code"] == workspace_cmd.MAIN_SYNC_PARTIAL, state
+    assert state["overwritten_ignored"] == ["out"], state
+    assert (repo / "out").is_dir(), "their file really was replaced by the incoming directory"
+
+
+def test_the_updated_branch_keeps_its_UNFILTERED_list(repo, tracker, tmp_path):
+    """The half of the fix that was deliberately NOT made, and it needs a pin BECAUSE it is a cost.
+
+    The same path is named a second time by the sweep that finally completes the fast-forward, so
+    one loss still costs TWO messages rather than one. That branch's list is unfiltered by design —
+    the merge completed, so everything incoming was written — and the human who chose this fix
+    scoped it to the refusal branch in those words. Pinned so that "surely it should be filtered
+    there too" is a decision somebody makes on purpose."""
+    _api, wf = tracker
+    _ignored_only_stand(repo, tmp_path)
+
+    with _unwritable_dir(repo / "ro"):
+        first = gc_workspaces(cwd=repo, workflow=wf)["main_checkout"]
+    healed = workspace_cmd.sync_main_checkout(repo)
+
+    assert first["overwritten_ignored"] == ["shot.png"], first
+    assert healed["updated"] is True, healed
+    assert healed["overwritten_ignored"] == ["shot.png"], (
+        "named again on the branch that does not filter — two messages for one loss, by decision"
+    )
+
+
+# --- VMCP-252 (851) ROUND THREE: the round-two FIX shipped a fresh instance of the same class ---
+#
+# Filed by the independent review of `292fdfc` — this card's own second landing — and by that
+# review's second pass after it, then reproduced here from scratch before anything was changed.
+# The quiet branch had gained a third sentence: "And unlike the tracked form nothing is left here
+# to block the merge again: clearing whatever stopped it is enough, and the next sweep completes
+# the fast-forward (measured)." The word doing the damage is "(measured)": it WAS measured, on
+# `_ignored_only_stand`, whose own docstring says the incoming commit "touches EXACTLY two paths".
+#
+# `_tracked_changes` is `git diff-index`, and its own docstring names the hole — it cannot see an
+# UNTRACKED path. A merge that fails PART-WAY writes new incoming files to disk without moving the
+# index, so a NEW non-ignored file in the incoming range lands untracked, `diff-index` stays empty
+# (which is why this is still the quiet branch), and git then refuses every later merge over it.
+# Measured on the three-path stand below: sweep 1 `half-applied` with the healing sentence and
+# `git status` `?? brandnew.txt`; sweeps 2-5 `blocked` on "The following untracked working tree
+# files would be overwritten by merge: brandnew.txt", HEAD never reaching the remote, the blocker
+# CLEARED since sweep 2. Removing that one file is what unblocks it, and the report named neither.
+#
+# TWO THINGS MAKE THIS WORSE THAN AN INHERITED BLIND SPOT, both from the review's second pass.
+# On this input the round-two fix REPLACED A TRUE VERDICT WITH A FALSE ONE — the pre-851 sentence
+# ("It does NOT heal itself … every later sweep reports `blocked`") is CORRECT here. And the false
+# sentence was ratified by an assertion in this file, so no mutation could ever have killed it:
+# not one stand landed a new non-ignored path beside a blocked tracked one.
+#
+# THE FIX RESTS ON A PROBE, NOT ON A STAND'S SHAPE. `_incoming_paths_absent_here` is taken BEFORE
+# the merge (afterwards a left-behind file is indistinguishable from one the human always had) and
+# `_untracked_left_behind` keeps the ones that reappeared and that git does not ignore — the
+# ignored ones do not block, they get overwritten, which is the OTHER key's subject entirely.
+#
+# MUTATION SWEEP FOR ROUNDS THREE AND FOUR. One selection throughout —
+# `tests/unit/test_workspace_cmd.py -p no:randomly -k "half_appl or ignored_only or IGNORED_file or
+# up_front_refusal or partial_apply or overwritten or PART_WAY or LOCKED_checkbox or left_behind or
+# ANCESTOR or RESTORED or UNFILTERED or quiet_branch or ALREADY_held or unanswerable_left or
+# RAW_bytes"`, no `-q` so the `collected` line exists — and it read `collected 214 items / 179
+# deselected / 35 selected` with 0 `ERROR ` lines in EVERY round, each round read by counting lines
+# beginning `FAILED ` and lines beginning `ERROR ` separately rather than off pytest's summary,
+# which lands inside the literal `control 0 failed` these very docstrings print. Mutations were
+# applied in a SEPARATE clone with `__pycache__` deleted and `PYTHONDONTWRITEBYTECODE=1`, and
+# `vikunja_mcp.__file__` was printed every round and pointed into that clone.
+# control 0 failed; drop the option-C filter entirely 3 failed; filter the `updated: true` branch
+# too 1 failed; read the discriminator AFTER the merge instead of before 16 failed; an unanswerable
+# read falls towards FILTERING instead of reporting 1 failed; always print the reassurance (round
+# three's shape, both guarded arms dead) 2 failed; count IGNORED left-behind paths as blockers too
+# 1 failed; `_incoming_paths_absent_here` drops its absent-only filter 2 failed; hash WITH filters
+# (round three's shape, where an eol attribute hides a loss) 1 failed; an unanswered left-behind
+# probe reads as `no blockers` 1 failed; control again 0 failed.
+# The last two rows are the round-four pins and each kills exactly one test, so neither is a
+# duplicate of anything round three already had. The 16 is not a stronger pin than the 1s — reading
+# the discriminator after the merge filters the loss on the FIRST sweep too, so it takes out most of
+# the section at once; the narrow rows are the ones that say a specific pin is load-bearing.
+
+def _left_behind_stand(repo, tmp_path, name="leftbehind"):
+    """`_ignored_only_stand` plus ONE more incoming path: a NEW file this repo does not ignore.
+
+    That is the entire difference, and it is the difference between "heals once the blocker is
+    cleared" and "stuck until a human removes something" — which is why the two-path stand could
+    measure the healing claim and be right, and be useless as evidence about the FORM."""
+    _ignoring(repo, "*.png")
+    (repo / "ro").mkdir()
+    (repo / "ro" / "bbb.txt").write_text("v1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "before")
+    _git(repo, "push", "origin", "main")
+    (repo / "shot.png").write_bytes(b"\x89PNG the human's own evidence")
+    return _land_on_origin(tmp_path, name, {"ro/bbb.txt": "v2\n", "shot.png": "UPSTREAM\n",
+                                            "brandnew.txt": "hello\n"}, force=True)
+
+
+def test_the_quiet_branch_no_longer_promises_healing_when_the_merge_left_a_blocker(repo, tracker,
+                                                                                   tmp_path):
+    """ROUND THREE. The sentence is now conditional, and the condition is a probe.
+
+    Both halves are asserted, because a report is only as good as the tree under it: the prose must
+    refuse to promise healing AND must name the file, and the ground truth must be the stuck
+    checkout that makes the refusal necessary — including that the blocker being cleared is not
+    enough, which is exactly what the old sentence said it would be."""
+    _api, wf = tracker
+    _left_behind_stand(repo, tmp_path)
+
+    with _unwritable_dir(repo / "ro"):
+        state = gc_workspaces(cwd=repo, workflow=wf)["main_checkout"]
+    reason = state["reason"]
+
+    assert state["code"] == workspace_cmd.MAIN_SYNC_PARTIAL, state
+    assert "half_applied" not in state, "still the quiet branch — `diff-index` is empty"
+    assert "Nothing tracked differs from HEAD at all" in reason, reason
+    assert "This will NOT heal on its own" in reason, reason
+    assert "brandnew.txt" in reason, "and it NAMES the file a human has to remove"
+    assert "A HUMAN moving or removing them" in reason, reason
+    # Round four narrowed this too: "every later sweep will report `blocked`" ignored an upstream
+    # commit that later DROPS the path, which the second pass built and which heals with no human.
+    assert "for as long as that path is here AND the incoming range still carries it" in reason
+    assert "expected to complete the fast-forward" not in reason, reason
+    # Ground truth: untracked, not ignored, and put there by the merge rather than by the human.
+    assert _git(repo, "status", "--porcelain") == "?? brandnew.txt", _git(repo, "status", "-s")
+    assert _git(repo, "ls-files", "brandnew.txt") == "", "the index never heard of it"
+    # ...and it really does not heal. The blocker is released by leaving the `with` above.
+    later = [workspace_cmd.sync_main_checkout(repo), workspace_cmd.sync_main_checkout(repo)]
+    assert [s["code"] for s in later] == [workspace_cmd.MAIN_SYNC_BLOCKED] * 2, later
+    assert (repo / "ro" / "bbb.txt").read_text() == "v1\n", "HEAD never reached the remote"
+    # And the one command the report asks for is the one that works.
+    (repo / "brandnew.txt").unlink()
+    assert workspace_cmd.sync_main_checkout(repo)["updated"] is True
+    assert (repo / "ro" / "bbb.txt").read_text() == "v2\n"
+
+
+def test_an_unanswerable_left_behind_probe_never_prints_the_reassurance(repo, tracker, tmp_path,
+                                                                        monkeypatch):
+    """ROUND FOUR: the round-three fix could not tell "looked, found none" from "could not look".
+
+    The probe returned `[]` on failure, which is the same value as "nothing was left behind", so
+    all three silent routes — either `except` wrapper and an unreadable `git diff` — printed the
+    full reassurance over a checkout that then answered `blocked` forever. That is the identical
+    defect the TRACKED half was bounced for and has guarded with `looked` since #835. Built here on
+    the input where the reassurance is FALSE, so a green run means the refusal fires exactly where
+    it is needed rather than everywhere."""
+    _api, wf = tracker
+    _left_behind_stand(repo, tmp_path)
+    monkeypatch.setattr(workspace_cmd, "_incoming_paths_absent_here",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("git said no")))
+
+    with _unwritable_dir(repo / "ro"):
+        state = gc_workspaces(cwd=repo, workflow=wf)["main_checkout"]
+    reason = state["reason"]
+
+    assert state["code"] == workspace_cmd.MAIN_SYNC_PARTIAL, state
+    assert "could NOT be checked on this run" in reason, reason
+    assert "expected to complete the fast-forward" not in reason, reason
+    assert "This will NOT heal on its own" not in reason, "it does not claim the opposite either"
+    # ...and the reassurance it declined to print would have been FALSE.
+    later = workspace_cmd.sync_main_checkout(repo)          # blocker released with the `with`
+    assert later["code"] == workspace_cmd.MAIN_SYNC_BLOCKED, later
+
+
+def test_the_filter_compares_RAW_bytes_so_an_eol_attribute_cannot_hide_a_loss(repo, tracker,
+                                                                              tmp_path):
+    """ROUND FOUR, and it is a CORRECTNESS bug the second pass found in round three's own filter.
+
+    The first version hashed the way `git hash-object <path>` does — through this checkout's
+    filters — reasoning that the incoming side is git's stored form. But `clean` need not be
+    invertible, so an equal hash does not mean equal bytes, and the filter then DROPS a path whose
+    content really did die. This is the counterexample that needs no filter configuration at all:
+    one committed `.gitattributes` saying `text eol=lf` and a working copy with CRLF. Measured
+    directly on git 2.50.1 — the CRLF file hashes to `fbbee861…` with filters, byte-identical to
+    the LF blob, and to `17f2fc0a…` with `--no-filters`.
+
+    The residual error now runs the safe way: with a SMUDGE filter configured a file that already
+    equals what the merge will write is reported anyway — noise rather than silence."""
+    _api, wf = tracker
+    _ignoring(repo, "*.png")
+    (repo / ".gitattributes").write_text("shot.png -diff\nnotes.txt text eol=lf\n")
+    (repo / "ro").mkdir()
+    (repo / "ro" / "bbb.txt").write_text("v1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "before")
+    _git(repo, "push", "origin", "main")
+    (repo / "notes.txt").write_bytes(b"alpha\r\nbeta\r\n")   # the human's CRLF copy
+    _ignoring(repo, "*.png\nnotes.txt\n")                    # ...and it is ignored here
+    _land_on_origin(tmp_path, "eol", {"ro/bbb.txt": "v2\n", "notes.txt": "alpha\nbeta\n"},
+                    force=True)
+
+    with _unwritable_dir(repo / "ro"):
+        state = gc_workspaces(cwd=repo, workflow=wf)["main_checkout"]
+
+    assert (repo / "notes.txt").read_bytes() == b"alpha\nbeta\n", (
+        "ground truth first: the bytes on disk really did change"
+    )
+    assert state["code"] == workspace_cmd.MAIN_SYNC_PARTIAL, state
+    assert state["overwritten_ignored"] == ["notes.txt"], (
+        "a filtered hash would have called this 'already upstream' and said nothing"
+    )
+
+
+def test_an_IGNORED_file_left_behind_is_not_counted_as_a_blocker(repo, tracker, tmp_path):
+    """The narrowing that keeps the new warning from crying wolf, and it is not symmetry for its
+    own sake: git does not refuse over an ignored path, it overwrites it silently. So a left-behind
+    `*.png` must NOT turn the healing sentence off — measured here by letting the ff finish."""
+    _api, wf = tracker
+    _ignoring(repo, "*.png")
+    (repo / "ro").mkdir()
+    (repo / "ro" / "bbb.txt").write_text("v1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "before")
+    _git(repo, "push", "origin", "main")
+    (repo / "shot.png").write_bytes(b"\x89PNG the human's own evidence")
+    _land_on_origin(tmp_path, "ignleft", {"ro/bbb.txt": "v2\n", "shot.png": "UPSTREAM\n",
+                                          "fresh.png": "NEW\n"}, force=True)
+
+    with _unwritable_dir(repo / "ro"):
+        state = gc_workspaces(cwd=repo, workflow=wf)["main_checkout"]
+
+    assert state["code"] == workspace_cmd.MAIN_SYNC_PARTIAL, state
+    assert (repo / "fresh.png").exists(), "the part-way merge really did leave it here"
+    assert "This will NOT heal on its own" not in state["reason"], state["reason"]
+    # The wording has to survive this input being TRUE-but-irrelevant: a path WAS left behind
+    # untracked, it just is not one git will refuse over. Round four narrowed the sentence for
+    # exactly this reason, after the second pass measured the flat version literally false here.
+    assert "left behind in a state git would refuse to merge over" in state["reason"]
+    assert "ignored ones are excluded" in state["reason"], state["reason"]
+    second = workspace_cmd.sync_main_checkout(repo)         # blocker released with the `with`
+    assert second["updated"] is True, f"and the claim holds: {second}"
 
 
 def test_an_empty_half_applied_is_never_reported_as_a_quiet_TRACKED_tree(repo, tracker, tmp_path):
