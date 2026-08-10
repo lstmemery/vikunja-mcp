@@ -7416,7 +7416,13 @@ def test_one_unaskable_path_costs_only_itself_and_not_the_paths_around_it(repo, 
 # to rmdir 'sub': Directory not empty`, and `sub/` still a directory holding `.git`, `inside.txt`
 # and `precious.txt` — the submodule is still a working repo (`git -C sub status` answers). The
 # gitlink becoming a real DIRECTORY is the same when its members are new, and REFUSED (rc=1) when an
-# incoming member collides with one on disk. So this is the TYPECHANGE, not "any incoming change to
+# incoming member collides with a NOT-IGNORED one on disk. That qualifier is VMCP-265 (877), which
+# measured the other half on `5782538`: collide with an IGNORED member (`sub/keep.png`) and it is
+# rc=0, `updated: True`, the human's bytes replaced — and `overwritten_ignored` names only the
+# ordinary neighbour OUTSIDE the gitlink, never the casualty in it. So the contrast holds on git's
+# BEHAVIOUR axis and fails on the REPORT axis, which is the one the key exists for. It is the same
+# asymmetry the paragraph above already measured for a path INSIDE the gitlink, and this row
+# inherits it rather than escaping it. So this is the TYPECHANGE, not "any incoming change to
 # a submodule".
 #
 # AND THE PRE-MERGE ` M sub` IS NOT A SIGNAL TO BUILD ON, which is what a "refuse when the gitlink
@@ -7474,10 +7480,15 @@ def test_one_unaskable_path_costs_only_itself_and_not_the_paths_around_it(repo, 
 # ONE CLAIM OF THAT WARRANT WAS ALSO TOO WIDE and the second pass caught it: "the loss changes no
 # agent ACTION, since there is nothing for the agent to name" holds on the rc=0 branch ONLY. Reached
 # through #835's half-applying ff (a `chflags uchg` neighbour, built with it sorting before AND
-# after `sub`), the same typechange gives `code: 'half-applied'`, `half_applied: ['.gitmodules',
-# 'sub']` and a NON-empty `git status --porcelain` (` D .gitmodules`, ` T sub`) with all three files
+# after `sub`), the same typechange gives `code: 'half-applied'`, a NON-EMPTY `half_applied` and a
+# NON-empty `git status --porcelain` (` D .gitmodules`, ` T sub`) with all three files
 # still gone — so there the agent does have something to name, and SKILL.md's existing instruction
-# to report `half_applied` already covers it. Its wording there calls the collateral an IGNORED file
+# to report `half_applied` already covers it. THE VALUE IS DELIBERATELY NOT WRITTEN, and the earlier
+# `['.gitmodules', 'sub']` was measured NOT to reproduce on this card's own shape (VMCP-265 (877)):
+# `half_applied` is a DELTA of `_tracked_changes` before/after, so a VISIBLY dirty gitlink is
+# already in the before-set and CANCELS — three victims, and `sub` off the list. That is #851's
+# lesson one card later. What survives every configuration is the invariant above, which is what to
+# assert. Its wording there calls the collateral an IGNORED file
 # ("а лежавший там игнорируемый файл мог погибнуть"), which is now known to be narrower than the
 # truth; that one word is left to whoever answers the product question rather than changed here.
 # What the tool should DO — report the gitlink path, widen the ask with `--no-index`, or refuse the
@@ -7501,19 +7512,33 @@ def test_one_unaskable_path_costs_only_itself_and_not_the_paths_around_it(repo, 
 # and sha256-verified after each. control 0 failed:
 #   * simulate REFUSING the ff on a gitlink typechange .............. control 0 failed; 2 failed
 #   * simulate NAMING the gitlink path in `overwritten_ignored` ..... control 0 failed; 2 failed
-#   * drop the `rel in gitlinks` early return in `_expand_if_directory` control 0 failed; 0 failed
+#   * drop the `rel in gitlinks` early return in `_expand_if_directory` control 0 failed; 1 failed
+#     — RE-MEASURED, VMCP-265 (877). It shipped as `0 failed`, which was a round taken BEFORE the
+#     pin below grew its direct assertion and never re-run. Re-run at `215d38d`, same whole-file
+#     selection, `collected 226 items` in both rounds, control 0 failed and 0 ERROR lines: the
+#     mutant kills `test_the_contrast_is_FALSE_when_the_incoming_entry_lands_ON_a_gitlinks_path`,
+#     and the narrow `-k lands_ON_a_gitlinks_path` selection agrees (1 selected, same verdict). The
+#     prose beside it — "the typechange pin below now asserts it directly" — was TRUE all along;
+#     the round was what lagged, which is why a stale zero is worth more than a shrug here.
 # The first two are the point: each is one of the parked product options, each fails BOTH this
 # card's typechange pin and 837's `test_one_unaskable_path_costs_only_itself…`, so neither option
 # can be implemented without a test noticing. The THIRD is a real find rather than a shrug — that
 # early return was pinned by NOTHING (837's own seam test passes `gitlinks={'vendor/sub'}` with
 # `rel='vendor'`, so it exercises the NESTED `dirnames[:]` prune and never the top-level one), and
 # the typechange pin below now asserts it directly. The second pass swept the same file
-# independently on selection `-k "gitlink or contrast"` (`collected 193`, control 0 failed) and its
+# independently on selection `-k "gitlink or contrast"` and its
 # rounds are worth reading beside these: `_add_capped` emitting the key unconditionally 3 failed
 # (BOTH new tests), dropping the pointer-move skip 1 failed, dropping the NESTED prune 2 failed,
-# `--diff-filter=ACMT` -> `ACMTD` 0 failed, and the probe returning `[]` unconditionally 0 failed —
+# `--diff-filter=ACMT` -> `ACMTD` 0 failed, and the probe returning `[]` unconditionally 1 failed —
 # that last meaning NEITHER new test exercises the probe, which is why they are labelled
-# characterisation pins and not coverage.
+# characterisation pins and not coverage. THAT ROW SHIPPED AS `0 failed` AND THE BREAKDOWN OF ITS
+# SELECTION WAS THE WHOLE-FILE `collected 193`, i.e. a number belonging to a DIFFERENT selection;
+# both are VMCP-265 (877). Re-measured at `215d38d`, selection unchanged, `collected 226 items /
+# 217 deselected / 9 selected` in BOTH rounds, control 0 failed, 0 ERROR lines: the mutant kills
+# `test_the_expansion_does_not_walk_into_a_NESTED_gitlink`. The CONCLUSION above survives the
+# correction untouched — that test is neither of 838's two new ones — but the zero did not, and a
+# recorded zero over a LIVE pin is the error direction CLAUDE.md calls worse than inflation,
+# because it reads as an invitation to delete the pin.
 #
 # THE SUITE'S OWN SCOPE, unchanged from 837 and worth repeating because it is what makes this
 # latent: there are no submodules in this repository (`git ls-files -s | awk '$1=="160000"'` is

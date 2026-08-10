@@ -351,7 +351,13 @@ assertion in `tests/unit/test_line_length_gate.py`, which pyproject must agree w
   reach a file no rule matches. The class is bounded by SHAPE and not by hope, and the neighbours
   were built: a plain gitlink DELETE destroys nothing (git refuses to remove a non-empty directory
   and warns, the content survives), and neither does the gitlink becoming a real DIRECTORY, whose
-  colliding member is refused normally. Nor is the pre-merge ` M sub` a signal
+  colliding member is refused normally — **but only a NOT-IGNORED one, and that qualifier governs
+  the `sub/precious.txt` refusal above too** (tracker #877, measured on `5782538`): let the
+  colliding member be IGNORED (`sub/keep.png`) and the same merge is rc=0, `updated: true`, the
+  human's bytes replaced, and `overwritten_ignored` names only the ordinary neighbour outside the
+  gitlink — #837's rc=128 is why nothing inside one can be asked about. So on the REPORT axis the
+  contrast does not hold in there at all, which is the axis this key exists for.
+  Nor is the pre-merge ` M sub` a signal
   to lean on: it is absent whenever the doomed file is ignored by the SUBMODULE's own rules (both
   statuses empty, before and after), and `submodule.<name>.ignore = all` or
   `diff.ignoreSubmodules = all` switch it off outright — #766's lesson again. What the tool should

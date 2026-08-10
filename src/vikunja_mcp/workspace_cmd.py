@@ -2705,7 +2705,12 @@ def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str) -> list[str]:
         plain gitlink DELETE (`:160000 000000 … D`) destroys nothing at all — git refuses to remove
         a non-empty directory and says so (`warning: unable to rmdir 'sub': Directory not empty`),
         the content survives — and neither does the gitlink becoming a real DIRECTORY, whose
-        colliding member is refused in the ordinary way. So this is the TYPECHANGE, not "any
+        colliding member is refused in the ordinary way. THAT LAST CLAUSE IS ABOUT A NOT-IGNORED
+        MEMBER ONLY, and VMCP-265 (877) measured the other half on `5782538`: collide with an
+        IGNORED member and the merge is rc=0 with the human's bytes replaced, this key naming only
+        the ordinary neighbour outside the gitlink. So the DIRECTORY row bounds the class on git's
+        behaviour and not on this report — inside a live gitlink the contrast is absent either
+        way, for 837's reason. So this is the TYPECHANGE, not "any
         incoming change to a submodule";
       * the name reported is the one on THIS disk only where the two can differ and git agrees
         they are the same path. On a case-insensitive filesystem (measured on macOS with
