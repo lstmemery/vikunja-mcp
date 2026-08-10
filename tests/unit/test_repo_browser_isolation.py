@@ -2155,11 +2155,14 @@ def _publishable_copies(root: Path, *, prefix: int | None = None):
             # `ls-files` above are handed, so the two halves agree at any `root` inside the working
             # tree THE READ RESOLVES AGAINST — top or not. That qualifier is VMCP-255 (855) and it
             # is not pedantry: unqualified, the sentence is FALSE in the ordinary physical reading,
-            # because `.git` sits inside the working tree and is exactly where the two commands
-            # disagree — `ls-files` answers, `:./` refuses every path. The docstring below pays for
-            # the qualifier with three constructed rows and owns them; #842 narrowed it THERE and
-            # left this site unqualified, which is the two-site divergence #842 itself was filed
-            # about. VMCP-243 (820) wrote that BACKWARDS, as a precondition the
+            # because `.git` sits inside the working tree and is ONE place where the two commands
+            # disagree — `ls-files` answers, `:./` refuses every path; `.git/refs`, `.git/objects`,
+            # `.git/info` and `.git/hooks` each do the same, which is why the docstring below calls
+            # `.git` the LOUD member of that boundary rather than its only one. That docstring pays
+            # for the qualifier with three constructed rows and owns them; #842 narrowed it THERE
+            # and left this site unqualified — the class #842 kept running into rather than what it
+            # was filed about, which was the INVERTED direction. VMCP-243 (820) wrote that
+            # BACKWARDS, as a precondition the
             # FIX depends on; the precondition is the BARE form's, since a bare `:<rel>` resolves
             # from the repository ROOT, and `./` REMOVES it. Off the top the bare form also goes
             # wrong the same TWO ways it goes wrong on a stage, not just by missing. Both
