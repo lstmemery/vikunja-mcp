@@ -7358,6 +7358,84 @@ def test_the_expansion_does_not_walk_into_a_NESTED_gitlink(repo, tracker, tmp_pa
     assert (repo / "vendor").is_file(), "the directory really was replaced by a file"
 
 
+def test_a_stray_nested_clone_is_named_ONCE_instead_of_flooding_the_report(repo, tracker, tmp_path):
+    """VMCP-256 (858). A FOREIGN CLONE under an incoming directory — and it is the MIRROR of the
+    gitlink test above, not another instance of it. There, paths are unaskable and the index says
+    so. Here `git ls-files -s -- vendor/stray` is EMPTY (asserted below), no gitlink points at it,
+    the index-based prune therefore leaves it alone — correctly — and `check-ignore` answers about
+    its paths perfectly well. So nothing in 837's machinery applies, and the walk used to go
+    straight in: measured on the filing card's stand, 31 paths came back of which 29 were `.git`
+    internals — hook samples, loose objects, refs.
+
+    WHY THAT IS NOT MERELY UNTIDY. `_MAX_REPORTED_IGNORED` is 50, and a clone of ordinary liveness
+    has hundreds of paths under `.git`, so the noise does not just bury the real names — it can
+    push them PAST the cap. `overwritten_ignored_truncated` would then stand beside a list that
+    silently lost the only two names a human needed, and nothing says which. That is the failure
+    #516 split `kept` in two to cure, arriving from a new direction.
+
+    WHY ONE NAME IS THE RIGHT ANSWER rather than a filter entry: adding `.git/` to
+    `_is_reproducible_ignored` was the cheap option and was REJECTED by the human who chose this
+    one, because another repository's contents are not build detritus, and that filter decides what
+    gets REPORTED — so the loss would have become entirely nameless. Naming the PLACE keeps the
+    casualty in the report at the granularity a reader can act on: a foreign repository died here.
+
+    AND THE TWO CHECKS STAY TWO. `.git`-on-disk is the right evidence for "one repository, not N
+    files" and the WRONG evidence for "can this be asked about" — 837 measured it failing at that
+    in both directions, so `_holds_a_dot_git` says as much in its own docstring. Do not merge them.
+
+    MUTATION ROUND, measured at `2817dc3` on the whole file, `-q` dropped, `FAILED `- and `ERROR `-
+    prefixed lines counted SEPARATELY, `collected` cross-checked, caches cleared and the target
+    restored and sha256-verified: control 0 failed; dropping the clone prune (walking in as before)
+    1 failed, killing this test and nothing else."""
+    _api, wf = tracker
+    _ignoring(repo, "*.png", "vendor/stray/")
+    (repo / "vendor").mkdir()
+    (repo / "vendor" / "note.txt").write_text("makes `vendor` a real tracked directory\n")
+    _git(repo, "add", "vendor")
+    _git(repo, "commit", "-m", "a tracked directory")
+    _git(repo, "push", "origin", "main")
+    # A REAL clone, so the `.git` noise is git's own rather than something this test invented.
+    stray = repo / "vendor" / "stray"
+    stray.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main", str(stray)], check=True, capture_output=True)
+    (stray / "work.txt").write_text("somebody's vendored checkout\n")
+    (repo / "vendor" / "shot.png").write_bytes(b"\x89PNG the human's own, beside the clone")
+    assert _git(repo, "ls-files", "-s", "--", "vendor/stray") == "", (
+        "no gitlink points at a stray clone — this is the mirror of the submodule case, and the "
+        "index-based prune must NOT be what handles it"
+    )
+    noise = len([p for p in (stray / ".git").rglob("*") if p.is_file()])
+    assert noise >= 10, ("a real `.git` brings real noise, else this test proves nothing", noise)
+
+    other = tmp_path / "sibling-stray"
+    subprocess.run(["git", "clone", str(tmp_path / "origin.git"), str(other)],
+                   check=True, capture_output=True)
+    _git(other, "config", "user.email", "sibling@example.com")
+    _git(other, "config", "user.name", "Sibling")
+    _git(other, "rm", "-r", "-q", "--cached", "vendor")
+    shutil.rmtree(other / "vendor", ignore_errors=True)
+    (other / "vendor").write_text("upstream made this an ordinary file\n")
+    _git(other, "add", "vendor")
+    _git(other, "commit", "-m", "sibling: vendor becomes a file")
+    _git(other, "push", "origin", "HEAD:main")
+    _git(repo, "fetch", "origin")
+
+    expanded = workspace_cmd._expand_if_directory(repo, "vendor")
+    assert "vendor/stray" in expanded, ("the clone is named as ONE casualty", expanded)
+    assert not [p for p in expanded if p.startswith("vendor/stray/")], (
+        "the walk went INSIDE a foreign repository", expanded
+    )
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["updated"] is True, state
+    assert sorted(state["overwritten_ignored"]) == ["vendor/shot.png", "vendor/stray"], state
+    assert "overwritten_ignored_truncated" not in state, state
+    assert (repo / "vendor").is_file(), "the directory really was replaced by a file"
+    assert not stray.exists(), "and the foreign repository really is gone"
+
+
 def test_one_unaskable_path_costs_only_itself_and_not_the_paths_around_it(repo, tracker, tmp_path,
                                                                           monkeypatch):
     """THE BISECT, and it is what covers the OTHER producer — `_expand_if_directory`.

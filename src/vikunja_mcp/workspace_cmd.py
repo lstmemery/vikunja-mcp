@@ -2069,6 +2069,30 @@ def _index_gitlink_paths(root: Path, pathspecs: list[str]) -> frozenset[str]:
     return frozenset(found)
 
 
+def _holds_a_dot_git(path: str) -> bool:
+    """Does this directory hold a `.git` of ANY form — the mark of a repository ROOT?
+
+    VMCP-256 (858). Deliberately `lexists` and not `isdir`: a working clone has a `.git`
+    DIRECTORY, a linked worktree and a populated submodule have a `.git` FILE holding
+    `gitdir: …`, and a symlinked one is a third spelling. All three mean the same thing to the
+    caller — everything below this point belongs to another repository — so all three answer
+    True, and asking about the PATH is what covers them without three branches.
+
+    NOT A SUBSTITUTE FOR THE INDEX-BASED GITLINK PRUNE, and the card that asked for this said so
+    in as many words. That prune asks "can `check-ignore` be asked about paths in here at all?"
+    and its answer comes from the INDEX, because VMCP-246 (837) measured `.git`-on-disk failing
+    at exactly that job in BOTH directions: a DEINITIALISED submodule has no `.git` and still
+    makes `check-ignore` exit 128, while a stray clone has one and answers rc=0 perfectly well.
+    This function asks a different question — "is this one foreign repository rather than N
+    loose files?" — and `.git` is the right evidence for THAT. Keep them two calls; merging them
+    would re-introduce the check 837 rejected under a new name.
+
+    Best-effort like its neighbours: on EACCES `lexists` answers False and the walk descends as
+    it did before, which costs noise and never a wrong name.
+    """
+    return os.path.lexists(os.path.join(path, ".git"))
+
+
 def _expand_if_directory(root: Path, rel: str, gitlinks: frozenset[str] = frozenset()) -> list[str]:
     # `r"""` is load-bearing, not style: the measurement below quotes a NUL-separated `printf`, and
     # in a plain docstring `\0` is a real NUL character — measured, two of them landed in
@@ -2378,17 +2402,30 @@ def _expand_if_directory(root: Path, rel: str, gitlinks: frozenset[str] = frozen
     full = os.path.join(root, rel)
     if os.path.islink(full) or not os.path.isdir(full) or rel in gitlinks:
         return [rel]
+    if _holds_a_dot_git(full):
+        return [rel]
     inside: list[str] = []
     for dirpath, dirnames, filenames in os.walk(full):
         # Prune nested GITLINKS in place: nothing inside one can be put to `check-ignore`, so
         # walking in costs bisect calls and yields no name (`_index_gitlink_paths`).
         dirnames[:] = [d for d in dirnames
                        if os.path.relpath(os.path.join(dirpath, d), root) not in gitlinks]
+        # THEN a STRAY NESTED CLONE, and the ORDER of these two is what keeps them separate
+        # questions rather than one merged guess (VMCP-256 (858)). The gitlink prune above asks
+        # the INDEX and means "do not ask about what cannot be answered"; this asks the DISK and
+        # means "a foreign repository is ONE casualty, not several hundred". A populated
+        # submodule matches both, and it is already gone from `dirnames` by the time we get
+        # here, so nothing is classified twice. Symlinks are excluded because the `links` pick
+        # below already names them once — including a symlink that points AT a clone.
+        clones = [d for d in dirnames
+                  if not os.path.islink(os.path.join(dirpath, d))
+                  and _holds_a_dot_git(os.path.join(dirpath, d))]
+        dirnames[:] = [d for d in dirnames if d not in set(clones)]
         # THEN read what survived: a symlink-to-a-directory is in `dirnames` and in no other list,
         # so it is named here or nowhere. One name per symlink, never its contents. AFTER the prune
         # on purpose — a pruned gitlink must stay unnamed (its files are VMCP-247 (838)'s).
         links = [d for d in dirnames if os.path.islink(os.path.join(dirpath, d))]
-        for name in filenames + links:
+        for name in filenames + links + clones:
             inside.append(os.path.relpath(os.path.join(dirpath, name), root))
             if len(inside) >= _MAX_DIR_EXPANSION:
                 return inside
