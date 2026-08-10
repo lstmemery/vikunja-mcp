@@ -1,5 +1,11 @@
 """Config resolution: env > repo .vikunja-mcp.env (repo-local, beside toml) >
-repo .vikunja-mcp.toml (walk-up) > ~/.config/vikunja-mcp/env."""
+repo .vikunja-mcp.toml (walk-up) > ~/.config/vikunja-mcp/env.
+
+DOSSIER: `docs/dossier/config.md` — the measured evidence under the rules in this
+module: the 4-layer precedence, why `wip_limit` is toml-only, and why
+`require_review_independence` defaults to FALSE.
+Read it before changing a guard here; CLAUDE.md carries only the rule.
+"""
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path

@@ -6972,8 +6972,16 @@ def test_the_rulebook_names_every_main_checkout_code_the_sweep_can_emit():
     also an ordinary word could be vouched for by unrelated prose (`blocked` is a tracker LABEL in
     this same file). It catches the one failure that is otherwise completely silent — a code the
     rulebook does not mention at all."""
-    skill = (Path(workspace_cmd.__file__).parent / "skills" / "tracker" / "SKILL.md").read_text(
-        encoding="utf-8")
+    # the WHOLE rulebook — the core plus its `references/*.md`. The rulebook was split into a
+    # core (what to do) and references (payload shapes and measured reasons), and the
+    # `main_checkout` codes are payload shapes, so they live in `references/gc-report.md`. This
+    # asks whether the RULEBOOK names them, which is a question about the set of files, not about
+    # which one holds the sentence today.
+    tracker = Path(workspace_cmd.__file__).parent / "skills" / "tracker"
+    skill = "\n".join([
+        (tracker / "SKILL.md").read_text(encoding="utf-8"),
+        *(p.read_text(encoding="utf-8") for p in sorted((tracker / "references").glob("*.md"))),
+    ])
     codes = {n: v for n, v in vars(workspace_cmd).items()
              if n.startswith("MAIN_SYNC_") and isinstance(v, str)}
     assert len(codes) >= 8, sorted(codes)

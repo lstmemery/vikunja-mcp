@@ -1428,7 +1428,25 @@ def test_claude_md_states_the_control_round_rule_and_its_limit():
         "runs — the same silent-downward shape as the parser it was added to catch"
 
 
-def test_claude_md_says_a_stale_figure_sweep_is_not_line_fed():
+def _testing_dossier() -> str:
+    """`docs/dossier/testing.md` — the evidence layer under CLAUDE.md's Testing Philosophy.
+
+    The rulebook was split into a rules layer (CLAUDE.md, in every session's context) and
+    per-subsystem dossiers (read when you touch that subsystem). The line-fed material below is
+    evidence, not a rule, so it lives here; `_testing_philosophy` still slices CLAUDE.md for the
+    rules that must stay in front of every agent. Sliced whole rather than by section: this file
+    IS the one section.
+    """
+    path = REPO_ROOT / "docs" / "dossier" / "testing.md"
+    assert path.is_file(), (
+        "docs/dossier/testing.md is gone — the Testing Philosophy dossier is where the measured "
+        "prose under CLAUDE.md's rules lives. If it moved, move this anchor; do not delete the "
+        "check"
+    )
+    return path.read_text(encoding="utf-8")
+
+
+def test_the_testing_dossier_says_a_stale_figure_sweep_is_not_line_fed():
     """The OTHER sweep in this section — the text one that hunts stale figures — and its trap.
 
     Pinned in four pieces, and three of them are the counter-intuitive half rather than the rule.
@@ -1488,15 +1506,15 @@ def test_claude_md_says_a_stale_figure_sweep_is_not_line_fed():
         still present in the file, which is the cheap version of #646's `vikunja_mcp.__file__`.
       * restore -> 0 failed, 1 passed, back to the control, CLAUDE.md byte-identical to the copy
     """
-    section = _testing_philosophy()
+    section = _testing_dossier()
 
     assert "must not be LINE-FED" in section, \
-        "CLAUDE.md no longer says a sweep for stale figures must not be line-fed. Test prose " \
+        "the testing dossier no longer says a sweep for stale figures must not be line-fed. Test prose " \
         "here is hand-wrapped near 100 columns — a convention, not the gate, which sits at " \
         "`max-line-length = 110` since #711 ratcheted #669's 120 down — so `grep -rn` reports " \
         "a file CLEAN at a wrapped figure, which is the one answer a sweep exists to give"
     assert _MEASURED_COUNTER_EXAMPLE.search(" ".join(section.split())), \
-        "CLAUDE.md no longer carries the measured counter-example, and the rule is worth less " \
+        "the testing dossier no longer carries the measured counter-example, and the rule is worth less " \
         "without it: read PER LINE, loosening the PATTERN does not help — the same 15 hits on " \
         "both greps. Without this the next reader fixes the regex and stays blind. What is pinned " \
         "is the class token NEXT TO its negative finding (`recovers nothing`) in one sentence — " \
@@ -1504,11 +1522,11 @@ def test_claude_md_says_a_stale_figure_sweep_is_not_line_fed():
         "BSD grep's lever, so it pinned the paragraph and not the counter-example. Reworded the " \
         "finding? Restate it beside the class, or update `_MEASURED_COUNTER_EXAMPLE` to match"
     assert "DIFF against the per-line hits" in section, \
-        "CLAUDE.md no longer says WHAT to report. A raw spanning hit list is dominated by what " \
+        "the testing dossier no longer says WHAT to report. A raw spanning hit list is dominated by what " \
         "the line-anchored sweep already found, so the difference is the only useful output — " \
         "and the noise a wrap-crossing pattern adds has to be eyeballed, not counted"
     assert "--decompress" in section, \
-        "CLAUDE.md no longer records that the two greps need OPPOSITE levers: on ugrep 7.5.0 " \
+        "the testing dossier no longer records that the two greps need OPPOSITE levers: on ugrep 7.5.0 " \
         "`-z` is --decompress, not --null-data, so the flag that works on BSD grep finds " \
         "nothing there, while a pattern carrying an explicit \\n finds it AND says where. " \
         "Without this the paragraph reads as 'add -z', wrong on one of the two greps it names"
@@ -1651,7 +1669,7 @@ def _repo_markdown():
 # split and a copyedit.
 #
 # THE ANCHOR HALF COSTS NOTHING THIS REPO IS NOT ALREADY CARRYING:
-# `test_claude_md_says_a_stale_figure_sweep_is_not_line_fed` asserts that phrase verbatim already,
+# `test_the_testing_dossier_says_a_stale_figure_sweep_is_not_line_fed` asserts that phrase already,
 # so breaking it is red there whether or not this assert exists. From the same control of 0 failed:
 # rewrapping the line so `must not be` ends it and `LINE-FED` opens the next -> 1 failed, on that
 # sibling ALONE, because the sha half keeps this one green; rewriting the paragraph's opening and
@@ -1712,6 +1730,12 @@ def _repo_markdown():
 #     the one below only asks that the scan reach what the hand read found.
 _LINE_FED_ANCHOR = "must not be LINE-FED"
 _LINE_FED_MEASUREMENT = "e86b2c9"
+# WHERE that material lives. It was a CLAUDE.md paragraph until the rulebook was split into a
+# rules layer plus per-subsystem dossiers: CLAUDE.md now carries the RULE (do not be line-fed)
+# and `docs/dossier/testing.md` carries the measured prose this pin reads — the round counts
+# quoted without a control beside them, which is the shape the scope comment names. The pin
+# follows the material rather than the filename, which is what its own message asks for.
+_LINE_FED_HOME = "docs/dossier/testing.md"
 
 
 def test_the_tree_wide_claims_in_this_file_are_asserted_rather_than_counted():
@@ -1877,13 +1901,13 @@ def test_the_tree_wide_claims_in_this_file_are_asserted_rather_than_counted():
         if _quotes_a_round_count(paragraph) and not _states_a_control_count(paragraph)
     )
     line_fed_offenders = sorted(
-        f"CLAUDE.md::¶{_paragraph_head(paragraph)}"
-        for paragraph in _paragraphs((REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8"))
+        f"{_LINE_FED_HOME}::¶{_paragraph_head(paragraph)}"
+        for paragraph in _paragraphs((REPO_ROOT / _LINE_FED_HOME).read_text(encoding="utf-8"))
         if (_LINE_FED_ANCHOR in paragraph or _LINE_FED_MEASUREMENT in paragraph)
         and _quotes_a_round_count(paragraph) and not _states_a_control_count(paragraph)
     )
     assert line_fed_offenders, (
-        "the CLAUDE.md material the SCOPE comment at the top NAMES — the line-fed rule — no longer "
+        "the material the SCOPE comment at the top NAMES — the line-fed rule — no longer "
         "quotes a round count without a control beside it, so that half of the scope comment is "
         f"false (uncontrolled markdown paragraphs found anywhere: {uncontrolled_markdown}). "
         "Rewrite it; the argument the scope actually rests on — that widening the scan is a "

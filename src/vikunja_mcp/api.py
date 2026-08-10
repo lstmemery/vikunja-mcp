@@ -1,4 +1,10 @@
-"""Vikunja REST client. Gotchas baked in: PUT=create, POST=full-replace update -> RMW."""
+"""Vikunja REST client. Gotchas baked in: PUT=create, POST=full-replace update -> RMW.
+
+DOSSIER: `docs/dossier/api.md` — the measured evidence under the rules in this
+module: why a guessed page size is never acceptable and how it
+reaped a live worktree.
+Read it before changing a guard here; CLAUDE.md carries only the rule.
+"""
 import time
 from typing import Any
 

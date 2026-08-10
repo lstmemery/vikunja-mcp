@@ -261,6 +261,14 @@ def install_skill(dest_root=None, opencode_root=None) -> None:
         dest.mkdir(parents=True, exist_ok=True)
         out = dest / "SKILL.md"
         shutil.copyfile(str(src), out)
+        # …and the references the core routes to. The rulebook is a core plus `references/*.md`
+        # (the core says what to do, a reference carries the payload shapes and the measured
+        # reasons), so copying only the core hands the agent a rulebook whose every pointer is a
+        # dead end — worse than the un-split file, because the text LOOKS complete.
+        for ref in _packaged_references():
+            ref_dir = dest / "references"
+            ref_dir.mkdir(parents=True, exist_ok=True)
+            (ref_dir / ref.name).write_text(ref.read_text(encoding="utf-8"), encoding="utf-8")
         return out
 
     claude_root = Path(dest_root) if dest_root else Path("~/.claude").expanduser()
@@ -276,7 +284,31 @@ def install_skill(dest_root=None, opencode_root=None) -> None:
 
     oc_skill = _copy_to(oc_root)
     print(f"skill installed (opencode): {oc_skill}")
-    print(f'  добавь в opencode.json: "instructions": ["{oc_skill}"]')
+    # opencode has no progressive disclosure — it loads whatever `instructions` lists, wholesale —
+    # so every reference is named here explicitly. Claude Code needs only the core: it discovers
+    # the skill and the core tells the agent which reference to open at which phase.
+    oc_refs = [oc_skill.parent / "references" / ref.name for ref in _packaged_references()]
+    listed = ", ".join(f'"{path}"' for path in [oc_skill, *oc_refs])
+    print(f'  добавь в opencode.json: "instructions": [{listed}]')
+
+
+def _packaged_references() -> list:
+    """Every packaged `skills/tracker/references/*.md`, sorted. Empty list on any failure.
+
+    Never raises: one caller is `sync_installed_artifacts`, which runs inside the stdio server and
+    must not crash it, and the other is `install_skill`, where a missing references directory
+    should degrade to "core only" rather than abort an otherwise good install.
+    """
+    try:
+        from importlib.resources import files
+
+        directory = files("vikunja_mcp").joinpath("skills/tracker/references")
+        return sorted(
+            (entry for entry in directory.iterdir() if entry.name.endswith(".md")),
+            key=lambda entry: entry.name,
+        )
+    except Exception:
+        return []
 
 
 def _sync_opt_out() -> bool:
@@ -343,6 +375,20 @@ def sync_installed_artifacts(dest_root=None, opencode_root=None) -> list:
     if packaged_skill is not None:
         for root in (claude_root, oc_root):
             _refresh_if_stale(root / "skills" / "tracker" / "SKILL.md", packaged_skill, healed)
+    # The references move with the core, and they are refreshed under the SAME refresh-only rule:
+    # a reference that is not already installed is not provisioned here. That is deliberate rather
+    # than inherited — provisioning would make the server write into ~/.claude on a machine that
+    # never ran install-skill, which is exactly what this function promises not to do. What it
+    # DOES mean is that a consumer who installed before the split gets its core refreshed and no
+    # references, so the core's pointers dangle until they re-run `install-skill`; the core says so
+    # in the same breath as the pointers.
+    for ref in _packaged_references():
+        try:
+            body = ref.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        for root in (claude_root, oc_root):
+            _refresh_if_stale(root / "skills" / "tracker" / "references" / ref.name, body, healed)
     if hook_body is not None:
         _refresh_if_stale(
             claude_root / "hooks" / HOOK_SCRIPT_NAME, hook_body, healed, executable=True

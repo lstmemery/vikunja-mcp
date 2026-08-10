@@ -31,9 +31,51 @@ from tests.unit.fakes import FakeAPI
 from vikunja_mcp import config, notify, server, setup_cmd, workflow, workspace_cmd
 
 
-def _skill_text() -> str:
-    # the packaged copy that actually ships in the wheel and self-heals onto consumers (#88)
+def _skill_core() -> str:
+    # the packaged CORE — the file `install-skill` copies and `sync_installed_artifacts` heals.
+    # Kept separate from `_skill_text` because ONE pin below is about that file's identity with
+    # its in-repo source, and a bundle could never satisfy it.
     return files("vikunja_mcp").joinpath("skills/tracker/SKILL.md").read_text(encoding="utf-8")
+
+
+def _skill_references() -> list[tuple[str, str]]:
+    """(name, text) for every packaged `references/*.md`, sorted so a bundle is deterministic."""
+    directory = files("vikunja_mcp").joinpath("skills/tracker/references")
+    return sorted(
+        (entry.name, entry.read_text(encoding="utf-8"))
+        for entry in directory.iterdir()
+        if entry.name.endswith(".md")
+    )
+
+
+def _skill_text() -> str:
+    """The WHOLE rulebook: the core plus every reference it routes to.
+
+    The rulebook used to be one file and is now a core plus `references/*.md` — the core carries
+    what an agent must do, the references carry the payload shapes and the measured reasons, and
+    the core names the file to open at each phase. Every content pin in this module asks "does the
+    rulebook still say X", and that question is about the rulebook, not about which of its files
+    happens to hold the sentence today — so they read the bundle. The pins that are about WHERE a
+    rule sits slice a named section out of this text, and those sections moved whole, so their
+    anchors are unchanged.
+
+    Deliberately NOT the in-repo copy: this reads what is PACKAGED, i.e. what actually ships in
+    the wheel and self-heals onto consumers (#88).
+    """
+    return "\n".join([_skill_core(), *(text for _, text in _skill_references())])
+
+
+def _reference(name: str) -> str:
+    """One packaged `references/<name>` — the file that now OWNS a section the pins below slice.
+
+    A section that moved out of the core whole is still sliced by its own heading; what changed is
+    which file to slice it OUT of. Reading the named file rather than the bundle matters where the
+    core kept a POINTER stub carrying the same heading (the browser one does): a search over the
+    bundle would find the stub first and assert against a summary instead of the rule.
+    """
+    return files("vikunja_mcp").joinpath(f"skills/tracker/references/{name}").read_text(
+        encoding="utf-8"
+    )
 
 
 def _workflow_src() -> str:
@@ -134,8 +176,20 @@ def test_the_rulebook_says_which_copy_of_itself_is_authoritative():
         "the rule no longer names the in-repo source copy it redirects agents to"
     source = Path(__file__).resolve().parents[2] / SKILL_SOURCE_PATH
     assert source.is_file(), f"the rulebook redirects agents to {SKILL_SOURCE_PATH}, which is gone"
-    assert source.read_text(encoding="utf-8") == text, \
+    # core against core, not against the bundle: `text` above is core + references, and this
+    # assert is about the identity of the FILE agents are redirected to with the file that ships
+    assert source.read_text(encoding="utf-8") == _skill_core(), \
         f"{SKILL_SOURCE_PATH} is no longer the source the packaged rulebook is built from"
+    for name, packaged in _skill_references():
+        beside = source.parent / "references" / name
+        assert beside.is_file(), (
+            f"references/{name} ships in the wheel but is missing beside {SKILL_SOURCE_PATH}, so "
+            f"an agent redirected to the in-repo copy cannot reach a reference the packaged one has"
+        )
+        assert beside.read_text(encoding="utf-8") == packaged, (
+            f"references/{name} differs between the in-repo copy and the packaged one — the "
+            f"redirect above would hand an agent prose that is not what ships"
+        )
 
 
 def test_every_workflow_stage_is_documented_in_the_skill():
@@ -435,6 +489,14 @@ def test_the_evidence_mismatch_escalation_is_one_the_orchestrator_can_execute():
 
 
 def _gc_section(text: str) -> str:
+    """The `--gc` rule as a UNIT: the tick step in the core plus the report breakdown that moved
+    to `references/gc-report.md`. Every refusal code and payload key an agent must recognise is in
+    the second half now; slicing only the first would ask the core to explain shapes it points at.
+    """
+    return _gc_step(text) + "\n" + _reference("gc-report.md")
+
+
+def _gc_step(text: str) -> str:
     """Just the `--gc` step of the orchestrator's tick, sliced out of the rulebook.
 
     ROUND-2 REVIEW, Minor: the assertions below used to be `code in text` — a WHOLE-FILE substring
@@ -514,6 +576,11 @@ def _standing_record_bullet(text: str) -> str:
     start = text.find("     - **Стоячая запись приходит на КАЖДОМ свипе")
     assert start != -1, "SKILL.md no longer states the cadence of a standing --gc record"
     end = text.find("\n     `--gc` ходит ОДИН", start)
+    if end == -1:
+        # The rulebook split put this bullet in `references/gc-report.md` and left the `--gc`
+        # argument rule in the core, so the anchor that used to follow it now PRECEDES it in the
+        # concatenation. The bullet runs to the end of the reference instead.
+        end = len(text)
     assert end != -1, "the cadence bullet no longer ends where the --gc argument rule begins"
     bullet = text[start:end]
     assert 0 < len(bullet) < len(text), "the cadence slice is not a proper subset of SKILL.md"
@@ -1376,13 +1443,11 @@ def test_the_ceiling_numbers_in_both_files_re_derive_from_their_own_formula():
 
 
 def _shared_resources_section(text: str) -> str:
-    """The shared-resource rules a per-task agent follows under the parallel drain.
+    """The shared-resource section, plus the browser rules that moved out of it.
 
-    Sliced like `_gc_section` / `_tick_step_3`, and for the same measured reason: `attach_file`,
-    `Page URL` and `browser` would each be satisfiable somewhere else in a 800-line rulebook, so a
-    whole-file substring could not tell "the rule is still stated where an agent reads it" from
-    "the word survives in an unrelated paragraph". Width is asserted, not assumed — a slice that
-    silently widened to the whole file would restore exactly the weakness it exists to remove."""
+    The section itself stayed in the core; only its browser subsection became
+    `references/browser.md`, so the pins about shared resources still see both.
+    """
     start = text.find("## Общие ресурсы: worktree изолирует ФАЙЛЫ")
     assert start != -1, "the shared-resource section is no longer where this pin can find it"
     end = text.find("\n## ", start + 1)
@@ -1390,7 +1455,10 @@ def _shared_resources_section(text: str) -> str:
     section = text[start:end]
     assert 0 < len(section) < len(text), "the slice is not a proper subset of SKILL.md"
     assert "## Кто выполняет работу" not in section, "the slice swallowed the following section"
-    return section
+    # The browser subsection used to close this section and now lives in `references/browser.md`.
+    # APPENDED rather than merged, because one pin below asserts ORDER — shared-resource rules
+    # first, browser rules after — which is the layout the section always had.
+    return section + "\n" + _reference("browser.md")
 
 
 def test_the_shared_browser_rule_stays_detectable_rather_than_wishful():
@@ -2309,9 +2377,18 @@ _VERSION_WINDOW = 220
 
 
 def _browser_section(text: str) -> str:
-    """The `### Браузер (playwright)` section: from its heading to the next level-2 heading."""
+    """The browser rules, sliced out of the file that owns them now.
+
+    The core keeps a pointer stub under the SAME heading, so this reads
+    `references/browser.md` rather than the bundle: a bundle search finds the stub.
+    """
+    text = _reference("browser.md")
     start = text.index("### Браузер (playwright)")
-    rest = text.index("\n## ", start)
+    # `references/browser.md` IS this section, so there is no following `## ` to stop at any
+    # more; before the split the section ended at the next top-level heading of the one big file.
+    rest = text.find("\n## ", start)
+    if rest == -1:
+        rest = len(text)
     return text[start:rest]
 
 
@@ -2372,7 +2449,7 @@ def test_a_playwright_tool_count_in_the_rulebook_names_the_version_it_was_measur
     )
 
 
-@pytest.mark.parametrize("name", ["CLAUDE.md", ".gitignore"])
+@pytest.mark.parametrize("name", ["docs/dossier/browser.md", ".gitignore"])
 def test_a_playwright_tool_count_outside_the_rulebook_names_its_version_too(name):
     """VMCP-222 (765): the same rule, in the two other files that make the same claim.
 
@@ -2877,15 +2954,8 @@ def test_the_rulebook_quotes_the_saturated_message_and_the_payload_still_renders
 
 
 def _stuck_section(text: str) -> str:
-    """The «Застрял? Выход зависит от РОЛИ» section — where a stuck agent is told which door is
-    its own.
-
-    Sliced like `_freshness_section` / `_wip_saturated_bullet`, and here the slicing is MEASURED,
-    not stylistic: `review_task`, `needs_work` and `file_task` each occur several times elsewhere
-    in this rulebook (the review sections, the push recipe's Review-stage escalation, the
-    independent-review rules). A whole-file substring therefore stays GREEN with the reviewer's
-    bullet deleted outright — it cannot tell "the reviewer is told where to go" from "the words
-    exist somewhere". Verified by running exactly that mutation both ways."""
+    """Sliced out of `references/stuck.md`, which owns this section now."""
+    text = _reference("stuck.md")
     start = text.find("\n## Застрял? Выход зависит от РОЛИ\n")
     assert start != -1, "SKILL.md no longer has the section that routes a stuck agent by role"
     end = text.find("\n## ", start + 1)
@@ -4871,19 +4941,8 @@ def test_the_post_push_check_reads_the_runs_OUTCOME_and_not_only_its_existence()
 
 
 def _after_review_section(text: str) -> str:
-    """The «После Review» section — the one place written to the implementer who RECEIVES a
-    bounced card, and today the LAST section of the rulebook (so the slice may legitimately run
-    to end-of-file, unlike every other section helper here; it still stops at a `## ` heading if
-    one is ever appended below).
-
-    Sliced to the SECTION rather than grepped whole-file for a MEASURED reason: `call_human` and
-    `decompose` both occur many times elsewhere in this rulebook — the stuck section, the drain
-    tick, the push recipe, the decomposition section — so a whole-file `"call_human" in text`
-    stays GREEN with this entire rule deleted. It cannot tell "the receiver is told to forward
-    the question" from "the words exist somewhere". Verified by running exactly that mutation
-    both ways, which is the whole argument; no occurrence COUNT is quoted, because the count is
-    a number this file's own edits keep moving — the first draft of this docstring quoted one
-    and the same diff had already changed it, so run the mutation instead of counting."""
+    """Sliced out of `references/stuck.md`, which owns this section now."""
+    text = _reference("stuck.md")
     start = text.find("\n## После Review\n")
     assert start != -1, "SKILL.md no longer has the section written to a post-review implementer"
     end = text.find("\n## ", start + 1)

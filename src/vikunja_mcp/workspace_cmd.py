@@ -13,6 +13,11 @@ else knows whether the task behind an orphaned tree is still alive (see gc_works
 
 SAFETY INVARIANT, taken verbatim from hgdev-acp's reaper: push OK -> remove, push FAIL -> KEEP.
 Housekeeping must never be how an agent's work disappears.
+
+DOSSIER: `docs/dossier/workspace.md` — the measured evidence under the rules in this
+module: `half-applied`, the gitlink typechange gap, why the probes
+read the TREE rather than git's messages, and why `git diff` had to become `diff-index`.
+Read it before changing a guard here; CLAUDE.md carries only the rule.
 """
 import argparse
 import fcntl

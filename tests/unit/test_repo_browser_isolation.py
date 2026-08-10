@@ -264,6 +264,22 @@ ARTIFACT_EXTENSION_GLOBS = ("*.png", "*.jpg", "*.jpeg", "*.pdf")
 #     auto-named files moved there and the explicit one still landed in the checkout root.
 SKILL_MD_PATH = REPO_ROOT / "src" / "vikunja_mcp" / "skills" / "tracker" / "SKILL.md"
 
+
+def _rulebook_text() -> str:
+    """The WHOLE rulebook: the core plus every `references/*.md` it routes to.
+
+    The rulebook is a core (what an agent must do) plus references (payload shapes and the
+    measured reasons), and the browser recipes this module reads live in `references/browser.md`.
+    The question here — "does the rulebook prescribe a `filename` git excludes" — is about the
+    rulebook, not about which of its files holds the recipe today, so it reads the set.
+    """
+    parts = [SKILL_MD_PATH.read_text(encoding="utf-8")]
+    parts.extend(
+        path.read_text(encoding="utf-8")
+        for path in sorted((SKILL_MD_PATH.parent / "references").glob("*.md"))
+    )
+    return "\n".join(parts)
+
 # The directory the rule now sends every caller-chosen artifact to — the browser's own output
 # dir, excluded wholesale by #607's rule. Named once because two different assertions depend on
 # it: that git excludes what SKILL.md prescribes, and that SKILL.md prescribes THIS place.
@@ -1872,7 +1888,7 @@ def test_every_filename_skill_md_prescribes_is_excluded_by_this_repos_gitignore(
     them is the flag the recipe carries. SKILL.md says exactly that instead of implying coverage
     it does not have.
     """
-    text = SKILL_MD_PATH.read_text(encoding="utf-8")
+    text = _rulebook_text()
     prescribed = sorted(set(PRESCRIBED_FILENAME_RE.findall(text)))
 
     assert len(prescribed) >= MIN_PRESCRIBED_FILENAMES, \

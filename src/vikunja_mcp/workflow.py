@@ -1,4 +1,9 @@
-"""Stages and gates of the agent flow. The rules are baked in here, not in prompts."""
+"""Stages and gates of the agent flow. The rules are baked in here, not in prompts.
+
+DOSSIER: `docs/dossier/workflow.md` — the measured evidence under the rules in this
+module: the stage/gate rules and the push-review decision.
+Read it before changing a guard here; CLAUDE.md carries only the rule.
+"""
 import mimetypes
 import os
 import shutil

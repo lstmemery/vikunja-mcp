@@ -194,6 +194,11 @@ deliberate rather than a gap to close: the hub parses the line, so parsed equali
 property the contract actually needs, and a byte-level pin would fail on a key reordering the
 consumer cannot see. Byte-identity is a stronger claim, established by `cmp` on real runs, and
 whoever next changes what stdout prints has to re-establish it the same way.
+
+DOSSIER: `docs/dossier/claimable.md` — the measured evidence under the rules in this
+module: the dogfood regression that created this command and the
+200-byte cap that forces the stderr trail to stay terse.
+Read it before changing a guard here; CLAUDE.md carries only the rule.
 """
 import json
 import os
