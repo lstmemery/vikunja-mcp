@@ -884,6 +884,11 @@ def _without_mentions(flat: str) -> str:
     tally closer together and could vouch where the unmasked text does not, which is the one
     direction a fix for an over-vouching defect must not travel. The filler is a non-digit,
     non-word character, so it neither spells a tally nor bridges a `\\b`.
+
+    That is now a RUN and not only a reason. Deleting instead of filling shipped GREEN over the
+    whole suite until VMCP-273 (894); it now reddens
+    `test_a_mention_is_blanked_to_ITS_OWN_LENGTH_and_never_deleted`, whose record carries both
+    pairs. Do not simplify this line back without reading it.
     """
     return _MENTIONED.sub(lambda m: "·" * len(m.group(0)), flat)
 
@@ -1122,6 +1127,58 @@ def test_the_scanner_tells_a_pytest_tally_from_the_other_numbers_in_this_repo():
             f"_ROUND_COUNT read {prose!r} as {not expected_round}"
         assert _states_a_control_count(prose) is expected_control, \
             f"_CONTROL_COUNT read {prose!r} as {not expected_control}"
+
+
+def test_a_mention_is_blanked_to_ITS_OWN_LENGTH_and_never_deleted():
+    """`_without_mentions` fills a mention rather than removing it, and nothing held that.
+
+    Both patterns are distance-bounded (`[^.;]{0,60}`), so DELETING a mention pulls whatever sat on
+    either side of it closer together: a control then reaches a tally it could not reach in the
+    unmasked text and vouches where the text itself does not — the one direction a fix for an
+    over-vouching defect must not travel. That reasoning was written in the function's docstring
+    and held by nothing else, so `return _MENTIONED.sub("", flat)` shipped GREEN over the whole
+    suite. VMCP-273 (894) is that gap, and this is the round it was missing.
+
+    The construction is the smallest kind of prose that separates the two readings: the word
+    control, a mention long enough to hold it past the sixty-character window, and a stray tally.
+    Its width is measured rather than picked — forty-five filler characters do not separate the
+    readings at all (the unmasked text already vouches, so there is nothing for a mask to
+    preserve) and forty-six are the first that do. Sixty are used, so the pin is not balanced on
+    the window's own edge.
+
+    MUTATION-CHECKED, `__pycache__` deleted then `PYTHONDONTWRITEBYTECODE=1`, this file as the
+    selection, `-q` dropped so the `collected` line prints, and each round read by counting lines
+    beginning `FAILED ` and lines beginning `ERROR ` separately rather than the first tally in
+    stdout. At `194c6c4` plus this test, collected 7 on every round: control 0 failed and 0 errors;
+    `_without_mentions` returning `_MENTIONED.sub("", flat)` -> 1 failed and 0 errors, the failure
+    being this test; restored to a byte-identical file (sha256) and the closing control 0 failed
+    again. What says the pin was MISSING rather than merely present is a SECOND pair, on `194c6c4`
+    alone, where the selection is collected 6 on both sides: control 0 failed, and the same
+    deletion 0 failed — green, which is why this test exists.
+    """
+    prose = "control the phrase `" + "q" * 60 + "` 3 failed"
+    flat = _flat(prose)
+
+    assert _quotes_a_round_count(prose), (
+        "the construction has to carry a tally, or neither reading is asked anything at all"
+    )
+    assert not _CONTROL_COUNT.search(flat), (
+        "the UNMASKED text must state no control here, because that is the reading the mask has "
+        "to preserve; if it vouches on its own this round proves nothing"
+    )
+    assert _CONTROL_COUNT.search(_MENTIONED.sub("", flat)), (
+        "deleting the mention must close the window on this construction, or the test no longer "
+        "separates the two readings and would be green for the wrong reason"
+    )
+
+    assert len(_without_mentions(flat)) == len(flat), (
+        "`_without_mentions` shortened the text: a mention is replaced by filler of ITS OWN "
+        "length, never removed, because both patterns are distance-bounded"
+    )
+    assert not _states_a_control_count(prose), (
+        "the mask made this paragraph vouch for itself where the unmasked text does not — exactly "
+        "what deleting a mention buys, and the one direction this fix must not travel"
+    )
 
 
 def test_a_control_in_one_paragraph_does_not_vouch_for_the_next():
