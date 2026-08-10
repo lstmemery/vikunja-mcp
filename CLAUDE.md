@@ -1426,11 +1426,20 @@ push origin HEAD:main` is the expected outcome, not an anomaly. The
 triggers itself, so it never pushes twice in a row and can cost an agent at most
 one round. That bound is what sizes SKILL.md's integration ceiling, and the
 ceiling is a FORMULA, not a constant. Two steps, and the second is the one that
-kept getting dropped: the worst purely MECHANICAL run at `wip_limit = N` is
+kept getting dropped: the worst purely MECHANICAL run at N racing agents is
 2·(N−1) + 1 rounds — **5** at the default 3 — and the ceiling must sit STRICTLY
 ABOVE that (otherwise it fires on arithmetic), i.e. one more round. So the
 ceiling is **`2 × wip_limit`**: 2 at limit 1, **6** at this repo's default 3, 8
-at 4, 10 at 5. The worst run and the ceiling are DIFFERENT numbers — quoting the
+at 4, 10 at 5. **N is how many tasks are ACTUALLY in Design/Build — `wip.active`,
+not the limit — and reading it off the limit fires the ceiling on exactly the
+arithmetic it exists to prevent** (tracker #939): rework re-enters Build past the
+`claim` gate, so `wip.active` legitimately EXCEEDS `wip_limit` (measured on this
+board: 5–7 against a limit of 3, where card 851 spent all 6 rounds on pure
+mechanics with green gates and no rebase conflict, then parked finished pushed
+work in Your Call). So the operative formula is `2 × max(wip_limit, wip.active)`,
+the `max` being what keeps the ceiling from DROPPING below the table above when
+fewer tasks are in flight than the limit allows; the table itself is unchanged,
+being a function of N. The worst run and the ceiling are DIFFERENT numbers — quoting the
 first where the second belongs is what card 556 caught in this very paragraph.
 The rulebook self-heals onto every consumer and `wip_limit` is per-project, so a
 pinned constant would call a human onto pure arithmetic in any project running a

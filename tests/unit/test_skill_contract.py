@@ -1056,7 +1056,21 @@ def test_the_integration_retry_ceiling_is_pinned():
     formula into a constant — "it is always 6 here anyway" — which stays silently correct on this
     repo, at the default limit, and is silently wrong everywhere the drain is wider: at 4 a pinned 6
     escalates to a human on arithmetic alone. The three positive site pins below are all spelled
-    `2 × wip.limit`, so a re-collapse cannot pass them.
+    `2 × max(wip.limit, wip.active)`, so a re-collapse cannot pass them.
+
+    VMCP-280 (939) moved those three spellings off `wip.limit` alone, and the reason is that the
+    limit was the WRONG variable rather than a coarse one: rivals on the push are whoever is really
+    in Design/Build, and `wip.active` legitimately exceeds the limit because rework re-enters Build
+    past the `claim` gate. Measured on this board — active 5–7 against a limit of 3, and card 851
+    spent all 6 rounds on pure mechanics, green gates, no rebase conflict, then parked finished
+    pushed work in Your Call, i.e. the ceiling fired on exactly the arithmetic it exists to
+    prevent. `max` keeps it from ever DROPPING below the old value. A fourth positive pin follows,
+    on the dispatch brief carrying `wip.active`: unlike the limit that number is BOARD state with
+    no config to read it from, so losing it from the brief silently collapses the formula back.
+    MUTATION-CHECKED for 939 (both rounds `collected 55 items`, the same selection as the control;
+    SKILL.md restored sha256-identical afterwards; `FAILED `/`ERROR ` lines counted separately):
+    control 0 failed; drop `wip.active` out of the dispatch brief -> 1 failed; re-collapse the
+    recipe's round count to a bare `2 × wip.limit` -> 1 failed.
 
     Pinned in all three places that carry the RULE, not once against the whole file (see
     `_gc_section` on why a whole-file substring is the weak form of this): the parallel-drain
@@ -1113,12 +1127,14 @@ def test_the_integration_retry_ceiling_is_pinned():
     src = _workflow_src()
 
     # the three sites that carry the ceiling itself
-    assert "ещё круг, до `2 × wip.limit`)" in flat, \
-        "the parallel-drain rule no longer states the `2 × wip.limit` integration retry ceiling"
-    assert "до 2 × wip.limit кругов" in recipe, \
-        "the integration recipe's push step no longer states the `2 × wip.limit` retry ceiling"
-    assert "круги кончились (`2 × wip.limit`, см. «Откуда потолок»)" in flat, \
-        "the escalation sentence no longer spends the `2 × wip.limit` rounds before call_human"
+    assert "ещё круг, до `2 × max(wip.limit, wip.active)`)" in flat, \
+        "the parallel-drain rule no longer states the `2 × max(...)` integration retry ceiling"
+    assert "до 2 × max(wip.limit, wip.active) кругов" in recipe, \
+        "the integration recipe's push step no longer states the `2 × max(...)` retry ceiling"
+    assert "круги кончились (`2 × max(wip.limit, wip.active)`, см. «Откуда потолок»)" in flat, \
+        "the escalation sentence no longer spends the `2 × max(...)` rounds before call_human"
+    assert "`wip.active` из того же" in flat, \
+        "the dispatch brief no longer carries wip.active — the ceiling collapses back to the limit"
 
     # the diagnosis: a round is owed only for a race that was LOST, and the count cannot say
     assert "git log --oneline HEAD..origin/main" in recipe, \
