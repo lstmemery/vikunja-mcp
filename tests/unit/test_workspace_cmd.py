@@ -4886,6 +4886,211 @@ def test_an_unreadable_FILE_is_destroyed_by_the_merge_and_named_anyway(repo, tra
     assert not doomed.exists(), "and it really is destroyed; naming is not saving"
 
 
+def test_the_walk_RECORDS_what_it_could_not_read_instead_of_swallowing_it(tmp_path):
+    """VMCP-281 (940), variant B, chosen by the human on the card: `onerror=None` is replaced by a
+    RECORDING callback, so "the list is incomplete" becomes an expressible state.
+
+    WHAT WAS WRONG. `os.walk` defaults to `onerror=None`, which swallows EVERY `OSError` — not
+    only permission ones. So a directory the walk cannot descend contributes no name and no
+    signal, and `overwritten_ignored` comes back PRESENT, NON-EMPTY and SHORT, with no
+    `overwritten_ignored_truncated` either. That report is indistinguishable from a complete one,
+    and the whole documented reading of the key ("present ⇒ these died; absent ⇒ nothing proven")
+    invites treating it as a lower bound on the loss — which it silently was not.
+
+    The fix does NOT save the bytes and is not meant to: git destroys them, a `git pull --ff-only`
+    typed by hand does the same, and VMCP-240 (806) settled that this feature is a post-mortem and
+    explicitly not a guard. What it buys is that a SHORT list can no longer pass for a full one.
+
+    Asserted on the return value of the walk rather than end to end, so no downstream filter can
+    mask it. The trigger here is a mode, because that is portable and deterministic; the channel
+    the card was filed for is ENAMETOOLONG, which needs no mode at all and is measured next door.
+    """
+    root = tmp_path / "checkout"
+    (root / "out" / "reachable").mkdir(parents=True)
+    (root / "out" / "reachable" / "a.txt").write_text("the human's own scratch\n")
+    closed = root / "out" / "closed"
+    closed.mkdir()
+    (closed / "precious.txt").write_text("bytes nobody will be told about\n")
+    closed.chmod(0o000)
+    try:
+        unreadable: list[str] = []
+        got = workspace_cmd._expand_if_directory(root, "out", unreadable=unreadable)
+
+        assert "out/reachable/a.txt" in got, ("the neighbour is still named — a recording "
+                                              "`onerror` must not cost the names the walk DID "
+                                              "reach", got)
+        assert not any(p.startswith("out/closed/") for p in got), \
+            "nothing under the unreadable directory can be named; that is the loss, not the bug"
+        assert len(unreadable) == 1, (
+            "the walk hit exactly one place it could not read and must say so ONCE. Before this "
+            "card that information existed inside `os.walk` and was thrown away by the default "
+            "`onerror=None`", unreadable
+        )
+    finally:
+        closed.chmod(0o700)                          # or tmp_path cleanup cannot remove it
+
+
+def test_a_denied_probe_says_so_END_TO_END_beside_the_names_it_did_reach(repo, tracker, tmp_path):
+    """VMCP-281 (940) end to end: the state the card is about, on a real repo and a real merge.
+
+    `overwritten_ignored` PRESENT and NON-EMPTY while the walk was denied somewhere — before this
+    card that came back with no companion key at all, so it was byte-for-byte the shape of a
+    COMPLETE answer and a reader had nothing to tell them apart. The unit tests next door pin the
+    walk's own return value; this pins that the signal survives the probe, the ignore filter, the
+    cap and the payload assembly, because every one of those has dropped information before.
+
+    The mode is the portable trigger, not the channel: 940 is about ENAMETOOLONG, which needs no
+    mode at all. What is shared — and what this asserts — is the callback and the key.
+    """
+    _api, wf = tracker
+    _ignoring(repo, "out/")
+    (repo / "out").mkdir()
+    (repo / "out" / "named.txt").write_text("the human's own note\n")
+    closed = repo / "out" / "closed"
+    closed.mkdir()
+    (closed / "unnameable.txt").write_text("bytes the report can never list\n")
+    closed.chmod(0o000)
+    assert _git(repo, "status", "--porcelain") == "", "ignored, so invisible as always"
+
+    _land_on_origin(tmp_path, "denied", {"out": "upstream takes that name\n"})
+    try:
+        res = gc_workspaces(cwd=repo, workflow=wf)
+    finally:
+        if closed.exists():
+            closed.chmod(0o700)
+
+    state = res["main_checkout"]
+    assert state.get("overwritten_ignored"), (
+        "the probe still names what it COULD reach — this card added a signal, it did not trade "
+        "away the names", state
+    )
+    assert state.get("overwritten_ignored_incomplete") == 1, (
+        "the walk was denied one place and the report does not say so. That is the whole defect: "
+        "a SHORT `overwritten_ignored` is indistinguishable from a complete one, and every "
+        "document in this repo invites reading a present list as a lower bound on the loss", state
+    )
+
+
+def _build_enametoolong_band(out: Path) -> tuple[int, int, int] | None:
+    """Nest inside `out` until its ABSOLUTE path passes PATH_MAX while the RELATIVE one has not.
+
+    THE BAND IS THE WHOLE POINT of VMCP-281 (940). git works RELATIVE to the checkout and the
+    probe walked ABSOLUTE, so between those two lengths git sees a file and destroys it while
+    `scandir` gets ENAMETOOLONG. Built by `chdir` descent so every individual NAME stays short —
+    it is the accumulated path that is long, which is what makes this an ordinary deep tree and
+    not a pathological filename.
+
+    Returns (depth, deepest_relative_len, deepest_absolute_len) or None when this machine cannot
+    hold the band — PATH_MAX differs (1024 on macOS, 4096 on Linux) and the checkout root eats
+    into it, so the caller SKIPS rather than asserting on a stand that was never built.
+    """
+    limit = os.pathconf("/", "PC_PATH_MAX")
+    name = "d" * 34
+    root = out.parent
+    keep = os.open(".", os.O_RDONLY)
+    depth = 0
+    try:
+        os.chdir(out)
+        while depth < (limit // 35) + 4:
+            os.mkdir(name)
+            os.chdir(name)
+            with open("f.txt", "w") as fh:
+                fh.write(f"precious-{depth}\n")
+            depth += 1
+            rel = len(f"{out.name}" + f"/{name}" * depth + "/f.txt")
+            absolute = len(str(root)) + 1 + rel
+            if absolute > limit and rel < limit:
+                return depth, rel, absolute
+            if rel >= limit:
+                return None                  # overshot: git would not see the file either
+    except OSError:
+        return None
+    finally:
+        os.fchdir(keep)
+        os.close(keep)
+    return None
+
+
+def test_ENAMETOOLONG_is_reported_on_the_branch_where_the_merge_SUCCEEDS(repo, tracker, tmp_path):
+    """VMCP-281 (940)'s actual channel, end to end, on the `updated: true` branch.
+
+    THIS BRANCH RATHER THAN `half-applied`, and the difference is not cosmetic — it is why the
+    mode-based stand next door cannot stand in for this one. A denied directory stops GIT too, so
+    the merge refuses and the report goes out as `half-applied`; the state the card describes is
+    the opposite one, where the merge COMPLETES and the report looks like a full account of what
+    died. ENAMETOOLONG is the one measured route into it, because git addresses paths RELATIVE to
+    the checkout and the probe walked them ABSOLUTE, so only the probe is blinded.
+
+    Measured while fixing the card, macOS 26.5.2 / APFS, git 2.50.1, PATH_MAX 1024: at depth 28
+    (989 relative / 1063 absolute) the merge reports `updated: True`, 28 files with bytes are
+    destroyed, `overwritten_ignored` names 27 and — before this fix — no companion key appeared
+    at all. Three independent reviewers reached the same shape with 15/14, 22/21 and 25/24.
+
+    SKIPPED rather than asserted where the band cannot be built: PATH_MAX is 1024 here and 4096 on
+    the Linux runner, and the checkout root eats into the budget. A skip says "not measured on this
+    machine", which is honest; the unit pins next door carry the callback on every machine.
+    """
+    _api, wf = tracker
+    _ignoring(repo, "out/")
+    (repo / "out").mkdir()
+    band = _build_enametoolong_band(repo / "out")
+    if band is None:
+        pytest.skip("PATH_MAX and this checkout's root leave no relative/absolute band to build")
+    depth, rel_len, abs_len = band
+    assert rel_len < abs_len, (rel_len, abs_len)
+    assert _git(repo, "status", "--porcelain") == "", "ignored, so invisible as always"
+
+    _land_on_origin(tmp_path, "toolong", {"out": "upstream takes that name\n"})
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state.get("updated") is True, (
+        "the merge must SUCCEED here — that is what separates this channel from an unreadable "
+        "directory, which stops git as well and reports `half-applied`", state
+    )
+    assert state.get("overwritten_ignored"), (
+        "the probe still names what it reached; the deep tail is what it cannot", state
+    )
+    assert state.get("overwritten_ignored_incomplete"), (
+        f"the walk was denied inside a {depth}-deep tree ({rel_len} relative / {abs_len} "
+        f"absolute, PATH_MAX {os.pathconf('/', 'PC_PATH_MAX')}) and the report does not say so. "
+        f"This is the card's exact state: `overwritten_ignored` PRESENT, NON-EMPTY and SHORT, "
+        f"with nothing to distinguish it from a complete account of the loss", state
+    )
+
+
+def test_the_recorded_skip_counts_PLACES_and_never_files(tmp_path):
+    """The key's SEMANTICS, pinned because the natural misreading is expensive.
+
+    One unreadable directory hides its WHOLE subtree, so the number of recorded skips is NOT the
+    number of files lost — it is the number of places the probe could not look. Measured while
+    fixing this card, on the ENAMETOOLONG stand: at depth 28 one file died unnamed and the walk
+    reported ONE error; at depth 30 THREE files died unnamed and the walk still reported ONE.
+
+    That is why the sibling key is a bare count of skipped PLACES and why no code here tries to
+    turn it into a loss estimate. A reader who takes it for a file count would compute a lower
+    bound that is wrong in the unsafe direction.
+    """
+    root = tmp_path / "checkout"
+    closed = root / "out" / "closed"
+    (closed / "deeper").mkdir(parents=True)
+    for name in ("one.txt", "two.txt"):
+        (closed / name).write_text("bytes\n")
+    (closed / "deeper" / "three.txt").write_text("bytes\n")
+    closed.chmod(0o000)
+    try:
+        unreadable: list[str] = []
+        workspace_cmd._expand_if_directory(root, "out", unreadable=unreadable)
+        assert len(unreadable) == 1, (
+            "three files and a subdirectory are behind ONE closed door, so the probe was denied "
+            "ONCE. If this ever reads 3 or 4 the key has quietly become a file count, and the "
+            "docstring above says why that is worse than useless", unreadable
+        )
+    finally:
+        closed.chmod(0o700)
+
+
 def test_a_symlink_under_a_NON_TRAVERSABLE_parent_is_still_named(tmp_path):
     """VMCP-253 (852) round 2. A BLINDED `is_dir()` does not cost a symlink its name — and the
     real directory beside it is lost, which is VMCP-245 (836)'s road reached a second way.

@@ -186,6 +186,13 @@ measured shape of both exemptions.
   before-`advance` rule and not this code.**
   **Those loss keys read in ONE direction only.** Present ⇒ something was destroyed.
   Absent ⇒ NOT a proof that nothing was. Present ⇒ NOT a proof that the list is COMPLETE.
+  That third reading has ONE key that states it outright since tracker #940:
+  **`overwritten_ignored_incomplete`** counts the PLACES the probe could not look at — not the
+  files lost, since one denied directory hides a whole subtree — and it is emitted even with no
+  `overwritten_ignored` beside it, which is the case that looks safest and is not. Its channel
+  needs no permissions at all: git addresses paths RELATIVE to the checkout while the probe
+  walked them ABSOLUTE, so between those two lengths git destroys a file that `os.scandir`
+  cannot even see. It closes the SILENCE, never the loss.
   **Only ONE of the two refusal channels is coded, and the split is deliberate.** Every
   `--release`/`--gc` refusal is exit 0 + `released: false` + a machine-readable `code`
   beside the prose `reason` ("the tool RAN and is protecting your work"), and `--gc` GRADES

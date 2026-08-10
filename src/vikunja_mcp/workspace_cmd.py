@@ -2098,7 +2098,8 @@ def _holds_a_dot_git(path: str) -> bool:
     return os.path.lexists(os.path.join(path, ".git"))
 
 
-def _expand_if_directory(root: Path, rel: str, gitlinks: frozenset[str] = frozenset()) -> list[str]:
+def _expand_if_directory(root: Path, rel: str, gitlinks: frozenset[str] = frozenset(),
+                         unreadable: list[str] | None = None) -> list[str]:
     # `r"""` is load-bearing, not style: the measurement below quotes a NUL-separated `printf`, and
     # in a plain docstring `\0` is a real NUL character — measured, two of them landed in
     # `__doc__` before this prefix went on, invisible in the file and in any diff of it.
@@ -2212,9 +2213,12 @@ def _expand_if_directory(root: Path, rel: str, gitlinks: frozenset[str] = frozen
     that with a clean yes. On the PERMISSION axis two different things do the saving on the rows
     below — which is the whole of VMCP-253 (852) and the part any one-line summary gets wrong —
     but they are not everything, and the last paragraph here names what gets past them. `os.walk`
-    defaults to `onerror=None`, so a subdirectory the walk cannot DESCEND
-    into is skipped in silence: `out/` holding `a.txt` plus a `chmod 000` `locked/` expands to
-    `['out/a.txt']`, naming neither `out/locked` nor its content. An earlier draft called THAT
+    USED TO default to `onerror=None` here — VMCP-281 (940) replaced it with a recording callback,
+    so a subdirectory the walk cannot DESCEND into is still SKIPPED but no longer skipped in
+    SILENCE: `out/` holding `a.txt` plus a `chmod 000` `locked/` expands to
+    `['out/a.txt']`, naming neither `out/locked` nor its content, and the caller now reports
+    `overwritten_ignored_incomplete`. The names below are unchanged by that fix — it buys the
+    reader a signal, never a name and never the bytes. An earlier draft called THAT
     tree a second route to a silent present-and-incomplete report; the second pass refuted it and
     the refutation reproduces — `out` is still a directory afterwards, the victim is alive and no
     `overwritten_ignored` key is emitted (what the sync CALLS it is the paragraph below).
@@ -2241,16 +2245,28 @@ def _expand_if_directory(root: Path, rel: str, gitlinks: frozenset[str] = frozen
     `out` still a directory. Do NOT read the far side of that as safe — this stand did not check
     survival there, and the second pass did and reports unnamed byte losses continuing beyond it
     and growing with depth. So `overwritten_ignored`
-    comes back PRESENT and INCOMPLETE with nothing saying so, which is a loss of the #710/#806
-    class. Measured on three different trees by three readers — both of this card's reviewers and
-    again here — with a different file count each time and the same shape: one casualty per run
-    reaching NEITHER key. Read this as a THIRD built road to present-and-incomplete, sister to
+    used to come back PRESENT and INCOMPLETE with nothing saying so, which is a loss of the
+    #710/#806 class. Measured on FOUR different trees by four readers — both of this card's
+    reviewers, the implementer of VMCP-281 (940) and again here — with a different file count each
+    time (15/14, 22/21, 25/24, 28/27) and the same shape: one casualty per run reaching NEITHER
+    key. Read this as a THIRD built road to present-and-incomplete, sister to
     VMCP-245 (836)'s symlink in `dirnames`, and not as a census — roads are counted by who has
-    built one. The behaviour fix and the product choice under it are VMCP-281 (940); the slice here
-    is prose, so nothing below guards it.
+    built one.
+
+    VMCP-281 (940) CLOSED THE SILENCE AND NOT THE LOSS, which is the human's choice on that card
+    (variant B of four) and not a partial job. `overwritten_ignored_incomplete` now counts the
+    PLACES this walk was denied, so present-and-incomplete is an expressible state instead of one
+    that reads as a complete account. The bytes still die: git destroys them, a hand-typed
+    `git pull --ff-only` does the same, and VMCP-240 (806) settled that this whole feature is a
+    post-mortem and explicitly not a guard. NAMING the deep casualty needs the walk to descend by
+    `dir_fd` instead of by absolute path — measured on that card as working (25 of 25, zero
+    errors) and declined for now, because it replaces `os.walk` wholesale and four behaviours hang
+    off its semantics: the symlink-in-`dirnames` classification, the nested-gitlink prune, the
+    `_MAX_DIR_EXPANSION` cap and the empty-directory branch.
 
     TWO OMISSIONS COMPOUND THERE, and naming only one of them is where the round-1 text went
-    wrong. The CONTENT is lost to `onerror=None`. The directory ENTRY `out/locked` is lost to the
+    wrong. The CONTENT is lost to the failing descent — counted since 940, still unnamed. The
+    directory ENTRY `out/locked` is lost to the
     deliberate real-subdirectory filter above, which omits it because its contents are named
     INSTEAD — sound whenever the descent works, and exactly wrong when it does not, since then
     there are no contents to stand in for it. "An UNREADABLE subdirectory" is also the wrong axis
@@ -2410,7 +2426,25 @@ def _expand_if_directory(root: Path, rel: str, gitlinks: frozenset[str] = frozen
     if _holds_a_dot_git(full):
         return [rel]
     inside: list[str] = []
-    for dirpath, dirnames, filenames in os.walk(full):
+    # VMCP-281 (940), variant B, decided by the human on that card. `os.walk` defaults to
+    # `onerror=None`, which swallows EVERY `OSError` and not just permission ones — so a place the
+    # walk cannot descend contributed no name AND no signal, and the caller's key came back
+    # PRESENT, NON-EMPTY and SHORT with nothing to distinguish it from a complete answer. The
+    # information already existed here; only the default callback threw it away.
+    #
+    # RECORDS PLACES, NEVER FILES, and the difference is measured rather than assumed: one denied
+    # directory hides its whole subtree, so on the ENAMETOOLONG stand depth 28 lost ONE file and
+    # depth 30 lost THREE while both reported exactly ONE error. Anything that turns this into a
+    # loss estimate is wrong in the unsafe direction.
+    #
+    # It cannot fail the sync: the callback only appends, and a caller that passes nothing keeps
+    # the previous behaviour exactly. The repo rule stands — a diagnostic may cost the REPORT,
+    # never the fast-forward.
+    def _record(err: OSError) -> None:
+        if unreadable is not None:
+            unreadable.append(str(getattr(err, "filename", "") or ""))
+
+    for dirpath, dirnames, filenames in os.walk(full, onerror=_record):
         # Prune nested GITLINKS in place: nothing inside one can be put to `check-ignore`, so
         # walking in costs bisect calls and yields no name (`_index_gitlink_paths`).
         dirnames[:] = [d for d in dirnames
@@ -2646,7 +2680,8 @@ def _ignored_of(root: Path, paths: list[str]) -> list[str]:
     return ask(paths)
 
 
-def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str) -> list[str]:
+def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str,
+                                         unreadable: list[str] | None = None) -> list[str]:
     r"""Name the IGNORED files a fast-forward onto `remote` is about to overwrite — VMCP-240 (806).
 
     THE HOLE THIS EXISTS FOR, measured on real git (2.50.1) rather than reasoned about, three
@@ -2859,7 +2894,7 @@ def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str) -> list[str]:
         if ancestor is not None:
             candidates = [ancestor]
         elif os.path.lexists(os.path.join(root, p)):
-            candidates = _expand_if_directory(root, p, gitlinks)
+            candidates = _expand_if_directory(root, p, gitlinks, unreadable)
         else:
             candidates = []
         # De-duplicated because `_doomed_ancestor` MAKES collisions by construction: every
@@ -3225,6 +3260,33 @@ def _add_capped(state: dict, key: str, paths: list[str]) -> None:
     state[key] = _cap_reported(paths)
     if len(state[key]) < len(paths):
         state[f"{key}_truncated"] = len(paths)
+
+
+def _note_probe_was_denied(state: dict, unreadable: list[str]) -> None:
+    """Attach `overwritten_ignored_incomplete` — or attach NOTHING. VMCP-281 (940), variant B.
+
+    THE NAME IS DELIBERATELY BROAD, and that was the human's call on the card rather than a
+    preference here. The channel measured on 940 is ENAMETOOLONG, but any `OSError` reaches the
+    same callback — permissions, a vanished directory, a filesystem saying no for its own reasons
+    — and every one of them means the same thing to a reader: this list is short by an unknown
+    amount. A key named after one errno would have had to be widened later, and widening is a
+    second visible change to a payload the hgdev-acp hub reads.
+
+    THE VALUE COUNTS PLACES, NOT FILES. One denied directory hides its whole subtree: measured on
+    the ENAMETOOLONG stand, depth 28 lost one file and depth 30 lost three, and BOTH reported
+    exactly one denial. It is a count of what the probe could not look at, and it supports no
+    arithmetic about how much died.
+
+    EMITTED EVEN WITH NO `overwritten_ignored`, which is the case that looks safest and is not:
+    a probe denied everywhere finds nothing, and an absent key alone reads as "nothing at risk".
+    Absence of the names has always been documented as proving nothing; this makes the difference
+    between "looked and found none" and "could not look" VISIBLE rather than doctrinal.
+
+    Absent when the probe reached everywhere, for `_add_capped`'s reason: a key present on every
+    sync is the never-read field VMCP-68 had to split `kept` in two to rescue.
+    """
+    if unreadable:
+        state["overwritten_ignored_incomplete"] = len(unreadable)
 
 
 def _partial_apply_reason(root: Path, remote: str, half: list[str], over: list[str],
@@ -3597,8 +3659,12 @@ def sync_main_checkout(root: Path) -> dict | None:
     # then and the human's bytes are already gone. Best-effort in the strongest sense — anything
     # this raises must cost the REPORT and never the fast-forward, which is the whole point of
     # the feature and was working before the report existed.
+    # VMCP-281 (940): the places the probe's walk was DENIED. Declared out here so the `except`
+    # below keeps whatever was recorded before the raise — a probe that skipped three directories
+    # and then died has strictly more to say than one that only died.
+    unreadable: list[str] = []
     try:
-        doomed = _ignored_paths_the_ff_will_overwrite(root, remote)
+        doomed = _ignored_paths_the_ff_will_overwrite(root, remote, unreadable)
         doomed_answered = True
     except Exception:                               # noqa: BLE001 — a diagnostic, never a gate
         doomed = []
@@ -3775,6 +3841,7 @@ def sync_main_checkout(root: Path) -> dict | None:
                                                  (merged.stderr or merged.stdout).strip())}
         _add_capped(state, "half_applied", half)
         _add_capped(state, "overwritten_ignored", over)
+        _note_probe_was_denied(state, unreadable)
         return state
     result = {"updated": True, "branch": branch, "path": str(root),
               "from": before, "to": target, "commits": int(behind.stdout.strip() or 0)}
@@ -3782,6 +3849,7 @@ def sync_main_checkout(root: Path) -> dict | None:
     # paragraph above is about. Unfiltered here, unlike on the refusal branch — this merge
     # COMPLETED, so every incoming path was written and there is nothing to filter down to.
     _add_capped(result, "overwritten_ignored", doomed)
+    _note_probe_was_denied(result, unreadable)
     return result
 
 
