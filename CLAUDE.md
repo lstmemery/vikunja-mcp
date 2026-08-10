@@ -1474,6 +1474,23 @@ sha (`gh run list --commit "$(git rev-parse HEAD)"` — the FULL 40-char sha; an
 abbreviated one returns `[]` and exit 0, which reads exactly like "no run" and
 raises a false marker alarm) — "no run" and "green run" look identical from git.
 
+**"No run" has a SECOND cause, and reading it as the marker is a false diagnosis
+(tracker #937): GitHub creates one run per PUSH, attached to that push's TIP, so a
+commit that arrives NON-TIP inside a multi-commit push gets no run and no
+check-suite at all — while the work itself lands and reaches consumers.** Measured
+here: `bc960b2` returns `[]` on the full sha and `check-suites` `total_count: 0`,
+carries none of the six marker spellings, and is an ancestor of `origin/stable`,
+while its child `b6c7502` has green run 31086601577 — 1 of the 21 task commits in
+the last 40 landings arrived that way (~5%, and a wider drain makes it likelier,
+not rarer). So one step goes in front of the alarm: ask whether a DESCENDANT on
+`main` has a run — `git log --oneline <full sha>..origin/main`, then `gh run list
+--commit <that full sha>` — and raise the marker alarm only when nothing is above
+you, or the descendant has no run either. What that step does NOT buy back is the
+gate: the tree AT your commit was never linted or tested, only the merged thread of
+the next push was, so `git bisect` and a rollback onto it are not covered by the
+neighbour's green. Why the push carried two task commits at all was NOT established
+and is deliberately not guessed at here.
+
 **And build the message with `git commit -F - <<'MSG'`, never `-m "…"`** (tracker #773).
 Same family, same silence: inside double quotes a backtick is command substitution, and the
 house style here wraps every identifier in backticks — so the more faithfully an agent follows

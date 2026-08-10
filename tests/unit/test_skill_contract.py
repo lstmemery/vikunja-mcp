@@ -4802,6 +4802,31 @@ def test_the_post_push_check_reads_the_runs_OUTCOME_and_not_only_its_existence()
         "an environment failure into a round trip through the implementer"
     )
 
+    # 5b. VMCP-278 (937): "no run" has TWO causes, and only one of them is the swallowed marker.
+    # GitHub attaches one run to a push's TIP, so a commit that arrived non-tip inside a
+    # multi-commit push has no run and no check-suite while the work itself lands — measured on
+    # `bc960b2` (no run, `check-suites total_count: 0`, no marker in any spelling, ancestor of
+    # `origin/stable`, child `b6c7502` green), 1 of 21 task commits in 40 landings. Both agent
+    # surfaces have to carry the descendant step, or a reviewer bounces a landed card on a false
+    # diagnosis — which is exactly what the rule used to prescribe «без разговоров».
+    # MUTATION-CHECKED for 937 (every round `collected 55 items`, the same selection as the
+    # control; both files restored sha256-identical; `FAILED `/`ERROR ` lines counted separately):
+    # control 0 failed; revert the reviewer sentence to the bare «без разговоров» -> 1 failed;
+    # delete CLAUDE.md's «"No run" has a SECOND cause» paragraph -> 1 failed.
+    for site, where in ((bullet, "the post-push existence check"), (review, "the reviewer")):
+        assert "прогон заводится на ВЕРШИНУ пуша" in site, (
+            f"{where} no longer says a run belongs to the push's TIP, so 'no run on the full sha' "
+            f"reads as a swallowed ci-skip marker again — false on ~5% of landings"
+        )
+        assert "..origin/main" in site, (
+            f"{where} no longer names the command that separates the two causes "
+            f"(`git log --oneline <full sha>..origin/main` — is there a descendant with a run?)"
+        )
+    assert "дерево ИМЕННО на твоём коммите не гонял никто" in bullet, (
+        "the existence check no longer says what stays true in the BENIGN branch. Without it the "
+        "new step reads as 'all clear' — but nothing ever gated the tree at that commit"
+    )
+
     # 6. CLAUDE.md carries the same rule, with the same numbers (two copies of one rule drift)
     claude = _flat(_claude_ci_outcome_paragraph(_claude_md_text()))
     assert 'status == "completed"' in claude and "`status` FIRST" in claude, (
@@ -4834,6 +4859,14 @@ def test_the_post_push_check_reads_the_runs_OUTCOME_and_not_only_its_existence()
         "the per-job timing that explains WHY red runs lean fast is missing from one of the two "
         "files. Without it the lean reads as `integration` failing early — which is measurably "
         "false, and was this card's own first defect"
+    )
+    # 937's half of CLAUDE.md, deliberately read off the WHOLE file rather than a slice: the
+    # correction belongs beside the EXISTENCE check, which lives in the ci-skip marker paragraph
+    # and not in the outcome paragraph sliced above. The phrase is long enough to be its own
+    # anchor, which is what a slice would otherwise be buying.
+    assert '**"No run" has a SECOND cause' in _claude_md_text(), (
+        "CLAUDE.md no longer records that a non-tip commit gets no run at all, so its copy of the "
+        "existence check reads every empty result as a swallowed marker again"
     )
 
 
