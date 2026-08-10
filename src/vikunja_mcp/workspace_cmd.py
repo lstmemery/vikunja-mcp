@@ -2991,8 +2991,15 @@ def _same_object_key(root: Path, rel: str) -> tuple | str:
     — the filter and `_MAX_DIR_EXPANSION` both make it UNDERSTATE — and this was the one known road
     on which it OVERSTATED. Two errors in opposite directions in one key are worse than one, and it
     also undercut `_expand_if_directory`'s own reason for filtering out real subdirectories
-    ("Naming both would double-count the same bytes"), since the same bytes were double-counted
-    anyway by a road that filter never touched.
+    ("a REAL subdirectory is not a path that dies, its files are, and they are named individually
+    by this same walk"), since the same bytes were double-counted
+    anyway by a road that filter never touched. That parenthesis used to read "Naming both would
+    double-count the same bytes", which is nowhere in that function — it is the REAL-subdirectory
+    TEST's docstring, one file over, landed there by VMCP-245 (836). `git log --all -S` over `src/`
+    returns exactly one commit for it, `97c2c5c`, the 859 landing that wrote the misattribution:
+    before that the phrase had never been in `src/` at all (VMCP-275 (898)). The SUBSTANCE was
+    attributed rightly; only the WORDS were somebody else's, and no gate here can see that — the
+    phrase IS in the tree, just not where the sentence said it was.
 
     THE KEY IS COMPOSITE, and neither half would do on its own — both alternatives are measured
     rather than argued. `os.path.normcase` is what the card proposed and it is a NO-OP on POSIX
@@ -3001,11 +3008,17 @@ def _same_object_key(root: Path, rel: str) -> tuple | str:
     in one merge came back as ONE name instead of two. Adding `rel.casefold()` keeps them apart
     while still collapsing the case-duplicate, and buys a property neither half has — this key can
     NEVER merge two DISTINCT objects on disk, because the inode forbids it. So on a case-SENSITIVE
-    filesystem, where `out/a.txt` and `OUT/a.txt` really are different files, it collapses nothing
-    at all, which is why the fix needs no platform test.
+    filesystem, where `out/a.txt` and `OUT/a.txt` really are different files, it collapses no
+    case-DUPLICATE — there are none to collapse — which is why the fix needs no platform test.
+    NOT "collapses nothing at all", the flat version this shipped with: the paragraph below already
+    names the counterexample (two hardlinks whose names differ only in case), and VMCP-275 (898)
+    BUILT it on a case-sensitive APFS image — `ln a.txt A.txt`, both names keying to one
+    `(dev, ino, 'a.txt')`. So the two sentences contradicted each other four lines apart, and the
+    one that survives is the narrow one; the platform-test conclusion stands on its own reason,
+    which is that the only collapse left there is the residue the next paragraph declares.
 
     WHICH SPELLING SURVIVES is the first one the walk reached, exactly as it already was for exact
-    repeats, and it is an INCOMING spelling — the bound this function's own list already states
+    repeats, and it is an INCOMING spelling — the bound the CALLER's bounds list already states
     ("the string handed to the human is not the name their file had"). What is NOT closed: two
     hardlinks whose names differ only in case would still collapse, which needs a case-sensitive
     filesystem to build and errs in the direction the key errs in everywhere else.

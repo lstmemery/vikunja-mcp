@@ -6609,8 +6609,15 @@ def _real_once_then_raises(monkeypatch, name, exc):
 def test_a_tracked_probe_dying_AFTER_the_refusal_no_longer_costs_the_whole_report(
         repo, tracker, tmp_path, monkeypatch):
     """VMCP-258 (860). `_tracked_changes` runs `git diff-index` through `_run_git`, which RAISES
-    `WorkspaceError` on `_GIT_TIMEOUT` — so this is a slow or locked repository, not a thought
-    experiment. Unguarded, that exception leaves `sync_main_checkout` altogether and takes the
+    `WorkspaceError` on `_GIT_TIMEOUT` — so this is a SLOW repository, not a thought
+    experiment. It shipped as "slow or LOCKED", and the second half was exactly backwards
+    (VMCP-275 (898), re-measured here rather than inherited): hold `.git/index.lock` open and run
+    the argv `_tracked_changes` actually uses — `diff-index --name-only -z --no-renames HEAD` —
+    and it answers rc=0 in ~0.02 s, WITH `GIT_OPTIONAL_LOCKS=0` and without it alike, on git
+    2.50.1. It never wanted that lock: `_tracked_changes` is itself the caller that passes the
+    do-not-take-it knob. A held lock is the one shape this call is IMMUNE to, so naming it as the
+    motivating state pointed the reader at the wrong repository.
+    Unguarded, that exception leaves `sync_main_checkout` altogether and takes the
     ENTIRE state dict with it, including the `overwritten_ignored` computed BEFORE the merge;
     `gc_workspaces` then reports `MAIN_SYNC_ERROR` and the reaper survives, so the cost is the
     REPORT, on the one branch where a human most needs it.
