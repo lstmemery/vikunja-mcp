@@ -361,7 +361,15 @@ assertion in `tests/unit/test_line_length_gate.py`, which pyproject must agree w
   to lean on: it is absent whenever the doomed file is ignored by the SUBMODULE's own rules (both
   statuses empty, before and after), and `submodule.<name>.ignore = all` or
   `diff.ignoreSubmodules = all` switch it off outright — #766's lesson again. What the tool should
-  DO about it is a product question parked for a human, not guessed at in code; this repo has no
+  DO about it was a product question, and it is ANSWERED: NO to both halves (tracker #838). No
+  `--no-index` sub-list under the gitlink — it widens the probe's surface and still cannot reach
+  `sub/precious.txt`, which no rule matches, so an ignore-probe is wrong there by REMIT and not by
+  reach; and no refusal of the ff — "report and never refuse" (#801/#806) stands, and the
+  condition would have had to be "typechange onto a gitlink whose directory is non-empty", i.e.
+  every populated submodule, re-refusing every sweep. So this shape is a DOCUMENTED GAP: nothing
+  protects that content, not git and not us. Naming the PLACE rather than the files is the only
+  option that would cover the non-ignored half too, and it is not implemented — it stays with the
+  card. This repo has no
   submodules (`git ls-files -s | awk '$1=="160000"'` is empty — `.gitmodules` is the wrong
   evidence, a gitlink lives in the INDEX), so it is latent HERE and ordinary in a consumer's
   checkout. **What used to close that sentence — "so the REFUSAL branches really do

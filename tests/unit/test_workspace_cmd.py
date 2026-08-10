@@ -7559,10 +7559,18 @@ def test_one_unaskable_path_costs_only_itself_and_not_the_paths_around_it(repo, 
 # ("а лежавший там игнорируемый файл мог погибнуть"), which is now known to be narrower than the
 # truth; that one word is left to whoever answers the product question rather than changed here.
 # What the tool should DO — report the gitlink path, widen the ask with `--no-index`, or refuse the
-# ff on that shape — is a product question parked for a human via `call_human`, because refusing
-# would break the chain's standing "report and never refuse" and #806's reason for that rule (the
-# rulebook TELLS agents to write `shot-<id>.png`) does not apply to a submodule, where the rulebook
-# tells them to write nothing.
+# ff on that shape — went to a human via `call_human`, AND HAS BEEN ANSWERED. Two of the three are
+# NO. Widening the ask with `--no-index` is declined as probe surface, and it could never have
+# reached `precious.txt` anyway (rc=1 — no rule matches it, so the instrument is wrong by REMIT,
+# not by reach). Refusing the ff is declined: "report and never refuse" stands, #806's reason for
+# that rule (the rulebook TELLS agents to write `shot-<id>.png`) indeed does not apply to a
+# submodule, where the rulebook tells them to write nothing — but the condition would have had to
+# be "typechange onto a gitlink whose directory is non-empty", every populated submodule
+# including one with nothing to lose, refusing again on every sweep. The THIRD — reporting the
+# gitlink PATH, the only one that covers the non-ignored half — is NOT implemented and is not
+# refused either; it stays with the card. So the shape below is a DOCUMENTED GAP rather than an
+# open design, and the two mutation rounds recorded further down still guard it: either declined
+# option, if it were ever implemented, reddens a test rather than landing quietly.
 #
 # THE TDD ROUND, recorded because a prose defect has no other red. Selection
 # `-k lands_ON_a_gitlinks_path`, `collected 193 items / 192 deselected / 1 selected` in both, no

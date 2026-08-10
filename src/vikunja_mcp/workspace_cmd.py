@@ -3419,8 +3419,23 @@ def sync_main_checkout(root: Path) -> dict | None:
     the three corrections: no probe of ours reports that content — `overwritten_ignored` is about
     IGNORED paths by name and by remit — and, unlike 806 and 835, the CONTRAST is absent rather
     than narrowed, so "the tool never has to decide which local edits are precious" has one shape
-    where git decides nothing either. What to DO about it is a product question parked for a human,
-    not guessed at here; the measurements, including the shapes that are NOT losses, live in this
+    where git decides nothing either. BOTH QUESTIONS THAT PARKED ARE NOW ANSWERED, and both
+    answers are NO (tracker #838), so read this shape as a documented gap and not as an open
+    design. Asking the sub-list under a gitlink with `--no-index` is declined: it widens the
+    probe's surface, and it could not reach `sub/precious.txt` in any case — measured rc=1, no
+    rule matches that file, so an ignore-probe is the wrong instrument by REMIT rather than by
+    reach. Refusing the ff is declined too: the chain's standing "report and never refuse"
+    (#801/#806) stands, and the condition would have had to be "typechange onto a gitlink whose
+    directory is non-empty" — every populated submodule, including one with nothing to lose, and
+    re-refusing on every sweep until a human intervened. What that leaves is worth stating
+    plainly rather than softening: on THIS shape nothing protects the content, ours or git's. The
+    806 contrast (untracked-and-NOT-ignored is refused by git itself) does not hold here, and
+    `overwritten_ignored` is about IGNORED paths by name and by remit, so it would not name these
+    files even with the ask widened. Naming the PLACE instead of the files — a key off the `--raw`
+    modes this probe already parses, costing no extra git call — is the one option that would
+    cover the whole class including the non-ignored half; it is deliberately NOT implemented here,
+    because this pass was scoped to prose, and it stays with the card rather than being decided in
+    a docstring. The measurements, including the shapes that are NOT losses, live in this
     card's section of `tests/unit/test_workspace_cmd.py`.
 
     A DIFFERENT CLAUSE OF THAT SAME PARAGRAPH TOOK ITS OWN CORRECTION, and it is NOT a fourth link
