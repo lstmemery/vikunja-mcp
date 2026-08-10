@@ -4593,6 +4593,66 @@ def test_the_directory_expansion_does_not_walk_through_a_symlink(repo, tracker, 
     assert (outside / "precious.txt").read_text() == "not in the checkout\n"
 
 
+def test_a_BROKEN_symlink_at_the_incoming_path_is_still_named(repo, tracker, tmp_path):
+    """VMCP-268 (884). The `lexists` in `_ignored_paths_the_ff_will_overwrite`'s present-branch
+    was held up by NOTHING: swap it for `exists` and the whole suite stayed green, so the comment
+    beside it ("a broken symlink still counts as something being written over") described an
+    intention no test could tell from its opposite. That claim was INHERITED from VMCP-262 (865)
+    and re-measured here before anything was built, which the card asked for and which matters
+    because a `0 failed` taken on somebody else's tree is exactly what this repo keeps getting
+    wrong: whole file, `collected 226 items` in both rounds, control 0 failed / mutant 0 failed,
+    0 ERROR lines either side. The hole was real.
+
+    WHY IT IS A LOSS AND NOT A CURIOSITY: `exists` FOLLOWS the link, so on a broken one it
+    answers False, the candidate never enters the batch, and the object the merge really does
+    unlink is named nowhere. That is `overwritten_ignored` PRESENT-and-INCOMPLETE — VMCP-245
+    (836)'s class by a third road, and this one needs no nesting at all, just a dead target.
+
+    WHERE THE DECISION IS TAKEN, asserted rather than assumed, because the card warned that
+    `_doomed_ancestor` is asked FIRST and could be intercepting this input: it is not. That walk
+    is over ANCESTORS, and a root-level `shot.png` has none, so it answers None and the `elif`
+    is reached — which is why the pin belongs here and not one branch up. Assert it directly, or
+    a later reader cannot tell a pin on `lexists` from a pin on the ancestor walk.
+
+    The dangling-symlink case one test over is a DIFFERENT road and does not cover this one:
+    there the link is INSIDE an expanded directory, where `os.walk` files it under `filenames`
+    and `lexists` is never consulted about it. Here the link IS the incoming path.
+
+    MUTATION SWEEP, `lexists` -> `exists` on the present-branch, measured at `502cfab`. `-q`
+    dropped, `FAILED `- and `ERROR `-prefixed lines counted SEPARATELY, `collected` cross-checked
+    between control and round, `__pycache__` deleted before each, the target restored from a
+    SIGTERM/SIGINT handler and sha256-verified after. WITHOUT this test: whole file, `collected
+    226 items` in both, control 0 failed; mutant 0 failed, 0 ERROR lines either side — the round
+    that says the choice was pinned by nothing, and the reason this card exists. WITH it, both
+    selections agree and both are recorded because the narrow one alone would not show the file
+    stayed clean: `-k BROKEN_symlink_at_the_incoming_path`, `collected 227 items / 226 deselected
+    / 1 selected` in both, control 0 failed; mutant 1 failed. Whole file, `collected 227 items` in
+    both, control 0 failed; mutant 1 failed. The single kill is this test, in both — nothing else
+    in the file moves, which is the honest shape for a characterisation pin: it buys exactly the
+    one decision it names."""
+    _api, wf = tracker
+    _ignoring(repo, "*.png")
+    (repo / "shot.png").symlink_to(repo / "target-that-never-existed.png")
+    assert os.path.lexists(repo / "shot.png"), "the link itself is there"
+    assert not os.path.exists(repo / "shot.png"), "and it is BROKEN — this is the whole input"
+    assert _git(repo, "status", "--porcelain") == "", "ignored, so git says nothing about it"
+    landed = _land_on_origin(tmp_path, "one", {"shot.png": "UPSTREAM\n"}, force=True)
+
+    assert workspace_cmd._doomed_ancestor(repo, "shot.png") is None, (
+        "the ancestor walk must NOT claim this input — otherwise the branch under test is never "
+        "reached and this test would pin the wrong decision"
+    )
+
+    res = gc_workspaces(cwd=repo, workflow=wf)
+
+    state = res["main_checkout"]
+    assert state["updated"] is True, state
+    assert state["overwritten_ignored"] == ["shot.png"], state
+    assert _git(repo, "rev-parse", "HEAD") == landed
+    assert not (repo / "shot.png").is_symlink(), "the link really was replaced"
+    assert (repo / "shot.png").read_text() == "UPSTREAM\n"
+
+
 def test_a_NESTED_symlink_to_a_directory_inside_the_expansion_is_named_ONCE(repo, tracker,
                                                                             tmp_path):
     """The test above pins the guard on `rel` ITSELF; this one pins the SECOND guard, which was

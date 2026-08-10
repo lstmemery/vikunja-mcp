@@ -2624,7 +2624,11 @@ def _ignored_paths_the_ff_will_overwrite(root: Path, remote: str) -> list[str]:
     but the path never being in the diff at all, and it is `_expand_if_directory` that answers
     it. Then each incoming path is mapped, in python, onto what it DISPLACES on this disk, which
     is two questions and not one. Present (`lexists`, so a broken symlink still counts as
-    something being written over) — it displaces itself, or, when it is a local directory, the
+    something being written over — pinned since VMCP-268 (884) by
+    `test_a_BROKEN_symlink_at_the_incoming_path_is_still_named`, and for two cards before that it
+    was pinned by NOTHING: swapping in `exists` left the whole file green, so this parenthesis
+    stated an intention no round could tell from its opposite) — it displaces itself, or, when it
+    is a local directory, the
     things inside it that can DIE — its files AND its symlinks, one name each. Not "the FILES
     inside it", the wording that stood for two rounds and lost every nested symlink-to-a-directory,
     and not "the PATHS inside it" either, which over-corrects: see `_expand_if_directory`, where
