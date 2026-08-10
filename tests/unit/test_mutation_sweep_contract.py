@@ -357,14 +357,28 @@ _CONTROL_COUNT = re.compile(
 # entries would leave the list having gained no baseline at all — a shrink for the wrong reason,
 # which is worse than the hole it closes. Both are RUN, with their counts and the paragraphs they
 # name, in the pattern test's own record below, beside that record's control. The narrow form costs
-# nothing measurable: at `1fb0082` the offender set is identical with the mask and without it. Which
+# nothing measurable THROUGH THE OFFENDER-SET LENS, which is the lens it was measured through: at
+# `1fb0082` the offender set is identical with the mask and without it, and at `cbc3816` it still
+# is, both differences empty. Through ONE predicate the cost is not zero — the mask blanks a real
+# round that sits inside a mention — but at that sha the only paragraph whose round verdict moves
+# is this comment's own `A MENTION` block, where round and control move together, so the offender
+# verdict does not. The two lenses agree today; that is not a reason they must. Which
 # is why this exclusion is the third of its kind here rather than a new idea — `_ROUND_COUNT` above
 # carries three, each cutting one named false positive and each as narrow as its name.
 #
-# ITS TWO BOUNDS, both real and neither closable from here. The vocabulary is a LIST and a list
+# ITS BOUNDS, all real and none closable from here — and read the list as OPEN. It said "ITS TWO
+# BOUNDS" until VMCP-272 (893) built a third of a different KIND, so what was wrong is the count
+# rather than either entry: both of these are UNDER-firing. The vocabulary is a LIST and a list
 # rots: a mention spelled any other way is invisible to it, so the hole is narrowed rather than
 # shut. And it needs the BACKTICKS — a mention written without them is not separable by anything
-# this scanner can see from an author declaring a baseline in plain words.
+# this scanner can see from an author declaring a baseline in plain words. OVER-firing is the one
+# that closed count omitted, and the paragraph above already names its mechanism without drawing
+# the consequence: an honest record DECLARING its baseline in one of those introducing words has
+# it blanked and becomes an offender. Measured at `cbc3816` on the module, a CLAUDE.md-shaped
+# record with one delta row under it: baseline stated with the introducing words -> round yes,
+# control no; the same baseline declared plainly -> control yes. That red is LOUD and
+# self-correcting, since its author watches the ratchet redden on their own new prose, where a
+# missed mention is SILENT — so this is about the list being complete, not about priority.
 _MENTIONED = re.compile(r"\bthe (?:literal|string|phrase|words?)\s+`[^`]*`", re.IGNORECASE)
 
 # How much of a record's opening text goes into its key. ONE constant for both halves of the key
@@ -1474,11 +1488,25 @@ def _reads_as_a_control(prose: str, reading) -> bool:
     """Whether one of the weak readings accepts this prose — a pair meaning both halves must hit.
 
     It reads through `_without_mentions` for the same reason the strong form does, and that keeps
-    the tree-wide comparison about PATTERN STRENGTH alone: without it the two predicates would
-    differ in a second dimension, and the day a paragraph's only control is a mention the identity
-    assert below would fire about calibration when what actually happened is the ratchet catching
-    exactly what VMCP-259 (861) added it for. The flattening stays this function's own — adding the
-    `#` strip here is a separate change with its own price, and this one is not it.
+    the tree-wide comparison about PATTERN STRENGTH alone WHERE THE MENTION IS NOT WRAPPED across
+    a line break: without it the two predicates would differ in a second dimension, and the day a
+    paragraph's only control is a mention the identity assert below would fire about calibration
+    when what actually happened is the ratchet catching exactly what VMCP-259 (861) added it for.
+    The flattening stays this function's own — adding the `#` strip here is a separate change with
+    its own price, and this one is not it.
+
+    THAT QUALIFIER IS VMCP-272 (893) and names a measured hole, not a hedge. `_flat` strips each
+    line's leading `#` BEFORE the join and this flattener does not, while `_MENTIONED` wants
+    whitespace between the introducing word and the backtick — so a `#` landing in that gap masks
+    on the strong path only, and the second dimension survives there. Measured at `cbc3816` on the
+    module: a comment-run paragraph whose only baseline is an introducing word ending one line and
+    the backticked control opening the next quotes a round, reads False strongly and True on all
+    five weak readings — a STRONG offender and a weak one on none of the five, which is exactly
+    the difference the identity assert reports, blaming the WEAKENING and sending its reader to
+    the calibration comment. Unwrapped, the same sentence is an offender on both sides and only
+    the ratchet fires. A docstring carries no `#`, so only a mention inside a COMMENT RUN can
+    diverge; at that sha the scan sees 16 spans, 9 of them in comment runs, and no paragraph
+    diverges — latent, and one hand re-wrap of one of those nine arms it.
     """
     flat = _without_mentions(" ".join(prose.split()))
     if isinstance(reading, tuple):
