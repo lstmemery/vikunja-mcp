@@ -1312,6 +1312,35 @@ def _inspect_status(path: Path) -> tuple[list[str], list[str]]:
     released is held now. What changed is that the answer stopped depending on someone else's
     config.
 
+    AND BOTH HALVES GO BLIND A SECOND WAY, UNDER A POPULATED GITLINK — where the conclusion #766
+    left here ("the guard sees `??`, so the hole is exactly the paths this repo IGNORES") is not
+    merely narrow, it is the wrong axis (VMCP-261 (863)). Rebuilt here on real git 2.50.1 rather
+    than inherited: a superproject with a real submodule whose OWN `.gitignore` hides `build-out/`,
+    a linked worktree, an explicit `git submodule update --init` inside it, and
+    `sub/build-out/artifact.txt` on disk. All THREE reads from the worktree — `status --porcelain`,
+    the same with `-c status.showUntrackedFiles=normal`, and `--ignored` — return the EMPTY STRING,
+    so this function answers `([], [])` and the tree reads CLEAN; run `status --porcelain
+    --ignored` inside `sub` itself and it says `!! build-out/`. The file is perfectly visible, to
+    the only index that has ever heard of it. So under a gitlink the loss is NOT bounded by what
+    THIS repo ignores: a file the SUBMODULE's rules hide dies the same way, and `removed_ignored`
+    cannot name it either, because it reads this same call. Nor is ` M sub` a fallback — two config
+    keys switch it off (`submodule.<name>.ignore = all`, `diff.ignoreSubmodules = all`, measured on
+    VMCP-247 (838)), which is #766's dependency-on-someone-else's-config all over again.
+
+    WHAT ACTUALLY HOLDS SUCH A TREE IS NOT THIS FUNCTION, and that is the practical half: since
+    VMCP-266 (878) `_populated_gitlinks` refuses it with CODE_POPULATED_GITLINK before the single
+    `git worktree remove` is reached — measured on the same stand, `released: false` and the file
+    intact, verified BY CONTENT and not by `lexists`, which answers False on EACCES. That guard
+    asks the INDEX (mode 160000) and not `git status`, which is exactly why it can answer where
+    this call cannot. Do NOT read an empty answer from here as "there is nothing in that tree".
+    Two things were declined rather than overlooked. A recursive `git submodule foreach … status`
+    is a human's NO: extra processes on every sweep tick for a state the drain never creates
+    (`git worktree add` does not populate a submodule — measured on this stand, the directory
+    comes up EMPTY), and defeated by those same two config keys anyway. And do not generalise "git
+    refuses, so the work is safe": that holds only on an INITIALISED submodule, i.e. the one
+    configuration the pipeline never produces — 878 measured the other side, rc=0 and the content
+    destroyed.
+
     A per-invocation `-c` deliberately, never `git config`: the user's setting is not rewritten,
     only what THIS inspection sees. Someone who set it for speed keeps it everywhere else, and a
     CLEAN tree under that setting still releases normally (measured) — which is the objection
