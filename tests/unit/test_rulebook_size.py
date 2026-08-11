@@ -29,8 +29,11 @@ byte count would report roughly 1.6x its real size and the ceiling would mean no
 THE UNIT IS A PROXY, AND KNOWING WHICH ONE MATTERS (#998). What this gate is defending is
 CONTEXT, and context is priced in TOKENS. Characters stand in for tokens well enough while a
 file stays in one language, and not at all across a change of language: measured, Cyrillic
-prose runs about 0.46 tokens per character against 0.23 for Latin, so English says the same
-thing in slightly MORE characters for roughly HALF the tokens. TOKENS ARE THE THIRD UNIT, and
+prose runs about 0.46-0.48 tokens per character against 0.25-0.28 for Latin (the Latin figure
+is the range over all 12 Latin markdown files this repo tracks, 0.2487-0.2834, not one sample),
+so English says the same thing in slightly MORE characters for noticeably fewer tokens: a real
+SKILL.md section translated by hand measured 1.69x more tokens in Russian, and an independent
+reviewer's translation of a different section 1.63x. TOKENS ARE THE THIRD UNIT, and
 the bytes-versus-characters argument above did not consider them — it is still correct, so do
 not "fix" it. The reason this gate is not simply moved onto tokens is measured too: the only
 available tokenizer (`tiktoken`) fetches its BPE table over the network from an OpenAI CDN
@@ -58,8 +61,9 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 # The script is load-bearing, not a label: characters are a PROXY for the tokens this gate
 # actually cares about, and the rate differs by language (see the script test at the bottom).
 # CLAUDE.md measures 0.0% Cyrillic by letter (12 of 25 758) and SKILL.md 85.6%, so these two
-# numbers are quoted in different currencies — in characters SKILL.md's ceiling is 2.9x
-# CLAUDE.md's, in tokens about 5.8x.
+# numbers are quoted in different currencies — in characters SKILL.md's ceiling is 2.88x
+# CLAUDE.md's, and converted at each file's OWN measured rate (0.4645 and 0.2608 tokens per
+# character) 53 419 against 10 432, i.e. 5.12x. All measured at `d3884bc`.
 #
 # Headroom is deliberately modest — a few thousand characters, i.e. a rule or two — because a
 # generous ceiling is the same as no ceiling.
@@ -168,15 +172,33 @@ def test_each_ceiling_declares_the_script_it_was_derived_in():
 
     Measured (tiktoken cl100k_base, which is OpenAI's tokenizer — a PROXY for the one that
     actually counts here, so read the RATIO and not the absolutes): Cyrillic prose runs about
-    0.46 tokens per character, Latin about 0.23, and the same paragraph translated costs about
-    1.77x more tokens in Russian than in English. English is therefore slightly LONGER in
-    characters and roughly HALF the price in tokens.
+    0.46-0.48 tokens per character; Latin 0.25-0.28, which is the RANGE over all 12 Latin
+    markdown files this repo tracks (0.2487 for docs/dossier/browser.md to 0.2834 for
+    docs/dossier/config.md) rather than one sample — every tree-derived figure in this docstring
+    measured at `d3884bc`. Same content translated by hand: a real SKILL.md section came out
+    1.69x cheaper in English, and an independent reviewer's translation of a different section
+    1.63x. Those two are properties of a SAMPLE, not of the tree, so they carry no anchor and
+    should not be treated as constants. English is therefore slightly LONGER in characters
+    (1.07x on that section) and distinctly cheaper in tokens.
+
+    NONE OF THESE FIGURES IS GATED, and that is a limitation rather than an oversight: checking
+    them needs a tokenizer, the only available one fetches over the network, and this file
+    refuses to put that in CI (see the module docstring). The sha anchor is the substitute the
+    repo already has — it does not re-derive the number, it guarantees a reader who wants to
+    check CAN, because the tree is named and reachable (test_measured_figure_anchors.py).
+
+    DO NOT ROUND THESE, and this is the defect that sent round 1 back. Round 1 wrote 0.46 and
+    0.23 and derived "5.8x" from them while claiming to use "each file's own measured rate" —
+    self-contradictory, since those rates are 0.4645 and 0.2608 and give 5.12x. Worse, 0.23 came
+    from one hand-written paragraph and sits BELOW every Latin file in this repo, so the
+    re-derivation this test PRESCRIBES would have come out 7-13% too generous: the procedure the
+    gate hands you would have quietly loosened the gate.
 
     Two consequences, and the second is why this test exists rather than a paragraph:
 
-    * The two ceilings below are not comparable to each other. In characters SKILL.md's is 2.9x
-      CLAUDE.md's; converted at each file's own measured rate it is about 5.8x — so the gate
-      understates, by half, how much more context SKILL.md is allowed to cost.
+    * The two ceilings below are not comparable to each other. In characters SKILL.md's is 2.88x
+      CLAUDE.md's; converted at each file's own measured rate (0.4645, 0.2608) it is 5.12x — so
+      the gate understates, by nearly half, how much more context SKILL.md is allowed to cost.
     * Translating a rulebook would push it AGAINST its ceiling while cutting the cost the
       ceiling exists to control. A ceiling raised at that moment "because we hit it" would be
       the gate defeating its own purpose. Re-DERIVE it from a token measurement of the new
@@ -223,7 +245,9 @@ def test_each_ceiling_declares_the_script_it_was_derived_in():
             f"language while its ceiling of {ceiling} characters did not. DO NOT simply raise "
             f"or lower that number to fit. The ceiling bounds CONTEXT COST, which is counted "
             f"in tokens, and characters only stand in for tokens at a rate that depends on the "
-            f"language: about 0.46 tokens/character for Cyrillic against 0.23 for Latin. "
+            f"language: 0.46-0.48 tokens/character for Cyrillic against 0.25-0.28 for Latin "
+            f"(the range over this repo's 12 Latin markdown files — do not round it DOWN, a "
+            f"lower rate yields a more generous ceiling). "
             f"Re-derive the ceiling from a token measurement of the NEW text so it preserves "
             f"the same budget, then update the declared script in the same commit"
         )
