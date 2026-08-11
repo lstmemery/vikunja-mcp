@@ -23,24 +23,32 @@ WHAT THIS GATE IS NOT. It does not check that the split is correct, that a rule 
 stated, or that a dossier is still reachable — those are the prose pins in
 test_mutation_sweep_contract.py, test_skill_contract.py and test_repo_browser_isolation.py,
 which is why this file is deliberately dumb. It measures ONE thing, in CHARACTERS rather than
-bytes, for the reason CLAUDE.md's line-length rule gives: SKILL.md is majority Cyrillic, so a
-byte count would report roughly 1.6x its real size and the ceiling would mean nothing.
+bytes. That choice was made when SKILL.md was majority Cyrillic and a byte count would have
+reported roughly 1.6x its real size; #997 translated it, so bytes and characters have since
+converged and the distinction no longer bites anywhere in the rules layer. The unit stayed
+because the NEXT one is the one that matters.
 
 THE UNIT IS A PROXY, AND KNOWING WHICH ONE MATTERS (#998). What this gate is defending is
 CONTEXT, and context is priced in TOKENS. Characters stand in for tokens well enough while a
-file stays in one language, and not at all across a change of language: measured, Cyrillic
-prose runs 0.44-0.47 tokens per character against 0.25-0.28 for Latin — each range measured over
-a NAMED population of this repo's own markdown (7 Cyrillic files, 12 Latin), never extrapolated
-from a sample — so English says the same thing in slightly MORE characters for fewer tokens: a real
-SKILL.md section translated by hand measured 1.69x more tokens in Russian, and an independent
-reviewer's translation of a different section 1.63x. TOKENS ARE THE THIRD UNIT, and
-the bytes-versus-characters argument above did not consider them — it is still correct, so do
-not "fix" it. The reason this gate is not simply moved onto tokens is measured too: the only
-available tokenizer (`tiktoken`) fetches its BPE table over the network from an OpenAI CDN
-(1.68 MB; 2.62 s cold against 0.11 s warm), which would make `lint-and-unit` — the job that
-decides whether `release` runs at all — depend on a third party's uptime, for a tokenizer that
-is not even the one counting here. So the proxy stays and is LABELLED: every ceiling names the
-script it was derived in, and a test below fails when a file stops matching it.
+file stays in one language, and not at all across a change of language. Measured at `d3884bc`,
+when this repo still held both: Cyrillic prose ran 0.44-0.47 tokens per character against
+0.25-0.28 for Latin, each range being the observed spread of a NAMED population of this repo's
+own markdown (7 Cyrillic files, 12 Latin) rather than an extrapolation from a sample. The
+Cyrillic half of that is now HISTORY — after #997 there is not one Cyrillic markdown file left
+above 2 000 characters — and the Latin half moved with the new text: 0.2380 to 0.2840 over 20
+files, its new minimum being the freshly translated `references/gc-report.md`, below the whole
+of the old band. Same content, hand-translated, cost 1.69x more tokens in Russian on one real
+SKILL.md section and 1.63x on another; the whole rulebook came out at 1.66x once measured
+end to end.
+
+TOKENS ARE THE THIRD UNIT, and the bytes-versus-characters argument above did not consider them
+— it was correct for its own question, so do not "fix" it. The reason this gate is not simply
+moved onto tokens is measured too: the only available tokenizer (`tiktoken`) fetches its BPE
+table over the network from an OpenAI CDN (1.68 MB; 2.62 s cold against 0.11 s warm), which
+would make `lint-and-unit` — the job that decides whether `release` runs at all — depend on a
+third party's uptime, for a tokenizer that is not even the one counting here. So the proxy
+stays and is LABELLED: every ceiling names the script it was derived in, and a test below fails
+when a file stops matching it.
 
 RATCHET DIRECTION. When a rulebook genuinely shrinks, lower its ceiling in the same commit —
 that is the whole mechanism, and it is the same one `_HARD_LIMIT` uses in
@@ -60,18 +68,24 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 #
 # The script is load-bearing, not a label: characters are a PROXY for the tokens this gate
 # actually cares about, and the rate differs by language (see the script test at the bottom).
-# CLAUDE.md measures 0.0% Cyrillic by letter (12 of 25 758) and SKILL.md 85.6%, so these two
-# numbers are quoted in different currencies — in characters SKILL.md's ceiling is 2.88x
-# CLAUDE.md's, and converted at each file's OWN measured rate (0.4645 and 0.2608 tokens per
-# character) 53 419 against 10 432, i.e. 5.12x. All measured at `d3884bc`.
+# BOTH ARE LATIN SINCE #997, so the two ceilings are finally in one currency: 3.15x apart in
+# characters against 3.06x in tokens (126 000 x 0.2535 = 31 942 against 40 000 x 0.2608 =
+# 10 432). They used to disagree by nearly half — 2.88x in characters was 5.12x in tokens at
+# `d3884bc`, when SKILL.md was 85.6% Cyrillic by letter and CLAUDE.md 0.0%.
+#
+# SKILL.md's ceiling ROSE from 115 000 to 126 000 in this unit while the budget it stands for
+# FELL from 53 419 tokens to 31 942, a 40% ratchet down in the unit that matters. That is the
+# case this gate was labelled for, resolved the way it prescribes: the character headroom was
+# held constant (10 161, the same room for a rule or two that it always had) and the number
+# re-derived around the new text rather than bumped until the file fitted.
 #
 # Headroom is deliberately modest — a few thousand characters, i.e. a rule or two — because a
 # generous ceiling is the same as no ceiling.
 # Measured at the split: CLAUDE.md 34 574 characters (down from 155 270 at `f77977e`) and
 # SKILL.md 104 596 (down from 202 619 at the same commit). SKILL.md's ceiling has more headroom
 # than CLAUDE.md's for a stated reason rather than a generous one: its two universal sections —
-# «Следы работы» and «Второй независимый проход», needed by every agent on every task — were
-# deliberately NOT moved to references, so its rules layer is genuinely larger and its next
+# "Traces of the work" and "A second independent pass", needed by every agent on every task —
+# were deliberately NOT moved to references, so its rules layer is genuinely larger and its next
 # ratchet step is condensing those two in place, not relocating them.
 _CEILINGS = {
     "CLAUDE.md": (
@@ -79,7 +93,7 @@ _CEILINGS = {
         "the repo rulebook — read by every session in this checkout",
     ),
     "src/vikunja_mcp/skills/tracker/SKILL.md": (
-        115_000, "cyrillic",
+        126_000, "latin",
         "the agent rulebook — ships in the wheel, so every consumer pays for it too",
     ),
 }
@@ -104,24 +118,43 @@ def test_each_rulebook_stays_under_its_ceiling():
         )
 
 
-def test_the_ceiling_is_measured_in_characters_and_not_bytes():
-    """The unit is load-bearing, and only one of the two files can show it.
+def test_the_two_rulebooks_are_in_the_same_script_so_their_ceilings_compare():
+    """WHAT THIS TEST USED TO BE, and why it changed rather than went away (#997).
 
-    SKILL.md is majority Cyrillic, where UTF-8 spends two bytes per character, so a byte count
-    reports roughly 1.6x the real size. A gate written in bytes would therefore be far tighter on
-    SKILL.md than on CLAUDE.md for no reason anyone chose, and re-tightening it after a split
-    would silently ratchet against Russian prose specifically. This asserts the two units really
-    do disagree on that file, so the docstring above stays true rather than decorative.
+    It used to assert the OPPOSITE fact: that SKILL.md was majority Cyrillic, where UTF-8
+    spends two bytes per character, so bytes reported ~1.6x its real size and a gate written in
+    bytes would have been far tighter on SKILL.md than on CLAUDE.md for no reason anyone chose.
+    That argument was correct and is now HISTORY: #997 translated SKILL.md and every reference,
+    so the byte/character distinction no longer bites anywhere in the rules layer. Its failure
+    message said "either the file was translated — then rewrite that paragraph". It was, so
+    this is that rewrite.
+
+    WHAT REPLACES IT IS THE FACT THE TRANSLATION CREATED. The two ceilings used to be quoted in
+    different currencies — measured at `d3884bc`, 2.88x apart in characters and 5.12x in
+    tokens, because Cyrillic costs roughly 0.46 tokens per character against 0.25 for Latin.
+    Now both files are Latin, the two units nearly agree (3.15x in characters against ~3.06x in
+    tokens), and the character ceiling finally means what it appears to mean. That is worth a
+    gate rather than a sentence: if one rulebook drifts back into another script, the pair stops
+    being comparable and the neighbouring assert on their ratio silently starts measuring
+    nothing. The script test below catches the drift per file; this one catches the pair.
     """
+    for relative, (_ceiling, script, _what) in _CEILINGS.items():
+        assert script == "latin", (
+            f"{relative} declares script {script!r} while the other rulebook is Latin. The "
+            f"ceilings are then quoted in different currencies again — 2.88x apart in "
+            f"characters was 5.12x in tokens the last time that was true — and the ratio "
+            f"asserted next door stops meaning anything. Re-derive both from token "
+            f"measurements before letting them diverge"
+        )
+
     skill = REPO_ROOT / "src/vikunja_mcp/skills/tracker/SKILL.md"
     text = skill.read_text(encoding="utf-8")
-    assert len(text.encode("utf-8")) > len(text) * 1.3, (
-        "SKILL.md is no longer majority non-ASCII, so bytes and characters have converged and "
-        "the paragraph above explaining why this gate counts characters is now describing a "
-        "difference that does not exist. Either the file was translated — then rewrite that "
-        "paragraph, AND see test_each_ceiling_declares_the_script_it_was_derived_in, which is "
-        "the one that tells you what to do about the NUMBER (re-derive it from tokens, never "
-        "bump it to fit) — or this pin is reading the wrong file"
+    assert len(text.encode("utf-8")) < len(text) * 1.05, (
+        "SKILL.md has drifted back to majority non-ASCII while its entry still says `latin`. "
+        "Bytes and characters have separated again, which means its per-character token rate "
+        "has too — and the ceiling above was derived at the Latin rate, so it is now quoting a "
+        "budget the file no longer costs. Re-derive it from a token measurement of the new text "
+        "and move the declared script with it; never bump the number to fit"
     )
 
 
@@ -255,9 +288,9 @@ def test_each_ceiling_declares_the_script_it_was_derived_in():
     ratio = (
         _CEILINGS["src/vikunja_mcp/skills/tracker/SKILL.md"][0] / _CEILINGS["CLAUDE.md"][0]
     )
-    assert abs(ratio - 2.88) < 0.01, (
-        f"the ceilings are now {ratio:.2f}x apart in characters, not the 2.88x this test's "
-        f"docstring quotes beside its 5.12x in tokens. Re-measure the token side before "
+    assert abs(ratio - 3.15) < 0.01, (
+        f"the ceilings are now {ratio:.2f}x apart in characters, not the 3.15x this test's "
+        f"docstring quotes beside its ~3.06x in tokens. Re-measure the token side before "
         f"editing the prose: the whole point of the pair is that the two units disagree, and "
         f"updating only the half that needs no tokenizer would hide exactly that"
     )

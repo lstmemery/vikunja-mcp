@@ -1,246 +1,282 @@
-# Застрял, и что бывает после Review
+# Stuck, and what happens after Review
 
-> **Справочник к SKILL.md, а не отдельные правила.** Читай **когда ты не можешь двигаться дальше, или карточка уже уехала в Review**.
-> Обязательное к исполнению живёт в самом SKILL.md — здесь разобраны формы ответов,
-> измеренные грабли и причины, по которым правило написано именно так.
+> **A reference for SKILL.md, not rules of its own.** Read it **when you cannot move any further, or the card has already gone to Review**.
+> What is binding lives in SKILL.md itself — what is worked through here is the shapes of the
+> answers, the measured pitfalls, and the reasons a rule is written exactly the way it is.
 
-## Застрял? Выход зависит от РОЛИ
+## Stuck? The way out depends on your ROLE
 
-- **`call_human` — единственный канал вопросов к человеку.** Нужно решение или
-  вводные (выбор из вариантов, доступ к секрету, продуктовое решение) — заводи
-  карточку через `call_human`, а НЕ спрашивай в консоли. Оркестратор живёт под
-  `/loop`, человека нет у консоли: вопрос в чат, `AskUserQuestion`, план на
-  подтверждение (`ExitPlanMode`) или «спрошу и подожду» просто повиснет без
-  ответа. Любой вопрос к человеку — только в карточку. В вопросе: что нужно,
-  какие варианты рассмотрел, что рекомендуешь. Задача остаётся твоей, уезжает
-  в Your Call.
-  - **После `call_human` не блокируйся.** Вопрос уехал в карточку — не жди
-    ответа в этом же тике: иди в `next_task` за следующей задачей (Your Call =
-    припаркована, не твоя активная), на пустой очереди — уступи ход до следующего
-    тика (см. «Очередь пуста»).
-  - **Ответ вернётся сам.** Человек ответит комментом и РУКАМИ вернёт карточку
-    в Design/Build; на следующем тике `next_task` отдаст её как «твою активную»
-    с ответом — читаешь коммент (`get_task`) и продолжаешь. Двигать карточку из
-    Your Call тебе не нужно и нечем — это делает человек.
-  - **YC = Your Call** — колонка, куда ведёт `call_human`. Просьбу человека
-    «переведи (кинь) таску в YC / в Your Call» выполняй именно через `call_human`
-    (с вопросом-контекстом). Отдельного `advance`-пути в эту колонку нет.
-- **`return_task`** — внешняя блокировка (чужой сервис лежит, нет зависимости,
-  задача потеряла смысл). Клейм снимается, задача уходит в Backlog на ре-триаж.
-  **Он ОТКАЗЫВАЕТ из ДВУХ стадий — Review и Done, — а работает из пяти остальных**
-  (Backlog, Queue, Design, Build, Your Call). «Работает» тут про СТАДИЮ: гард владения на месте
-  и из открытой стадии тоже, так что чужую карточку он не отдаст ни из одной из пяти.
-  - **Из Review** (гейт по стадии, #590): увести карточку, стоящую под ревью,
-    на ре-триаж — это не «застрял», а вынос чужой готовой работы из пайплайна.
-  - **Из Done** (#626): карточку в Done поставил ЧЕЛОВЕК, и обратный ход из Done — тоже его,
-    а не твой: «в Done двигает только человек» держится в ОБЕ стороны. Измерено: до этого
-    гейта `return_task` уводил принятую человеком карточку в Backlog без ассайни и с ДВУМЯ
-    метками сразу (`reviewed` + `blocked`), пока `advance` всеми тремя формами, `call_human`,
-    `claim` и `review_task` обеими ветками — отказывали. Эта пара — замер #626, а НЕ то, что
-    получишь сегодня: с #693 вердикт снимается ПЕРЕД `blocked`, и со снятым гейтом карточка
-    приезжает с одной меткой `blocked` (измерено). Гейт от этого не слабее — принятие человека
-    теперь не «противоречило бы» доске, а СТЁРЛОСЬ БЫ с неё, и ровно это отказ и говорит.
-    Работа в Done оказалась негодной —
-    заводи `file_task` (следующую карточку, `related_task_id` на эту) человеку на триаж;
-    `call_human` из Done тоже отказывает, а вернуть саму карточку может только человек руками.
-    **С #662 это ОДНО ПРАВИЛО, а не привычка каждого тула, и отсюда следует практическое.**
-    Раньше human-only Done нигде не был записан один раз: четыре тула выводили его из своей
-    стартовой стадии, а `return_task` и `decompose` несли по персональному гейту (#626/#649), —
-    поэтому следующий мутирующий тул, который двигает карточку и стадию не проверяет, открывал
-    дыру снова, и поймать это было нечем. Теперь гард стоит в общей точке (`_find_task`), а два
-    ставших мёртвыми персональных гейта удалены. Что видишь ТЫ: из Done **любой** тул отказывает
-    ОДНИМ И ТЕМ ЖЕ текстом — он называет само правило и дверь, которая работает (`file_task`), —
-    так что перебирать тулы после первого отказа бессмысленно, ответ будет тот же. А ЧИТАТЬ
-    принятую карточку по-прежнему можно: `get_task`, `comment`, `attach_file` и
-    `download_attachment` работают из Done намеренно и это запинено.
-    **Чего это НЕ значит:** дыра не стала невыразимой — гард можно снять, — и правило по-прежнему
-    ровно про Done, а не про «стадии, из которых конкретный тул не двигает карточку» вообще (у
-    `decompose` таких стадий ДВЕ: Done и Review, и вторую держит свой гейт #663).
-- **Карточка ТВОЯ, а тул говорит «not assigned to you» — это НЕ твоя ошибка. С #885 форма обычно
-  лечится сама; не вылечилась — сначала просто ПОВТОРИ, и лишь потом читай про пересоздание.**
-  Форма измерена вживую (#885, project 10, 2026-08-06): `claim` отчитался успехом, `get_task`
-  показал `stage: Design` и тебя в ассайни, а вот копия задачи В KANBAN-ВИДЕ приехала с ПУСТЫМ
-  `assignees` — и судят по ней все владельческие гейты. ТОГДА, до починки, карточку не мог
-  СДВИНУТЬ ни один тул: `advance`, `call_human`, `return_task` и `decompose` отказывали
-  одинаково — то есть даже спросить про неё было нечем, потому что `call_human` ПО НЕЙ ЖЕ и есть
-  один из отказывающих. **Но «неработаема НИ ОДНИМ тулом» — перебор, и круг назад тут стоял
-  именно он:** `get_task`, `comment`, `attach_file` и `file_task` владения не требуют и работают
-  по такой карточке всегда (замерено), `get_task` даже показывает настоящего ассайни — на этом и
-  держится обходной путь через `file_task` ниже. А «повтори» из заголовка — потому что перечитка
-  best-effort: она сдаётся на любой сетевой ошибке, и это состояние ПРЕХОДЯЩЕЕ (замерено: первый
-  вызов отказал, простой повтор — `Build`, ничего пересоздавать не пришлось).
-  **Слот WIP она при этом НЕ занимает — она его ТЕРЯЕТ, и круг назад тут стояло ровно
-  обратное.** `_my_active_tasks` считает по той же копии с доски, поэтому для счётчика такой
-  карточки нет вовсе. Замерено при `wip_limit = 3` (три карточки заклеймлены, ОДНА схлопнута):
-  гейт отдаёт `{'active': 2, 'limit': 3, 'free': 1}`, тогда как реально за тобой в Design/Build
-  ТРИ, — и ЧЕТВЁРТЫЙ `claim` ПРОХОДИТ, оставляя четыре против лимита три (здоровый контроль его
-  отбивает: «WIP limit reached (3/3)»). **И в Design/Build `next_task` такую карточку обратно НЕ
-  отдаёт** (`task=None`; на здоровом контроле — `task=<id>`, `resume=True`), поэтому упавшего на
-  ней пер-таск-агента НЕ заменит никто САМ: правило «упавший build-агент напомнит о себе сам» тут
-  не работает — назови id такой карточки человеку в своём итоге. **В Review этого перекоса
-  БОЛЬШЕ НЕТ, и круг назад здесь стояло обратное.** Тогда ветка предложения ревью пропускала
-  карточки, назначенные на тебя, судила об этом по той же копии с доски — и схлопнутая карточка
-  ПРЕДЛАГАЛАСЬ её же автору, тогда как здоровый контроль отвечал `task=None` (замерено). С #991
-  пропуск условен на `require_review_independence`, а он по умолчанию false: предлагаются ОБЕ, и
-  различать тут нечего. Перекос уцелел ровно там, где флаг ВКЛЮЧЁН — схлопнутая копия прячет
-  авторство от ветки предложения, карточка приезжает к автору, а `review_task` вердикт вынести
-  не даст (он перечитывает `/tasks/<id>`). Первые два остатка ПРЕДСУЩЕСТВУЮЩИЕ и вне мандата
-  #885: чинить их не надо, надо не описывать наоборот.
-  - **«Своё ревью — не ревью» больше НЕ значит «не выноси вердикт».** При выключенном флаге
-    предложение собственной карточки — штатный соло-режим, а не симптом: независимость там несёт
-    СВЕЖИЙ КОНТЕКСТ, а не отдельная идентити (`review_task` такой вердикт и принимает). Диспатчь
-    отдельного ревьюера-сиблинга — никогда не того, кто писал код, — и вердикт выноси. Промолчать
-    тут ХУЖЕ, чем ошибиться: карточка без вердикта приходит на КАЖДОМ тике, и внешний
-    супервайзер будет поднимать под неё агента, пока вердикта нет.
-  - **Сначала проверь, что ты вообще в этом тупике, а не в соседнем.** Гейты с #885 перечитывают
-    задачу через `/tasks/<id>`, когда копия с доски пуста, поэтому СЕГОДНЯ эта форма обычно
-    лечится сама и ты её не увидишь. Признак, что она была: `claim` вернул ключ
-    `kanban_assignee_divergence` — прочитай его и назови в `[worklog]`. Отказ «not assigned to
-    you» БЕЗ этого ключа — это, скорее всего, другой край: бесхозная карточка, которую человек
-    положил руками (см. «После Review»), либо чужая работа.
-  - **Если тул всё-таки отказывает по карточке, которая по `get_task` твоя** — сам ты её не
-    починишь: измерено, что состояние ДУРАБЕЛЬНОЕ, а не гонка, и его не снимает ни
-    переназначение ассайни, ни перемещение между колонками, ни полная перезапись самой задачи.
-    Единственное известное лечение — **завести НОВУЮ карточку с тем же содержанием
-    (`file_task`, `related_task_id` на застрявшую) и назвать в ней, что оригинал застрял**;
-    оригинал уводит в Backlog человек. Почему `file_task`, а не `call_human`: последний работает
-    из Design/Build и требует владения — по застрявшей карточке он откажет ровно тем же текстом.
-    Так и было сделано с живой #854 → VMCP-270 (886).
-  - **Почему это не чинится «правильнее»:** ассайни в копии теряет сам сервер, и почему — вопрос
-    к Vikunja, а не к этим тулзам. Здесь гейты сделаны устойчивыми к форме, причина не
-    воспроизводится. Расхождение редкое: в тот же день сверка копии с доски против
-    `GET /tasks/<id>` по всем 31 карточке вне Done дала РОВНО ОДНО.
-- **У РЕВЬЮЕРА оба выхода выше нерабочие — у него свой, и он один.** Ревьюер — единственная
-  роль, которая работает ИСКЛЮЧИТЕЛЬНО из Review, а оттуда `call_human` отказывает,
-  `return_task` отказывает — и `decompose` тоже (гейт #663). Последний в «выходы выше» не
-  входит (он не про «застрял», а про «надо дробить»), но назван здесь, потому что в ЭТОЙ секции
-  ревьюеру написан только этот буллет — а искать он будет тут. (Про твою РОЛЬ сказано и в
-  других местах файла: «Независимое ревью изменений» и «Ревьюер, вынеся вердикт, освобождает
-  своё дерево».) Числа в перечислении НЕТ намеренно: оно тут ровно так уже и ОТСТАВАЛО от
-  гейтов — гейт #663 приехал, перечисление осталось прежним. Ложным при этом не стало ни одно
-  слово (сказано было про «оба выхода выше», а `decompose` в них и не входил) — просто у
-  ревьюера появился маршрут, о котором тут молчали, и этого хватило. А «сколько тулов
-  отказывает» — вопрос вообще без ОДНОГО ответа: свип всех 12 агентских тулов по карточке в
-  Review даёт ПЯТЬ (`claim`, `advance` всеми тремя формами, `call_human`, `return_task`,
-  `decompose`), но `claim` и `advance` ревьюеру не двери, так что «три» — тоже сужение, просто
-  никем не проговорённое. Держись вместо счётчика за измеренное ОДНО, которое от нового гейта не
-  устаревает: из Review карточку выводит РОВНО ОДИН агентский тул —
-  `review_task(verdict='needs_work')`; `approve` её не двигает вовсе, а все прочие тулы либо
-  отказывают, либо оставляют карточку на месте. (Оба числа, и ПЯТЬ, и РОВНО ОДИН, держит
-  `test_exactly_ONE_agent_tool_walks_a_card_out_of_Review` — молча они не протухнут; потому они
-  тут и написаны. В мульти-идентити карточка ещё и не твоя — клеймить её не надо, а отказов
-  всё равно пять: меняются только их причины.)
-  Нужно решение человека посреди ревью — вопрос идёт в `review_task(task_id,
-  verdict='needs_work', report=<вопрос>)`: карточка возвращается ИМПЛЕМЕНТЕРУ в Build, а он
-  её владелец и зовёт `call_human` из Build законно — Your Call (и пинг человеку, если в
-  проекте настроен вебхук). «Надо дробить» — ТОТ ЖЕ вызов, только `report=<почему дробить>`:
-  `decompose` зовёт ИМПЛЕМЕНТЕР из Build, её владелец (подробности — в буллете `decompose`
-  секции «Декомпозиция и файлинг находок»). Шага два, но пайплайн цел — ценой метки
-  `review-failed`: вопрос оформляется как «доработать», другого способа вернуть карточку
-  владельцу нет.
-  - **Не сокращай их до одного, припарковав карточку самому.** `call_human` из Review
-    загейчен не «для порядка»: его тело двигает карточку в Your Call, а из Your Call
-    `review_task` отказывает («only tasks in Review can be reviewed») — обе ветки, и approve,
-    и needs_work, — то есть твой вердикт умер бы вместе с твоим вопросом. Заодно карточка
-    ушла бы из Review, а живость твоего review-дерева считается ровно по «карточка в Review»
-    (см. «Ревьюер, вынеся вердикт, освобождает своё дерево») — ДЕРЕВО стало бы для `--gc`
-    мёртвым в ту же секунду (каталог при этом исчезает не мгновенно и не всегда: там свои
-    grace-окно и гарды). И ассайни `call_human` СОХРАНЯЕТ, а это значит РАЗНОЕ в двух
-    сетапах: в МУЛЬТИ-ИДЕНТИТИ ассайни в Review — ИМПЛЕМЕНТЕР, и ответ человека `next_task`
-    отдал бы ЕМУ, а тебе — никогда; в СОЛО токен один, поэтому карточка вернулась бы к тебе
-    же «твоей активной» в Build и заняла бы слот — а вердикт всё равно записывать было бы
-    уже некуда.
-  - **Находка вне слайса ревьюируемой карточки — `file_task`, а не вердикт и не возврат.**
-    Вердикт — про эту карточку; `needs_work` с посторонней находкой отправляет имплементера
-    чинить чужое. **Но `file_task` тут не автомат: находка по ПРОЗЕ заводится карточкой,
-    только если меняет действие читателя, иначе идёт `comment`-ом на карточку, чей текст
-    обсуждается** (см. «ПОРОГ заведения» в секции «Декомпозиция и файлинг находок»); находка о
-    ПОВЕДЕНИИ — как и раньше, карточкой.
+- **`call_human` is the only channel for questions to the human.** You need a decision or
+  an input (a choice between options, access to a secret, a product decision) — file a
+  card via `call_human`, do NOT ask at the console. The orchestrator lives under `/loop`
+  and the human is not at the console: a question into the chat, `AskUserQuestion`, a plan
+  submitted for approval (`ExitPlanMode`) or "I'll ask and wait" simply hangs unanswered.
+  Every question to the human goes into a card and nowhere else. In the question: what you
+  need, which options you considered, what you recommend. The task stays yours; it moves
+  to Your Call.
+  - **Do not block after `call_human`.** The question has gone into a card — do not wait
+    for an answer within this same tick: go to `next_task` for the next task (Your Call =
+    parked, not your active one); on an empty queue, yield the turn until the next tick
+    (see "The queue is empty").
+  - **The answer comes back on its own.** The human answers with a comment and moves the
+    card back to Design/Build BY HAND; on the next tick `next_task` hands it to you as
+    "your active one" with the answer on it — you read the comment (`get_task`) and carry
+    on. You neither need to move the card out of Your Call nor have anything to move it
+    with — the human does that.
+  - **YC = Your Call** — the column `call_human` leads to. When the human asks you to
+    "move (throw) the task into YC / into Your Call", do it through `call_human` and
+    nothing else (with the question as context). There is no separate `advance` route into
+    that column.
+- **`return_task`** — an external blocker (someone else's service is down, a dependency is
+  missing, the task has lost its point). The claim is dropped and the task goes to Backlog
+  for re-triage. **It REFUSES from TWO stages — Review and Done — and works from the other
+  five** (Backlog, Queue, Design, Build, Your Call). "Works" here is about the STAGE: the
+  ownership guard is in place from an open stage too, so it will not hand over someone
+  else's card from any of the five.
+  - **From Review** (a stage gate, #590): dragging a card that is standing under review
+    off to re-triage is not "stuck", it is carrying someone else's finished work out of
+    the pipeline.
+  - **From Done** (#626): a card in Done was put there by the HUMAN, and the move back out
+    of Done is the human's too, not yours: "only the human moves a card to Done" holds in
+    BOTH directions. Measured: before this gate `return_task` dragged a human-accepted card
+    into Backlog with no assignee and with TWO labels at once (`reviewed` + `blocked`),
+    while `advance` in all three forms, `call_human`, `claim` and `review_task` in both
+    branches all refused. That pair is measurement #626 and NOT what you get today: since
+    #693 the verdict is cleared BEFORE `blocked`, and with the gate removed the card
+    arrives with the single label `blocked` (measured). The gate is no weaker for it — the
+    human's acceptance would now not "contradict" the board, it would be ERASED from it,
+    and that is exactly what the refusal says. The work in Done turned out to be no good —
+    file a `file_task` (the next card, `related_task_id` pointing at this one) for the
+    human to triage; `call_human` from Done refuses too, and only the human can bring the
+    card itself back by hand.
+    **Since #662 this is ONE RULE, not a habit of each individual tool, and something
+    practical follows from that.** Human-only Done used to be written down nowhere as a
+    single statement: four tools derived it from their own starting stage, and
+    `return_task` and `decompose` each carried a personal gate (#626/#649) — so the next
+    mutating tool that moves a card and does not check the stage would open the hole again,
+    and there was nothing to catch it with. Now the guard sits at the shared point
+    (`_find_task`), and the two personal gates that had gone dead are deleted. What YOU
+    see: from Done **every** tool refuses with the SAME TEXT — it names the rule itself and
+    the door that does work (`file_task`) — so working through the tools after the first
+    refusal is pointless, the answer will be the same. READING an accepted card is still
+    possible: `get_task`, `comment`, `attach_file` and `download_attachment` work from Done
+    deliberately, and that is pinned.
+    **What this does NOT mean:** the hole has not become inexpressible — the guard can be
+    removed — and the rule is still exactly about Done, not about "the stages a particular
+    tool does not move a card out of" in general (`decompose` has TWO such stages: Done and
+    Review, and the second is held by its own gate #663).
+- **The card is YOURS and a tool says "not assigned to you" — that is NOT your mistake.
+  Since #885 the shape usually heals itself; if it did not, just RETRY first, and only then
+  read about re-filing.** The shape was measured live (#885, project 10, 2026-08-06):
+  `claim` reported success, `get_task` showed `stage: Design` and you among the assignees,
+  but the copy of the task IN THE KANBAN VIEW arrived with an EMPTY `assignees` — and that
+  is the copy every ownership gate judges by. BACK THEN, before the fix, not one tool could
+  MOVE the card: `advance`, `call_human`, `return_task` and `decompose` refused alike — that
+  is, there was nothing left even to ask about it with, because `call_human` ON THAT VERY
+  CARD is one of the refusers. **But "unworkable by ANY tool" is an overstatement, and a
+  round ago that is exactly what stood here:** `get_task`, `comment`, `attach_file` and
+  `file_task` require no ownership and always work on such a card (measured), and `get_task`
+  even shows the real assignee — that is what the `file_task` workaround below rests on. And
+  the "retry" in the heading is there because the re-read is best-effort: it gives up on any
+  network error, and that state is TRANSIENT (measured: the first call refused, a plain
+  retry gave `Build`, and nothing had to be re-filed).
+  **It does NOT hold a WIP slot meanwhile — it LOSES one, and a round ago the exact
+  opposite stood here.** `_my_active_tasks` counts off that same board copy, so for the
+  counter such a card does not exist at all. Measured at `wip_limit = 3` (three cards
+  claimed, ONE collapsed): the gate returns `{'active': 2, 'limit': 3, 'free': 1}`, whereas
+  you really have THREE in Design/Build — and a FOURTH `claim` PASSES, leaving four against
+  a limit of three (the healthy control turns it away: "WIP limit reached (3/3)"). **And in
+  Design/Build `next_task` does NOT hand such a card back** (`task=None`; on the healthy
+  control it is `task=<id>`, `resume=True`), so nobody will replace a per-task agent that
+  died on it ON THEIR OWN: the rule "a fallen build agent reminds you of itself" does not
+  work here — name the id of such a card to the human in your final report. **In Review that
+  skew is GONE, and a round ago the opposite stood here.** Back then the review-offering
+  branch skipped cards assigned to you, judged that off the same board copy — and a
+  collapsed card WAS OFFERED to its own author, whereas the healthy control answered
+  `task=None` (measured). Since #991 the skip is conditional on
+  `require_review_independence`, which is false by default: BOTH are offered, and there is
+  nothing to tell apart here. The skew survived exactly where the flag is ON — the collapsed
+  copy hides authorship from the offering branch, the card arrives at its author, and
+  `review_task` will not let a verdict be delivered (it re-reads `/tasks/<id>`). The first
+  two leftovers are PRE-EXISTING and outside #885's mandate: they do not need fixing, what
+  needs doing is not describing them backwards.
+  - **"Your own review is not a review" no longer means "do not deliver a verdict".** With
+    the flag off, being offered your own card is the normal solo mode, not a symptom:
+    independence there is carried by FRESH CONTEXT, not by a separate identity
+    (`review_task` accepts such a verdict). Dispatch a separate sibling reviewer — never the
+    one who wrote the code — and deliver the verdict. Staying silent here is WORSE than
+    being wrong: a card without a verdict comes back on EVERY tick, and an external
+    supervisor will keep booting an agent for it as long as there is no verdict.
+  - **First check that you are in this dead end at all and not the one next door.** Since
+    #885 the gates re-read the task via `/tasks/<id>` when the board copy is empty, so TODAY
+    this shape usually heals itself and you never see it. The sign that it happened: `claim`
+    returned the key `kanban_assignee_divergence` — read it and name it in the `[worklog]`.
+    A "not assigned to you" refusal WITHOUT that key is most likely the other edge: an
+    ownerless card the human put there by hand (see "After Review"), or somebody else's
+    work.
+  - **If a tool still refuses on a card that `get_task` says is yours** — you cannot fix it
+    yourself: the state is measured to be DURABLE rather than a race, and it is cleared
+    neither by re-assigning the assignee, nor by moving the card between columns, nor by a
+    full rewrite of the task itself. The only known cure is to **file a NEW card with the
+    same content (`file_task`, `related_task_id` pointing at the stuck one) and say in it
+    that the original is stuck**; the original is taken to Backlog by the human. Why
+    `file_task` and not `call_human`: the latter works from Design/Build and requires
+    ownership — on a stuck card it refuses with exactly the same text. That is what was done
+    with the live #854 → VMCP-270 (886).
+  - **Why this is not fixed "more properly":** it is the server itself that loses the
+    assignee in the copy, and why is a question for Vikunja, not for these tools. What was
+    done here is to make the gates robust to the shape; the cause does not reproduce. The
+    divergence is rare: the same day, checking the board copy against `GET /tasks/<id>`
+    across all 31 cards outside Done gave EXACTLY ONE.
+- **For the REVIEWER both ways out above are dead — the reviewer has one of their own, and
+  only one.** The reviewer is the only role that works EXCLUSIVELY from Review, and from
+  there `call_human` refuses, `return_task` refuses — and so does `decompose` (gate #663).
+  The last one is not among "the ways out above" (it is not about "stuck" but about "this
+  needs splitting"), but it is named here because in THIS section this bullet is the only
+  thing written for the reviewer — and this is where the reviewer will look. (Your ROLE is
+  covered in other places in the file too: "Independent review of changes" and "Having cast a verdict, the reviewer releases its own tree".) There is deliberately NO
+  number in that enumeration: exactly as it stands here it has already LAGGED behind the
+  gates — gate #663 arrived and the enumeration stayed as it was. Not one word became false
+  in the process (what was said was "both ways out above", and `decompose` was never among
+  them) — the reviewer simply acquired a route this text was silent about, and that was
+  enough. And "how many tools refuse" is a question with no ONE answer at all: a sweep of
+  all 12 agent tools on a card in Review gives FIVE (`claim`, `advance` in all three forms,
+  `call_human`, `return_task`, `decompose`), but `claim` and `advance` are not doors for the
+  reviewer, so "three" is a narrowing too, just one nobody has spelled out. Hold on, instead
+  of a counter, to the measured ONE, which the new gate does not make stale: EXACTLY ONE
+  agent tool walks a card out of Review —
+  `review_task(verdict='needs_work')`; `approve` does not move it at all, and every other
+  tool either refuses or leaves the card where it is. (Both numbers, FIVE and EXACTLY ONE,
+  are held by `test_exactly_ONE_agent_tool_walks_a_card_out_of_Review` — they will not go
+  stale silently; that is why they are written here. Under multi-identity the card is not
+  yours either — no need to claim it, and there are still five refusals: only their reasons
+  change.)
+  You need a decision from the human in the middle of a review — the question goes into
+  `review_task(task_id, verdict='needs_work', report=<the question>)`: the card goes back to
+  the IMPLEMENTER in Build, and being its owner they call `call_human` from Build
+  legitimately — Your Call (and a ping to the human, if a webhook is configured for the
+  project). "This needs splitting" is the SAME call, only `report=<why it needs splitting>`:
+  `decompose` is called by the IMPLEMENTER from Build, its owner (details in the `decompose`
+  bullet of the section "Decomposition and filing findings"). Two steps, but the pipeline is
+  intact — at the price of a `review-failed` label: the question is dressed as "needs work",
+  because there is no other way to return the card to its owner.
+  - **Do not shorten them into one by parking the card yourself.** `call_human` from Review
+    is not gated "for tidiness": its body moves the card into Your Call, and from Your Call
+    `review_task` refuses ("only tasks in Review can be reviewed") — both branches, approve
+    and needs_work alike — that is, your verdict would die together with your question. On
+    top of that the card would leave Review, and the liveness of your review worktree is
+    counted by exactly "the card is in Review" (see "Having cast a verdict, the reviewer releases its own tree") — the TREE would become dead to `--gc` that same second
+    (the directory does not disappear instantly and not always: there are a grace window and
+    guards of its own there). And `call_human` PRESERVES the assignee, which means DIFFERENT
+    things in the two setups: under MULTI-IDENTITY the assignee in Review is the
+    IMPLEMENTER, and `next_task` would hand the human's answer to THEM, and to you — never;
+    under SOLO there is one token, so the card would come back to you as "your active one"
+    in Build and would take a slot — and there would still be nowhere left to write the
+    verdict.
+  - **A finding outside the slice of the card under review is a `file_task`, not a verdict
+    and not a return.** The verdict is about this card; a `needs_work` carrying an unrelated
+    finding sends the implementer off to fix somebody else's thing. **But `file_task` is not
+    automatic here: a finding about PROSE becomes a card only if it changes what the reader
+    does, otherwise it goes as a `comment` on the card whose text is under discussion** (see
+    "The THRESHOLD for filing" in the section "Decomposition and filing findings"); a finding
+    about BEHAVIOUR is a card, as before.
 
-## После Review
+## After Review
 
-- СВОЮ задачу в Review не трогай (чужие задачи в Review — наоборот, ревьюй,
-  см. выше). Правки по ревью = задача вернулась в Build с комментом
-  (от человека или от агента-ревьюера) — увидишь через next_task,
-  прочитай комменты через get_task.
-  - **Прочитал коммент — реши, ЧТО именно приехало. `[review] NEEDS WORK` НЕ значит «дефект»:**
-    метка `review-failed`, префикс `[review] NEEDS WORK` и карточка в Build одинаковы у всех
-    случаев — отличается только ТЕКСТ отчёта, а значит распознать разницу может лишь тот, кто
-    его прочитает, то есть ты. Так выходит потому, что из Review карточку не выводит НИ ОДИН
-    другой агентский тул (свипнуты ВСЕ агентские тулы по карточке в Review — у `advance`
-    каждая форма `to=`, у `review_task` каждый вердикт: сдвинул её ровно один,
-    `review_task(needs_work)`; `call_human`, `return_task` и `decompose` отказали гейтом по
-    стадии — как и `claim` с `advance`, см. буллет ревьюера про ПЯТЬ отказов), поэтому ревьюер
-    вынужден оформлять этим же вердиктом всё, что должен сделать
-    ВЛАДЕЛЕЦ из Build. Что бывает
-    за отбоем — ниже; список НЕ обещан закрытым, и последний пункт именно об этом:
-    - **дефект** — доработай и `advance(to='review')`, как обычно;
-    - **ВОПРОС К ЧЕЛОВЕКУ** (выбор из вариантов, продуктовое решение, доступ) — ПЕРВЫМ делом
-      перешли его через `call_human` из Build, а свой ответ вместо человеческого не придумывай:
-      это ровно тот случай, ради которого ревьюер и звал;
-    - **«надо дробить»** — `decompose` из Build (см. «Декомпозиция и файлинг находок»);
-    - **«потеряла смысл» / внешняя блокировка** — `return_task` из Build (см. «Застрял? Выход
-      зависит от РОЛИ»): карточка уезжает в **Backlog** с меткой `blocked` и БЕЗ ассайни, на
-      ре-триаж человеку. Ревьюер, увидевший, что зависимость выпилена или работа устарела, обязан
-      оформить это тем же `needs_work`: `return_task` из Review отказывает тем же гейтом (#590),
-      что и `call_human` с `decompose`. С веткой дробления они выглядят парой, и с #693 они ею
-      наконец и СТАЛИ: оба тула СНИМАЮТ вердикт, так что человек видит в Backlog ровно одну
-      метку — `blocked` тут и `epic` там (измерены обе). Раньше метки различались, потому что
-      `return_task` вердикт не снимал и в Backlog приезжала пара `blocked` + `review-failed`; на
-      сильной форме того же маршрута (карточка была ОДОБРЕНА, человек вернул её руками) это была
-      пара `blocked` + `reviewed`, то есть доска утверждала «принято» и «заблокировано»
-      одновременно — ровно то, что отказ `return_task` из Done тогда и запрещал СВОИМИ СЛОВАМИ.
-      Сейчас он этих слов не говорит, и причина — то же самое снятие: пара стала НЕДОСТИЖИМОЙ
-      (со снятым Done-гейтом карточка сегодня приезжает с одной меткой `blocked` — измерено),
-      поэтому отказ называет другое следствие — принятие человека СТЁРЛОСЬ БЫ с доски. Отличать
-      ветки по ЧИСЛУ меток больше нельзя, и не надо: их различает сама метка;
-    - **не подошло НИЧЕГО из перечисленного — НЕ УГАДЫВАЙ**, спроси человека через `call_human`
-      из Build. Перечисление выше — то, что ИЗМЕРЕНО на сегодняшнем наборе тулов, а не закрытый
-      список: новый мутирующий тул, открытый из Build и закрытый из Review, добавит отбою ветку,
-      которой здесь нет, и текст об этом промолчит. Дефолтное смещение всего этого раздела —
-      «отбой = дефект», поэтому непонятный отчёт безопаснее отдать человеку, чем дорабатывать.
-    Оговорка на край, измеренный на живом `Workflow`: всё это работает, пока карточка ЗА ТОБОЙ.
-    У карточки БЕЗ ассайни (человек снял его в Review или положил её туда руками) владельца,
-    которому её возвращать, попросту нет — поэтому отбой уводит такую карточку не в Build, а в
-    **Queue** (#705), и она становится обычной свободной задачей: `next_task` её предложит,
-    `claim` заклеймит, и все маршруты выше открываются уже НОВОМУ владельцу. «Обычной» —
-    буквально, со всеми обычными гейтами Queue, а не «гарантированно подхватится»: слоты заняты
-    — подождёт свободного (`claim` откажет «WIP limit reached», и это НЕ повод её чинить),
-    незавершённый предшественник — подождёт его, а с меткой `epic` или `blocked` `next_task` её
-    не предложит вовсе (измерено; фильтр старый и к отбою отношения не имеет). Хуже от этого не
-    стало ни в одном из случаев: в Build её не видел вообще никто. Метка
-    `review-failed` и текст вердикта остаются на карточке — заклеймив её, прочитай
-    `[review]`-коммент: если там ВОПРОС, пересылать его человеку через `call_human` всё равно
-    тебе. **Метку не пугайся и «чинить» её не лезь:** в Queue `review-failed` значит не
-    «переделывается прямо сейчас», а «была отбита и ждёт, кто возьмёт»; снимает её твой же
-    `claim` (измерено после #693: `Queue[review-failed]` → claim → `Design` без меток). До #693
-    её снимал только следующий `advance(to='build')`, и вердикт успевал доехать до Design —
-    окно узкое, но это была та же ложь на доске, что и в `return_task`, просто короче живущая.
-    Прочитать `[review]`-коммент это НЕ мешает: снимается метка, а журнал комментов
-    append-only. Ассайненный отбой не меняется ни на
-    байт: карточка едет в Build к своему имплементеру, и карточка, назначенная на ДРУГОГО, тебе
-    клеймабельной не становится.
-    Остаётся один край, которым отбой не заведует: неассайненную карточку человек положил
-    РУКАМИ сразу в Design/Build. Оттуда отказывают ВСЕ маршруты выше — и `advance`, и
-    `call_human`, и `return_task`, и `decompose`, — причём ОДНИМ И ТЕМ ЖЕ текстом, так что
-    пробовать следующий из списка после первого отказа бессмысленно (измерено свипом всех 12
-    тулзов по такой карточке и в Design, и в Build: НИ ОДИН её не двигает — читать и
-    комментировать можно, сделать своей или сдвинуть нельзя). Отказ начинается привычным «not
-    assigned to you — claim it first», но теперь сам же и говорит, что этот совет невыполним
-    (`claim` работает только из Queue) и что вернуть карточку может только человек; `next_task`
-    её не предложит вовсе. Своими силами не чинится: скажи об этом в своём итоге.
-    Второй край, тоже измеренный: у карточки с НЕЗАВЕРШЁННЫМ предшественником (`follows`/
-    `blocked`) отпадает ровно ветка «дефект» — `advance(to='review')` отказывает, пока
-    предшественник ниже Review, а остальные маршруты работают. Это не повод угадывать: доработай
-    и дождись предшественника, его карточка названа в тексте отказа.
-  - **И это СРОЧНО, потому что до твоего `call_human` человека о вопросе никто не УВЕДОМЛЯЕТ.**
-    Измерено со шпионом на вебхуке: `review_task(verdict='needs_work')` не пингует НИКОГО (ноль
-    запросов, ключа `notified` в его ответе нет вовсе), `next_task` тоже ноль, и только
-    `call_human` даёт один пинг и `notified: true`. То есть весь пуш-канал «ревьюер → человек»
-    держится на ОДНОМ твоём вызове. (Пинг вообще существует, только если в проекте настроен
-    вебхук `VIKUNJA_NOTIFY_WEBHOOK`; не настроен — «уведомляет» сводится к самой парковке в
-    Your Call. Но и она — твой же `call_human`.) Не переслал — вопрос остаётся просто комментом
-    на карточке в Build: заметить его человеку придётся самому, а карточка при этом выглядит как
-    штатная доработка — метка `review-failed`, стоит за тобой в Build, вопрос спрятан в тексте
-    отчёта. Это и есть тихий исход, ради которого правило написано.
-- В Done переводит только человек. Никогда не пытайся обойти это через API.
+- Do not touch YOUR OWN task in Review (someone else's tasks in Review — the opposite,
+  review them, see above). Review fixes = the task came back to Build with a comment
+  (from the human or from the reviewer agent) — you will see it through next_task,
+  read the comments through get_task.
+  - **You have read the comment — now decide WHAT exactly arrived. `[review] NEEDS WORK`
+    does NOT mean "defect":** the `review-failed` label, the `[review] NEEDS WORK` prefix
+    and the card sitting in Build are identical in every case — only the TEXT of the report
+    differs, which means the only one who can tell the difference is the one who reads it,
+    that is you. It comes out that way because NOT ONE other agent tool walks a card out of
+    Review (ALL agent tools were swept on a card in Review — every `to=` form of `advance`,
+    every verdict of `review_task`: exactly one moved it, `review_task(needs_work)`;
+    `call_human`, `return_task` and `decompose` refused on the stage gate — as did `claim`
+    and `advance`, see the reviewer's bullet about FIVE refusals), so the reviewer is forced
+    to dress everything the OWNER has to do from Build as that same verdict. What can be
+    behind a bounce is below; the list is NOT promised to be closed, and the last item is
+    precisely about that:
+    - **a defect** — do the work and `advance(to='review')`, as usual;
+    - **A QUESTION TO THE HUMAN** (a choice between options, a product decision, access) —
+      FIRST thing, forward it via `call_human` from Build, and do not invent an answer of
+      your own in place of the human's: this is exactly the case the reviewer was calling
+      for;
+    - **"this needs splitting"** — `decompose` from Build (see "Decomposition and filing
+      findings");
+    - **"it has lost its point" / an external blocker** — `return_task` from Build (see
+      "Stuck? The way out depends on your ROLE"): the card goes to **Backlog** with the
+      `blocked` label and WITHOUT an assignee, for the human to re-triage. A reviewer who
+      sees that the dependency has been ripped out or that the work has gone stale must
+      dress that as the same `needs_work`: `return_task` from Review refuses on the same gate
+      (#590) as `call_human` and `decompose`. Together with the splitting branch they look
+      like a pair, and since #693 they finally ARE one: both tools CLEAR the verdict, so the
+      human sees exactly one label in Backlog — `blocked` here and `epic` there (both
+      measured). The labels used to differ, because `return_task` did not clear the verdict
+      and the pair `blocked` + `review-failed` arrived in Backlog; on the strong form of the
+      same route (the card had been APPROVED and the human returned it by hand) it was the
+      pair `blocked` + `reviewed`, that is, the board asserted "accepted" and "blocked" at
+      the same time — exactly what the `return_task`-from-Done refusal forbade IN ITS OWN
+      WORDS back then. It does not say those words now, and the reason is that same
+      clearing: the pair has become UNREACHABLE (with the Done gate removed the card today
+      arrives with the single label `blocked` — measured), so the refusal names a different
+      consequence — the human's acceptance would be ERASED from the board. Telling the
+      branches apart by the NUMBER of labels is no longer possible, and there is no need:
+      the label itself tells them apart;
+    - **NOTHING in the list fits — do NOT GUESS**, ask the human via `call_human` from
+      Build. The enumeration above is what has been MEASURED against today's set of tools,
+      not a closed list: a new mutating tool, open from Build and closed from Review, will
+      add a branch to the bounce that is not here, and this text will stay silent about it.
+      The default bias of this whole section is "a bounce = a defect", so an unclear report
+      is safer handed to the human than worked on.
+    A caveat about an edge, measured on a live `Workflow`: all of this works while the card
+    is ASSIGNED TO YOU. A card with NO assignee (the human removed it in Review, or put the
+    card there by hand) simply has no owner to return it to — so the bounce takes such a card
+    not to Build but to **Queue** (#705), and it becomes an ordinary free task: `next_task`
+    will offer it, `claim` will claim it, and every route above opens up for the NEW owner.
+    "Ordinary" literally, with all the ordinary Queue gates, and not "guaranteed to be picked
+    up": slots taken — it waits for a free one (`claim` refuses with "WIP limit reached", and
+    that is NOT a reason to fix it), an unfinished predecessor — it waits for that, and with
+    an `epic` or `blocked` label `next_task` will not offer it at all (measured; that filter
+    is old and has nothing to do with the bounce). Nothing got worse in any of these cases:
+    in Build nobody saw it at all. The `review-failed` label and the text of the verdict stay
+    on the card — once you have claimed it, read the `[review]` comment: if there is a
+    QUESTION in it, forwarding it to the human via `call_human` is still on you. **Do not be
+    scared of the label and do not go "fixing" it:** in Queue `review-failed` does not mean
+    "is being reworked right now" but "was bounced and is waiting for someone to take it";
+    it is cleared by your own `claim` (measured after #693: `Queue[review-failed]` → claim →
+    `Design` with no labels). Before #693 only the next `advance(to='build')` cleared it, and
+    the verdict made it as far as Design — a narrow window, but it was the same lie on the
+    board as in `return_task`, just shorter-lived. That does NOT get in the way of reading
+    the `[review]` comment: what is cleared is the label, and the comment log is append-only.
+    The assigned bounce does not change by a single byte: the card goes to Build to its own
+    implementer, and a card assigned to SOMEONE ELSE does not become claimable by you.
+    One edge remains that the bounce does not govern: an unassigned card the human put
+    straight into Design/Build BY HAND. From there ALL the routes above refuse — `advance`,
+    `call_human`, `return_task` and `decompose` alike — and with the SAME TEXT, so trying the
+    next one on the list after the first refusal is pointless (measured with a sweep of all
+    12 tools on such a card in both Design and Build: NOT ONE moves it — reading and
+    commenting are possible, making it yours or moving it is not). The refusal opens with the
+    familiar "not assigned to you — claim it first", but now it also says itself that this
+    advice cannot be followed (`claim` works only from Queue) and that only the human can
+    bring the card back; `next_task` will not offer it at all. It cannot be fixed under your
+    own power: say so in your final report.
+    A second edge, also measured: for a card with an UNFINISHED predecessor (`follows`/
+    `blocked`) exactly the "defect" branch drops out — `advance(to='review')` refuses while
+    the predecessor is below Review, and the other routes work. That is no reason to guess:
+    do the work and wait for the predecessor, whose card is named in the refusal text.
+  - **And it is URGENT, because until your `call_human` nobody NOTIFIES the human about the
+    question.** Measured with a spy on the webhook: `review_task(verdict='needs_work')` pings
+    NOBODY (zero requests, and there is no `notified` key in its response at all),
+    `next_task` is zero too, and only `call_human` gives one ping and `notified: true`. That
+    is, the whole push channel "reviewer → human" rests on ONE call of yours. (The ping
+    exists at all only if the `VIKUNJA_NOTIFY_WEBHOOK` webhook is configured for the project;
+    not configured — "notifies" comes down to the parking in Your Call itself. But that too
+    is your own `call_human`.) If you did not forward it, the question stays as just a
+    comment on a card in Build: the human will have to notice it unaided, while the card
+    looks like an ordinary rework — a `review-failed` label, standing with you in Build, the
+    question hidden in the text of the report. That is precisely the quiet outcome the rule
+    is written for.
+- Only the human moves a card to Done. Never try to work around that through the API.

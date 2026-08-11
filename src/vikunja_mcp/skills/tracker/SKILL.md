@@ -3,1327 +3,1378 @@ name: tracker
 description: Use when working with team tasks in the Vikunja tracker via the "tracker" MCP tools (next_task/claim/advance/...) — queue discipline, stage gates, when to call_human vs return_task
 ---
 
-<!-- MANAGED — этот установленный файл авто-синхронизируется из пакета vikunja-mcp при старте
-     MCP-сервера (ровно один раз за сессию — см. «Какую копию этих правил ты читаешь»); локальные
-     правки будут перезаписаны. Отключить синк: VIKUNJA_MCP_NO_SKILL_SYNC=1.
-     Обновить вручную: `vikunja-mcp install-skill`. Правь ИСТОЧНИК в репозитории, не эту копию. -->
+<!-- MANAGED — this installed file is auto-synced from the vikunja-mcp package at MCP server
+     start (exactly once per session — see "Which copy of these rules you are reading"); local
+     edits will be overwritten. Turn the sync off: VIKUNJA_MCP_NO_SKILL_SYNC=1.
+     Update by hand: `vikunja-mcp install-skill`. Edit the SOURCE in the repo, not this copy. -->
 
-# Работа с трекером (Vikunja)
+# Working with the tracker (Vikunja)
 
-Пайплайн: `Backlog → Queue → Design → Build → Review → [человек] → Done`,
-плюс отдельная колонка `Your Call` (в сокращениях — YC). Жёсткие правила зашиты в MCP-тулзы —
-они откажут, если что-то не так. Эти правила — про то, КАК работать.
+Pipeline: `Backlog → Queue → Design → Build → Review → [human] → Done`,
+plus a separate `Your Call` column (YC in shorthand). The hard rules are wired into the MCP
+tools — they refuse if something is off. These rules are about HOW to work.
 
-## Какую копию этих правил ты читаешь
+## Which copy of these rules you are reading
 
-Текст, который отдаёт скилл, — СНИМОК. Установленную копию (`~/.claude/skills/tracker/SKILL.md`)
-переписывает из пакета `sync_installed_artifacts`, и делает это РОВНО ПРИ СТАРТЕ MCP-сервера, а
-сервер за сессию стартует один раз. Значит внутри сессии этот текст НЕ ДВИЖЕТСЯ — даже если
-правила за эту же сессию уже поменяли, приземлили и раскатали. (Тем же снимком заморожен
-standing-context SessionStart-хука: его проза живёт в `setup_cmd.render_hook_script` и
-синкается тем же вызовом.)
+The text the skill serves is a SNAPSHOT. The installed copy (`~/.claude/skills/tracker/SKILL.md`)
+is rewritten from the package by `sync_installed_artifacts`, and it does that EXACTLY AT MCP
+SERVER START, and a session's server starts once. So inside a session this text DOES NOT MOVE —
+even if the rules were changed, landed and rolled out during that same session. (The
+SessionStart hook's standing context is frozen by the same snapshot: its prose lives in
+`setup_cmd.render_hook_script` and is synced by the same call.)
 
-- **Работаешь в чекауте, где этот файл лежит ИСХОДНИКОМ (`src/vikunja_mcp/skills/tracker/SKILL.md`,
-  проверяется одним `ls`) — авторитетна копия из ТВОЕГО рабочего дерева, а не эта.** Прочитай её
-  файлом. Авторитетов при этом не двое: снимок — вход, исходник — источник, и правило включается
-  ровно там, где источник физически есть; у потребителей такого пути нет, и для них оно no-op.
-- **Задачу, чей РЕЗУЛЬТАТ — правка этого файла, нельзя проверять вызовом скилла — ни
-  исполнителю, ни РЕВЬЮЕРУ.** Скилл вернёт до-сессионный текст, правка будет выглядеть
-  непринятой — и вывод «не применилось» окажется верным по тому, что видно, и ложным по факту.
-  Ревьюеру тут особенно легко вляпаться: ему велено проверять ЗАПУСКОМ, а единственный «запуск»
-  у правки правил — как раз вызов скилла, и он вернёт замороженный снимок. Проверяй
-  `grep`/`diff` по файлу в своём рабочем дереве и пиши в отчёте (`[worklog]` у исполнителя,
-  `[review]` у ревьюера), чем именно проверял.
-- **До потребителей правка едет раскаткой, а не записью в чужой `~/.claude`.** Приземлилось в
-  главную → CI выпустил патч → канал `stable` → у потребителя встанет при следующем старте
-  сервера. Руками — `vikunja-mcp install-skill`. Из тика дренажа так не делай: это запись в
-  `~/.claude` ради эффекта, который в уже идущей сессии всё равно нечем подтвердить.
+- **Working in a checkout where this file sits as the SOURCE
+  (`src/vikunja_mcp/skills/tracker/SKILL.md`, one `ls` settles it) — the authoritative copy is
+  the one from YOUR worktree, not this one.** Read it as a file. That does not make two
+  authorities: the snapshot is an input, the source is the source, and the rule switches on
+  exactly where the source physically exists; consumers have no such path, and for them it is
+  a no-op.
+- **A task whose DELIVERABLE is an edit to this file cannot be verified by invoking the skill —
+  neither by the implementer nor by the REVIEWER.** The skill returns the pre-session text, the
+  edit will look unaccepted — and the conclusion "it did not take" is true by what is visible and
+  false in fact. A reviewer is especially easy to trap here: the instruction is to verify BY
+  RUNNING, and the only "run" a rules edit has is precisely the skill invocation, which returns
+  the frozen snapshot. Verify with `grep`/`diff` against the file in your own worktree and write
+  in the report (`[worklog]` for the implementer, `[review]` for the reviewer) what exactly you
+  checked.
+- **An edit reaches consumers by ROLLOUT, not by a write into somebody else's `~/.claude`.**
+  Landed on the main branch → CI released a patch → the `stable` channel → it installs at the
+  consumer's next server start. By hand — `vikunja-mcp install-skill`. Do not do that from a
+  drain tick: it is a write into `~/.claude` for an effect a running session has nothing to
+  confirm with anyway.
 
-## Дисциплина очереди
+## Queue discipline
 
-- **Сам НЕ БЕРИ больше `wip.limit` задач** (по умолчанию, когда `wip_limit` в
-  конфиге проекта не задан, их ТРИ; `wip.limit: 1` — ровно «одна задача за раз»), но не
-  останавливайся между ними — см. «Непрерывная работа (loop)». Формулировка именно про ТВОЙ
-  клейм, а не про число активных задач на доске: `wip.limit` — гейт на `claim`, и
-  `wip.active` законно бывает больше него, когда карточку вернули в Build мимо клейма
-  (см. «Ширина дренажа»). Свободных слотов нет
-  (`wip.free: 0`) — новую не клеймить, пока какая-то из твоих не уехала в Review,
-  Your Call или не возвращена через return_task. Исключение: фоновое
-  независимое ревью (см. «Независимое ревью изменений») НЕ считается
-  твоей активной задачей — оно идёт параллельно, слот не занимает, и следующую задачу
-  можно брать. Сколько слотов на самом деле — говорит `wip` в ответе `next_task`, а не
-  привычка (см. «Ширина дренажа» и «Параллельный дренаж»). Сам себе лимит не поднимай.
-- Начало работы с задачами — всегда `next_task`: сначала он вернёт твою
-  активную задачу (в т.ч. вернувшуюся после ответа человека), потом очередь.
-- **Возобновляемая задача (resume) — сначала перепроверь, потом работай.**
-  Не переделывай вслепую и не верь вслепую, что сделано: прочитай досье
-  (`get_task`), посмотри git log / состояние кода — работа могла быть
-  выполнена целиком или частично (например, задача мигрирована со старой
-  доски или её вёл кто-то до тебя). Если решена — верифицируй фактическое
-  поведение (запусти проверку, не только прочитай код) и переводи в Review
-  с честным evidence; если частично — зафиксируй комментом, что уже есть,
-  и доделай остальное. **И не считай рабочий каталог продолжением прошлого хода:**
-  что в нём лежит, зависит от того, ПОЧЕМУ задача вернулась — упавший агент
-  получает то же дерево с недоделанной работой, а вернувшаяся из Review карточка
-  чаще всего СВЕЖЕЕ дерево, потому что работа предшественника уже в главной ветке
-  (см. «Два возврата, два дерева»).
-- **Queue-контракт:** бери задачу, если она свободна ИЛИ назначена на тебя
-  (человек адресовал её именно тебе). Назначена на другого — не трогай,
-  это работа «для людей» или другого агента.
-- **Клеймить или нет — решает `stage`, а не `resume`.** `stage` есть в КАЖДОМ ответе
-  `next_task`, где есть `task`; правило ОДНО И ТО ЖЕ в последовательном и в параллельном
-  режиме, и другого нет:
-  - `stage: "Queue"` — и свежая из очереди (`resume: false`), и назначенная лично на тебя
-    человеком либо оставшаяся от недоделанного клейма (`resume: true`) → **`claim` НУЖЕН**:
-    именно он доводит задачу до Design и долечивает частичный клейм (тулза сама просит об
-    этом в `note`: «call claim(task_id) to finish moving it into Design»). Не заклеймишь —
-    задача застрянет в Queue, а `advance(to='build')` у исполнителя откажет: «moving to
-    Build is only possible from Design».
-  - `stage: "Design"` или `"Build"` (всегда `resume: true` — доработка после
-    `review-failed`, ответ человека из Your Call, работа упавшего агента) → клеймить НЕ
-    надо, она уже твоя, и `claim` откажет: «you can only claim from Queue».
-  - `stage: "Review"` (`review: true`) → это не работа тебе, а предложение отревьюить чужую
-    задачу: клеймить нечего (см. «Независимое ревью изменений»).
-- Backlog не трогаем — это зона триажа человека.
+- **Do NOT TAKE more than `wip.limit` tasks yourself** (by default, when `wip_limit` is not set
+  in the project config, that is THREE; `wip.limit: 1` is exactly "one task at a time"), but do
+  not stop between them — see "Continuous operation (loop)". The wording is about YOUR claim,
+  not about the number of active tasks on the board: `wip.limit` is a gate on `claim`, and
+  `wip.active` legitimately runs higher than it when a card was put back into Build past the
+  claim (see "The drain's width"). No free slots
+  (`wip.free: 0`) — do not claim a new one until one of yours has moved to Review,
+  Your Call, or been handed back via return_task. Exception: a background
+  independent review (see "Independent review of changes") does NOT count as
+  one of your active tasks — it runs in parallel, takes no slot, and the next task
+  can still be taken. How many slots there actually are is told by `wip` in the `next_task`
+  response, not by habit (see "The drain's width" and "Parallel drain"). Do not raise your own
+  limit.
+- Work on tasks always starts with `next_task`: it hands you your active task
+  first (including one that came back after a human's answer), then the queue.
+- **A resumable task (resume) — re-check first, work after.**
+  Do not redo it blindly and do not blindly believe it is done: read the dossier
+  (`get_task`), look at git log / the state of the code — the work may have been
+  done in full or in part (for example, the task was migrated from an old
+  board, or somebody ran it before you). If it is solved — verify the actual
+  behaviour (run a check, do not only read the code) and move it to Review
+  with honest evidence; if partially — record in a comment what is already there,
+  and finish the rest. **And do not treat the working directory as a continuation of the
+  previous turn:** what lies in it depends on WHY the task came back — a crashed agent
+  gets the same tree with unfinished work in it, while a card returned from Review
+  most often gets a FRESH tree, because its predecessor's work is already on the main branch
+  (see "Two returns, two trees").
+- **The Queue contract:** take a task if it is free OR assigned to you
+  (the human addressed it to you specifically). Assigned to somebody else — do not touch it,
+  that is work "for humans" or for another agent.
+- **Whether to claim is decided by `stage`, not by `resume`.** `stage` is present in EVERY
+  `next_task` response that has a `task`; the rule is ONE AND THE SAME in sequential and in
+  parallel mode, and there is no other:
+  - `stage: "Queue"` — both a fresh one from the queue (`resume: false`) and one assigned to
+    you personally by the human or left over from a partial claim (`resume: true`) → **`claim`
+    IS NEEDED**: it is what carries the task into Design and heals a partial claim (the tool
+    asks for it itself, in `note`: "call claim(task_id) to finish moving it into Design"). Do
+    not claim and the task stays stuck in Queue, and `advance(to='build')` refuses for the
+    implementer: "moving to Build is only possible from Design".
+  - `stage: "Design"` or `"Build"` (always `resume: true` — rework after
+    `review-failed`, a human's answer out of Your Call, a crashed agent's work) → NO claim
+    needed, it is already yours, and `claim` refuses: "you can only claim from Queue".
+  - `stage: "Review"` (`review: true`) → this is not work for you but an offer to review
+    somebody else's task: there is nothing to claim (see "Independent review of changes").
+- Backlog is not touched — that is the human's triage zone.
 
-## Непрерывная работа (loop)
+## Continuous operation (loop)
 
-- **Режим `/loop` выбирай по надзору: самопейсинг (без интервала) — только под
-  присмотром; для unattended/ночных прогонов — ИНТЕРВАЛЬНЫЙ `/loop <interval>`
-  (напр. `/loop 10m`).** Разница — в том, что переживает убитый ход (лимит сессии,
-  ошибка API, краш):
-  - *Самопейсинг* армит следующий тик ТОЛЬКО end-of-turn вызовом `ScheduleWakeup`.
-    Ход, убитый ДО этого вызова, не армит ничего — ни крона, ни вотчдога — и петля
-    тихо перестаёт существовать НАВСЕГДА (единственный fallback ~20 мин есть лишь у
-    ЧИСТО завершённой итерации, не у убитого хода). Это ровно репортнутый инцидент:
-    лимит ударил сразу после возврата саб-агента — оркестратор не успел ни
-    диспатчнуть, ни `ScheduleWakeup`.
-  - *Интервальный* хранит каденс как персистентный session-крон; фоновый демон
-    харнесса проверяет его каждую секунду и запускает МЕЖДУ ходами — поэтому он
-    ПЕРЕЖИВАЕТ убитый ход и сам продолжит на следующем тике. Дренаж-внутри-тика
-    сохраняется (тик выгребает всю очередь), пропущенные тики не копятся. Цена —
-    фиксированный каденс: задача, прилетевшая в паузу между тиками, ждёт до интервала.
-  - *Честный остаток:* НИ ОДИН режим не переживает выход самого ПРОЦЕССА сессии
-    (полный exit, а не убитый ход). Восстановление тогда — человеческий
-    `claude --resume`/`--continue` (возвращает session-кроны в пределах 7 дней) или
-    ВНЕШНИЙ супервайзер процесса; в этом репо его нет — это уровень харнесса или
-    сиблинг-проекта hgdev-acp (self-hosted запускалка агентов), не vikunja-mcp.
-    SessionStart-хук (`vikunja-tracker-orchestrator.sh`) — это FRAMING (инжектит
-    контекст оркестратора при старте/резюме/компакте), НЕ ignition: ход не запускает
-    и `/loop` не переиздаёт, мёртвую петлю НЕ воскрешает.
-- **Дренаж перебивает generic-дефолт автолупа.** Дефолтный автономный `/loop`
-  учит «ты steward, а не инициатор: не начинай новую работу без явного go-ahead,
-  на простое — стоп». К оркестратору трекера это НЕ применяется: Queue — уже
-  отобранная человеком работа, поэтому `claim` свежей задачи и диспатч — твой
-  мандат, а не «самовольная инициатива». `next_task` вернул свободную
-  (`resume:false`, но `task` есть) — клеймишь и дренируешь, НЕ останавливаешь
-  цикл и НЕ ждёшь отдельного разрешения. Останов — только по явной просьбе
-  человека; пусто (`task:null`) — уступи ход до следующего тика (см. «Очередь
-  пуста»), а не стоп.
-- **Внутри одного тика — дренаж очереди.** Как только пер-таск-агент вернулся
-  (довёл свою задачу до Review) — снова `next_task` и диспатч на следующую; ход
-  не завершай, пока `next_task` отдаёт задачи. (При `wip.limit > 1` возврата не ждёшь
-  вовсе: пока есть свободные слоты, диспатчишь дальше — см. «Параллельный дренаж».)
-- **Ширина дренажа задаётся конфигом, а не тобой.** `next_task` в КАЖДОМ ответе отдаёт
-  `wip: {active, limit, free}`: `active` — сколько задач ты уже держишь в Design/Build,
-  `limit` — сколько тебе разрешено (ключ `wip_limit` в репо-конфиге проекта; НЕ задан —
-  дефолт **3**), `free` — сколько слотов осталось. Число слотов НЕ придумывай и НЕ
-  хардкодь: читай из `wip` каждый раз — его назначает человек в конфиге проекта, и в
-  разных проектах (и в разных сессиях одного) оно разное. **`limit` и `free` — ВСЕГДА
-  числа: `null` там больше не бывает, и «лимита нет» не существует как состояние** —
-  гейт `claim` включён всегда, поэтому ветвись именно по ЧИСЛУ:
-  - **`limit: 1` — дренаж ПОСЛЕДОВАТЕЛЬНЫЙ**: ровно «одна задача за раз» из «Дисциплины
-    очереди». claim → задиспатчил пер-таск-агента → дождался, что он довёл задачу до
-    Review → только тогда следующая. Это то, что человек включает явно (`wip_limit = 1`
-    или старый `enforce_single_wip = true`), а не то, что получается само.
-  - **`limit > 1` — держи до `limit` пер-таск-агентов одновременно** (и это тот случай, в
-    который попадает проект, не задавший `wip_limit` вообще), каждого в СВОЁМ рабочем
-    каталоге-worktree (см. «Параллельный дренаж»). Это не «можно, если сочтёшь
-    безопасным»: свободный слот при непустой очереди — это простой, и придерживать его из
-    подозрения, что карточки трогают один код, нельзя (см. «Свободные слоты ЗАПОЛНЯЮТСЯ» —
-    перекрытие ловит интеграция). Двух агентов в ОДНОМ рабочем каталоге не держим НИКОГДА:
-    они подерутся за файлы, за индекс и за HEAD, и диффы задач склеятся. (Вложенные
-    саб-агенты ОДНОГО таска — по-прежнему можно, это его
-    дело: они живут в ЕГО дереве, и за то, чтобы не столкнуться, отвечает он. Один случай из
-    «его дела» уже вынут в ПРАВИЛО: ЛЮБОМУ ПИШУЩЕМУ саб-агенту — тому, кто мутирует исходники
-    и гоняет по ним тесты, — полагается СВОЙ клон. Чаще всего это второй независимый проход, на
-    нём это и измерено, но механизм — «двое пишущих в одном каталоге», а не роль: см. «ГДЕ он
-    работает».)
-- **`limit` — гейт на ОДИН переход (`claim`), а не инвариант на `active`: `active` ЗАКОННО
-  бывает БОЛЬШЕ `limit`.** Держит гейт ровно `claim` (Queue → Design) и только его. Обратно
-  в Build карточка въезжает МИМО `claim`, и вот измеренные пути — ЧИСЛА в этом перечислении
-  нет намеренно: считается ПАРА «стадия активная И карточка назначена на тебя», а измениться
-  может любая её половина, поэтому закрытым список не бывает. `review_task(verdict=
-  'needs_work')` двигает её Review → Build; человек руками возвращает её из Your Call
-  (и вообще кладёт назначенную на тебя карточку в Design/Build); человек ДОБАВЛЯЕТ тебя в
-  ассайни карточке, которая УЖЕ стоит в Build, — тут не двигается вообще ничего, стадия та же,
-  а `active` вырос (измерено на живом `Workflow`: 3/3 → 4/3, карточка как стояла в Build, так
-  и стоит); человек СНИЗИЛ `wip_limit`
-  в конфиге, пока задачи в работе — тут тоже не двигалась ни одна карточка, а `active` уже
-  больше лимита. Ни один из путей гейта не проходит, и проходить не должен: отказать
-  доработке — значит подвесить уже отревьюенную работу. (`advance(to='build')` в этот список
-  НЕ входит, вопреки очевидному предположению: Design и Build ОБА активные, счётчик он не
-  двигает вовсе — на ответе из Your Call перебор возникает в момент, когда карточку двигает
-  ЧЕЛОВЕК, а не когда ты зовёшь `advance`.) Воспроизведено на живом `Workflow` 2026-07-30:
-  при `limit: 3` один отбой ревью даёт `{"active": 4, "limit": 3, "free": 0}`, два — `active: 5`.
-  **Увидел `active > limit` — это НЕ порча доски, НЕ повод её «чинить» и НЕ повод звать
-  человека: это доработка, а у неё приоритет выше свежего клейма (см. «Приоритет — твоя
-  активная»). Дренируй её — перебор рассосётся сам, когда она уедет в Review.** И заметен он
-  ТОЛЬКО по паре `active`/`limit`: `free` — это `max(0, limit − active)`, поэтому «ровно
-  полон» и «перебор на две карточки» выглядят одинаково, как `free: 0`. На решение «клеймить
-  или нет» это не влияет (нельзя в обоих случаях, и `claim` откажет честным числом:
-  «WIP limit reached (4/3)»), а на диагноз — влияет. Поэтому `next_task`, отдавая
-  возобновляемую задачу при `active > limit`, дописывает это прямо в `note` («you hold N
-  active tasks against a limit of M … Drain the rework»); при `active <= limit` этой фразы
-  в `note` НЕТ вовсе — увидел её, значит перебор реальный.
-- **`wip_saturated: true` — это НЕ пустая очередь.** Все слоты заняты, поэтому `next_task`
-  на свободную очередь даже НЕ СМОТРЕЛ: «ничего не отдал» тут значит «некуда положить», а не
-  «работы нет» (сколько её там — по этому ответу неизвестно). Дождись возврата агента и зови
-  `next_task`. Не клейми (`claim` и сам откажет — «WIP limit reached») и НЕ уступай ход:
-  `ScheduleWakeup` здесь выбрасывает тик, за который слот как раз освободился бы. Отличай
-  от пустой очереди: у пустой этого поля нет. Его `message` — единственное место в payload,
-  где оба числа стоят рядом прозой («all 3 WIP slot(s) are busy (4 active)»), так что перебор
-  тут виден сразу; читай его как «занято с запасом», а не как сбой. И обратное НЕВЕРНО:
-  отсутствие поля само по себе не значит «не насыщено» — сигнал вообще появляется, только
-  если `exclude` полон (см. «Полнота `exclude`» в «Параллельном дренаже»).
-- **Приоритет — твоя активная.** Правки по ревью (задача вернулась в Build) и
-  ответы человека из Your Call приходят через `next_task` как «твоя активная»
-  и идут вперёд свободной очереди. Вернувшаяся карточка снова занимает слот — и если слоты
-  были заняты все, выводит `wip.active` ЗА `limit`. Так и задумано: этот приоритет и есть
-  причина, по которой гейт стоит на `claim`, а не на счётчике (см. «Ширина дренажа»).
-- **Очередь пуста (`next_task` ничего не вернул) — не крутись вхолостую, уступи ход
-  до следующего тика.** Не спамь повторными вызовами. В ИНТЕРВАЛЬНОМ режиме просто
-  заверши ход — крон сам поднимет через интервал (и НЕ вызывай `ScheduleWakeup`:
-  задвоит тик поверх крона). В САМОПЕЙСИНГЕ `ScheduleWakeup` (~10 мин, 600s)
-  ОБЯЗАТЕЛЕН, иначе петля не проснётся вовсе. На следующем тике — снова `next_task`.
-- **Голодающий хвост (`next_task` вернул `starving:true`) — это НЕ пустая очередь.**
-  Свободная очередь непуста, но ВСЕ задачи загейчены незавершёнными предшественниками
-  (цепочка эпика встала). Клеймить нечего (`task:null`), но это НЕ «нечего делать»:
-  сообщи человеку про застрявший хвост — `waiting`/`waiting_count` перечисляют ждущие
-  задачи и их блокирующие головы, а `needs_retriage:true` значит голову вернули в
-  Backlog через `return_task` и её должен ре-триажить человек. Затем уступи ход до
-  следующего тика, как на пустой (см. «Очередь пуста»). Не путай с пустой очередью:
-  у пустой этих полей нет.
-- **Цикл предшественников (`next_task` вернул `cycle:true`) — зови человека, НЕ спи.**
-  Особый случай голодания: follows/blocked-связи образуют петлю (напр. A follows B,
-  B follows A — вносится только руками в вебе; `decompose(ordered)` циклов не создаёт),
-  поэтому в цикле НИЧЕГО не клеймабельно и он сам НЕ разблокируется. `cycle_tasks`
-  называет задачи в петле. Это НЕ обычный голодающий хвост (тот рассосётся, когда голова
-  дойдёт до Review) и НЕ пустая очередь: разорвать может ТОЛЬКО человек, убрав одну
-  follows/blocked-связь в вебе. Поэтому не `ScheduleWakeup`-ом отделывайся, а заведи вопрос
-  через `call_human` — иначе цепочка стоит вечно. Потом уступи ход.
+- **Pick the `/loop` mode by supervision: self-paced (no interval) — only when
+  supervised; for unattended / overnight runs — an INTERVAL-backed `/loop <interval>`
+  (e.g. `/loop 10m`).** The difference is what survives a killed turn (session limit,
+  API error, crash):
+  - *Self-paced* arms its next tick ONLY through an end-of-turn `ScheduleWakeup` call.
+    A turn killed BEFORE that call arms nothing — no cron, no watchdog — and the loop
+    quietly ceases to exist FOREVER (the only fallback, ~20 min, belongs to a CLEANLY
+    finished iteration, not to a killed turn). That is exactly the reported incident:
+    the limit hit right after a subagent returned — the orchestrator managed neither
+    the dispatch nor the `ScheduleWakeup`.
+  - *Interval-backed* stores the cadence as a persistent session cron; the harness's
+    background daemon checks it every second and fires BETWEEN turns — which is why it
+    SURVIVES a killed turn and carries on by itself at the next tick. Drain-inside-a-tick
+    is preserved (a tick drains the whole queue), missed ticks do not pile up. The price
+    is a fixed cadence: a task that arrives in the pause between ticks waits out the interval.
+  - *The honest remainder:* NEITHER mode survives the exit of the session PROCESS itself
+    (a full exit, not a killed turn). Recovery is then a human
+    `claude --resume`/`--continue` (restores session crons within 7 days) or an
+    EXTERNAL process supervisor; this repo has none — that is the level of the harness or
+    of the sibling project hgdev-acp (a self-hosted agent launcher), not of vikunja-mcp.
+    The SessionStart hook (`vikunja-tracker-orchestrator.sh`) is FRAMING (it injects the
+    orchestrator's context at start/resume/compact), NOT ignition: it starts no turn
+    and does not re-issue `/loop`, and it does NOT resurrect a dead loop.
+- **The drain overrides the generic auto-loop default.** The default autonomous `/loop`
+  teaches "you are a steward, not an initiator: do not start fresh work without an
+  explicit go-ahead, stop when idle". That does NOT apply to the tracker orchestrator:
+  the Queue is work a human has already triaged, so `claim` of a fresh task and the
+  dispatch are your mandate, not "unsanctioned initiative". `next_task` returned a free
+  one (`resume:false`, but there is a `task`) — you claim and drain, you do NOT stop the
+  cycle and do NOT wait for separate permission. A stop comes only on an explicit
+  request from the human; empty (`task:null`) — yield the turn until the next tick
+  (see "The queue is empty"), never a stop.
+- **Inside one tick — drain the queue.** As soon as a per-task agent has returned
+  (having taken its task to Review) — `next_task` again and dispatch onto the next; do not
+  end the turn while `next_task` keeps handing out tasks. (At `wip.limit > 1` you do not wait
+  for a return at all: while there are free slots, you keep dispatching — see "Parallel drain".)
+- **The drain's width is set by the config, not by you.** `next_task` returns
+  `wip: {active, limit, free}` in EVERY response: `active` — how many tasks you already hold in
+  Design/Build, `limit` — how many you are allowed (the `wip_limit` key in the project's repo
+  config; NOT set — the default is **3**), `free` — how many slots are left. Do NOT invent the
+  number of slots and do NOT hardcode it: read it from `wip` every time — the human sets it in
+  the project config, and it differs between projects (and between sessions of one). **`limit`
+  and `free` are ALWAYS numbers: `null` no longer occurs there, and "no limit" does not exist
+  as a state** — the `claim` gate is always on, so branch on the NUMBER itself:
+  - **`limit: 1` — the drain is SEQUENTIAL**: exactly the "one task at a time" of "Queue
+    discipline". claim → dispatched a per-task agent → waited for it to take the task to
+    Review → only then the next one. This is what a human turns on explicitly (`wip_limit = 1`
+    or the old `enforce_single_wip = true`), not what comes out by itself.
+  - **`limit > 1` — keep up to `limit` per-task agents at once** (and this is the case a
+    project that never set `wip_limit` at all lands in), each in ITS OWN worktree working
+    directory (see "Parallel drain"). This is not "allowed if you judge it safe": a free
+    slot against a non-empty queue is idle time, and holding it back on a suspicion that the
+    cards touch the same code is not allowed (see "Free slots GET FILLED" — an overlap is
+    caught by integration). We NEVER keep two agents in ONE working directory: they will
+    fight over files, over the index and over HEAD, and the tasks' diffs will smear together.
+    (Nested subagents of ONE task are still fine, that is its own
+    business: they live in ITS tree, and keeping them from colliding is its job. One case has
+    already been lifted out of "its own business" into a RULE: ANY WRITING subagent — one that
+    mutates sources and runs tests over them — gets ITS OWN clone. Most often that is the second
+    independent pass, which is where it was measured, but the mechanism is "two writers in one
+    directory", not a role: see "WHERE it works".)
+- **`limit` is a gate on ONE transition (`claim`), not an invariant on `active`: `active`
+  LEGITIMATELY runs HIGHER than `limit`.** The gate is held by exactly `claim` (Queue → Design)
+  and by nothing else. A card re-enters Build PAST `claim`, and here are the measured paths —
+  there is deliberately NO COUNT in this enumeration: what is counted is the PAIR "the stage is
+  active AND the card is assigned to you", and either half of it can change, so the list is
+  never closed. `review_task(verdict='needs_work')` moves it Review → Build; a human returns it
+  by hand out of Your Call (and generally puts a card assigned to you into Design/Build); a
+  human ADDS you to the assignees of a card that is ALREADY in Build — here nothing moves at
+  all, the stage is the same and `active` grew (measured on a live `Workflow`: 3/3 → 4/3, the
+  card standing in Build before and after); a human LOWERED `wip_limit`
+  in the config while tasks are in flight — here, too, not one card moved, and `active` is
+  already above the limit. None of these paths passes the gate, and none of them should:
+  refusing rework means leaving already-reviewed work hanging. (`advance(to='build')` is NOT on
+  this list, contrary to the obvious assumption: Design and Build are BOTH active, it does not
+  move the counter at all — on an answer out of Your Call the overshoot appears at the moment
+  the HUMAN moves the card, not when you call `advance`.) Reproduced on a live `Workflow`
+  2026-07-30: at `limit: 3` one review rejection gives `{"active": 4, "limit": 3, "free": 0}`,
+  two give `active: 5`.
+  **Seeing `active > limit` is NOT board corruption, NOT a reason to "fix" it and NOT a reason
+  to call a human: it is rework, and rework has priority over a fresh claim (see "Priority is
+  your active task"). Drain it — the overshoot dissolves by itself once it moves to Review.**
+  And it is visible ONLY from the `active`/`limit` pair: `free` is `max(0, limit − active)`, so
+  "exactly full" and "two cards over" look identical, as `free: 0`. It does not affect the
+  "claim or not" decision (you may not, in either case, and `claim` refuses with an honest
+  number: "WIP limit reached (4/3)"), but it does affect the diagnosis. That is why `next_task`,
+  handing out a resumable task at `active > limit`, writes it straight into the `note` ("you
+  hold N active tasks against a limit of M … Drain the rework"); at `active <= limit` that
+  phrase is NOT in the `note` at all — see it, and the overshoot is real.
+- **`wip_saturated: true` is NOT an empty queue.** Every slot is busy, so `next_task` did not
+  even LOOK at the free queue: "handed nothing out" here means "nowhere to put it", not "there
+  is no work" (how much of it is there, this response does not say). Wait for an agent to return
+  and call `next_task`. Do not claim (`claim` refuses on its own — "WIP limit reached") and do
+  NOT yield the turn: `ScheduleWakeup` here throws away exactly the tick in which a slot would
+  have come free. Tell it apart from an empty queue: an empty one does not have this field. Its
+  `message` is the only place in the payload where both numbers stand side by side in prose
+  ("all 3 WIP slot(s) are busy (4 active)"), so the overshoot is visible there at once; read it
+  as "busy, and then some", not as a fault. And the converse is FALSE: the absence of the field
+  does not by itself mean "not saturated" — the signal appears at all only if `exclude` is full
+  (see "A complete `exclude` is also the VISIBILITY of signals" in "Parallel drain").
+- **Priority is your active task.** Review fixes (the task came back into Build) and
+  human answers out of Your Call arrive through `next_task` as "your active task"
+  and go ahead of the free queue. A returned card takes a slot again — and if the slots
+  were all busy, it pushes `wip.active` PAST `limit`. That is by design: this priority is
+  precisely the reason the gate sits on `claim` and not on the counter (see "The drain's width").
+- **The queue is empty (`next_task` returned nothing) — do not spin idle, yield the turn
+  until the next tick.** Do not spam repeat calls. In INTERVAL-backed mode simply
+  end the turn — the cron raises you after the interval (and do NOT call `ScheduleWakeup`:
+  it doubles a tick on top of the cron). SELF-PACED, `ScheduleWakeup` (~10 min, 600s)
+  is MANDATORY, otherwise the loop will not wake at all. At the next tick — `next_task` again.
+- **A starving tail (`next_task` returned `starving:true`) is NOT an empty queue.**
+  The free queue is not empty, but ALL its tasks are gated by unfinished predecessors
+  (an epic's chain has stalled). There is nothing to claim (`task:null`), but that is NOT
+  "nothing to do": tell the human about the stuck tail — `waiting`/`waiting_count` enumerate
+  the waiting tasks and their blocking heads, and `needs_retriage:true` means the head was
+  sent back to Backlog via `return_task` and a human must re-triage it. Then yield the turn
+  until the next tick, as on an empty one (see "The queue is empty"). Do not confuse it with
+  an empty queue: an empty one does not have these fields.
+- **A cycle of predecessors (`next_task` returned `cycle:true`) — call the human, do NOT sleep.**
+  A special case of starvation: the follows/blocked relations form a loop (e.g. A follows B,
+  B follows A — enterable only by hand in the web UI; `decompose(ordered)` creates no cycles),
+  so NOTHING in the cycle is claimable and it will NOT unblock itself. `cycle_tasks`
+  names the tasks in the loop. This is NOT an ordinary starving tail (that one dissolves once
+  the head reaches Review) and NOT an empty queue: ONLY a human can break it, by removing one
+  follows/blocked relation in the web UI. So do not get away with a `ScheduleWakeup` — file the
+  question via `call_human`, otherwise the chain stands forever. Then yield the turn.
+## Parallel drain (when `wip.limit > 1`)
 
-## Параллельный дренаж (когда `wip.limit > 1`)
+One identity, several tasks AT ONCE — each in its own git worktree, so that per-task agents do
+not trample each other's working directory. This is the DEFAULT mode, not an exotic one: a
+project that never set `wip_limit` gets `limit: 3` and lands here. The trees are created and
+removed by the CLI of the same package that serves these tools: `vikunja-mcp workspace`. Run it
+THE SAME WAY the tracker's MCP server is started in this project (look at `.mcp.json` — usually
+`uvx --from git+…@stable vikunja-mcp`): a bare `vikunja-mcp` may not be on PATH. Every command
+returns one line of JSON.
 
-Одна идентити, несколько задач ОДНОВРЕМЕННО — каждая в своём git-worktree, чтобы
-пер-таск-агенты не топтали друг другу рабочий каталог. Это ДЕФОЛТНЫЙ режим, а не экзотика:
-проект, не задавший `wip_limit`, получает `limit: 3` и попадает сюда. Деревья заводит и
-убирает CLI того же пакета, что даёт эти тулзы: `vikunja-mcp workspace`. Запускай его ТЕМ ЖЕ способом, каким в
-этом проекте поднимается MCP-сервер трекера (посмотри `.mcp.json` — обычно
-`uvx --from git+…@stable vikunja-mcp`): голого `vikunja-mcp` в PATH может не быть. Любая
-команда отдаёт одну строку JSON.
+- **The orchestrator's tick:**
+  1. `vikunja-mcp workspace --gc` — housekeeping FIRST: tear down the trees the board no longer
+     has live work behind. Liveness is counted BY ROLE, and that is worth getting exactly right:
+     a build tree is live while its task is in Design/Build and assigned to you; a review tree is
+     live while the card is in Review. What gets swept is what the work has LEFT: the task
+     reached Review or Done, went off to Backlog/Your Call, the card left Review. `--gc` does NOT
+     touch the tree of a CRASHED agent — its task stayed yours in Design/Build, that is, live,
+     and the resume agent comes back to exactly that tree (this is ONE of the two returns, see
+     "Two returns, two trees"). It returns THREE lists:
+     `{"released": [...], "kept": [...], "expected": [...]}`, and you must act on TWO of them:
+     read `kept` in full and scan `released` for `branch_deleted: false` and for
+     `removed_ignored`. Plus an OPTIONAL fourth key, `main_checkout` — it is not about trees but
+     about the MAIN checkout; its breakdown is below, in a bullet of its own.
+     - **Reading the `--gc` RESPONSE is in `references/gc-report.md`; open it the moment the
+       response is non-empty.** Every form is worked through there: `main_checkout` (the
+       `MAIN_SYNC_*` codes, what to do on `updated: false`), every `code` in `kept`, the fields
+       of `released`, `removed_ignored` and `expected`. Here — only what cannot be left undone:
+       * **Read `kept` IN FULL** — it says "could not clean up, and this is NOT routine, look".
+       * **Scan `released`** for `branch_deleted: false` (the tree went, the branch leaked) and
+         for `removed_ignored` (files `git status` does not see were DESTROYED together with the
+         tree — that is not a warning, it is a record of loss).
+       * **The `main_checkout` key is OPTIONAL: present ⇒ read it.** Absent means there was
+         nothing to fast-forward.
+       * **An unfamiliar `code` goes to `kept`, not to `expected`**, deliberately: better one
+         look too many than one swallowed.
+     `--gc` goes ALONE: it combines with neither a task id, nor `--release`, nor `--role`, nor
+     `--at` (it refuses — a silently swallowed argument is worse than an error). It is also the
+     only subcommand that READS the board (so it needs the config and a token, but changes
+     nothing in the tracker itself); creating and releasing a tree never go to the tracker and
+     need no token — the only thing that goes to the network from them is git (on create,
+     `git fetch origin`).
+  2. While `wip.free > 0`: `next_task(exclude=[ids of the tasks you have an agent living on
+     RIGHT NOW])` → `claim` BY THE `stage` RULE (see "Queue discipline"; in parallel mode it is
+     exactly the same rule, there is no separate one). This loop spins to the END — as long as
+     there is a slot and `next_task` gives out a task (see "Free slots GET FILLED"). Then branch
+     on the shape of the response:
+     - **the task is yours** (`stage: "Queue"` — after the claim it is already in Design — or
+       `stage: "Design"/"Build"` outright): `vikunja-mcp workspace <id>` → dispatch a BACKGROUND
+       per-task agent, and the `path` from the response goes into its brief as the working
+       directory. It is already there on its own throwaway `task/<id>` branch, cut from a fresh
+       `origin/<main branch>`.
+     - **a review offering** (`stage: "Review"`, `review: true`): it takes no slot, and the tree
+       it needs is a review one — dispatch the reviewer as in step 3, create neither a build
+       agent nor a `task/<id>` branch.
+     - **`claim` REFUSED — the id goes into `exclude` until the end of the tick, and you keep
+       draining.** A refusal (not your card, an unfinished predecessor, the slot gate) changes
+       NOTHING on the board, so on the next iteration `next_task` will honestly offer the same
+       card again — and `while wip.free > 0` will spin on it for nothing (in sequential mode this
+       was just noise: there is only one iteration there). This happens routinely: a card in
+       Queue assigned by the human is handed out as "your partial claim", and `claim` will not
+       let it through until the predecessor has arrived. Added the id to `exclude` — off for a
+       new `next_task`; nothing left to offer — behave as on an empty queue (step 4).
+  3. An agent came back with its result → FIRST check the sha from its `evidence` with the same
+     two commands ("Commit+push is part of the transition to Review"), but after `git fetch origin`,
+     because the sha is somebody else's: `--at` checks only that the commit EXISTS, not that it
+     is on the main branch, and a pre-rebase sha will quietly give the reviewer a tree nailed to
+     code that never went to the main branch. **It does not check out — do NOT dispatch a review
+     (there is nothing to look at), and do NOT call `call_human` here: the card is already in
+     Review, and it works only from Design/Build** (you will get `call_human works only from
+     Design/Build; task is in Review`). Leaving it in Review with a single comment is a dead end
+     too, but since #991 a DIFFERENT one: a card without a verdict will be offered for review
+     AGAIN (in a solo setup — to you), and so on every tick, because the only thing that takes it
+     off the offering is a verdict. Instead of a quiet hang you get an endless re-dispatch of a
+     reviewer onto a sha that does not exist. Send it back to Build with the ONE thing that works
+     from Review: `review_task(<id>, verdict='needs_work', report=…)` — it requires no ownership,
+     hangs `review-failed`, leaves the assignee and moves the card to Build. In `report` — what
+     exactly was missing: the sha from `evidence`, the command and its return code (128 — no such
+     commit even after a `fetch`; 1 — it exists, but not on the main branch). After that the card
+     comes back on its own: on the next `next_task` it arrives as "your active one"
+     (`resume: true`, `stage: "Build"`, the slot is taken again) → you dispatch a fresh resume
+     agent onto it. This is not a dead end but a repair: the typical cause (never pushed at all;
+     named a pre-rebase sha) is cured by a re-push, and only if it was not cured — `call_human`,
+     which from Build is already legitimate. And this is NOT the orchestrator's right to judge
+     code: `needs_work` here is a mechanical refusal to accept unverifiable evidence, not a
+     verdict on the merits; `verdict='approve'` the orchestrator NEVER sets (the gate will let it
+     through — the rule will not). It checks out → you dispatch the reviewer in the background
+     and give it its OWN tree: `vikunja-mcp workspace <id> --role review --at <sha from
+     evidence>` — it is detached exactly on that commit (a freshly created one answers
+     `created: true` and that sha as `head`; a review tree has no branch — `branch: null`). The
+     slot is free → back to step 2.
+  4. `wip_saturated: true` → you wait for any agent to come back (you do not yield the turn, see
+     "Continuous operation (loop)"). `task: null` with no `wip_saturated` and nobody at work → you yield the
+     turn until the next tick.
+- **The rest of the drain rules are in `references/drain.md`.** There: why free slots GET FILLED
+  while overlap is caught at integration; why you do NOT see the queue; how `exclude` is kept and
+  why its completeness is also a matter of signal visibility; the two returns and the two trees;
+  a reviewer releasing its tree; what to do when `workspace` refused. Not subject to forgetting
+  here either:
+  - **`exclude` is kept by YOU, and only within the tick** — the tracker does not know whether
+    your subagent is alive. Pass ALL the ids that have an agent living on them right now: an
+    incomplete `exclude` is not only a risk of a double claim, it is a loss of signals.
+  - **Holding a slot back "to be on the safe side", because two cards LOOK LIKE they touch one
+    module, is NOT ALLOWED** — that is substituting a guess for the project's mechanism.
+  - **A review takes no slot**: `wip.active` counts only Design/Build assigned to you.
+  - **It would not come up — do NOT drop the loop.** Any `workspace` refusal degrades to one slot
+    in this checkout, but never stops the drain. And read `released: false` in THREE readings,
+    not in one: `dirty` and `unpushed` mean "the work is in place, I am keeping it safe", while
+    `no-worktree` means the tree is gone anyway, that is, this is a routine success and not a
+    protective refusal. Confusing them means going off to rescue what is not there.
+## Shared resources: a worktree isolates FILES, and only those
 
-- **Тик оркестратора:**
-  1. `vikunja-mcp workspace --gc` — СНАЧАЛА уборка: снести деревья, за которыми на доске
-     больше нет живой работы. Живость считается ПО РОЛИ, и это важно понимать точно:
-     build-дерево живо, пока его задача в Design/Build и назначена на тебя; review-дерево
-     живо, пока карточка в Review. Сметается то, откуда работа УШЛА: задача доехала до
-     Review или Done, уехала в Backlog/Your Call, карточка покинула Review. Дерево УПАВШЕГО
-     агента `--gc` НЕ трогает — его задача так и осталась твоей в Design/Build, то есть
-     живой, и resume-агент вернётся именно в него (это ОДИН из двух возвратов, см.
-     «Два возврата, два дерева»). Отдаёт ТРИ списка:
-     `{"released": [...], "kept": [...], "expected": [...]}`, и действовать надо по ДВУМ:
-     прочитать `kept` целиком и просмотреть `released` на `branch_deleted: false` и на
-     `removed_ignored`. Плюс НЕОБЯЗАТЕЛЬНЫЙ четвёртый ключ `main_checkout` — он не про
-     деревья, а про ГЛАВНЫЙ чекаут; разбор ниже, отдельным буллетом.
-     - **Разбор ОТВЕТА `--gc` — в `references/gc-report.md`; открой его, как только ответ
-       непустой.** Там разобраны все формы: `main_checkout` (коды `MAIN_SYNC_*`, что делать
-       при `updated: false`), каждый `code` в `kept`, поля `released`, `removed_ignored` и
-       `expected`. Здесь — только то, что нельзя не сделать:
-       * **Читать `kept` ЦЕЛИКОМ** — это «убрать не смог, и это НЕ штатно, посмотри».
-       * **Просматривать `released`** на `branch_deleted: false` (дерево снесли, ветка
-         утекла) и на `removed_ignored` (вместе с деревом УНИЧТОЖЕНЫ файлы, которых не
-         видит `git status`, — это не предупреждение, а протокол утраты).
-       * **Ключ `main_checkout` НЕОБЯЗАТЕЛЬНЫЙ: есть ⇒ читай.** Нет — значит подтягивать
-         было нечего.
-       * **Незнакомый `code` — в `kept`, а не в `expected`**, специально: лучше лишний раз
-         посмотреть, чем проглотить.
-     `--gc` ходит ОДИН: с id задачи, с `--release`, с `--role` или с `--at` он не сочетается
-     (откажет — молча проглоченный аргумент хуже ошибки). Он же — единственная подкоманда,
-     которая ЧИТАЕТ доску (значит требует конфиг и токен, но сама в трекере ничего не
-     меняет); создание и освобождение дерева в трекер не ходят и токена не требуют — в сеть
-     из них лезет только git (при создании — `git fetch origin`).
-  2. Пока `wip.free > 0`: `next_task(exclude=[id задач, на которых у тебя ПРЯМО СЕЙЧАС
-     живёт агент])` → `claim` ПО ПРАВИЛУ `stage` (см. «Дисциплина очереди»; в параллельном
-     режиме оно ровно то же, отдельного нет). Крутится этот цикл до КОНЦА — пока есть слот и
-     `next_task` даёт задачу (см. «Свободные слоты ЗАПОЛНЯЮТСЯ»). Дальше — по форме ответа:
-     - **задача тебе** (`stage: "Queue"` — после клейма она уже в Design — либо сразу
-       `stage: "Design"/"Build"`): `vikunja-mcp workspace <id>` → диспатч ФОНОВОГО
-       пер-таск-агента, и `path` из ответа — ему в бриф как рабочий каталог. Он там уже на
-       своей одноразовой ветке `task/<id>`, отведённой от свежего `origin/<главная ветка>`.
-     - **предложение ревью** (`stage: "Review"`, `review: true`): слот оно не занимает, и
-       дерево ему нужно review-шное — диспатчь ревьюера как в п.3, build-агента и ветку
-       `task/<id>` не заводи.
-     - **`claim` ОТКАЗАЛ — id в `exclude` до конца тика, и дренируй дальше.** Отказ (не твоя
-       карточка, незавершённый предшественник, гейт слотов) НИЧЕГО не меняет на доске, поэтому
-       `next_task` на следующей итерации честно предложит ту же карточку снова — и
-       `while wip.free > 0` закрутится на ней вхолостую (в последовательном режиме это был
-       просто шум: там итерация одна). Так бывает штатно: карточка в Queue, назначенная
-       человеком, отдаётся как «твоя недоделанная», а `claim` её не пустит, пока не доехал
-       предшественник. Добавил id в `exclude` — и за новым `next_task`; предлагать стало
-       нечего — веди себя как при пустой очереди (п.4).
-  3. Агент вернулся с итогом → СНАЧАЛА проверь sha из его `evidence` теми же двумя командами
-     («Коммит+пуш — часть перевода в Review»), но после `git fetch origin`, потому что sha
-     чужой: `--at` проверяет только СУЩЕСТВОВАНИЕ коммита, а не то, что он на главной, и
-     до-rebase-овый sha молча заведёт ревьюеру дерево, приколотое к коду, который в главную
-     так и не уехал. **Не сошлось — ревью НЕ диспатчь (смотреть нечего), и `call_human` тут
-     НЕ зови: карточка уже в Review, а он работает только из Design/Build** (получишь
-     `call_human works only from Design/Build; task is in Review`). Оставить её в Review с
-     одним комментом — тоже тупик, но с #991 ДРУГОЙ: карточку без вердикта предложат на ревью
-     СНОВА (в соло — тебе же), и так на каждом тике, потому что снимает её с предложения только
-     вердикт. Вместо тихого зависания получишь бесконечный передиспатч ревьюера на sha, которого
-     нет. Верни её в Build ЕДИНСТВЕННЫМ, что работает из Review: `review_task(<id>,
-     verdict='needs_work', report=…)` — владения он не требует, вешает `review-failed`,
-     ассайни оставляет и двигает карточку в Build. В `report` — чего именно не хватило:
-     sha из `evidence`, команда и её код возврата (128 — такого коммита нет даже после
-     `fetch`; 1 — есть, но не на главной). Дальше карточка вернётся сама: на следующем
-     `next_task` она придёт как «твоя активная» (`resume: true`, `stage: "Build"`, слот снова
-     занят) → диспатчишь на неё свежий resume-агент. Это не тупик, а починка: типичная причина
-     (не запушил вовсе; назвал до-rebase-овый sha) лечится перепушем, и только если не
-     вылечилась — `call_human`, который из Build уже законен. И это НЕ право оркестратора
-     судить код: `needs_work` здесь — механический отказ принять непроверяемый evidence, а не
-     вердикт по существу; `verdict='approve'` оркестратор не ставит НИКОГДА (гейт пропустит —
-     правило нет). Сошлось → диспатчишь ревьюера в фоне и даёшь ему СВОЁ дерево:
-     `vikunja-mcp workspace <id> --role review --at <sha из evidence>` — оно detached ровно
-     на этом коммите (у свежесозданного в ответе `created: true` и этот sha как `head`;
-     ветки у review-дерева нет — `branch: null`). Слот освободился → назад к п.2.
-  4. `wip_saturated: true` → ждёшь возврата любого агента (не уступаешь ход, см.
-     «Непрерывная работа»). `task: null` без `wip_saturated` и никого в работе → уступаешь
-     ход до следующего тика.
-- **Остальные правила дренажа — в `references/drain.md`.** Там: почему свободные слоты
-  ЗАПОЛНЯЮТСЯ, а перекрытие ловится на интеграции; почему очереди ты НЕ ВИДИШЬ; как
-  ведётся `exclude` и почему его полнота — это ещё и видимость сигналов; два возврата и
-  два дерева; освобождение дерева ревьюером; что делать, когда `workspace` отказал.
-  Не подлежит забыванию и здесь:
-  - **`exclude` ведёшь ТЫ, и только в пределах тика** — трекер не знает, жив ли твой
-    саб-агент. Передавай ВСЕ id, на которых прямо сейчас живёт агент: неполный `exclude`
-    это не только риск двойного клейма, но и потеря сигналов.
-  - **Придержать слот «от греха подальше», потому что две карточки НА ВИД трогают один
-    модуль, НЕЛЬЗЯ** — это подмена механизма проекта догадкой.
-  - **Ревью слот не занимает**: `wip.active` считает только Design/Build, назначенные на
-    тебя.
-  - **Не завелось — цикл НЕ роняем.** Любой отказ `workspace` деградирует до одного слота
-    в этом чекауте, но никогда не останавливает дренаж. И читай `released: false` в ТРИ
-    прочтения, а не в одно: `dirty` и `unpushed` значат «работа на месте, я её берегу», а
-    `no-worktree` — что дерева и так уже нет, то есть это рутинный успех, а не защитный
-    отказ. Спутать их — значит идти спасать то, чего нет.
-## Общие ресурсы: worktree изолирует ФАЙЛЫ, и только их
+These are the rules for the PER-TASK AGENT (and the reviewer), not for the pump. The parallel
+drain hands you your own working directory — and NOTHING MORE. Everything else your task can
+reach (the browser, ports, containers, directories outside the tree) you SHARE with your
+siblings, and the default is `limit: 3`: assume two more are working right beside you right now
+until you know otherwise. The rule in one line: **a name you did not derive from your own task's
+id is shared.** A path, a container name, a port, a file name.
 
-Это правила ПЕР-ТАСК-АГЕНТА (и ревьюера), а не насоса. Параллельный дренаж выдаёт тебе
-свой рабочий каталог — и БОЛЬШЕ НИЧЕГО. Всё остальное, до чего дотягивается твоя задача
-(браузер, порты, контейнеры, каталоги вне дерева), у тебя ОБЩЕЕ с сиблингами, а дефолт —
-`limit: 3`: исходи из того, что рядом прямо сейчас работают ещё двое, пока не знаешь
-обратного. Правило одной строкой: **имя, которое ты не вывел из id своей задачи, —
-общее.** Путь, имя контейнера, порт, имя файла.
+### What does NOT collide — do not serialise for nothing
 
-### Что НЕ сталкивается — не сериализуйся зря
+Listed so that "isolate" does not degenerate into "I will wait just in case": holding a slot back
+is forbidden (see "Free slots GET FILLED"), and what is listed below is verified.
 
-Перечислено, чтобы «изолируй» не выродилось в «на всякий случай подожду»: придержанный
-слот запрещён (см. «Свободные слоты ЗАПОЛНЯЮТСЯ»), а перечисленное ниже проверено.
+- **git between trees.** Each worktree has its own index (`.git/worktrees/<name>/index`), and git
+  locks the objects and the refs itself: 24 simultaneous `git fetch origin` from three trees —
+  zero errors and zero output. The race for the main branch is on the REMOTE's side, and it is
+  already resolved by the fetch+rebase+re-check+push loop (see "Commit+push is part of the transition to Review"), not by abstaining from parallelism.
+- **`.venv` and the caches** (`__pycache__`, `.pytest_cache`, `.ruff_cache`) sit INSIDE your tree
+  — they are yours. The shared `uv` cache (`~/.cache/uv`) uv locks itself: three simultaneous
+  `uv run` in one project — all three succeed, one created the venv, the rest waited.
+  **"Yours" here means "not a sibling's", not "nobody else's":** your NESTED subagent stands in
+  THE SAME tree, so the caches, the `.venv` and the sources themselves are SHARED between you —
+  and if it writes (mutates and runs), that is not hygiene but the correctness of its own
+  conclusions: see "WHERE it works" in "A second independent pass over YOUR OWN text".
+- **The tracker.** Each agent touches its own card; the only shared thing is the MCP server of
+  the tools, and it holds no per-task state.
+- **`workspace` (`<id>`, `--release`, `--gc`)** — tree mutations are serialised by a repo-wide
+  flock (`.git/vikunja-mcp-worktree.lock`): in the queue you simply wait, there is nothing to do.
 
-- **git между деревьями.** Индекс у каждого worktree свой (`.git/worktrees/<имя>/index`),
-  объекты и рефы git запирает сам: 24 одновременных `git fetch origin` из трёх деревьев —
-  ноль ошибок и ноль вывода. Гонка за главную ветку — на стороне РЕМОУТА, и её уже
-  разруливает цикл fetch+rebase+перепроверка+push (см. «Коммит+пуш — часть перевода
-  в Review»), а не воздержание от параллельности.
-- **`.venv` и кэши** (`__pycache__`, `.pytest_cache`, `.ruff_cache`) лежат ВНУТРИ твоего
-  дерева — они твои. Общий кэш `uv` (`~/.cache/uv`) uv запирает сам: три одновременных
-  `uv run` в одном проекте — все три успешны, один создал venv, остальные дождались.
-  **«Твои» тут значит «не сиблинга», а не «ничьи больше»:** твой ВЛОЖЕННЫЙ саб-агент стоит в
-  ТОМ ЖЕ дереве, так что кэши, `.venv` и сами исходники у вас ОБЩИЕ — и если он пишет
-  (мутирует и прогоняет), это не гигиена, а корректность его выводов: см. «ГДЕ он работает»
-  во «Втором независимом проходе».
-- **Трекер.** Каждый агент трогает свою карточку; единственное общее — MCP-сервер тулзов,
-  и пер-таск-состояния он не держит.
-- **`workspace` (`<id>`, `--release`, `--gc`)** — мутации деревьев сериализует репо-широкий
-  flock (`.git/vikunja-mcp-worktree.lock`): в очереди ты просто подождёшь, делать ничего
-  не надо.
+### What does collide: everything with a FIXED name
 
-### Что сталкивается: всё, у чего ФИКСИРОВАННОЕ имя
-
-- **Каталог под временные файлы — ОДИН на СЕССИЮ, а не на агента.** Проверено на живом
-  прогоне: в скрэтчпаде, который харнесс выдал «под временные файлы», 179 записей
-  (166 файлов), написанных за день РАЗНЫМИ агентами одной сессии, с именами вида `a.log`,
-  `out.json`, `check.py`. Два агента, взявшие одно очевидное имя, затрут друг друга молча
-  и без ошибки. Поэтому: всё, что создаёшь ВНЕ своего дерева, называй с id своей задачи
-  (`…/scratchpad/554-probe.log`) или заведи себе подкаталог `…/scratchpad/554/`. Одного id при
-  этом МАЛО там, где по карточке работают НЕСКОЛЬКО агентов сразу (автор, ревьюеры кругов, их
-  аудиторы второго прохода) — ровно как у docker-имени ниже: допиши суффикс роли, как это
-  делает фенс второго прохода со своим клоном (`$ID-pass2-audit`). А лучше
-  не создавай вовсе: что может жить в твоём дереве — пусть живёт в нём. **И симметрично —
-  УДАЛЯЙ тоже только своё:** рекурсивная уборка по всему скрэтчпаду (`find <скрэтчпад> -name
-  __pycache__ -exec rm -rf`, «приберусь перед свипом») сносит файлы живым соседям, а не только
-  твои — и молча, потому что чужие файлы никто не хватится сразу. Порядок величин, замеренный
-  перечислением (без удаления) дважды за полчаса задачи 702: под общим скрэтчпадом СОТНИ
-  каталогов `__pycache__`, твоих из них ЕДИНИЦЫ, и обе цифры за те полчаса заметно выросли.
-  Цифры не заучивай — они живут своей жизнью; перемерь тем же `find` БЕЗ `-exec`, прежде чем
-  дописывать `-exec`. Корень такой команды — твой подкаталог или твой клон, никогда не
-  скрэтчпад.
-  **А удаляй ПЕРЕЧИСЛЕНИЕМ того, что создал, — не глобом по своему префиксу:** «корень свой»
-  этого НЕ гарантирует, и вот почему. Две формы имени, которые этот же буллет предлагает на
-  выбор выше (`<id>-что-то` и подкаталог `<id>/`), — ПРЕФИКСЫ друг друга, так
-  что глоб по первой захватывает вторую, и оба агента при этом правилу СЛЕДОВАЛИ. Построено, а
-  не выведено: в каталоге с `702r3`, `702r3-sweep`, `702r3-pass4-audit` и `702r3-logs` глоб
-  `702r3*` разворачивается во все ЧЕТЫРЕ, а `702r3-*` — в три; первое множество включает ЧУЖОЙ
-  каталог. Инцидент был реальный, не сконструированный, и известен он по СОБСТВЕННОМУ отчёту
-  автора 702: он снёс глобом `702r3*` каталог ревьюера круга 2 (в дереве следов не осталось —
-  это его `[worklog]`, а не коммит). Живого тогда не потеряли, но `rm -rf` по глобу молчит — в
-  отличие от занятого docker-имени, которое падает громко.
-- **Имя контейнера и порт из доки — ФИКСИРОВАННЫЕ, а значит общие.** Рецепты в
-  README/CLAUDE.md писались для одного агента: у этого репозитория интеграция — это
-  `--name vikunja-test -p 3456:3456`. Скопируешь как есть, пока сиблинг делает то же, —
-  получишь `Conflict. The container name "/vikunja-test" is already in use` либо
-  `Bind for 0.0.0.0:3456 failed: port is already allocated` (проверены обе). То же у
-  любого dev-сервера, который ты поднимаешь, чтобы проверить свою правку. Выводи имя и
-  порт из своего id и прибирай за собой:
+- **The directory for temporary files is ONE per SESSION, not per agent.** Verified on a live
+  run: the scratchpad the harness handed out "for temporary files" held 179 entries (166 files),
+  written over a day by DIFFERENT agents of one session, with names of the form `a.log`,
+  `out.json`, `check.py`. Two agents that took one obvious name will overwrite each other
+  silently and without an error. So: everything you create OUTSIDE your tree gets your own task's
+  id in its name (`…/scratchpad/554-probe.log`), or give yourself a subdirectory
+  `…/scratchpad/554/`. One id is NOT ENOUGH where SEVERAL agents work on one card at once (the
+  author, the reviewers of the rounds, their second-pass auditors) — exactly as with the docker
+  name below: append a role suffix, the way the second-pass fence does with its own clone
+  (`$ID-pass2-audit`). Better still, do not create it at all: what can live inside your tree —
+  let it live there. **And symmetrically — DELETE only your own too:** a recursive cleanup over
+  the whole scratchpad (`find <scratchpad> -name __pycache__ -exec rm -rf`, "let me tidy up
+  before the sweep") takes out files belonging to live neighbours and not only yours — and
+  silently, because nobody misses somebody else's files right away. The order of magnitude,
+  measured by listing (without deleting) twice during the half hour of task 702: under the shared
+  scratchpad there are HUNDREDS of `__pycache__` directories, and only a HANDFUL of them are
+  yours, and both figures grew noticeably over that half hour. Do not learn the figures by heart
+  — they live a life of their own; re-measure with the same `find` WITHOUT `-exec` before you
+  append `-exec`. The root of such a command is your subdirectory or your clone, never the
+  scratchpad.
+  **And delete by ENUMERATING what you created, not by a glob over your own prefix:** "the root
+  is mine" does NOT guarantee that, and here is why. The two name forms this very bullet offers
+  as a choice above (`<id>-something` and the subdirectory `<id>/`) are PREFIXES of each other,
+  so a glob over the first captures the second, and both agents were FOLLOWING the rule.
+  Constructed, not deduced: in a directory holding `702r3`, `702r3-sweep`, `702r3-pass4-audit`
+  and `702r3-logs`, the glob `702r3*` expands to all FOUR, and `702r3-*` to three; the first set
+  includes SOMEBODY ELSE'S directory. The incident was real, not constructed, and it is known
+  from the OWN report of 702's author: he wiped round 2's reviewer's directory with the glob
+  `702r3*` (no trace was left in the tree — this is his `[worklog]`, not a commit). Nothing live
+  was lost that time, but `rm -rf` over a glob is silent — unlike an occupied docker name, which
+  fails loudly.
+- **The container name and the port from the docs are FIXED, and therefore shared.** The recipes
+  in README/CLAUDE.md were written for one agent: in this repository integration means
+  `--name vikunja-test -p 3456:3456`. Copy it as is while a sibling is doing the same, and you
+  get `Conflict. The container name "/vikunja-test" is already in use` or
+  `Bind for 0.0.0.0:3456 failed: port is already allocated` (both verified). The same goes for
+  any dev server you bring up to check your own edit. Derive the name and the port from your own
+  id, and clean up after yourself:
 
   ```sh
-  ID=554                                   # id ТВОЕЙ задачи. РЕВЬЮЕР: он ЧУЖОЙ — допиши
-                                           # суффикс роли, иначе имя совпадёт с контейнером
-                                           # build-агента этой же карточки, а «удали и повтори»
-                                           # из ошибки docker убьёт ЕГО работающий контейнер
-  NAME=vikunja-test-$ID                    # вместо фиксированного имени из доки
-  PORT=$((20000 + ID % 10000))             # 20554 — детерминированно, переживает resume
-  lsof -nP -iTCP:$PORT -sTCP:LISTEN        # пусто — свободен; занят — возьми соседний
+  ID=554                                   # the id of YOUR task. REVIEWER: it is SOMEBODY
+                                           # ELSE'S — append a role suffix, or the name collides
+                                           # with the container of this same card's build agent,
+                                           # and docker's "delete it and retry" kills ITS work
+  NAME=vikunja-test-$ID                    # instead of the fixed name from the docs
+  PORT=$((20000 + ID % 10000))             # 20554 — deterministic, survives a resume
+  lsof -nP -iTCP:$PORT -sTCP:LISTEN        # empty — free; occupied — take a neighbouring one
   docker run -d --name "$NAME" -p "$PORT":3456 …
   VIKUNJA_TEST_URL=http://localhost:$PORT uv run pytest tests/integration -q
-  docker rm -f "$NAME"                     # ОБЯЗАТЕЛЬНО, и до advance
+  docker rm -f "$NAME"                     # MANDATORY, and before advance
   ```
 
-  Прибрать обязательно: утёкший контейнер держит имя и порт до конца дня и ломает не
-  тебя, а следующего.
+  Cleaning up is mandatory: a leaked container holds the name and the port until the end of the
+  day and breaks not you but the next one.
 
-### Браузер (playwright): СВОЙ поднять МОЖНО — общий можно только заметить
+### The browser (playwright): bringing up YOUR OWN is ALLOWED — a shared one can only be noticed
 
-**Полный разбор — в `references/browser.md`; открой его перед первым `browser_*`-вызовом.**
-Там: как поднять свой процесс, чем чреват общий профиль, что именно и куда утекает.
-Здесь — то, что нарушать нельзя:
+**The full breakdown is in `references/browser.md`; open it before your first `browser_*` call.**
+There: how to bring up your own process, what a shared profile risks, what exactly leaks and
+where. Here — what must not be broken:
 
-- **Свой браузер поднимается с `--isolated`** — общий профиль выводится ИЗ КОРНЯ
-  ВОРКСПЕЙСА, поэтому две сессии на одном репозитории сходятся в один и второй браузер не
-  стартует вовсе.
-- **Артефакты пиши ТОЛЬКО под `.playwright-mcp/<id ТВОЕЙ задачи>/`** — этот каталог
-  `.gitignore` закрывает целиком, независимо от имени и формата. Голое имя в `filename`
-  резолвится относительно cwd СЕРВЕРА и падает в КОРЕНЬ репозитория.
-- **Каталог создай заранее (`mkdir -p`)**: под явный `filename` он сам не создаётся.
-- **`--output-dir` своего браузера — туда же** (`.playwright-mcp/<id>`), либо вообще вне
-  репозитория.
-## Кто выполняет работу: оркестратор-насос и пер-таск-агенты
+- **Your own browser is brought up with `--isolated`** — the shared profile is derived FROM THE
+  WORKSPACE ROOT, so two sessions on one repository converge into one and the second browser does
+  not start at all.
+- **Write artifacts ONLY under `.playwright-mcp/<id of YOUR task>/`** — `.gitignore` covers that
+  directory wholesale, independently of name and format. A bare name in `filename` resolves
+  against the SERVER's cwd and lands in the ROOT of the repository.
+- **Create the directory in advance (`mkdir -p`)**: an explicit `filename` does not create it.
+- **The `--output-dir` of your own browser goes there too** (`.playwright-mcp/<id>`), or outside
+  the repository entirely.
+## Who does the work: the orchestrator-pump and the per-task agents
 
-- **Основная сессия — тонкий оркестратор-насос, не исполнитель и не дизайнер.**
-  Её цикл: `next_task` → `claim` (когда `stage: "Queue"` — по правилу «Клеймить или нет
-  решает `stage`» из «Дисциплины очереди»; НЕ «только свежая»: карточку, назначенную
-  человеком, и недоделанный клейм тоже клеймишь) → диспатч ОДНОГО свежего
-  пер-таск-агента на ВЕСЬ таск → дождаться его краткого итога → следующая.
-  (Так — при `wip.limit: 1`, то есть когда человек СУЗИЛ дренаж до последовательного.
-  При `wip.limit > 1` — а это дефолт, `3` — итога не ждёшь: пока есть свободные слоты,
-  диспатчишь дальше и держишь до `limit` агентов сразу, каждого в своём дереве — см.
-  «Параллельный дренаж». Всё остальное в этом разделе одинаково для обоих режимов.)
-  Оркестратор НЕ делает Design, НЕ пишет `[spec]`, НЕ реализует, НЕ
-  коммитит и НЕ вызывает `advance` — всё это внутри пер-таск-агента. Его
-  контекст остаётся лёгким: он видит бриф диспатча и короткий итог, а не
-  рассуждения Design/Build.
-- **Пер-таск-агент УПАЛ (ошибка рантайма/API), а не вернул итог — оркестратор
-  ПЕРЕзапускает, не роняет задачу.** Диспатченный агент может умереть на полуслове
-  от ошибки рантайма Claude (напр. «Agent terminated early due to an API error:
-  API Error: Connection closed mid-response») — это НЕ ошибка трекера и НЕ ошибка
-  кода задачи. Почему «он не ретраит сам»: харнесс сам повторяет многие
-  транзиентные сбои API, но обрыв соединения на полуслове завершает саб-агента, а
-  тот сам себя не перезапускает; vikunja-mcp (MCP-сервер тулзов) в этой петле не
-  участвует и оживить мёртвого саб-агента не может. Восстановление — на
-  ОРКЕСТРАТОРЕ: получив уведомление, что агент упал/умер (а не краткий итог), он НЕ
-  бросает задачу и НЕ встаёт — снова зовёт `next_task` (задача всё ещё за ним, в
-  Design/Build) и диспатчит СВЕЖИЙ resume-агент. Тот по правилу «Возобновляемая
-  задача (resume)» (см. «Дисциплина очереди») перечитывает досье (`get_task`) и git
-  log, понимает, что уже сделано, и доводит задачу до конца. Задача простаивает,
-  ТОЛЬКО если оркестратор молча её бросил, — вот этого и не делаем. (Транзиентные
-  ошибки самого трекера api.py ретраит с backoff внутри клиента — это другой,
-  нижний слой, невидимый агенту.)
-  - **Упал РЕВЬЮЕР — с #991 механизм ЕСТЬ, и вместе с ним пришла ЗЕРКАЛЬНАЯ забота.** Круг
-    назад здесь стояло «механизма нет», и это было верно: ветка предложения ревью пропускала
-    карточки, назначенные на тебя, а в соло они все твои, поэтому карточка тихо стояла в Review
-    без вердикта и вынести его было некому — ни одному тику. Теперь пропуск условен на
-    `require_review_independence` (по умолчанию false), и карточка без вердикта приходит СНОВА,
-    сколько угодно раз: снимает её с предложения ровно вердикт. Упавший ревьюер напоминает о
-    себе сам — как упавший build-агент.
-    **Цена ровно обратная прежней: ВНУТРИ тика ту же карточку предложат ещё раз, то есть можно
-    задиспатчить второго ревьюера на одну работу.** Поэтому id задиспатченного ревью клади в
-    `exclude` — раньше это было бесполезно (карточка и так не приходила), теперь несуще. Свой
-    список на тик всё равно веди: `exclude` защищает от дубля, а НЕ вернувшегося ревьюера
-    по-прежнему заметишь только ты.
-- **Пер-таск-агент ведёт ВЕСЬ таск сам** (свежий на каждую задачу; старшая
-  модель; грузит tracker-тулзы через ToolSearch). Бриф от оркестратора: id
-  задачи, рабочая директория, критерии готовности (тесты/линт) и `wip.limit`
-  из ответа `next_task` — по нему агент считает свой потолок кругов интеграции
-  (см. «Откуда потолок»); не назовёшь — он прочитает `wip_limit` из репо-конфига
-  сам, но это лишний шаг и лишний способ ошибиться. **`wip.active` из того же
-  ответа называй ТОЖЕ** — потолок считается по `max` из них двоих, а `active`
-  агенту прочитать неоткуда: это состояние доски, а не конфиг. Дальше агент
-  сам: `get_task` (досье — описание, spec, комменты) → Design и
-  `advance(to='build', spec=...)` → реализация → коммит+пуш дифа задачи →
-  `advance(to='review')` с отчётом (worklog/evidence; для багов — root_cause).
-  Все правила ниже про ведение задачи (гейты, журнал-комменты, resume-
-  перепроверка, `call_human`, note-подсказки тулзов) — про него; оркестратор их
-  не исполняет, только пампит очередь.
-- **Агент МОЖЕТ плодить своих саб-агентов.** Реализацию делает либо инлайн (по
-  узкому whitelist ниже), либо дальнейшим диспатчем — отдельный имплементер,
-  или параллельные агенты на несвязные куски. Для своего таска он такой же
-  оркестратор, каким основная сессия — для очереди.
-- **Модель — старшая (Opus-класса) по умолчанию** и для пер-таск-агента, и для
-  всех вложенных (имплементер, независимое багревью). Понижать (Sonnet/Haiku-
-  класс) ЗАПРЕЩЕНО — кроме случая, когда в самой задаче есть отдельное явное
-  разрешение на понижение.
-- **Зачем:** чистый контекст на каждую задачу (решения соседних задач не
-  перетекают), оркестратор остаётся лёгким и живёт долго, и симметрия
-  с ревью — у автора и ревьюера свои несмешанные контексты.
-- **Инлайн vs вложенный диспатч — решает пер-таск-агент (узкий whitelist, не
-  про размер).** Инлайн допустим, только если правка ЦЕЛИКОМ попадает хотя бы в
-  один пункт: (а) конфиг/данные (toml/json/yaml/env); (б) текст/доки/комменты;
-  (в) чистое переименование или механическая замена БЕЗ изменения поведения — И
-  проходит ВСЕ гарды: не трогает .py-логику; НЕ добавляет и не меняет тесты; НЕ
-  меняет поведение тула/гейта/воркфлоу. Любой гард не сошёлся → диспатч
-  вложенного саб-агента. Размер (строки, минуты) — НЕ критерий: короткий дифф
-  тоже может менять поведение.
-- **Само-проверка перед инлайном (self-check):** файл — только
-  конфиг/текст? · ноль изменений в .py-логике? · ноль новых/правленых
-  тестов? · поведение не меняется? Все «да» → инлайн ок; хоть одно «нет»
-  → диспатч. Пример-ловушка: багфикс гейта в `workflow.py` +
-  юнит-тест — НЕ тривиально, диспатчь, даже если дифф в 3 строки.
-- Ревью изменений — всегда отдельный саб-агент (см. ниже), никогда тот же,
-  что писал код.
+- **The main session is a thin orchestrator-pump, not an implementer and not a designer.**
+  Its cycle: `next_task` → `claim` (when `stage: "Queue"` — by the rule "Whether to claim is
+  decided by `stage`" from "Queue discipline"; NOT "only a fresh one": a card assigned by the
+  human and a partial claim you claim as well) → dispatch ONE fresh per-task agent for the
+  WHOLE task → wait for its short result → the next one.
+  (That is at `wip.limit: 1`, i.e. when the human has NARROWED the drain down to sequential.
+  At `wip.limit > 1` — and that is the default, `3` — you do not wait for the result: while
+  there are free slots you keep dispatching and hold up to `limit` agents at once, each in its
+  own tree — see "Parallel drain". Everything else in this section is the same for both modes.)
+  The orchestrator does NOT do Design, does NOT write `[spec]`, does NOT implement, does NOT
+  commit and does NOT call `advance` — all of that is inside the per-task agent. Its context
+  stays light: it sees the dispatch brief and a short result, not the Design/Build reasoning.
+- **The per-task agent CRASHED (a runtime/API error) instead of returning a result — the
+  orchestrator RE-launches, it does not drop the task.** A dispatched agent can die mid-sentence
+  from a Claude runtime error (e.g. "Agent terminated early due to an API error: API Error:
+  Connection closed mid-response") — that is NOT a tracker error and NOT an error in the task's
+  code. Why "it does not retry by itself": the harness does retry many transient API failures
+  on its own, but a connection dropped mid-sentence terminates the subagent, and it does not
+  restart itself; vikunja-mcp (the MCP server of the tools) takes no part in that loop and
+  cannot revive a dead subagent. Recovery is on the ORCHESTRATOR: having received a
+  notification that the agent crashed/died (rather than a short result), it does NOT abandon the
+  task and does NOT stop — it calls `next_task` again (the task is still its own, in
+  Design/Build) and dispatches a FRESH resume agent. That one, by the rule "A resumable task
+  (resume)" (see "Queue discipline"), re-reads the dossier (`get_task`) and the git log, works
+  out what has already been done, and takes the task to the end. A task idles ONLY if the
+  orchestrator silently abandoned it — and that is exactly what we do not do. (Transient errors
+  of the tracker itself api.py retries with backoff inside the client — that is a different,
+  lower layer, invisible to the agent.)
+  - **A REVIEWER crashed — since #991 the mechanism EXISTS, and a MIRRORED worry came with it.**
+    One round ago this said "there is no mechanism", and that was true: the review-offering
+    branch skipped cards assigned to you, and in a solo setup they are all yours, so a card
+    stood quietly in Review without a verdict and there was nobody to deliver one — not on a
+    single tick. Now the skip is conditional on `require_review_independence` (false by
+    default), and a card without a verdict comes AGAIN, as many times as it takes: what takes it
+    off the offering is exactly a verdict. A crashed reviewer reminds you of itself — like a
+    crashed build agent.
+    **The price is exactly the reverse of the old one: WITHIN a tick the same card will be
+    offered once more, that is, you can dispatch a second reviewer onto one piece of work.** So
+    put the id of a dispatched review into `exclude` — it used to be useless (the card did not
+    come anyway), now it is load-bearing. Keep your own list for the tick regardless: `exclude`
+    protects against a duplicate, while a reviewer that did NOT come back is still something
+    only you will notice.
+- **The per-task agent runs the WHOLE task itself** (a fresh one per task; the senior model;
+  loads the tracker tools through ToolSearch). The brief from the orchestrator: the task id, the
+  working directory, the readiness criteria (tests/lint) and `wip.limit` from the `next_task`
+  response — the agent computes its ceiling of integration rounds from it (see "Where the
+  ceiling comes from"); do not name it and it will read `wip_limit` from the repo config itself,
+  but that is an extra step and an extra way to be wrong. **Name `wip.active` from that same
+  response TOO** — the ceiling is computed from the `max` of the two, and the agent has nowhere
+  to read `active` from: it is board state, not config. From there the agent goes on its own:
+  `get_task` (the dossier — description, spec, comments) → Design and
+  `advance(to='build', spec=...)` → implementation → commit+push of the task's diff →
+  `advance(to='review')` with a report (worklog/evidence; for bugs — root_cause). All the rules
+  below about running a task (the gates, the journal comments, the resume re-check,
+  `call_human`, the tools' note hints) are about it; the orchestrator does not execute them, it
+  only pumps the queue.
+- **The agent MAY spawn subagents of its own.** It does the implementation either inline (by the
+  narrow whitelist below) or by dispatching further — a separate implementer, or parallel agents
+  on unrelated pieces. For its own task it is the same kind of orchestrator that the main
+  session is for the queue.
+- **The model is the senior one (Opus class) by default**, both for the per-task agent and for
+  all the nested ones (the implementer, the independent bug review). Downgrading (Sonnet/Haiku
+  class) is FORBIDDEN — except where the task itself carries a separate, explicit permission to
+  downgrade.
+- **Why:** a clean context per task (decisions from neighbouring tasks do not leak across), the
+  orchestrator stays light and lives long, and symmetry with review — the author and the
+  reviewer have their own unmixed contexts.
+- **Inline vs a nested dispatch — the per-task agent decides (a narrow whitelist, not about
+  size).** Inline is admissible only if the edit falls ENTIRELY into at least one item: (a)
+  config/data (toml/json/yaml/env); (b) text/docs/comments; (c) a pure rename or a mechanical
+  replacement WITHOUT a change of behaviour — AND it passes ALL the guards: it does not touch
+  .py logic; it does NOT add or change tests; it does NOT change the behaviour of a
+  tool/gate/workflow. Any guard that does not check out → dispatch a nested subagent. Size
+  (lines, minutes) is NOT a criterion: a short diff can change behaviour too.
+- **Self-check before going inline:** the file — config/text only? · zero changes in .py
+  logic? · zero new/edited tests? · behaviour unchanged? All "yes" → inline is fine; a
+  single "no" → dispatch. A trap example: a gate bugfix in `workflow.py` +
+  a unit test — NOT trivial, dispatch, even if the diff is 3 lines.
+- Review of the changes is always a separate subagent (see below), never the same one that
+  wrote the code.
+## Traces of the work (comments are the journal)
 
-## Следы работы (комменты — это журнал)
-
-- **Ссылайся на задачу человекочитаемо.** В комментах, отчётах (worklog) и любом
-  тексте для человека называй задачу по `ref` из выдачи тулзов
-  (`next_task`/`claim`/`get_task`, а для заведённой тобой карточки — `file_task`)
-  — «VMCP-27 (82)»: идентификатор проекта +
-  индекс, ПЛЮС числовой id в скобках. **Половины делают РАЗНОЕ, и поэтому эхаются обе.**
-  Идентификатор — ЧИТАЕМОЕ имя: живой UI печатает `TGT-3` заголовком h1 на странице
-  задачи, так что человек считывает с карточки проект и её порядковый номер и глазами
-  сверяет, та ли это карточка. Адресует же ровно id в скобках: `/tasks/82` открывает
-  карточку, и это та самая ссылка, которую ставит сам UI в своих списках задач.
-  **ИСКАТЬ по идентификатору НЕЛЬЗЯ — ни в API, ни в вебе** (перемерено на живой 2.3.0,
-  #757: `?s=TGT-3` даёт НОЛЬ попаданий и в REST, и в quick-actions веб-интерфейса, тогда
-  как слово из title находит карточку в обоих; `filter=identifier` — это 400). Раньше тут
-  стояло обратное («индекс, по которому человек ищет её в трекере»; «голый глобальный id
-  для поиска человеком бесполезен») — это было единственное обоснование всей фичи, и оно
-  ни разу не измерялось. Практическое правило от этого не слабеет, а УСИЛИВАЕТСЯ: раз
-  сочинённый идентификатор нельзя проверить поиском, единственная дешёвая проверка у
-  читателя — id рядом с ним. (Трейлер коммита
-  остаётся `… (tracker #N)` — это отдельная grep-конвенция по истории.)
-  - **`ref` только ОТДАВАЕМЫЙ тулом, СОБИРАТЬ его самому нельзя.** Индекс
-    (`VMCP-27`) назначает сервер: он ПОПРОЕКТНЫЙ и считается с единицы, а id —
-    глобальный, поэтому из id индекс не выводится никакой арифметикой (перемерено
-    `get_task`-ом: id 732 → `VMCP-195`, id 706 → `VMCP-181` — разрыв 537 и 525,
-    даже не постоянный). Сочинённая ссылка не выглядит битой — она ведёт в
-    ПОСТОРОННЮЮ ЖИВУЮ карточку, и читатель этого не замечает. Ровно это уехало в
-    приземлившийся файл на #660: «Filed as VMCP-181 (732)», тогда как 732 — это
-    `VMCP-195`, а `VMCP-181` — живая карточка id 706 совсем про другое
-    (`canonical_base_url`; обе пары перепроверены `get_task`-ом при работе над
-    #735, а не взяты из чужого отчёта). Числовая половина там была ВЕРНА, ошибочна
-    ровно человекочитаемая — та, которую надо брать у тула, а не додумывать. Не
-    отдал ни один тул (ссылаешься на чужую карточку, ref в руках нет) — зови
-    `get_task`, а не угадывай. Но `get_task` привязан к ТВОЕМУ проекту, поэтому
-    карточку на ЧУЖОЙ доске он не достанет вовсе: там, если ref не пришёл вместе с
-    карточкой, пиши голый `#<id>` и прямо скажи, что индекса нет. Честный `#82`
-    лучше правдоподобного вранья.
-  - **Завёл через `file_task` — ref УЖЕ на руках**, в `filed.ref`; отдельный
-    `get_task` за ним не нужен. Заводил в ЧУЖОЙ проект (`project_id`) — там префикс
-    ЦЕЛЕВОГО проекта, а не твоего: так и эхай, это имя, по которому карточку ЧИТАЮТ
-    на ЕЁ доске (не ищут — искать по идентификатору нельзя, см. выше).
-    **У `decompose` теперь тоже есть (#749):** каждый ребёнок приезжает как
-    `{id, ref, title}`, так что отдельный `get_task` за ссылкой больше не нужен ни на
-    одной поверхности, которая карточку СОЗДАЁТ. Раньше дети приходили как `{id, title}`,
-    и рулбук сам отправлял тебя за `get_task` на каждого — при том, что значение уже
-    лежало в ответе создания и просто выбрасывалось. Правило «ref только ОТДАВАЕМЫЙ
-    тулом» от этого не смягчается: оно про то, что собирать ссылку самому нельзя, а не
-    про то, у скольких тулов она есть.
-- При клейме тулза сама отметится; следом опиши план коротким `comment`.
-- Фиксируй находки и решения по ходу: «выбрал X вместо Y, потому что Z»,
-  «наступил на гочу W» — это читают и люди, и следующие агенты.
-- `advance(to='build')` требует spec — 2-5 предложений о подходе, не эссе.
-- **`advance(to='review')` = отчёт о проделанной работе**, его читает ревьюер:
-  - `root_cause` — для багфиксов ОБЯЗАТЕЛЕН: причина бага (почему возник —
-    «стейт не подписан на событие X»), а не симптом («не отображался титул»);
-  - `worklog` — что сделано (подход, ключевые файлы) и КАК проверено
-    (что запускал, что наблюдал — проверка запуском, не чтением кода);
-  - `evidence` — sha/ссылка на коммит этой задачи (см. следующий пункт).
-  Прогони проверку ДО перевода. Отчёт без причины у бага — повод для
-  человека вернуть задачу в Build. А если деливерабл этой карточки — ТЕКСТ с измеримыми
-  утверждениями (докстринги, комменты в коде, правила) или таков сам твой отчёт, то до
-  `advance` по нему проходит ещё и второй независимый проход —
-  см. «Второй независимый проход по СВОЕМУ тексту»: запускать его надо РАНО, а не перед
-  самой сдачей.
-- **«Review needs a report» на отчёте, который ты ТОЧНО написал, — это НЕ «ты забыл».**
-  Отказ дизъюнктивный, и с #657 он НАЗЫВАЕТ и поле, и то, КАК оно приехало. Полей, которые
-  он может назвать, ТРИ, а не два: с #718 к `worklog` и `evidence` добавился `root_cause`, но
-  ТОЛЬКО у карточки с меткой `bug` (у эпик-контейнера — нет: его никто не ревьюит, значит
-  причину спрашивать не с кого). До #718 отсутствие `root_cause` было тихим no-op, и багфикс
-  доезжал до ревьюера без причины, хотя и этот файл, и докстринг тула звали поле обязательным —
-  так что «обязателен» тут теперь означает гейт, а не пожелание. Читай именно
-  это место, а не общий смысл фразы:
-  - `evidence — passed, but empty or whitespace-only` (или то же про `worklog`) — поле
-    доехало пустым. Это обычное «допиши и повтори».
-  - `worklog — arrived as null, not as a string` при том, что ты передавал ДЛИННЫЙ
-    текст. **ИМЯ ПАРАМЕТРА ПРОВЕРЯТЬ НЕ НАДО: из четырёх прежних причин это единственная,
-    которую сам факт этого отказа теперь ИСКЛЮЧАЕТ.** До #720 правило говорило обратное
-    («сначала проверь имя»), и было верным: опечатка (`wroklog`) выбрасывалась МОЛЧА и давала
-    ровно этот же отказ. Теперь неизвестный аргумент отвергается НА ГРАНИЦЕ и ПОИМЁННО
-    (`wroklog … Extra inputs are not permitted`, `isError=True`) ещё до тела тула — то есть
-    если ты ЧИТАЕШЬ «arrived as null», имя ты написал верно (измерено по настоящему stdio).
-    Оговорка одна, и она не про твой вызов: гейт BEST-EFFORT, и если он не встал, опечатка
-    снова возможна. Сервер ПЫТАЕТСЯ сказать об этом одной строкой в stderr при старте — но
-    только пытается: при закрытом fd 2 он не скажет НИЧЕГО (измерено), да и stderr сервера
-    тебе изнутри вызова никто не показывает. Это остаточный риск, который отсюда НЕ
-    ПРОВЕРИТЬ, а не сигнал, за которым надо идти. Значит текст до тула НЕ ДОЕХАЛ — и с
-    VMCP-279 (938) известно, ПОЧЕМУ, поэтому совет тут ПОМЕНЯЛСЯ на противоположный:
-    **ПОВТОРИ ВЫЗОВ.** Круг назад тут стояло «повтор тем же вызовом — не починка», и держалось
-    это на том, что механизм не найден. Теперь найден, и он в ТВОЕЙ СОБСТВЕННОЙ ЭМИССИИ:
-    вызов тула у тебя тег-структурный, и параметр, чей ОТКРЫВАЮЩИЙ ТЕГ написан без
-    namespace-префикса, парсер параметром не считает вовсе — значит он не становится ключом
-    JSON и до тула доезжает как `null`, молча и неотличимо от «его не передавали».
-    Дискриминатор, который это решает, держит ПОЗИЦИЮ и ДЛИНУ постоянными и меняет ТОЛЬКО
-    тег: один и тот же вызов (длинный `worklog` первым, `evidence` из 40 пробелов вторым)
-    отвечает `evidence — arrived as null` при испорченном теге и `evidence — passed, but
-    empty or whitespace-only` при верном. Контроль, без которого сентинел нечитаем: те же 40
-    пробелов, посланные ОДНИ, приезжают именно ПУСТЫМИ, — значит пробельное не съедается.
-    Ни размер, ни порядок тут ни при чём: измерено, что ни `Workflow` (1 МиБ), ни настоящий
-    MCP-сервер поверх настоящего stdio-транспорта (4 МиБ, а на независимом перемере — 8 МиБ,
-    побайтово) на килобайтных отчётах не режут ничего, КОНТЕНТНОГО порога нет (кириллица,
-    NUL, CRLF, одна строка на 8 МиБ без единого перевода), и ПОРЯДОК аргументов не меняет
-    ничего — десять перестановок через настоящую границу, все побайтово (#938).
-    **Поэтому ПЕРЕСТАВЛЯТЬ аргументы БЕСПОЛЕЗНО, и это опровержение, а не уточнение.** Три
-    карточки подряд независимо решили, что «теряется ПОСЛЕДНИЙ по порядку аргумент», и
-    лечили это перестановкой; предикат ложный. Выглядит он верным потому, что порча тега
-    КОРРЕЛИРУЕТ с длинным ПРЕДЫДУЩИМ значением: портится тег у того параметра, который ты
-    пишешь сразу ПОСЛЕ длинного блока. Читай это как ПРИЧИНУ, а не как частоту — частоту
-    никто не мерил, и ни один из трёх прежних вызовов не переигрывали; показано, что эта
-    причина даёт их симптом, а их предикат — нет.
-    Тул не может отличить ТРИ случая — их было ЧЕТЫРЕ, опечатку у него забрал
-    #720: потерянный ключ, непереданный аргумент и ЯВНО переданный `null` приезжают одинаково
-    — как `null` (первые два — вообще одна и та же форма на проводе). Поэтому он и называет
-    СОСТОЯНИЕ, а не причину.
-  - **Тихих форм РОВНО ЧЕТЫРЕ** (измерено): ключ отсутствует, `null`, `""`, строка из одних
-    пробельных. Весь остальной ТИПОВОЙ набор JSON — число, дробное, булево, список, объект —
-    ловится валидацией ГРОМКО и поимённо, до нашего гарда; перечисление полное именно по
-    типам, а не «мы попробовали несколько». И «пусто» тут значит «ноль НЕпробельных
-    символов», а не ноль байт: 100 неразрывных пробелов (200 байт на проводе) отвергаются
-    так же, как пустая строка, — а вот 50 нулевой ширины (ZWSP, U+FEFF, U+2060) НЕ
-    пробельные, гард их пропускает, и карточка уедет в Review с отчётом, пустым для любого
-    читателя. Проверено обоими способами; заполнителем отчёт не затыкай.
-  - **Запасной путь, если повтор не берёт** (до #938 он был единственным предписанным, и
-    цена у него та, ради которой карточку и заводили: полный отчёт приходится РЕЗАТЬ):
-    переведи карточку КОРОТКИМ `worklog`, а полный
-    отчёт выложи отдельными `comment(task_id, "[worklog] ПОЛНЫЙ ОТЧЁТ (1/N) …")` ДО
-    `advance`. Маркер `[worklog]` ставь ПРЕФИКСОМ, и «(1/N)» тоже — и знай, что он значит,
-    потому что предикат тут ОДИН и он СЛЕП К АВТОРУ. `get_task` отдаёт ревьюеру все комменты
-    подряд и по маркеру ничего не фильтрует, так что отчёт без маркера не исчезает — его
-    просто легко пропустить тому, кто ищет глазами. А `next_task` предлагает карточку на
-    ревью ровно тогда, когда САМЫЙ СВЕЖИЙ коммент, НАЧИНАЮЩИЙСЯ с `[worklog]`, новее
-    последнего `[review]`, — и ему всё равно, написал его `advance` или ты руками. Построено
-    и проверено на живом `Workflow`: карточка после вердикта ревью не предлагается; один
-    ручной коммент с `[worklog]` в префиксе — предлагается СНОВА; тот же текст с маркером НЕ
-    в начале — не предлагается. Два следствия: чанки отчёта клади ДО `advance` (как и
-    написано выше), а на карточку, где вердикт уже стоит, `[worklog]`-префиксным комментом
-    не пиши — задиспатчишь лишний круг ревью. Плейсхолдер
-    вида `Сделано: probe` в `[worklog]` НЕ оставляй — в самом коротком worklog напиши,
-    что полный отчёт лежит отдельными комментами выше, иначе журнал карточки будет
-    утверждать одно, а сделано будет другое.
-  - **Порога НЕТ ВОВСЕ — не гадай про него и не подгоняй под него отчёт.** Круг назад тут
-    стояло «порога не знает никто», и это было честно ровно до тех пор, пока механизм не
-    нашли: раз теряет ТЕГ, а не размер, то искать было нечего. На #657 порог
-    ВОСПРОИЗВЕСТИ НЕ УДАЛОСЬ ни разу: живой пробой через MCP-клиент `advance` принял
-    5807 символов / 9598 байт UTF-8 с первого раза (доставленный аргумент; ещё 7 байт в
-    карточке — наш собственный префикс `[spec]\n`). Так что ни «длиннее N всегда падает», ни
-    «до N безопасно» отсюда не следует, и подгонять длину отчёта под воображаемый потолок —
-    работа впустую. Ветвись по слову `null` в отказе — оно про ФАКТ, а не про размер.
-    Одна честная граница у всего этого разбора: механизм найден в ТОМ харнессе, под которым
-    ходят эти агенты (тег-структурный вызов тула). Другой харнесс, сериализующий вызов иначе,
-    может ронять аргумент по своей причине — «arrived as null» тогда тот же, а диагноз надо
-    ставить заново.
-- **Визуально проверяемый результат — приложи скриншот.** Если правоту
-  изменения человек подтверждает ГЛЯДЯ (UI, отрендеренная страница/чарт,
-  сгенерированная картинка, раскладка доски) — приложи скрин готового
-  результата к карточке через `attach_file(task_id, path, note=...)` и сошлись
-  на него в `worklog` как на evidence рядом с sha. Скрин — тот, что ты и так
-  снял при верификации (browser-тул, скилл run/verify): карточка про ПРИЛОЖИТЬ
-  уже снятое, отдельный механизм скриншотинга изобретать не надо. Снимал ОБЩИМ
-  browser-тулом — сперва сверь `Page URL` соседним `browser_snapshot` (сам скрин
-  этой строки не печатает) и путь к файлу по «Общие ресурсы»: браузер один на всю
-  сессию, скрин может оказаться со страницы сиблинга, а лежит он не в твоём дереве,
-  а в `<главный чекаут>/.playwright-mcp/` — при условии, что `filename` ты дал с
-  этим префиксом, как там и предписано. Проще этой гонки избежать — снять свой скрин своим
-  же процессом (там же, «Свой браузер»). Кто решает,
-  что задача «визуально проверяема» — ты сам по существу работы (не лейбл, не
-  эвристика). Правило НЕ для каждой задачи: у изменения без визуальной
-  поверхности (lockfile, рефактор, конфиг) показывать нечего — не притягивай за
-  уши. Загрузка сама оставляет след в журнале комментов — `[attach] имя (mime,
-  размер)`; передай `note=` одной строкой, ЧТО на скрине («доска после
-  reconcile»), и НЕ пости отдельный дублирующий коммент про сам аплоад (упавший
-  журнальный коммент вернётся как `journal_comment: false` — файл уже на
-  карточке, НЕ перезагружай его). `attach_file` — отдельный шаг, задачу он НЕ
-  двигает; упавшая загрузка (напр. токен без scope `tasks_attachments:create`)
-  вернёт внятную ошибку и на перевод в Review не влияет. Лимит 25 МБ; имя
-  вложения = basename файла. Ревьюер тоже может приложить скрин к чужой задаче
-  в Review (владение не требуется).
-- **Коммит+пуш — часть перевода в Review, не отдельный шаг.** Пер-таск-агент
-  коммитит дифф именно своей задачи отдельным коммитом в ГЛАВНУЮ ветку
-  (`type(scope): … (tracker #N)` + трейлер `Co-Authored-By`) и ПУШИТ его — ДО
-  `advance(to='review')`; `evidence` = sha этого коммита. (Если диспатчил своего
-  имплементера — принимает его работу и коммитит сам, от своего имени.)
-  - **Интеграция — это rebase + ПОВТОРНАЯ проверка + пуш, а не просто `git push`.** В
-    параллельном дренаже ты сидишь в своём worktree на ОДНОРАЗОВОЙ ветке `task/<id>`:
-    голый `git push` запушит эту ветку, главная останется без твоей работы, а все тулзы
-    отрапортуют успех — задача тихо окажется вне релизного пайплайна. Пушить надо ЯВНО:
+- **Refer to a task in a human-readable way.** In comments, reports (worklog) and any text
+  meant for a human, name the task by the `ref` the tools hand you
+  (`next_task`/`claim`/`get_task`, and `file_task` for a card you filed yourself)
+  — "VMCP-27 (82)": the project identifier +
+  index, PLUS the numeric id in brackets. **The two halves do DIFFERENT things, and that is why
+  both are echoed.**
+  The identifier is the READABLE name: the live UI prints `TGT-3` as the h1 heading on the task
+  page, so a human reads the project and the card's ordinal off the card and checks by eye that
+  it is the right one. What ADDRESSES is exactly the id in brackets: `/tasks/82` opens the card,
+  and that is the very link the UI itself puts in its own task lists.
+  **You CANNOT SEARCH by the identifier — not in the API, not on the web** (re-measured on a live
+  2.3.0, #757: `?s=TGT-3` returns ZERO hits in both REST and the web interface's quick-actions,
+  while a word from the title finds the card in both; `filter=identifier` is a 400). This used to
+  say the opposite ("the index a human searches for it by in the tracker"; "a bare global id is
+  useless for a human to search with") — that was the entire feature's only justification, and it
+  was never once measured. The practical rule does not weaken from this, it is STRENGTHENED:
+  since an invented identifier cannot be checked by searching, the reader's only cheap check is
+  the id beside it. (The commit trailer
+  stays `… (tracker #N)` — that is a separate grep convention over the history.)
+  - **A `ref` is only ever HANDED OUT by a tool; ASSEMBLING one yourself is not allowed.** The
+    index (`VMCP-27`) is assigned by the server: it is PER-PROJECT and counts from one, while the
+    id is global, so no arithmetic derives the index from the id (re-measured with
+    `get_task`: id 732 → `VMCP-195`, id 706 → `VMCP-181` — gaps of 537 and 525,
+    not even constant). An invented reference does not look broken — it leads to an
+    UNRELATED LIVE card, and the reader does not notice. Exactly that shipped into a
+    landed file on #660: "Filed as VMCP-181 (732)", whereas 732 is
+    `VMCP-195` and `VMCP-181` is a live card, id 706, about something else entirely
+    (`canonical_base_url`; both pairs were re-checked with `get_task` while working on
+    #735, not taken from someone else's report). The numeric half there was CORRECT; the
+    wrong one was exactly the human-readable half — the one you must take from the tool
+    rather than infer. If no tool handed you one (you are referring to someone else's card
+    and have no ref in hand), call `get_task` — do not guess. But `get_task` is bound to
+    YOUR project, so it will not fetch a card on SOMEONE ELSE'S board at all: there, if no
+    ref arrived with the card, write a bare `#<id>` and say outright that there is no index.
+    An honest `#82` beats a plausible lie.
+  - **Filed it with `file_task` — the ref is ALREADY in hand**, in `filed.ref`; no separate
+    `get_task` for it is needed. Filed into SOMEONE ELSE'S project (`project_id`) — the prefix
+    there is the TARGET project's, not yours: echo it as it is, that is the name the card is READ
+    by on ITS board (not searched for — the identifier cannot be searched by, see above).
+    **`decompose` now has one too (#749):** every child arrives as
+    `{id, ref, title}`, so a separate `get_task` for the reference is no longer needed on
+    any surface that CREATES a card. Children used to arrive as `{id, title}`,
+    and this rulebook itself sent you for a `get_task` on each one — while the value was already
+    in the creation response and was simply thrown away. The "a ref is only ever HANDED OUT by a
+    tool" rule is not softened by this: it is about not assembling the reference yourself, not
+    about how many tools have one.
+- The claim tool marks the card itself; follow it with a short `comment` describing the plan.
+- Record findings and decisions as you go: "chose X over Y because Z",
+  "stepped on gotcha W" — both humans and the agents after you read this.
+- `advance(to='build')` requires a spec — 2-5 sentences on the approach, not an essay.
+- **`advance(to='review')` = the report on the work done**, and the reviewer reads it:
+  - `root_cause` — MANDATORY for bug fixes: the cause of the bug (why it arose —
+    "the state is not subscribed to event X"), not the symptom ("the title did not render");
+  - `worklog` — what was done (the approach, the key files) and HOW it was verified
+    (what you ran, what you observed — verification by RUNNING, not by reading the code);
+  - `evidence` — the sha/link of this task's commit (see the next bullet).
+  Run the verification BEFORE the transition. A report with no cause on a bug is grounds for
+  a human to send the task back to Build. And if this card's deliverable is TEXT with measurable
+  claims (docstrings, code comments, rules), or your report itself is one, then a second
+  independent pass runs over it before `advance` as well —
+  see "A second independent pass over YOUR OWN text": it must be run EARLY, not right
+  before handing in.
+- **"Review needs a report" on a report you KNOW you wrote is NOT "you forgot".**
+  The refusal is disjunctive, and since #657 it NAMES both the field and HOW it arrived. There
+  are THREE fields it can name, not two: since #718 `root_cause` joined `worklog` and `evidence`,
+  but ONLY on a card labelled `bug` (not on an epic container: nobody reviews it, so there is
+  nobody to ask for a cause). Before #718 a missing `root_cause` was a silent no-op, and a bug fix
+  reached the reviewer with no cause, even though both this file and the tool's docstring called
+  the field mandatory — so "mandatory" here now means a gate, not a wish. Read exactly
+  that part, not the general sense of the sentence:
+  - `evidence — passed, but empty or whitespace-only` (or the same about `worklog`) — the field
+    arrived empty. This is the ordinary "write it and retry".
+  - `worklog — arrived as null, not as a string` while you passed a LONG
+    text. **DO NOT CHECK THE PARAMETER NAME: of the four former causes this is the one that
+    the very fact of this refusal now EXCLUDES.** Before #720 the rule said the opposite
+    ("check the name first"), and it was correct: a typo (`wroklog`) was dropped SILENTLY and gave
+    exactly this same refusal. Now an unknown argument is rejected AT THE BOUNDARY and BY NAME
+    (`wroklog … Extra inputs are not permitted`, `isError=True`) before the tool's body runs — that
+    is, if you are READING "arrived as null", you spelled the name right (measured over real stdio).
+    There is one caveat, and it is not about your call: the gate is BEST-EFFORT, and if it did not
+    come up, a typo is possible again. The server TRIES to say so with one line on stderr at start —
+    but only tries: with fd 2 closed it says NOTHING (measured), and nobody shows you the server's
+    stderr from inside a call anyway. That is a residual risk you CANNOT CHECK from here, not a
+    signal to go after. So the text did NOT REACH the tool — and since
+    VMCP-279 (938) it is known WHY, which is why the advice here FLIPPED to its opposite:
+    **RETRY THE CALL.** A round ago this said "a retry with the same call is not a fix", and that
+    rested on the mechanism not having been found. It has been found now, and it is in YOUR OWN
+    EMISSION: your tool call is tag-structured, and a parameter whose OPENING TAG is written
+    without the namespace prefix is not counted as a parameter by the parser at all — so it never
+    becomes a JSON key and reaches the tool as `null`, silently and indistinguishably from "it was
+    not passed". The discriminator that settles this holds POSITION and LENGTH constant and varies
+    ONLY the tag: the same call (a long `worklog` first, an `evidence` of 40 spaces second)
+    answers `evidence — arrived as null` with the tag corrupted and `evidence — passed, but
+    empty or whitespace-only` with it correct. The control without which the sentinel is
+    unreadable: the same 40 spaces, sent ALONE, arrive exactly as EMPTY — so whitespace is not
+    being eaten. Neither size nor order has anything to do with it: it is measured that neither
+    `Workflow` (1 MiB) nor a real MCP server over a real stdio transport (4 MiB, and 8 MiB on an
+    independent re-measurement, byte-for-byte) truncates anything on kilobyte-sized reports, that
+    there is NO CONTENT threshold (Cyrillic, NUL, CRLF, one 8 MiB line without a single newline),
+    and that the ORDER of the arguments changes nothing — ten permutations across the real
+    boundary, all byte-for-byte (#938).
+    **So REORDERING the arguments is USELESS, and that is a refutation, not a refinement.** Three
+    cards in a row independently decided that "the argument LAST in order is the one lost" and
+    treated it by reordering; the predicate is false. It looks true because tag corruption
+    CORRELATES with a long PRECEDING value: the tag that gets corrupted is the one on the
+    parameter you write immediately AFTER a long block. Read that as a CAUSE and not as a
+    frequency — nobody measured the frequency, and none of the three earlier calls was replayed;
+    what is shown is that this cause produces their symptom and their predicate does not.
+    The tool cannot tell THREE cases apart — there were FOUR, and #720 took the typo away from
+    it: a lost key, an argument that was never passed and an EXPLICITLY passed `null` all arrive
+    the same way — as `null` (the first two are literally the same shape on the wire). That is why
+    it names the STATE and not the cause.
+  - **There are EXACTLY FOUR silent forms** (measured): the key absent, `null`, `""`, a string of
+    nothing but whitespace. The whole remaining JSON TYPE set — integer, float, boolean, list,
+    object — is caught by validation LOUDLY and by name, ahead of our guard; the enumeration is
+    complete over TYPES, not a "we tried a few". And "empty" here means "zero NON-whitespace
+    characters", not zero bytes: 100 non-breaking spaces (200 bytes on the wire) are rejected just
+    like an empty string — whereas 50 zero-width ones (ZWSP, U+FEFF, U+2060) are NOT whitespace,
+    the guard lets them through, and the card goes to Review with a report that is empty to any
+    reader. Checked both ways; do not plug the report with filler.
+  - **The fallback if the retry does not take** (before #938 it was the only prescribed path, and
+    its price is the one the card was filed over: the full report has to be CUT UP):
+    move the card with a SHORT `worklog`, and lay the full
+    report out as separate `comment(task_id, "[worklog] FULL REPORT (1/N) …")` calls BEFORE
+    `advance`. Put the `[worklog]` marker as a PREFIX, and "(1/N)" too — and know what it means,
+    because there is ONE predicate here and it is BLIND TO THE AUTHOR. `get_task` hands the
+    reviewer every comment in order and filters nothing by marker, so a report without the marker
+    does not disappear — it is simply easy to miss for someone scanning by eye. And `next_task`
+    offers a card for review exactly when the MOST RECENT comment STARTING with `[worklog]` is
+    newer than the last `[review]` — and it does not care whether `advance` wrote it or you did by
+    hand. Constructed and checked on a live `Workflow`: after a review verdict the card is not
+    offered; one manual comment with `[worklog]` as its prefix and it is offered AGAIN; the same
+    text with the marker NOT at the start and it is not offered. Two consequences: lay the report
+    chunks down BEFORE `advance` (as written above), and do not write a `[worklog]`-prefixed
+    comment onto a card that already carries a verdict — you will dispatch an extra round of
+    review. Do NOT leave a placeholder like `Done: probe` in the `[worklog]` — in even the
+    shortest worklog, write that the full report is in separate comments above, otherwise the
+    card's journal will claim one thing while another was done.
+  - **There is NO THRESHOLD AT ALL — do not guess about it and do not size the report to it.** A
+    round ago this said "nobody knows the threshold", and that was honest exactly until the
+    mechanism was found: since it is the TAG that is lost and not the size, there was nothing to
+    look for. On #657 the threshold could NOT BE REPRODUCED even once: in a live probe through an
+    MCP client, `advance` accepted 5807 characters / 9598 bytes of UTF-8 on the first attempt (the
+    delivered argument; the extra 7 bytes on the card are our own `[spec]\n` prefix). So neither
+    "longer than N always fails" nor "up to N is safe" follows from this, and sizing the report's
+    length to an imagined ceiling is wasted work. Branch on the word `null` in the refusal — it is
+    about the FACT, not about the size. One honest bound on this whole analysis: the mechanism was
+    found in THE harness these agents run under (a tag-structured tool call). A different harness
+    that serialises the call differently may drop an argument for its own reason — "arrived as
+    null" is then the same, and the diagnosis has to be made afresh.
+- **A visually verifiable result — attach a screenshot.** If a human confirms the change is
+  right by LOOKING (UI, a rendered page/chart, a generated image, the board's layout) — attach
+  a screenshot of the finished result to the card with `attach_file(task_id, path, note=...)`
+  and cite it in the `worklog` as evidence beside the sha. The screenshot is the one you took
+  during verification anyway (the browser tool, the run/verify skill): the card is about
+  ATTACHING what was already taken, there is no separate screenshotting mechanism to invent.
+  If you took it with the SHARED browser tool, first check the `Page URL` with a neighbouring
+  `browser_snapshot` (the screenshot itself does not print that line) and the file path against
+  "Shared resources": the browser is one per session, the screenshot may turn out to be of a
+  sibling's page, and it lands not in your worktree but in `<main checkout>/.playwright-mcp/` —
+  provided you gave `filename` with that prefix, as prescribed there. It is simpler to avoid
+  that race — take your own screenshot with your own process (same place, "Your own browser").
+  Who decides that a task is "visually verifiable" — you do, on the substance of the work (not
+  a label, not a heuristic). The rule is NOT for every task: a change with no visual surface
+  (a lockfile, a refactor, a config) has nothing to show — do not force it. The upload leaves
+  its own trace in the comment journal — `[attach] name (mime, size)`; pass `note=` as one
+  line saying WHAT is in the screenshot ("the board after reconcile"), and do NOT post a
+  separate duplicate comment about the upload itself (a failed journal comment comes back as
+  `journal_comment: false` — the file is already on the card, do NOT re-upload it).
+  `attach_file` is a separate step, it does NOT move the task; a failed upload (e.g. a token
+  without the `tasks_attachments:create` scope) returns a clear error and does not affect the
+  transition to Review. The limit is 25 MB; the attachment's name is the file's basename. A
+  reviewer can also attach a screenshot to someone else's task in Review (ownership is not
+  required).
+- **Commit+push is part of the transition to Review, not a separate step.** The per-task agent
+  commits the diff of its own task as its own commit on the MAIN BRANCH
+  (`type(scope): … (tracker #N)` + a `Co-Authored-By` trailer) and PUSHES it — BEFORE
+  `advance(to='review')`; `evidence` = that commit's sha. (If it dispatched its own
+  implementer, it accepts that work and commits itself, under its own name.)
+  - **Integration is rebase + RE-RUNNING the checks + push, not just `git push`.** In a
+    parallel drain you sit in your own worktree on a THROWAWAY branch `task/<id>`: a bare
+    `git push` pushes that branch, the main branch is left without your work, and every tool
+    reports success — the task quietly ends up outside the release pipeline. Push EXPLICITLY:
 
     ```sh
-    git add <файлы этой задачи>
-    git commit -m "type(scope): … (tracker #N)"    # + трейлер Co-Authored-By
-    # ОДНОЙ цепочкой, не отдельными ходами: `&&` не даёт запушить на красных критериях,
-    # а окно, в котором гонку можно проиграть, схлопывает с твоего раздумья до машинного
+    git add <this task's files>
+    git commit -m "type(scope): … (tracker #N)"    # + the Co-Authored-By trailer
+    # ONE chain, not separate turns: `&&` will not let you push on red criteria, and it
+    # shrinks the window in which the race can be lost from your thinking to machine time
     git fetch origin && git rebase origin/main \
-      && <ПРОГНАТЬ КРИТЕРИИ ГОТОВНОСТИ ЭТОЙ ЗАДАЧИ ЗАНОВО — те, что дал оркестратор в брифе> \
-      && git push origin HEAD:main   # отбило (не fast-forward) — не повторяй вслепую, см. ниже
-    # ОТБИЛО? ПЕРВЫЙ вопрос — не «кто выиграл», а «а работа-то НЕ уехала?»: сервер мог взять
-    # ref и упасть уже на ответе (502, оборванное соединение) — клиент видит ошибку, коммит на
-    # главной. `git fetch` в этой цепочке несущий: на протухшем tracking-рефе проверка ВРЁТ.
+      && <RE-RUN THIS TASK'S ACCEPTANCE CRITERIA — the ones the orchestrator gave in the brief> \
+      && git push origin HEAD:main   # rejected (not fast-forward) — do not retry blindly, see below
+    # REJECTED? The FIRST question is not "who won" but "did the work NOT land after all?": the
+    # server may have taken the ref and died on the response (502, a dropped connection) — the
+    # client sees an error, the commit is on main. `git fetch` in this chain is load-bearing:
+    # on a stale tracking ref the check LIES.
     git fetch origin && git merge-base --is-ancestor HEAD origin/main
-    #   0 → твой коммит УЖЕ на главной: пуш приземлился, ошибка клиента была ложью. Круг НЕ
-    #       трать и человека НЕ зови — sha этого HEAD и есть evidence, иди к подтверждениям
-    #   1 → твоей работы на главной нет. ТЕПЕРЬ выясняй, КТО выиграл гонку:
+    #   0 → your commit is ALREADY on main: the push landed, the client's error was a lie. Do NOT
+    #       spend a round and do NOT call a human — this HEAD's sha IS the evidence, go
+    #       to the confirmations
+    #   1 → your work is not on main. NOW find out WHO won the race:
     git log --oneline HEAD..origin/main
-    #   пусто   → гонки не было (защищённая ветка, нет прав, hook) — круги не помогут: call_human
-    #   непусто → механика (bump бота, коммит сиблинга) — повтори блок,
-    #             до 2 × max(wip.limit, wip.active) кругов
-    git rev-parse HEAD           # КАНДИДАТ в evidence — читать ПОСЛЕ успешного пуша, не до
-    # и только теперь — подтвердить, что этот sha действительно уехал (обе молчат при успехе):
-    git cat-file -e "<sha>^{commit}"                   # 0 — коммит существует; 128 — нет такого
-    git merge-base --is-ancestor "<sha>" origin/main   # 0 — он РЕАЛЬНО на главной; 1 — не на ней
+    #   empty     → no race at all (protected branch, no rights, hook) — rounds
+    #               will not help: call_human
+    #   non-empty → mechanics (the bot's bump, a sibling's commit) — repeat the block,
+    #               up to 2 × max(wip.limit, wip.active) rounds
+    git rev-parse HEAD           # evidence CANDIDATE — read AFTER a successful push, not before
+    # and only now — confirm that this sha really landed (both are silent on success):
+    git cat-file -e "<sha>^{commit}"                   # 0 — the commit exists; 128 — no such commit
+    git merge-base --is-ancestor "<sha>" origin/main   # 0 — it is REALLY on main; 1 — it is not
     ```
 
-    (`main` здесь — имя главной ветки репозитория; называется иначе — подставь её.)
-    Повторный прогон ПОСЛЕ rebase — не перестраховка: пока ты работал, в главную ветку мог
-    приехать сосед, и rebase может БЕЗ КОНФЛИКТА склеить два по отдельности верных
-    изменения в одно неверное. Чисто слитый дифф ≠ верный дифф — проверяет только прогон.
+    (`main` here is the repository's main branch name; if it is called something else, put that.)
+    Re-running AFTER the rebase is not belt-and-braces: while you worked, a neighbour may have
+    landed on the main branch, and a rebase can splice two individually correct changes into one
+    incorrect one WITHOUT A CONFLICT. A cleanly merged diff ≠ a correct diff — only a run tells.
 
-    **А «пуш прошёл» без последних двух команд — это вера в отсутствие сообщения об ошибке,
-    а не факт.** `git rev-parse HEAD` только ПЕЧАТАЕТ локальный HEAD: полный 40-символьный
-    sha и он, и `rev-parse --verify` возвращают с кодом 0, даже если такого объекта в
-    репозитории нет вовсе — то есть проверка, которой обычно ловят «агент назвал sha,
-    которого не было», ровно этого и не ловит. И существования мало: sha ДО rebase
-    продолжает резолвиться (объект жив, пока его не собрал gc), а на главной ветке его нет
-    и не будет — в параллельном дренаже rebase перед пушем норма, а не исключение. Поэтому
-    команд две, и коды возврата у них РАЗНЫЕ по смыслу: `cat-file -e` → 128 «такого коммита
-    здесь нет» (выдуман, опечатка — или ты просто не сделал fetch), `merge-base
-    --is-ancestor` → 1 «коммит есть, но на главной его нет» (до-rebase-овый, orphan,
-    незапушенный). При успехе обе не печатают НИЧЕГО — смотри код возврата, а не вывод.
-    Кавычки вокруг `"<sha>^{commit}"` обязательны: в zsh с `extendedglob` неквотированная
-    форма падает с `no matches found` ещё до запуска git, и выглядит это как вердикт «sha
-    плохой». Свой пуш сам обновляет локальный `origin/main` — отдельный fetch перед
-    проверкой не нужен; но ЧУЖОЙ sha (ревьюеру, оркестратору) проверяй только после
-    `git fetch origin`, иначе уехавший в главную коммит даст те же 128, что и выдуманный.
-    Не сошлось — задача НЕ уехала: чини (перепушь) и перепроверяй, `evidence` с
-    неподтверждённым sha не отправляй.
+    **And "the push went through" without the last two commands is faith in the absence of an
+    error message, not a fact.** `git rev-parse HEAD` only PRINTS the local HEAD: a full
+    40-character sha is returned with exit code 0 by both it and `rev-parse --verify`, even if
+    no such object is in the repository at all — that is, the check usually used to catch "the
+    agent named a sha that never existed" catches exactly that not at all. And existence is not
+    enough: a PRE-rebase sha keeps resolving (the object lives until gc collects it), while it
+    is not on the main branch and never will be — in a parallel drain a rebase before the push
+    is the norm, not the exception. So there are two commands, and their exit codes MEAN
+    different things: `cat-file -e` → 128 "no such commit here" (invented, a typo — or you
+    simply did not fetch), `merge-base --is-ancestor` → 1 "the commit exists, but it is not on
+    main" (pre-rebase, orphaned, unpushed). On success both print NOTHING — read the exit code,
+    not the output. The quotes around `"<sha>^{commit}"` are mandatory: in zsh with
+    `extendedglob` the unquoted form dies with `no matches found` before git even runs, and that
+    looks like a verdict of "bad sha". Your own push updates the local `origin/main` itself — no
+    separate fetch before the check is needed; but check SOMEONE ELSE'S sha (as a reviewer, as
+    the orchestrator) only after `git fetch origin`, otherwise a commit that did land on main
+    gives the same 128 as an invented one. If it does not check out, the task did NOT land: fix
+    it (re-push) and re-check; do not send `evidence` with an unconfirmed sha.
 
-    Конфликт rebase рвёт цепочку на `rebase` (пуша не будет) и разруливаешь ты его сам —
-    контекст задачи именно у тебя; не выходит — или круги кончились
-    (`2 × max(wip.limit, wip.active)`, см. «Откуда потолок») — `call_human`.
-    **И помни, что при этом происходит с деревом:**
-    `call_human` уводит карточку в **Your Call**, а значит для `--gc` твоё дерево с этого
-    момента МЁРТВОЕ (живым его делает только задача в Design/Build за тобой). Держит его не
-    стадия, а НЕСОХРАНЁННАЯ работа: пока внутри незакоммиченное или незапушенное — а при
-    конфликте и при отбитом пуше именно так — защиты снести его не дадут. Но если ты успел
-    `git rebase --abort` и дерево стало чистым и полностью запушенным, его вправе смести на
-    любом тике, пока ты ждёшь ответа: работа не пропадёт (сметается только то, что уже в
-    главной ветке), а вот каталога может не стать. Поэтому человек ответил — зови
-    `workspace <id>` заново, а не считай, что ты всё ещё стоишь в своём дереве.
-    В последовательном режиме, в основном чекауте, рецепт ТОТ ЖЕ минус одноразовая ветка.
-  - **Отбитый пуш — это НОРМА, а не сигнал беды: главный твой соперник — машина.** Если в
-    репозитории есть авто-релиз (бот, пушащий свой коммит после КАЖДОГО зелёного приземления) —
-    свежий rebase протухает почти сразу после ЛЮБОГО приземления, и отбитый пуш становится
-    ожидаемым исходом, а не краевым случаем. Измерено на первом живом параллельном дренаже
-    vikunja-mcp (2026-07-30): из 46 приземлений в главную ветку за сутки **17 сделал CI**, а не
-    агент; его bump-коммит приезжает через **37 с … 2 мин 55 с** после таск-коммита (медиана
-    1 мин 41 с), медианный интервал между соседними приземлениями — 2 мин, 65 % ≤ 3 мин.
-    Но соперник ОГРАНИЧЕН: один коммит на приземление, и его собственный пуш помечен
-    `[skip ci]` — сам себя он не триггерит и два раза подряд не пушит. Значит в одиночку
-    машина стоит максимум ОДНОГО круга.
-  - **Отбитый пуш ещё не значит, что работа не уехала — СНАЧАЛА спроси именно об этом.** Сервер
-    мог принять ref и упасть уже на ответе (502, «the remote end hung up unexpectedly»): клиент
-    честно печатает ошибку, а коммит при этом на главной. Первая команда после отбоя — не разбор
-    гонки, а `git fetch origin && git merge-base --is-ancestor HEAD origin/main`. **Код 0 — работа
-    НА ГЛАВНОЙ**: пуш приземлился, повторять нечего и звать некого — берёшь sha этого HEAD как
-    evidence и идёшь к двум подтверждениям. **Код 1 — работы там нет**, и только тогда включается
-    разбор гонки ниже; эта ветка ни на слово не смягчается — решает КОД ВОЗВРАТА, а не догадка
-    «пустой диапазон, наверное, всё-таки уехало». Почему проверка стоит ПЕРЕД разбором, а не
-    внутри его пустой ветки: приземлившийся пуш, поверх которого успел сесть сиблинг, даёт
-    НЕПУСТОЙ диапазон, то есть выглядит как честная механика, — и следующий круг тихо портит
-    evidence, `git rebase origin/main` ВЫБРАСЫВАЕТ твой коммит (он уже upstream), HEAD переезжает
-    на чужой tip, `git push` печатает «Everything up-to-date», а `git rev-parse HEAD` отдаёт sha
-    СИБЛИНГА, на котором обе подтверждающие команды честно проходят. Два уточнения, оба
-    измеренные: `git fetch` тут несущий — на протухшем remote-tracking рефе та же проверка
-    отвечает «не уехала» про уехавшую работу; и HEAD здесь — ТВОЙ коммит (цепочка его
-    перебазировала, отбитый пуш его не двигает), а если `git log -1` показывает не твой
-    `(tracker #N)`, ты просто не коммитил — это другая беда, и код 0 про неё ничего не говорит.
-  - **Круг тратится ТОЛЬКО на проигранную гонку — убедился, что работа не уехала, смотри, КТО
-    выиграл.** Проверка выше вернула 1 → `git log --oneline HEAD..origin/main`: HEAD — твой
-    коммит на СТАРОЙ базе, значит это ровно те, кто тебя обогнал. **Пусто — гонки не было вовсе**
-    (защищённая ветка, нет прав на пуш, pre-receive hook, не тот remote): следующий круг
-    проиграет ровно так же, а стоит он полного прогона критериев — потолок на это не тратят,
-    `call_human`
-    СРАЗУ, с текстом отказа git. **Непусто — это механика** (bump бота, коммит сиблинга):
-    главная ветка честно уехала вперёд, ровно это и чинит rebase, круг твой. Смотри КАЖДЫЙ
-    проигранный круг, а не вспоминай в конце: этот же список — готовое evidence для эскалации
-    (ниже), задним числом его уже не собрать.
-  - **Откуда потолок и почему он `2 × max(wip.limit, wip.active)`, а не константа.** Потолок
-    обязан быть строго больше худшего ЧИСТО МЕХАНИЧЕСКОГО прогона, иначе он зовёт человека на
-    арифметику. При N активных задачах каждый из N−1 сиблингов, успевший приземлиться за время
-    твоей интеграции, приводит с собой ещё и свой bump: 2·(N−1) кругов, плюс хвостовой bump
-    приземления, опередившего твой `fetch`, — итого 2·(N−1)+1, а потолок = **2 × N**. При
-    дефолтном лимите 3
-    худший механический прогон равен 5, а потолок — **6** (измеренный случай этого репо); при
-    лимите 1 потолок 2, при 4 — 8, при 5 — 10. Это РАЗНЫЕ числа, и путать их нельзя: 5 — то,
-    что механика может выдать, 6 — то, после чего ты зовёшь человека.
-    **N — это сколько задач РЕАЛЬНО в Design/Build (`wip.active`), а НЕ лимит: доработка
-    въезжает в Build мимо гейта `claim`, поэтому `wip.active` законно больше `wip.limit`**
-    (замерено на этой доске: 5-7 при лимите 3 — и VMCP-252 (851) выбрала при этом все 6 кругов
-    чистой механикой, с зелёными гейтами и без единого конфликта ребейза, после чего уехала в
-    Your Call с готовой запушенной работой). `max` — чтобы потолок не ОПУСКАЛСЯ, когда активных
-    меньше лимита. Числа
-    задают КОНФИГ ПРОЕКТА и текущая доска, а не привычка: `wip_limit` у каждого свой, а рулбук
-    один на всех и
-    сам себя перезаписывает при старте MCP-сервера — потребитель с лимитом 4 не может «поднять
-    у себя цифру», он может только получить правило, которое считает. Оба числа тебе называет
-    оркестратор в брифе (он видит `wip` в каждом ответе `next_task`). **`wip.active` — состояние
-    ДОСКИ, и прочитать его, как лимит, неоткуда: не назвал — считай по одному лимиту**, то есть
-    по старому `2 × wip.limit`; ошибка тогда только в безопасную сторону — эскалируешь раньше,
-    чем следовало. С лимитом иначе: **не назвал — не угадывай,
-    прочитай**: `wip_limit` лежит в репо-конфиге `.vikunja-mcp.toml` (walk-up от твоего
-    каталога), и он у тебя ЕСТЬ — этот ключ коммитится, поэтому файл выложен и в линкованный
-    worktree, в отличие от gitignored `.vikunja-mcp.env` с токеном. Ключа в файле нет — лимит
-    дефолтный, 3; стоит `enforce_single_wip = true` — лимит 1. И только если toml не нашёлся
-    вовсе — **бери 6**: это не догадка, а тот же вывод, потому что `wip_limit` бывает ТОЛЬКО
-    в toml (никогда в env), значит «файла нет» и означает дефолтный лимит, а 2 × 3 и есть 6.
-    Прежняя жёсткая шестёрка догадкой была и ломалась начиная с лимита 4: там худший
-    механический прогон уже 7, то есть потолок 6 звал человека ровно на ту арифметику, ради
-    которой формулу и вводили. И это верхняя граница, а не ручка для
-    тюнинга: прежнее «3» было ровно длиной САМОГО ОБЫЧНОГО плохого прогона (bump соседа A →
-    коммит соседа B → bump B), то есть звало человека именно тогда, когда следующий круг почти
-    наверняка бы выиграл; а без авто-релиза соперник только сиблинги, худший прогон вдвое
-    короче, и потолка ты просто не достигнешь — снижать его незачем.
-  - **Достиг потолка — говори, ЧТО выигрывало, а не «запушьте за меня».** При дефолтном лимите
-    столько механика не даёт, значит петля НЕ СХОДИТСЯ (конфликт, перерешаемый сам в себя;
-    сиблинг, застрявший в своём пуш-цикле; критерии, ставшие флаки под rebase). При широком
-    дренаже — или когда в главную пушат ещё и люди, чего эта арифметика не моделирует, — потолка
-    достигает и чистая механика. По ЧИСЛУ кругов одно от другого не отличить, по списку
-    победителей — можно, поэтому вопрос человеку и есть этот список: «N кругов подряд, вот что
-    приезжало в главную ветку каждый раз».
-  - **Критерии гоняются КАЖДЫЙ круг — в том числе когда приехал один только bump версии.**
-    Соблазн понятен: bump машинный и распознаётся механически (автор-бот, тема вида
-    `chore: v<semver> [skip ci]`, пара строк дифа). Не делай этого — и не потому, что «дифф
-    маленький», а потому что: (а) перебазируешься ты не на КОММИТ, а на ДИАПАЗОН, на всё
-    приехавшее с твоего `fetch`, и при таких интервалах туда штатно попадает bump ВМЕСТЕ с
-    реальным коммитом сиблинга — то есть случай, где послабление безопасно, это ровно случай,
-    где оно ничего не экономит; (б) «тут только bump» — правило, которое исполняешь прозой ТЫ:
-    ошибившись, оно не падает, а ТИХО отключает гарантию, и поймать это уже нечем; (в) сама
-    «инертность на глаз» здесь уже подводила — этот bump трогает не два файла, как принято
-    считать, а ТРИ: оба version-файла и **лок зависимостей**. Цена лишнего круга лечится
-    потолком выше и цепочкой `&&`, а не послаблением в проверке.
-  - **ЦИФРУ, заявленную свойством ДЕРЕВА, меряй ПОСЛЕ последнего ребейза — прямо перед пушем,
-    а не тогда, когда её удобно было получить.** Цепочка выше велит перегнать КРИТЕРИИ после
-    ребейза, и это работает. Про ПРОЗУ она молчит, и в эту щель уезжает всё остальное:
-    свип-рекорд в докстринге, `collected` контрольного раунда, строка «Gates on this tree: …
-    N passed» в сообщении коммита. Пишутся они ДО ребейза — и приземляются, описывая дерево,
-    которого в истории нет, потому что последнее изменение в него вносишь не ты, а СИБЛИНГ,
-    приземлившийся пока ты работал. Правило поэтому не «померь аккуратно», а «померь
-    ПОСЛЕДНИМ»: при дефолтном лимите 3 рядом работают ещё двое, а бот-релиз приезжает после
-    каждого зелёного приземления, так что протухает не край, а обычный случай.
-    Замер — на VMCP-249 (840): в её коммите стоит «Gates on this tree: uv run pytest
-    tests/unit -> 1136 passed» и свип-рекорд «control 0 failed / 0 errors / 200 collected»
-    (обе строки на месте — `git show` по приземлившейся sha), а перемер независимого ревьюера
-    на ТОЙ ЖЕ sha дал 1139 passed и 203 collected. Между замером и пушем приземлился сиблинг
-    с тремя тестами. `[worklog]` той же карточки содержит верные 1139 — то есть автор
-    перемерил для ТРЕКЕРА и не перемерил для ПРОЗЫ, и это не небрежность одного агента, а
-    щель в предписанном порядке.
-    Дельты самого свипа при этом воспроизвелись точно и ни один пин слепым не оказался:
-    ломается ровно та контрольная цифра, которой сверяют, что раунд и контроль мерили ОДНО
-    дерево, — то есть именно то, ради чего кросс-чек и заведён.
-    Практически: последним действием перед `git push` пройди по своей прозе и по сообщению
-    коммита и перемерь каждое число, названное свойством ЭТОГО дерева. Дешевле — не писать
-    абсолют вовсе: утверждение СВОЙСТВА (assert) не протухает никогда.
-  - **Исторический абсолют подписывай ДЕРЕВОМ — `N at `<sha>``.** Идиома анкера (число, слово
-    `at`, sha в бэктиках) распространяется и на свип-рекорды: написанную так цифру
-    `tests/unit/test_measured_figure_anchors.py` ВИДИТ и требует, чтобы названный коммит
-    существовал и был предком HEAD. Без анкера он её не видит вовсе — `collected 200` для него
-    просто число. Проверяет он ЯРЛЫК, а не значение: запись пройдёт и при истинных 203, потому
-    что спрашивается разрешимость дерева, а не арифметика. Этого и достаточно — читатель,
-    который захочет сверить, СМОЖЕТ, потому что дерево НАЗВАНО. Буллет выше анкер не отменяет:
-    цифру, заявленную свойством ТВОЕГО дерева, всё равно меряй после ребейза; анкер — для той,
-    которая заведомо историческая. И анкер живёт на ветке недолго: sha, взятый до
-    обязательного ребейза, ребейз осиротит, поэтому подписывай тем, что реально уедет.
-    **Гейт, который сам ВЫВОДИТ `collected` и сверяет с записанным, НЕ строй.** В CLAUDE.md эта
-    форма уже оценена замером и отвергнута: она красная на приезде и превращает
-    докстринг-правку в чужой карточке в красный сьют в горячем файле; здесь она вдвое дороже,
-    потому что пришлось бы гонять pytest дважды.
-    **И НЕ переписывай задним числом уже приземлившиеся записи в чужих карточках.** Где анкер
-    есть — он честен для своего дерева; где его нет — правило работает на БУДУЩИЕ записи.
-  - **В СООБЩЕНИИ КОММИТА не должно быть литерального ci-skip-маркера — даже в кавычках, даже
-    как цитаты.** Гоча, на которую наступила ровно эта задача, когда писала абзацы выше: CI
-    ищет маркер по ВСЕМУ тексту сообщения, включая тело и код-спаны, — поэтому коммит, который
-    всего лишь ЦИТИРУЕТ тему релизного бампа, отменяет свой собственный прогон. И отказа ты не
-    увидишь: пуш проходит, git молчит, обе проверки sha зелёные, задача выглядит доехавшей — а
-    прогона нет, авто-релиза нет, и правка не уезжает в канал раскатки, то есть до потребителей
-    рулбука не доходит вовсе. Пишешь про релизный коммит — назови маркер ОПИСАТЕЛЬНО
-    («ci-skip-маркер», «тот самый маркер в теме бампа»); в ФАЙЛЕ литерал безвреден, опасно
-    только в сообщении коммита. И написание не одно: GitHub гасит прогон на целом СЕМЕЙСТВЕ
-    (`[ci skip]`, `[no ci]`, `[skip actions]`, `[actions skip]` — и на трейлере
-    `skip-checks: true`), так что правило про семейство, а не про ту единственную форму,
-    которую эмитит бамп этого репо (её ты и процитируешь скорее всего — но перечисление
-    здесь затем, чтобы «я написал по-другому» не читалось как «значит, можно»). А что прогон
-    на твой sha в итоге ЗАВЁЛСЯ — проверяет следующий буллет, первой из двух своих проверок.
-  - **СОБИРАЙ ТЕЛО КОММИТА ЧЕРЕЗ `git commit -F - <<'MSG'`, а НЕ через `-m "…"` — иначе шелл
-    съест часть текста молча (#773).** Это родной брат ловушки выше по механике: пуш проходит,
-    git ничего не говорит, обе sha-проверки зелёные, прогон зелёный — а в сообщении не то, что
-    ты написал. Внутри ДВОЙНЫХ кавычек бэктик это подстановка команд, а идиома этого репозитория
-    — обкладывать бэктиками каждый идентификатор, так что чем аккуратнее ты держишь стиль, тем
-    вероятнее наступишь. Замерено на живом шелле, четыре формы:
+    A rebase conflict breaks the chain at `rebase` (there will be no push) and you resolve it
+    yourself — the task's context is precisely yours; if you cannot, or the rounds have run out
+    (`2 × max(wip.limit, wip.active)`, see "Where the ceiling comes from"), `call_human`.
+    **And remember what happens to the worktree when you do:**
+    `call_human` takes the card to **Your Call**, which means that from that moment your worktree
+    is DEAD as far as `--gc` is concerned (only a task in Design/Build behind you keeps it alive).
+    What holds it is not the stage but UNSAVED work: while there is anything uncommitted or
+    unpushed inside — and after a conflict or a rejected push that is exactly the case — the
+    protections will not let it be removed. But if you managed a `git rebase --abort` and the
+    worktree became clean and fully pushed, it may be swept on any tick while you wait for an
+    answer: the work will not be lost (only what is already on the main branch is swept), but the
+    directory may cease to exist. So once the human has answered, call
+    `workspace <id>` again rather than assuming you are still standing in your own worktree.
+    In sequential mode, in the main checkout, the recipe is THE SAME minus the throwaway branch.
+  - **A rejected push is the NORM, not a sign of trouble: your main rival is a machine.** If the
+    repository has an auto-release (a bot that pushes its own commit after EVERY green landing),
+    a fresh rebase goes stale almost immediately after ANY landing, and a rejected push becomes
+    the expected outcome rather than an edge case. Measured on vikunja-mcp's first live parallel
+    drain (2026-07-30): of 46 landings on the main branch in one day, **17 were made by CI**, not
+    by an agent; its bump commit arrives **37 s … 2 min 55 s** after the task commit (median
+    1 min 41 s), the median interval between adjacent landings is 2 min, 65 % are ≤ 3 min.
+    But the rival is BOUNDED: one commit per landing, and its own push is marked
+    `[skip ci]` — it does not trigger itself and does not push twice in a row. So on its own the
+    machine costs at most ONE round.
+  - **A rejected push does not yet mean the work did not land — ASK THAT FIRST.** The server
+    may have taken the ref and died on the response (502, "the remote end hung up unexpectedly"):
+    the client honestly prints an error while the commit is on main. The first command after a
+    rejection is not the race analysis but `git fetch origin && git merge-base --is-ancestor HEAD
+    origin/main`. **Exit 0 — the work is ON MAIN**: the push landed, there is nothing to retry and
+    nobody to call — you take this HEAD's sha as evidence and go on to the two confirmations.
+    **Exit 1 — the work is not there**, and only then does the race analysis below kick in; this
+    branch is not softened by one word — the EXIT CODE decides, not a guess like "an empty range,
+    so it probably landed after all". Why the check stands BEFORE the analysis and not inside its
+    empty branch: a landed push with a sibling already sitting on top gives a NON-EMPTY range,
+    i.e. it looks like honest mechanics — and the next round quietly corrupts the evidence,
+    `git rebase origin/main` THROWS AWAY your commit (it is already upstream), HEAD moves onto
+    someone else's tip, `git push` prints "Everything up-to-date", and `git rev-parse HEAD` hands
+    back the SIBLING's sha, on which both confirming commands honestly pass. Two clarifications,
+    both measured: `git fetch` here is load-bearing — on a stale remote-tracking ref the same
+    check answers "it did not land" about work that did; and HEAD here is YOUR commit (the chain
+    rebased it, a rejected push does not move it), and if `git log -1` shows something other than
+    your `(tracker #N)`, you simply did not commit — that is a different trouble, and exit 0 says
+    nothing about it.
+  - **A round is spent ONLY on a lost race — once you are sure the work did not land, look at WHO
+    won.** The check above returned 1 → `git log --oneline HEAD..origin/main`: HEAD is your
+    commit on the OLD base, so those are exactly the ones that overtook you. **Empty — there was
+    no race at all** (a protected branch, no push rights, a pre-receive hook, the wrong remote):
+    the next round will lose in exactly the same way, and it costs a full run of the criteria —
+    the ceiling is not spent on that, `call_human`
+    IMMEDIATELY, with git's refusal text. **Non-empty — that is mechanics** (the bot's bump, a
+    sibling's commit): the main branch honestly moved forward, that is exactly what a rebase
+    fixes, the round is yours. Look on EVERY lost round rather than recalling at the end: that
+    same list is ready-made evidence for the escalation (below), and it cannot be assembled after
+    the fact.
+  - **Where the ceiling comes from and why it is `2 × max(wip.limit, wip.active)` and not a
+    constant.** The ceiling must be strictly above the worst PURELY MECHANICAL run, otherwise it
+    calls a human on arithmetic. With N active tasks, each of the N−1 siblings that manages to
+    land during your integration brings its own bump along too: 2·(N−1) rounds, plus the trailing
+    bump of the landing that beat your `fetch` — 2·(N−1)+1 in all, and the ceiling = **2 × N**.
+    At the default limit of 3
+    the worst mechanical run equals 5 and the ceiling is **6** (this repo's measured case); at a
+    limit of 1 the ceiling is 2, at 4 it is 8, at 5 it is 10. These are DIFFERENT numbers and must
+    not be confused: 5 is what the mechanics can produce, 6 is what you call a human after.
+    **N is how many tasks are ACTUALLY in Design/Build (`wip.active`), NOT the limit: rework
+    re-enters Build past the `claim` gate, so `wip.active` legitimately exceeds `wip.limit`**
+    (measured on this board: 5-7 at a limit of 3 — and VMCP-252 (851) spent all 6 rounds under
+    exactly that on pure mechanics, with green gates and not a single rebase conflict, after which
+    it went to Your Call with its work finished and pushed). The `max` is there to keep the
+    ceiling from DROPPING when there are fewer active tasks than the limit. The numbers are
+    set by the PROJECT CONFIG and the current board, not by habit: everyone's `wip_limit` is their
+    own, while the rulebook is one for all and
+    rewrites itself at MCP server start — a consumer at limit 4 cannot "raise the number
+    locally", it can only receive a rule that computes. The orchestrator names both numbers in
+    your brief (it sees `wip` in every `next_task` response). **`wip.active` is the BOARD's
+    state, and there is nowhere to read it from the way you can read the limit: if it was not
+    named, compute from the limit alone**, i.e. by the old `2 × wip.limit`; the error is then only
+    in the safe direction — you escalate earlier than you should have. The limit is different:
+    **if it was not named, do not guess,
+    read it**: `wip_limit` lives in the repo config `.vikunja-mcp.toml` (walk-up from your
+    directory), and you DO have it — that key is committed, so the file is laid out into a linked
+    worktree too, unlike the gitignored `.vikunja-mcp.env` with the token. No such key in the
+    file — the limit is the default, 3; `enforce_single_wip = true` set — the limit is 1. And only
+    if no toml was found at all — **take 6**: that is not a guess but the same derivation, because
+    `wip_limit` exists ONLY in the toml (never in env), so "no file" also means the default limit,
+    and 2 × 3 is exactly 6. The old hard-coded six was a guess and broke from limit 4 on: there
+    the worst mechanical run is already 7, i.e. a ceiling of 6 called a human on exactly the
+    arithmetic the formula was introduced for. And it is an upper bound, not a tuning
+    knob: the earlier "3" was exactly the length of the MOST ORDINARY bad run (neighbour A's bump
+    → neighbour B's commit → B's bump), i.e. it called a human precisely when the next round would
+    almost certainly have won; and without an auto-release the only rivals are siblings, the worst
+    run is half as long, and you simply will not reach the ceiling — there is no point lowering it.
+  - **Hit the ceiling — say WHAT kept winning, not "push it for me".** At the default limit the
+    mechanics do not produce that many, so the loop is NOT CONVERGING (a conflict that keeps
+    resolving into itself; a sibling stuck in its own push cycle; criteria that went flaky under
+    rebase). In a wide drain — or when humans push to main as well, which this arithmetic does not
+    model — pure mechanics reach the ceiling too. The two cannot be told apart by the NUMBER of
+    rounds, but they can by the list of winners, which is why the question to the human IS that
+    list: "N rounds in a row, and here is what landed on the main branch each time".
+  - **The criteria are run EVERY round — including when all that arrived was the version bump.**
+    The temptation is clear: the bump is machine-made and mechanically recognisable (a bot author,
+    a subject of the form `chore: v<semver> [skip ci]`, a couple of diff lines). Do not do it —
+    and not because "the diff is small", but because: (a) you rebase not onto a COMMIT but onto a
+    RANGE, onto everything that arrived since your `fetch`, and at these intervals a bump
+    routinely lands in there TOGETHER with a sibling's real commit — that is, the case where the
+    relaxation is safe is exactly the case where it saves nothing; (b) "it is only a bump here" is
+    a rule YOU execute in prose: get it wrong and it does not fail, it SILENTLY switches the
+    guarantee off, and there is nothing left to catch that; (c) "inertness by eye" has already
+    failed here — this bump touches not two files, as is commonly believed, but THREE: both
+    version files and **the dependency lock**. The cost of an extra round is handled by the
+    ceiling above and by the `&&` chain, not by a relaxation in the checking.
+  - **A FIGURE claimed as a property of the TREE is measured AFTER the last rebase — right before
+    the push, and not when it was convenient to obtain.** The chain above orders the CRITERIA
+    re-run after the rebase, and that works. It says nothing about PROSE, and everything else
+    slips through that gap: the sweep record in a docstring, the control round's `collected`, the
+    "Gates on this tree: … N passed" line in the commit message. They are written BEFORE the
+    rebase — and they land describing a tree that is in no history, because the last change to it
+    is made not by you but by a SIBLING that landed while you worked. So the rule is not "measure
+    carefully" but "measure LAST": at the default limit of 3 two others are working beside you,
+    and the release bot arrives after every green landing, so what goes stale is not the edge case
+    but the ordinary one.
+    The measurement is on VMCP-249 (840): its commit carries "Gates on this tree: uv run pytest
+    tests/unit -> 1136 passed" and the sweep record "control 0 failed / 0 errors / 200 collected"
+    (both lines present — `git show` on the landed sha), while the independent reviewer's
+    re-measurement on the SAME sha gave 1139 passed and 203 collected. Between the measurement and
+    the push, a sibling with three tests landed. The same card's `[worklog]` contains the correct
+    1139 — that is, the author re-measured for the TRACKER and did not re-measure for the PROSE,
+    and that is not one agent's sloppiness but a gap in the prescribed order.
+    The sweep's own deltas reproduced exactly and not one pin turned out blind: what breaks is
+    precisely the control figure used to check that the round and the control measured ONE
+    tree — that is, exactly what the cross-check exists for.
+    In practice: as the last action before `git push`, walk your own prose and the commit
+    message and re-measure every number claimed as a property of THIS tree. Cheaper still is
+    not to write an absolute at all: an assertion of the PROPERTY (an assert) never goes stale.
+  - **Sign a historical absolute with the TREE — `N at `<sha>``.** The anchor idiom (a number,
+    the word `at`, a sha in backticks) extends to sweep records too: a figure written that way is
+    SEEN by `tests/unit/test_measured_figure_anchors.py`, which requires the named commit to exist
+    and to be an ancestor of HEAD. Without an anchor it does not see the figure at all —
+    `collected 200` is just a number to it. It checks the LABEL, not the value: the record passes
+    even when the truth is 203, because what is asked is the tree's resolvability, not the
+    arithmetic. And that is enough — a reader who wants to check CAN, because the tree is NAMED.
+    The bullet above is not cancelled by the anchor: a figure claimed as a property of YOUR tree
+    is still measured after the rebase; the anchor is for one that is historical by construction.
+    And an anchor does not live long on a branch: a sha taken before the mandatory rebase is
+    orphaned by that rebase, so sign with what will actually land.
+    **Do NOT build a gate that DERIVES `collected` itself and compares it against what was
+    written.** In CLAUDE.md that shape has already been evaluated by measurement and rejected: it
+    is red on arrival and turns a docstring edit in someone else's card into a red suite in a hot
+    file; here it costs twice as much, because pytest would have to be run twice.
+    **And do NOT retroactively rewrite records that have already landed in other people's cards.**
+    Where an anchor exists, it is honest for its own tree; where there is none, the rule applies
+    to FUTURE records.
+  - **A COMMIT MESSAGE must contain no literal ci-skip marker — not in quotes, not as a
+    quotation.** The gotcha this very task stepped on while writing the paragraphs above: CI
+    looks for the marker across the WHOLE message text, body and code spans included — so a commit
+    that merely QUOTES the release bump's subject cancels its own run. And you will see no
+    refusal: the push goes through, git is silent, both sha checks are green, the task looks
+    delivered — but there is no run, no auto-release, and the edit never reaches the rollout
+    channel, i.e. it does not reach the rulebook's consumers at all. Writing about the release
+    commit — name the marker DESCRIPTIVELY ("the ci-skip marker", "that marker in the bump's
+    subject"); in a FILE the literal is harmless, it is dangerous only in a commit message. And
+    there is more than one spelling: GitHub suppresses the run on a whole FAMILY
+    (`[ci skip]`, `[no ci]`, `[skip actions]`, `[actions skip]` — and on the
+    `skip-checks: true` trailer), so the rule is about the family, not about the single form
+    this repo's bump emits (that is the one you will most likely quote — but the enumeration is
+    here so that "I wrote it differently" does not read as "so it is allowed"). And that a run
+    for your sha did in the end GET CREATED is checked by the next bullet, with the first of its
+    two checks.
+  - **BUILD THE COMMIT BODY WITH `git commit -F - <<'MSG'`, NOT with `-m "…"` — otherwise the
+    shell eats part of the text silently (#773).** Mechanically it is a sibling of the trap
+    above: the push goes through, git says nothing, both sha checks are green, the run is green —
+    and the message is not what you wrote. Inside DOUBLE quotes a backtick is command
+    substitution, and this repository's idiom is to wrap every identifier in backticks, so the
+    more carefully you keep the style, the likelier you step on it. Measured on a live shell,
+    four forms:
 
     ```sh
-    git commit -m "keeps `blocked` and `epic` and $HOME"   # СЪЕДЕНО: "keeps  and  and /Users/…"
-    git commit -m "keeps \`blocked\`"        # уцелеет — но экранировать надо КАЖДЫЙ, руками
-    git commit -F - <<MSG                    # ТОЖЕ подставляет: `echo GONE` реально выполнится
-    git commit -F - <<'MSG'                  # верно: дословно, включая $HOME и $(date)
+    git commit -m "keeps `blocked` and `epic` and $HOME"   # EATEN: "keeps  and  and /Users/…"
+    git commit -m "keeps \`blocked\`"        # survives — but EVERY one must be escaped, by hand
+    git commit -F - <<MSG                    # ALSO substitutes: `echo GONE` really runs
+    git commit -F - <<'MSG'                  # correct: verbatim, including $HOME and $(date)
     ```
 
-    **Кавычки вокруг `MSG` несущие** — без них heredoc не чинит НИЧЕГО, и это третья строка выше,
-    а не придирка. Правило закрывает класс целиком: бэктик, `$VAR` и `$(…)` ломаются одинаково
-    тихо, и потеря не ограничена пропуском — `$(…)` ВСТАВИТ в сообщение чужой вывод. Отсюда же
-    следует, почему «сверить число бэктиков после коммита» не годится как проверка: она требует
-    помнить текст, который ты только что потерял, и вставку не ловит вовсе.
-    Инцидент, на котором это найдено, — коммит `5389be0` этого репозитория: три слова
-    (`blocked`, `epic`, `claim`) исчезли из тела, предложение осталось неполным, история не
-    переписывалась (force-push в главную ради сообщения — не та цена).
-  - **После пуша проверок ДВЕ, и они про РАЗНОЕ: что прогон ЗАВЁЛСЯ и что он кончился
-    ЗЕЛЁНЫМ.** «Прогон есть» — не «всё хорошо», и это измеренная дыра, а не опасение: в ночь
-    на 31.07 семь прогонов главной ветки из пятнадцати подряд закончились КРАСНЫМИ (во всех семи
-    одинаково: `lint-and-unit` success, `integration` failure, `release` **skipped**), каждый
-    раз агент честно отчитался «прогон есть» — и каждый раз приземление не доехало до канала
-    раскатки. Семь — это НИЖНЯЯ граница, а не итог: окно замера кончалось на своём же
-    последнем красном, и той же ночью был как минимум ещё один, в него не попавший
-    (`d6195e1`, та же тройка job'ов). Проверки разнесены не для симметрии: у них разные СРОКИ, потому что прогон
-    асинхронен. Команды и имена job'ов ниже — из ЭТОГО репозитория (GitHub Actions, `gh`),
-    потому что на нём и измерено; в проекте с другим CI меняются они, но не деление на две
-    проверки, не порядок «`status` раньше `conclusion`» и не то, что незавершённый прогон —
-    это «неизвестно», а не «зелено».
-    - **СУЩЕСТВОВАНИЕ — сразу после пуша.** Это защита от проглоченного ci-skip-маркера
-      (буллет выше), и спрашивает она не про длительность, а про факт: прогон либо заведён,
-      либо не будет заведён никогда.
+    **The quotes around `MSG` are load-bearing** — without them the heredoc fixes NOTHING, and
+    that is the third line above, not a nitpick. The rule closes the whole class: a backtick,
+    `$VAR` and `$(…)` break equally quietly, and the loss is not limited to omission — `$(…)`
+    will INSERT foreign output into the message. That is also why "count the backticks after the
+    commit" is no good as a check: it requires remembering the text you have just lost, and it
+    does not catch insertion at all.
+    The incident it was found on is commit `5389be0` of this repository: three words
+    (`blocked`, `epic`, `claim`) vanished from the body, the sentence was left incomplete, the
+    history was not rewritten (a force-push to main for the sake of a message is not the right
+    price).
+  - **After the push there are TWO checks, and they are about DIFFERENT things: that the run WAS
+    CREATED and that it ended GREEN.** "A run exists" is not "all is well", and that is a
+    measured hole, not a worry: on the night of 31.07 seven of fifteen consecutive runs on the
+    main branch ended RED (identically in all seven: `lint-and-unit` success, `integration`
+    failure, `release` **skipped**), each time the agent honestly reported "a run exists" — and
+    each time the landing never reached the rollout channel. Seven is a LOWER bound, not a total:
+    the measurement window ended on its own last red, and that same night there was at least one
+    more that fell outside it (`d6195e1`, the same three jobs). The checks are separated not for
+    symmetry: their DEADLINES differ, because a run is asynchronous. The commands and job names
+    below are THIS repository's (GitHub Actions, `gh`), because that is where they were measured;
+    in a project with a different CI those change, but the split into two checks does not, nor the
+    order "`status` before `conclusion`", nor the fact that an unfinished run is "unknown" and not
+    "green".
+    - **EXISTENCE — right after the push.** This is the defence against a swallowed ci-skip
+      marker (the bullet above), and it asks not about duration but about a fact: the run was
+      either created or it never will be.
       `gh run list --commit "$(git rev-parse HEAD)" --json databaseId,status,conclusion`.
-      **sha тут нужен ПОЛНЫЙ, 40-символьный:** измерено — с сокращённым та же команда отдаёт
-      пустой список `[]` и код возврата 0, то есть выглядит ровно как «прогона нет» и поднимает
-      ложную тревогу про маркер. Пусто на ПОЛНОМ sha — вот это уже тревога; но если с пуша
-      прошли секунды, спроси второй раз чуть позже, прежде чем её поднимать: сколько именно
-      идёт от приёма пуша до создания прогона, здесь НЕ замерено, а ложная тревога про маркер
-      стоит человеку круга.
-      **И даже пусто на полном sha — ещё НЕ маркер: прогон заводится на ВЕРШИНУ пуша, а не
-      на каждый коммит в нём.** Приехал твой коммит не-вершинным (один пуш нёс больше одного),
-      и прогона с check-suite у него не будет ВООБЩЕ — при том, что работа доехала. Различает
-      это ОДИН шаг: `git log --oneline <твой ПОЛНЫЙ sha>..origin/main`, и если сверху есть
-      коммит, чей `gh run list --commit <его ПОЛНЫЙ sha>` отдаёт прогон, — маркер ни при чём.
-      Замерено на этом репо: у `bc960b2` ноль прогонов и `check-suites` `total_count: 0`, в
-      сообщении ни одного написания маркера, при этом он предок `stable`, а его потомок
-      `b6c7502` несёт зелёный прогон 31086601577; так приехал 1 из 21 таск-коммита в последних
-      40 приземлениях (~5 %). Тревогу поднимай, только когда сверху пусто ИЛИ прогона нет и у
-      потомка. Но и в «хорошем» исходе одно остаётся верным, и это надо сказать в отчёте:
-      дерево ИМЕННО на твоём коммите не гонял никто — зелёным был объединённый тред соседа.
-    - **ИСХОД — ОДИН взгляд, ПОСЛЕДНИМ действием хода.** Обе очевидные формы неверны:
-      «дождись зелёного» блокирует тебя на минуты и гибнет вместе с убитым ходом, «спроси
-      сразу после пуша» почти всегда попадёт в идущий прогон. Поэтому спрашивай ПОЗЖЕ, но не
-      ожиданием, а ПОРЯДКОМ: сначала `advance(to='review')`, отчёт и `--release`, и только
-      потом один `gh run view <id> --json status,conclusion,jobs`. Замерено на 40 прогонах
-      этого репо, каждый по ПЕРВОЙ попытке (две потом перезапускали руками, а у перезапуска
-      в `updatedAt` сидит задержка ЧЕЛОВЕКА — 31 мин и 3 ч 26 мин, — и это не про CI; сама
-      очередь раннеров куда скромнее: 0 с у 35 прогонов из 38, максимум 80 с): от появления
-      до завершения 42–120 с, медиана 60 с. И перекос — в твою пользу, но НЕ разделение:
-      красные 42–55 с (медиана 46), зелёные 53–120 с (медиана 65) — полосы ПЕРЕСЕКАЮТСЯ на
-      53–55 с, так что по одной длительности быстрый зелёный от медленного красного не
-      отличить. Механика перекоса замерена по джобам и она НЕ «integration падает рано»:
-      `integration` вообще никогда не критический путь (16–29 с против 38–46 с у
-      `lint-and-unit`), длину прогона задаёт `lint-and-unit`, а ЗЕЛЁНЫЙ прогон вдобавок
-      гоняет `release` (8–15 с), который красный ПРОПУСКАЕТ. Отсюда и вывод: к концу хода
-      ответ чаще всего уже есть, и чуть чаще — именно в том случае, ради которого проверка и
-      заводится. **И знай, КУДА ответ пойдёт: `advance` уже позади, в
-      `worklog` он не попадёт.** Пиши его отдельным `comment` на карточку — этот тул не
-      гейтит ни стадию, ни владение, так что карточка в Review его примет, — и в свой итог
-      оркестратору. Id прогона возьми из первой проверки, а команду гони из ОСНОВНОГО
-      чекаута: `--release` к этому моменту уже снёс твоё дерево.
-    - **Ветвись по `status`, а НЕ по `conclusion`.** `conclusion` осмыслен ТОЛЬКО при
-      `status == "completed"`. Идущий прогон пойман живьём, вот он дословно:
-      `{"conclusion":"","databaseId":30636770459,"status":"in_progress"}` — вердикт ПУСТАЯ
-      СТРОКА, а не `null`, так что и джейкью-подстановка `.conclusion // "неизвестно"` тут
-      НЕ сработает (она ловит только `null`). Поэтому «`conclusion` не `success` ⇒ не зелёный»
-      — сломанная проверка: она
-      читает идущий прогон как красный и учит не верить собственной тревоге.
-      * `completed` + `success` — так и скажи в отчёте.
-      * `completed` + `failure` — **вот это и есть дыра, не проглатывай её.** Назови в
-        комменте id/url прогона и КАКОЙ job упал (`jobs` в том же ответе); `release: skipped`
-        рядом — видимый признак, что канал раскатки не сдвинулся. Красный `lint-and-unit` —
-        это ТВОЙ коммит, и главная ветка сломана для всех: там гоняются те же `ruff`/`pytest`,
-        что ты уже прогонял, ПЛЮС `uv sync --locked` — проверка, которой в твоих критериях
-        нет вовсе (`uv run` синхронизирует БЕЗ `--locked`), так что разъехавшийся лок краснеет
-        только там. Красный один `integration` — класс отказов среды. В обоих случаях есть дешёвое
-        действие, доступное тебе без человека: `gh run rerun <id> --failed`. Оно ничего не
-        двигает на доске и ничего не стоит тебе по времени — но диагнозом НЕ является:
-        измерено на этой же карточке, что перезапуск красного прогона снова дал красный, и
-        зелёным стал только следующий. И он ПЕРЕПИСЫВАЕТ `conclusion` того же прогона, а не
-        заводит новый: `8b4bfa5` из тех семи красных сегодня читается как `success`. Значит
-        «прогон зелёный» — это ответ на СЕЙЧАС, а не свидетельство, что он был зелёным сразу.
-        Перезапустил — так и напиши, и напиши, что ЕГО исход ты уже не проверял.
-      * не `completed` — это **НЕИЗВЕСТНО**, а не «зелёно» и не «красно». Не жди, не гадай и
-        не пиши «прогон в порядке»: назови в комменте id прогона и прямо скажи, что исхода не
-        дождался. Эту ветку дочитывает ревьюер — см. «Независимое ревью изменений»: он
-        опаздывает ПО ПОСТРОЕНИЮ, и это здесь достоинство, а не недостаток.
-    - **Насколько это срочно — знай точно, чтобы не паниковать и не расслабляться.** Красный
-      прогон не теряет работу навсегда: следующее ЗЕЛЁНОЕ приземление двигает канал раскатки
-      уже вместе с твоим коммитом (проверено: красный `8fc53f8` — предок текущего `stable`), и
-      в ту ночь догон занимал от 1 до 48 минут. Дорого другое — ПОСЛЕДНЕЕ приземление сессии:
-      за ним зелёного уже не будет, и канал стоит до следующей сессии. Какое приземление
-      окажется последним, заранее не знает никто — поэтому смотрит КАЖДЫЙ.
-  - **Пуш обязателен.** Независимый ревьюер — отдельная сессия/идентити, он
-    забирает фикс из remote; без пуша ревью нечего смотреть.
-  - **Чек-пойнть рано.** Доведи ЯДРО задачи до коммита+пуша и `advance(to='review')`
-    ПРЕЖДЕ чем браться за необязательные доп-работы (полировка, nice-to-have). Если
-    ход убьют на доп-работах, задача уже безопасно в Review и запушена, а не брошена
-    в Build с незакоммиченным дифом. Симметрично ревьюерскому «фиксируй вердикт сразу».
-    **В своём worktree правило сужается** (иначе оно спорит с «освободи дерево» ниже): с
-    момента `advance(to='review')` задача ушла из Build, значит для `--gc` это дерево уже
-    МЁРТВОЕ и оркестратор вправе смести его на любом тике. Ничего не потеряется (сметается
-    только чистое и запушенное — работа уже в главной ветке), но каталог может исчезнуть
-    из-под тебя посреди доп-работ. Поэтому: доп-работы, которым нужен ЭТОТ каталог, делай ДО
-    `advance`; взялся после — коммить и пуши их по тому же рецепту, `--release` оставь
-    САМЫМ последним действием и не удивляйся, если дерево уже убрали.
-  - **Одна задача = один коммит.** Не подмешивай чужие правки: `git add`
-    только файлы этой задачи (общий файл — по хункам, не целиком).
-  - **Работал в своём worktree — после `advance(to='review')` освободи его:**
-    `vikunja-mcp workspace --release <id>` (можно прямо из этого дерева — CLI сам работает
-    от главного чекаута). Успех — `{"released": true, ...}`, и с этого момента твоего
-    каталога БОЛЬШЕ НЕТ: всё оставшееся (отчёт, любые команды) делай из основного чекаута.
-    **ДВА нюанса УСПЕХА, и это те же два поля, что читают в `--gc`-списке `released`.**
-    (1) `branch_deleted: false` — каталог убран, а ветка `task/<id>` осталась (`git branch -D`
-    упал; в `warning` — причина и команда, которая её дочищает). Работа не потеряна и следующий
-    `workspace <id>` переподключится к этой ветке — но ветку добей, иначе они копятся молча.
-    (2) `removed_ignored: [пути]` — вместе с деревом УНИЧТОЖЕНЫ игнорируемые файлы, которые
-    гвард `dirty` не видит вовсе (`git status --porcelain` игнорируемого не показывает). Это
-    посмертный список, а не предупреждение: вернуть нечего. Сюда попадает ровно то, что
-    предписывают browser-рецепты этого же файла, — `shot-<id>.png` в твоём дереве и
-    `--output-dir .playwright-mcp/<id>`; воспроизводимый мусор (`.venv/`, `__pycache__/`,
-    кэши инструментов, `*.pyc`) в список НЕ включён, поэтому поле есть = потеряли что-то
-    неопознанное. Назови файлы в отчёте. **Чтобы не попадать: всё, что нужно ПОСЛЕ задачи,
-    выноси из дерева ДО `advance(to='review')`** — скриншот через `attach_file`, заметки
-    комментом в трекер (см. «Чек-пойнть рано»: после `advance` дерево уже мёртвое).
-    **`released: false` — это НЕ ошибка, и смотреть надо на поле, а не на код возврата:**
-    код всё равно 0, а что случилось — говорит `code` (машиночитаемый ключ) и `reason`
-    (человеческий текст), и реагировать надо ПО-РАЗНОМУ:
-    - `code: "dirty"` (`"working tree is dirty (…)"`) или `code: "unpushed"`
-      (`"N commit(s) not on origin/…"`) — ЗАЩИТА: осталась
-      незакоммиченная или незапушенная работа. Разберись, ЧТО осталось, доведи до пуша и
-      повтори. Руками (`rm -rf`, `git worktree remove --force`) дерево не снимай — так
-      теряют работу.
-    - `code: "detached-build"` — твоё дерево стоит НЕ НА ветке `task/<id>`, почти всегда
-      из-за прерванного `git rebase origin/main`. Работа не потеряна (коммиты на ветке), но
-      ни освободить, ни работать в нём нельзя, пока ребейз не доигран: выполни в ЭТОМ дереве
-      `git rebase --continue` (доиграть) или `git rebase --abort` (вернуться на ветку, потеряв
-      переигранное) — точные команды с путём есть в `reason` — и повтори. Выбор за тобой:
-      инструмент его не делает, потому что `--abort` выбрасывает работу.
-    - `code: "locked"` — дерево заблокировано человеком (`git worktree lock`), и git не даёт
-      снести залоченное дерево. Это НЕ сбой инструмента и НЕ потеря: работа на месте, ничего
-      не удалено, а лок — явное человеческое «руками не трогать». Сам НЕ разблокируй и
-      `remove -f -f` не применяй: снимает лок тот, кто его поставил (`git worktree unlock
-      <путь>` — точная команда в `reason`). Инструмент ничего не удалил и ничего не потерял, но
-      существование каталога отсюда НЕ следует: этот же код приходит и на залоченную запись,
-      каталог которой уже унесли руками (её `prune` не роняет). Путь бери из `path`, а лок и
-      путь назови в своём итоге оркестратору — дальше это к человеку.
-    - `code: "populated-gitlink"` — в дереве есть gitlink (субмодуль), чей каталог НЕ ПУСТ, и
-      снять такое дерево значит уничтожить его содержимое молча. Это ЗАЩИТА, как `dirty`, но
-      причина другая и знать её надо: `git status` про пути под gitlink'ом не отвечает ВООБЩЕ,
-      поэтому гвард `dirty` там слеп — и слеп не только на игнорируемом, а на ЛЮБОМ содержимом,
-      включая обычное untracked-и-НЕигнорируемое, которое в любом другом каталоге дерева он бы
-      увидел и дерево удержал. Раньше такое дерево сносилось с кодом возврата 0, без `--force`
-      и без единого поля в отчёте (замерено на настоящем субмодуле). Ничего не удалено и ничего
-      не потеряно. Лечение — твоё, и оно не «закоммить»: коммит каталог субмодуля не очищает.
-      Забери из него то, что нужно (пути в `reason`), опустоши каталог и повтори `--release`.
-      Пайплайн субмодули НИКОГДА не популирует (ни `git submodule`, ни `--recurse-submodules`),
-      так что непустой каталог означает, что туда положили что-то ТЫ или твой саб-агент.
-    - `code: "no-worktree"` (`"no worktree for this task"`) — дерева просто нет: ты его уже
-      освободил, или его
-      подобрал `--gc` (см. «Чек-пойнть рано» — после `advance` он вправе). Делать НЕЧЕГО,
-      это успех задним числом; повторять вызов бессмысленно.
-  - Это осознанно перебивает дефолт харнесса «коммить только по явной
-    просьбе»: в этом флоу завершённая задача коммитится и пушится сама.
-    Тег и сдвиг `stable` сюда НЕ входят — это отдельная релизная задача.
+      **The sha here must be the FULL 40-character one:** measured — with an abbreviated one the
+      same command returns an empty list `[]` and exit code 0, i.e. it looks exactly like "there
+      is no run" and raises a false alarm about the marker. Empty on the FULL sha — that is an
+      alarm; but if only seconds have passed since the push, ask a second time a little later
+      before raising it: exactly how long it takes from the push being accepted to the run being
+      created is NOT measured here, and a false alarm about the marker costs a human a round.
+      **And even empty on the full sha is NOT yet the marker: a run is created for the push's
+      TIP, not for every commit in it.** If your commit arrived non-tip (one push carried more
+      than one), it will have NO run and no check-suite AT ALL — while the work did land. ONE
+      step tells them apart: `git log --oneline <your FULL sha>..origin/main`, and if there is a
+      commit above whose `gh run list --commit <its FULL sha>` returns a run, the marker has
+      nothing to do with it. Measured on this repo: `bc960b2` has zero runs and `check-suites`
+      `total_count: 0`, not one spelling of the marker in its message, and yet it is an ancestor
+      of `stable`, while its descendant `b6c7502` carries a green run 31086601577; 1 of 21 task
+      commits in the last 40 landings arrived that way (~5 %). Raise the alarm only when nothing
+      is above OR the descendant has no run either. But even in the "good" outcome one thing
+      stays true, and it must be said in the report: nobody ran the tree AT your commit — what
+      was green was the neighbour's combined thread.
+    - **THE OUTCOME — ONE look, as the LAST action of the turn.** Both obvious forms are wrong:
+      "wait for green" blocks you for minutes and dies together with a killed turn, "ask right
+      after the push" almost always lands in an in-flight run. So ask LATER, but by ORDER rather
+      than by waiting: first `advance(to='review')`, the report and `--release`, and only then a
+      single `gh run view <id> --json status,conclusion,jobs`. Measured over 40 runs of
+      this repo, each on its FIRST attempt (two were later re-run by hand, and a re-run's
+      `updatedAt` carries a HUMAN's delay — 31 min and 3 h 26 min — which is not about CI; the
+      runner queue itself is far more modest: 0 s on 35 of 38 runs, 80 s at most): from appearing
+      to concluding is 42–120 s, median 60 s. And the bias is in your favour but is NOT a
+      separation: red runs 42–55 s (median 46), green runs 53–120 s (median 65) — the bands
+      OVERLAP at 53–55 s, so duration alone cannot tell a fast green from a slow red. The bias's
+      mechanics are measured per job and they are NOT "integration fails early": `integration` is
+      never the critical path at all (16–29 s against `lint-and-unit`'s 38–46 s), the run's length
+      is set by `lint-and-unit`, and a GREEN run additionally runs `release` (8–15 s), which a red
+      one SKIPS. Hence the conclusion: by the end of the turn the answer is usually already there,
+      and slightly more often in exactly the case the check exists for. **And know WHERE the
+      answer will go: `advance` is already behind you, it will not make it into the
+      `worklog`.** Write it as a separate `comment` on the card — that tool gates neither stage
+      nor ownership, so a card in Review will accept it — and into your summary for the
+      orchestrator. Take the run's id from the first check, and run the command from the MAIN
+      checkout: by this point `--release` has already removed your worktree.
+    - **Branch on `status`, NOT on `conclusion`.** `conclusion` is meaningful ONLY at
+      `status == "completed"`. An in-flight run was caught live, here it is verbatim:
+      `{"conclusion":"","databaseId":30636770459,"status":"in_progress"}` — the verdict is the
+      EMPTY STRING, not `null`, so a jq fallback `.conclusion // "unknown"` does NOT fire here
+      either (it catches only `null`). So "`conclusion` is not `success` ⇒ not green"
+      is a broken check: it reads an in-flight run as red and teaches you to distrust your own
+      alarm.
+      * `completed` + `success` — say exactly that in the report.
+      * `completed` + `failure` — **this is the hole; do not swallow it.** Name the run's
+        id/url in a comment and WHICH job failed (`jobs` in the same response); a
+        `release: skipped` beside it is the visible sign that the rollout channel did not move.
+        A red `lint-and-unit` is YOUR commit, and the main branch is broken for everyone: it
+        runs the same `ruff`/`pytest` you already ran, PLUS `uv sync --locked` — a check your
+        criteria do not contain at all (`uv run` syncs WITHOUT `--locked`), so a lock that has
+        drifted goes red only there. A red `integration` alone is the environment-failure class.
+        In both cases there is a cheap action available to you without a human:
+        `gh run rerun <id> --failed`. It moves nothing on the board and costs you no time — but
+        it is NOT a diagnosis: measured on this very card, re-running a red run gave red again,
+        and only the next one came out green. And it OVERWRITES the same run's `conclusion`
+        rather than creating a new one: `8b4bfa5`, one of those seven reds, reads as `success`
+        today. So "the run is green" is an answer about NOW, not evidence that it was green
+        straight away. If you re-ran it, say so, and say that you did not check ITS outcome.
+      * not `completed` — that is **UNKNOWN**, neither "green" nor "red". Do not wait, do not
+        guess and do not write "the run is fine": name the run's id in a comment and say outright
+        that you did not wait for the outcome. This branch is finished off by the reviewer — see
+        "Independent review of changes": it is late BY CONSTRUCTION, and here that is a virtue,
+        not a flaw.
+    - **Know exactly how urgent this is, so as neither to panic nor to relax.** A red run
+      does not lose the work forever: the next GREEN landing moves the rollout channel along with
+      your commit (checked: the red `8fc53f8` is an ancestor of the current `stable`), and that
+      night catching up took between 1 and 48 minutes. What is expensive is something else — the
+      session's LAST landing: there will be no green after it, and the channel stands until the
+      next session. Nobody knows in advance which landing will be the last — which is why EVERYONE
+      looks.
+  - **The push is mandatory.** The independent reviewer is a separate session/identity, it
+    pulls the fix from the remote; without a push there is nothing for the review to look at.
+  - **Check-point early.** Take the task's CORE all the way to commit+push and
+    `advance(to='review')` BEFORE taking on optional extra work (polish, nice-to-haves). If the
+    turn is killed
+    during the extra work, the task is already safely in Review and pushed, not abandoned
+    in Build with an uncommitted diff. Symmetric to the reviewer's "record the verdict at once".
+    **In your own worktree the rule narrows** (otherwise it argues with "release the worktree"
+    below): from the moment of `advance(to='review')` the task has left Build, so as far as
+    `--gc` is concerned this worktree is already DEAD and the orchestrator may sweep it on any
+    tick. Nothing will be lost (only what is clean and pushed is swept — the work is already on
+    the main branch), but the directory may vanish from under you in the middle of the extra
+    work. So: do extra work that needs THIS directory BEFORE `advance`; if you took it on
+    afterwards, commit and push it by the same recipe, leave `--release` as the VERY last action
+    and do not be surprised if the worktree has already been removed.
+  - **One task = one commit.** Do not mix in other people's edits: `git add`
+    only this task's files (a shared file — by hunks, not whole).
+  - **Worked in your own worktree — release it after `advance(to='review')`:**
+    `vikunja-mcp workspace --release <id>` (fine from inside that worktree — the CLI works from
+    the main checkout itself). Success is `{"released": true, ...}`, and from that moment your
+    directory IS GONE: do everything remaining (the report, any commands) from the main checkout.
+    **TWO subtleties of SUCCESS, and they are the same two fields read in `--gc`'s `released`
+    list.** (1) `branch_deleted: false` — the directory is gone but the `task/<id>` branch remains
+    (`git branch -D` failed; the `warning` carries the reason and the command that cleans it up).
+    The work is not lost and the next `workspace <id>` will reattach to that branch — but finish
+    the branch off, otherwise they pile up silently.
+    (2) `removed_ignored: [paths]` — ignored files were DESTROYED along with the worktree, files
+    the `dirty` guard does not see at all (`git status --porcelain` does not show ignored ones).
+    It is a post-mortem list, not a warning: there is nothing to get back. What lands here is
+    exactly what this same file's browser recipes prescribe — `shot-<id>.png` in your worktree and
+    `--output-dir .playwright-mcp/<id>`; reproducible junk (`.venv/`, `__pycache__/`, tool caches,
+    `*.pyc`) is NOT included in the list, so the field being present = something unidentified was
+    lost. Name the files in the report. **To stay out of it: everything you need AFTER the task,
+    carry out of the worktree BEFORE `advance(to='review')`** — the screenshot via `attach_file`,
+    notes as a comment in the tracker (see "Check-point early": after `advance` the worktree is
+    already dead).
+    **`released: false` is NOT an error, and what to read is the field, not the exit code:**
+    the code is 0 either way, and what happened is told by `code` (the machine-readable key) and
+    `reason` (the human text), and the reaction must DIFFER:
+    - `code: "dirty"` (`"working tree is dirty (…)"`) or `code: "unpushed"`
+      (`"N commit(s) not on origin/…"`) — PROTECTION: uncommitted
+      or unpushed work is left. Work out WHAT is left, take it through to a push and retry. Do
+      not remove the worktree by hand (`rm -rf`, `git worktree remove --force`) — that is how
+      work is lost.
+    - `code: "detached-build"` — your worktree is NOT ON the `task/<id>` branch, almost always
+      because of an interrupted `git rebase origin/main`. The work is not lost (the commits are
+      on the branch), but it can be neither released nor worked in until the rebase is played
+      out: run `git rebase --continue` (play it out) or `git rebase --abort` (return to the
+      branch, losing what was replayed) in THAT worktree — the exact commands with the path are
+      in `reason` — and retry. The choice is yours: the tool does not make it, because `--abort`
+      throws work away.
+    - `code: "locked"` — the worktree was locked by a human (`git worktree lock`), and git will
+      not let a locked worktree be removed. This is NOT a tool failure and NOT a loss: the work
+      is in place, nothing was deleted, and the lock is an explicit human "hands off". Do NOT
+      unlock it yourself and do not apply `remove -f -f`: whoever set the lock removes it
+      (`git worktree unlock <path>` — the exact command is in `reason`). The tool deleted nothing
+      and lost nothing, but the directory's existence does NOT follow from this: the same code
+      also comes back for a locked entry whose directory has already been carried off by hand
+      (`prune` does not drop it). Take the path from `path`, and name the lock and the path in
+      your summary to the orchestrator — from there it is for the human.
+    - `code: "populated-gitlink"` — the worktree holds a gitlink (a submodule) whose directory is
+      NOT EMPTY, and removing such a worktree means destroying its contents silently. This is
+      PROTECTION, like `dirty`, but the cause is different and you need to know it: `git status`
+      says NOTHING AT ALL about paths under a gitlink, so the `dirty` guard is blind there — and
+      blind not only to ignored files but to ANY content, including ordinary
+      untracked-and-NOT-ignored content that in any other directory of the worktree it would have
+      seen and held the worktree for. Such a worktree used to be removed with exit code 0, without
+      `--force` and without a single field in the report (measured on a real submodule). Nothing
+      was deleted and nothing was lost. The cure is yours, and it is not "commit it": a commit
+      does not empty the submodule's directory. Take what you need out of it (the paths are in
+      `reason`), empty the directory and retry `--release`. The pipeline NEVER populates
+      submodules (neither `git submodule` nor `--recurse-submodules`), so a non-empty directory
+      means that YOU or your subagent put something there.
+    - `code: "no-worktree"` (`"no worktree for this task"`) — there simply is no worktree: you
+      already released it, or
+      `--gc` picked it up (see "Check-point early" — after `advance` it may). There is NOTHING to
+      do, this is success after the fact; repeating the call is pointless.
+  - This deliberately overrides the harness default "commit only when explicitly
+    asked": in this flow a finished task commits and pushes itself.
+    The tag and moving `stable` are NOT part of this — that is a separate release task.
+## A second independent pass over YOUR OWN text
 
-## Второй независимый проход по СВОЕМУ тексту
+A rule about PROSE, not about code. No later than hand-off, and much earlier if you can — the
+implementer before `advance(to='review')`, the reviewer before `review_task` — raise a SEPARATE
+agent, give it the RAW measurements and your text, and ask it one thing: "which claim here is
+wider than its evidence?". Self-checking does NOT catch everything, and that is measured from both
+sides: on 582 the author caught SIX overstatements in his own new text himself, and the second pass
+found FIVE MORE — including one the first pass had already marked as verified. On VMCP-111 (582),
+VMCP-119 (594) and VMCP-124 (603) it fired for BOTH roles — for the author and for the reviewer
+alike. The price of not having the rule is in the same place: review rounds in which the code stood
+unchanged or was found correct on the first try, and what spun was the wordings alone.
 
-Правило про ПРОЗУ, а не про код. Не позже сдачи, а лучше сильно раньше — исполнитель до
-`advance(to='review')`, ревьюер до `review_task` — подними ОТДЕЛЬНОГО агента, дай ему СЫРЫЕ
-замеры и свой текст и спроси одно: «какое утверждение здесь шире своего доказательства?».
-Самопроверка ловит НЕ ВСЁ, и это измерено с обеих сторон: на 582 автор поймал сам ШЕСТЬ
-завышений в собственном новом тексте, а второй проход нашёл ЕЩЁ ПЯТЬ — включая то, что первый
-проход уже пометил проверенным. На VMCP-111 (582), VMCP-119 (594) и VMCP-124 (603) он
-срабатывал у ОБЕИХ ролей — и у автора, и у ревьюера. Цена отсутствия правила там же: круги
-ревью, в которых код стоял неизменным или был признан верным с первого раза, а крутились
-исключительно формулировки.
+- **When it is mandatory: when the prose IS the deliverable.** The marker is not size but that the
+  text carries measurable claims a reader will act on: docstrings and comments in code, rules (this
+  file), the `worklog` report, the `[review]` report. A hint is the share of prose in the diff:
+  "53 insertions, ~45 of them prose" on 594 was exactly the grounds for saying the prose there is
+  the deliverable and not decoration. On a one-line edit, on pure code with no new claims, and
+  where the text merely accompanies the work — do not raise one, it is wasted spend.
+- **Whom you raise, and with what.** A separate subagent with a FRESH context (the senior model, as
+  with everything nested — see "Who does the work"). Give it the raw material: run logs, commands
+  and their output, shas, card comments — and the text itself. Do NOT give it your own conclusions
+  about what is already verified: the memory "I measured this myself" is precisely what it must not
+  have. It works exactly because it opens the file and the history instead of remembering.
+- **WHERE it works — in its OWN clone, not in your tree.** A READING auditor (open the file, the
+  history, `git log -S`) is fine with your tree — the bullet above describes exactly that one. But
+  the moment you ask it to RE-MEASURE, the assignment becomes a WRITING one: a claim of the form "X
+  is what catches Y" is re-measured, by this repo's rules, by deleting X and requiring the test to
+  go RED — that is, the auditor mutates exactly the sources you are running your own rounds over in
+  that same minute. And the path you have to hand is exactly one — your working tree; hand it over
+  in the brief and there are TWO WRITERS in one directory. The collision was caught live on
+  VMCP-160 (667) and reproduced on a constructed stand (two processes, one tree, both mutating
+  `SKILL.md`). There are TWO axes, and they must not be confused:
+  - **a foreign MUTANT under your round — LOUD**: a round that alone gave `control 0 failed` gives
+    `1 failed`, and the failure text names a clause you never touched. It lied, but loudly. **And
+    even that is not a guarantee**: measured, with NON-OVERLAPPING selections (a one-test pin each)
+    the same control round is green — `0 failed` — and catches NOTHING; it went red only when the
+    selection was the whole file. So the noise is audible only if the foreign mutation landed
+    inside YOUR selection;
+  - **a foreign RESTORE under your round — SILENT, and that is what the rule exists for**: your
+    mutant is rolled back without a word, a round that alone gave `1 failed` gives `0 failed`, and
+    you write down "the pin is BLIND to this mutation". Exactly the false conclusion the second
+    pass is set up to prevent, and it is INDISTINGUISHABLE from an honest green.
 
-- **Когда обязателен: когда проза и есть деливерабл.** Признак — не объём, а то, что текст
-  несёт измеримые утверждения, по которым читатель будет действовать: докстринги и комменты
-  в коде, правила (этот файл), отчёт `worklog`, отчёт `[review]`. Подсказка — доля прозы в
-  дифе: «53 вставки, из них ~45 — проза» на 594 и было основанием сказать, что проза тут
-  деливерабл, а не украшение. На однострочной правке, на чистом коде без новых
-  утверждений и там, где текст лишь сопровождает работу, — не поднимай, это лишняя трата.
-- **Кого поднимаешь и с чем.** Отдельного саб-агента со СВЕЖИМ контекстом (модель старшая,
-  как и всё вложенное — см. «Кто выполняет работу»). Дай ему сырьё: логи прогонов, команды и
-  их вывод, sha, комменты карточек — и сам текст. НЕ давай своих выводов о том, что уже
-  проверено: память «это я мерил» и есть ровно то, чего у него быть не должно. Работает он
-  именно потому, что открывает файл и историю вместо того, чтобы вспоминать.
-- **ГДЕ он работает — в СВОЁМ клоне, а не в твоём дереве.** Читающему аудитору (открыть файл,
-  историю, `git log -S`) хватит и твоего дерева — буллет выше описывает именно его. Но как
-  только ты просишь ПЕРЕМЕРИТЬ, задание становится ПИШУЩИМ: утверждение вида «X — то, что ловит
-  Y» по правилам этого репо перемеряется удалением X и требованием, чтобы тест ПОКРАСНЕЛ, — то
-  есть аудитор мутирует ровно те исходники, по которым ты в эту же минуту гоняешь свои раунды.
-  А путь, который у тебя под рукой, ровно один — твоё рабочее дерево; отдашь его в брифе, и вас
-  в одном каталоге двое ПИШУЩИХ. Столкновение поймано вживую на VMCP-160 (667) и воспроизведено
-  на построенном стенде (два процесса, одно дерево, оба мутируют `SKILL.md`). Осей ДВЕ, и
-  путать их нельзя:
-  - **чужой МУТАНТ под твоим раундом — ШУМНО**: раунд, в одиночку дававший `control 0 failed`,
-    даёт `1 failed`, и в тексте падения стоит клауза, которую ты не трогал. Соврало, но громко.
-    **И даже это не гарантия**: измерено, что при НЕПЕРЕСЕКАЮЩИХСЯ селекциях (у каждого свой
-    одно-тестовый пин) тот же контрольный раунд зелен — `0 failed` — и не ловит НИЧЕГО; красным
-    он стал, только когда селекцией взяли файл целиком. То есть шум слышен, лишь если чужая
-    мутация попала в ТВОЮ селекцию;
-  - **чужой RESTORE под твоим раундом — ТИХО, и ради этого правило и существует**: твой мутант
-    молча откачен, раунд, в одиночку дававший `1 failed`, даёт `0 failed`, и ты записываешь «пин
-    к этой мутации СЛЕП». Ровно тот ложный вывод, ради предотвращения которого второй проход и
-    заводят, и от честного зелёного он НЕОТЛИЧИМ.
+  **The victim here is NOT tied to a role.** Both of you restore, so the silent axis lands on the
+  auditor (its mutant wiped your restore) and on YOU (your mutant wiped its restore) — the second
+  is worse, because your numbers ride into the commit. What is dangerous is not WHOSE restore it
+  is, but ANY foreign restore under anyone's round.
 
-  **Жертва тут НЕ закреплена за ролью.** Восстанавливают оба, поэтому тихую ось получает и
-  аудитор (его мутант стёр твой restore), и ТЫ (твой мутант стёр его restore) — второе хуже,
-  потому что твои числа уезжают в коммит. Опасно не «чей» restore, а ЛЮБОЙ чужой restore под
-  чьим угодно раундом.
+  Your own restore check does not help here: EVERY script's sha256 comparison reported success, and
+  `git status` showed exactly what it showed before the round. A script sees only ITS OWN writes —
+  it certifies a tree it did not own alone. This card's second pass got a worse outcome still on
+  its own stand: after BOTH scripts reported a successful restore, the file stayed mutated FOREVER,
+  while `git status` was indistinguishable from honest uncommitted work — that is, such a mutation
+  can be committed and not noticed. And the control saves you only halfway: it catches the loud
+  axis (on 667 that is exactly how it was found), the silent one by construction it does not, there
+  everything is green.
+- **How exactly.** A clone, `uv sync`, and `vikunja_mcp.__file__` in EVERY round:
 
-  Своя проверка restore тут не помогает: sha256-сверка КАЖДОГО скрипта отчиталась успехом, а
-  `git status` показал ровно то же, что и до раунда. Скрипт видит только СВОИ записи — он
-  заверяет дерево, которым владел не один. Второй проход этой карточки получил на своём стенде
-  исход ещё хуже: после того как ОБА скрипта отрапортовали успешный restore, файл остался
-  мутированным НАВСЕГДА, а `git status` при этом неотличим от честной незакоммиченной работы —
-  то есть такую мутацию можно закоммитить и не заметить. И контроль спасает лишь наполовину:
-  шумную ось он ловит (на 667 именно так и нашли), тихую — по построению нет, там всё зелено.
-- **Как именно.** Клон, `uv sync`, и `vikunja_mcp.__file__` в КАЖДОМ раунде:
-
-  Границу автор/аудитор проводит СТРОКА-МАРКЕР `# --- дальше в брифе аудитора ---` в самом
-  фенсе: всё ВЫШЕ неё — твоё (у аудитора нет ни твоего пути, ни твоей незакоммиченной работы),
-  всё НИЖЕ — его. Строки не считай и числом границу не называй: любая правка рецепта сдвинет
-  число, а маркер переедет вместе с ней. Путь клона отдай аудитору в брифе как рабочий каталог:
-  сам он его не угадает.
+  The author/auditor boundary is drawn by the MARKER LINE `# --- the auditor's brief starts here ---` in
+  the fence itself: everything ABOVE it is yours (the auditor has neither your path nor your
+  uncommitted work), everything BELOW is its. Do not count lines and do not name the boundary by a
+  number: any edit to the recipe shifts the number, while the marker moves with it. Hand the clone
+  path to the auditor in the brief as its working directory: it will not guess it by itself.
 
   ```sh
-  SP=<скрэтчпад>; ID=702                   # id ТВОЕЙ задачи: скрэтчпад ОДИН на сессию
-  TREE=<твоё дерево>; CLONE=$SP/$ID-pass2-audit   # суффикс роли: проходов по одной карточке
-  P=$SP/$ID-wip.patch                             # бывает НЕСКОЛЬКО (у автора и у ревьюера)
+  SP=<scratchpad>; ID=702                    # id of YOUR task: the scratchpad is ONE per session
+  TREE=<your tree>; CLONE=$SP/$ID-pass2-audit     # role suffix: one card can have SEVERAL
+  P=$SP/$ID-wip.patch                             # passes (the author's and the reviewer's)
   git clone --no-hardlinks "$TREE" "$CLONE"
-  git -C "$TREE" diff HEAD --binary > "$P"        # ОТСЛЕЖИВАЕМОЕ. --binary обязателен
-  [ ! -s "$P" ] || git -C "$CLONE" apply "$P"     # гард: пустой патч роняет apply (exit 128)
+  git -C "$TREE" diff HEAD --binary > "$P"        # TRACKED. --binary is mandatory
+  [ ! -s "$P" ] || git -C "$CLONE" apply "$P"     # guard: an empty patch kills apply (exit 128)
   git -C "$TREE" ls-files --others --exclude-standard | sort > "$SP/$ID-untracked-tree.list"
-  while IFS= read -r f; do                        # НЕОТСЛЕЖИВАЕМОЕ: патч его НЕ несёт
+  while IFS= read -r f; do                        # UNTRACKED: the patch does NOT carry it
     mkdir -p "$CLONE/$(dirname "$f")" && cp "$TREE/$f" "$CLONE/$f"
   done < "$SP/$ID-untracked-tree.list"
   git -C "$CLONE" ls-files --others --exclude-standard | sort > "$SP/$ID-untracked-clone.list"
-  diff "$SP/$ID-untracked-tree.list" "$SP/$ID-untracked-clone.list"   # пусто = доехало
-  # --- дальше в брифе аудитора, с подставленным $CLONE ---
+  diff "$SP/$ID-untracked-tree.list" "$SP/$ID-untracked-clone.list"   # empty = it arrived
+  # --- the auditor's brief starts here, with $CLONE substituted ---
   cd "$CLONE" && uv sync
-  find "$CLONE" -name __pycache__ -type d -prune -exec rm -rf {} +   # корень — КЛОН, не $SP
+  find "$CLONE" -name __pycache__ -type d -prune -exec rm -rf {} +   # root is the CLONE, not $SP
   export PYTHONDONTWRITEBYTECODE=1
-  uv run python -c 'import vikunja_mcp; print(vikunja_mcp.__file__)'   # печатай каждый раунд
+  uv run python -c 'import vikunja_mcp; print(vikunja_mcp.__file__)'   # print it every round
   ```
 
-  Убрать клон (`rm -rf "$CLONE"` — со своим `.venv` он весит порядка сотни мегабайт, а скрэтчпад
-  общий) — дело АВТОРА и ПОСЛЕ сдачи, поэтому этой строки в фенсе нет: склеив фенс через `&&`,
-  как учит «Коммит+пуш», ты бы снёс клон сразу после первой же печати `__file__`, ещё до первого
-  раунда.
+  Removing the clone (`rm -rf "$CLONE"` — with its own `.venv` it weighs on the order of a hundred
+  megabytes, and the scratchpad is shared) is the AUTHOR's job and comes AFTER hand-off, which is
+  why that line is not in the fence: gluing the fence together with `&&`, as "Commit+push" teaches,
+  you would have wiped the clone right after the very first `__file__` print, before the first
+  round.
 
-  Корень у `find` задан ЯВНО, а не точкой, специально: ход агента не сохраняет `cd` между
-  вызовами, поэтому `find .` — это «где окажусь», и в худшем случае как раз скрэтчпад, то есть
-  ровно то, что запрещает буллет ниже.
+  The root of `find` is given EXPLICITLY rather than as a dot, deliberately: an agent's turn does
+  not preserve `cd` between calls, so `find .` means "wherever I end up", and in the worst case
+  that is precisely the scratchpad, which is exactly what the bullet below forbids.
 
-  Шаги; ни один не отменяет остальных, и каждый — замер либо прямое следствие из него:
-  - **Клон несёт ЗАКОММИЧЕННОЕ, и это надо достраивать ДВАЖДЫ — патчем и копией.** `git clone`
-    копирует РЕПОЗИТОРИЙ, а не рабочий каталог: незакоммиченного в клоне НЕТ вовсе (проверено
-    сравнением свежего клона с деревом). Аудитор при этом отработает штатно и вернёт находку
-    «правила, о котором ты пишешь, в файле нет» — верную по тому, что он видел, и ложную по
-    факту, то есть ровно тот класс ошибки, ради которого второй проход и заводят. Патч закрывает
-    ровно ОДНУ половину — ОТСЛЕЖИВАЕМЫЕ файлы, — и у него две гочи, обе измеренные:
-    - **пустой патч НЕ no-op.** На чистом дереве `git diff HEAD` даёт файл в 0 байт, а
-      `git apply` на нём — `error: No valid patches in input`, **exit 128** (git 2.50.1; то же
-      на патче из одного перевода строки). Это ДЕФОЛТНЫЙ случай, а не край: у РЕВЬЮЕРА, который
-      аудитирует уже приземлившийся коммит, дерево чистое ВСЕГДА. А рецепты здесь склеиваются
-      через `&&` — значит без гарда рецепт встаёт на этом шаге и до `uv sync` не доходит вовсе.
-      Гард именно `[ ! -s "$P" ] || …`, и НЕ `[ -s "$P" ] && …`: второй на пустом патче сам
-      возвращает 1 и рвёт цепочку ровно так же (измерено — обе формы);
-    - **`--binary` обязателен.** Любой ЗАСТЕЙДЖЕННЫЙ бинарник без него даёт `Binary files …
-      differ` без index-строки, и `git apply` роняет ВЕСЬ патч (exit 1, не применяется НИЧЕГО) —
-      то есть один такой файл молча отменяет шаг целиком, вместе с правками текста. В ЭТОМ репо
-      скриншот сам собой сюда не попадёт (`*.png` игнорируется — `git check-ignore`), нужен явный
-      `git add -f`; но `--binary` стоит ровно потому, что цена ошибки — весь патч, а не этот файл.
-  - **Вторая половина — НЕОТСЛЕЖИВАЕМЫЕ файлы, и патч их не несёт ВООБЩЕ.** Новый тестовый
-    модуль — рядовое состояние задачи в этом репо, и `git diff HEAD` его не видит: измерено —
-    `git apply` вернул 0, правка отслеживаемого файла доехала, а `tests/unit/test_new_pin.py` в
-    клоне ОТСУТСТВОВАЛ. Поэтому в рецепте есть копия по `ls-files --others --exclude-standard`.
-    Она наследует твой `.gitignore` и едет только untracked-и-НЕ-игнорируемое: в этом репо
-    `.venv/`, `__pycache__/` и `.playwright-mcp/` игнорируются (проверено `git check-ignore`),
-    поэтому `.venv` НЕ едет и копия не вырождается в `cp -R` из буллета ниже. В репо, где venv не
-    игнорируется, — выродится; та же команда без `| sort` печатает ровно то, что поедет, посмотри
-    на неё ДО копирования. Имена с переводом строки внутри цикл не переживут — здесь их нет.
-  - **Доезд проверяй ЧЕМ УГОДНО, только не `git diff` с обеих сторон.** Эта проверка ЦИРКУЛЯРНА
-    и сходится ровно тогда, когда файл потерян: неотслеживаемое невидимо для `git diff` по ОБЕ
-    стороны. Измерено на том же стенде — md5 диффов дерева и клона СОВПАЛИ, при том что нового
-    тестового модуля в клоне не было вовсе. Поэтому рецепт сверяет СПИСКИ `ls-files --others`
-    (пустой `diff` = доехало), а `git status --porcelain` разницу показывает сразу: в дереве
-    ` M SKILL.md` + `?? test_new_pin.py`, в клоне только ` M SKILL.md`. Честная граница и у этой
-    сверки: она про ИМЕНА, а не про БАЙТЫ — измерено, что два каталога с одинаковыми именами и
-    разным содержимым дают пустой `diff` списков, так что оборвавшийся `cp` отчитается «доехало».
-    Сомневаешься — сверь md5 того файла, который и есть предмет аудита.
-  - **`git clone --no-hardlinks`, а не `cp -R`.** `.venv` git не отслеживает, поэтому в клон он
-    не попадает ВООБЩЕ (проверено на свежем клоне) и `uv sync` строит его заново — унаследовать
-    нечего. `cp -R` его ТАЩИТ, а внутри лежит `.pth` editable-инсталла с АБСОЛЮТНЫМ путём на
-    `src` ОРИГИНАЛА. Кусается это не всегда, и решает РАННЕР: голый `<копия>/.venv/bin/python`
-    читает протухший `.pth` и импортирует ОРИГИНАЛЬНЫЙ `src` — мутация, применённая в копии, до
-    интерпретатора не доезжает вовсе (измерено: маркер, дописанный в копию, не виден, а
-    `__file__` указывает в оригинал), и это те самые четыре зелёных подряд с VMCP-148 (646);
-    `uv run` в той же копии ре-синкает venv, переписывает `.pth` на копию, и мутация видна. То
-    есть `cp -R` — не «всегда сломано», а «через раз, в зависимости от того, чем запустил», что
-    хуже: тихо и невоспроизводимо. Это тот же механизм, которым CLAUDE.md объясняет четыре
-    зелёных подряд на VMCP-148 (646); каким раннером шли те раунды, здесь не проверялось.
-  - **`vikunja_mcp.__file__` печатай каждый раунд — и ТЕМ ЖЕ раннером, которым гоняешь
-    раунды.** Это самая дешёвая проверка предыдущего пункта, но не единственная
-    (`find_spec().origin`, `__path__`, `inspect.getsourcefile` дают тот же ответ) и не
-    раннеро-независимая: под `uv run` она скорее ЧИНИТ копию, чем ловит поломку — ре-синк
-    перепишет `.pth` прямо в момент печати. Раннеры разошлись — печать говорит про один
-    интерпретатор, а раунды идут в другом. Контрольный раунд этого не ловит и не претендует.
-  - **`__pycache__` удаляй ДО, и `PYTHONDONTWRITEBYTECODE=1` этого НЕ заменяет.** Переменная
-    запрещает ПИСАТЬ байткод, а не ЧИТАТЬ его. Измерено по заголовку `.pyc`: валидность — это
-    пара (mtime исходника в СЕКУНДАХ, размер), поэтому правка той же ДЛИНЫ, чей mtime не успел
-    перевалить ЦЕЛУЮ секунду (быстрый скриптованный свип попадает в это окно), оставляет кэш
-    валидным — и под этой переменной раунд прочитал СТАРОЕ значение; новое появилось только
-    после удаления `__pycache__`. Делай оба, в этом порядке.
-  - **`find` гоняй по СВОЕМУ клону, а не по скрэтчпаду.** Клон для того и заводится, чтобы
-    уборка перед раундом была УЗКОЙ: скрэтчпад ОДИН на сессию, и рекурсивный
-    `find <скрэтчпад> -name __pycache__ -type d -prune -exec rm -rf {} +` вычищает кэши ЖИВЫМ
-    соседям посреди их прогонов — порядок величин в «Каталог под временные файлы» («Что
-    сталкивается»), чтобы замер жил в одном месте.
+  The steps; none of them cancels the others, and each is a measurement or a direct consequence of
+  one:
+  - **The clone carries what is COMMITTED, and that has to be topped up TWICE — with a patch and
+    with a copy.** `git clone` copies the REPOSITORY, not the working directory: uncommitted work
+    is NOT in the clone at all (verified by comparing a fresh clone against the tree). The auditor
+    will run perfectly normally and come back with the finding "the rule you are writing about is
+    not in the file" — true for what it saw and false in fact, that is, exactly the class of error
+    the second pass exists for. The patch closes exactly ONE half — the TRACKED files — and it has
+    two gotchas, both measured:
+    - **an empty patch is NOT a no-op.** On a clean tree `git diff HEAD` gives a 0-byte file, and
+      `git apply` on it gives `error: No valid patches in input`, **exit 128** (git 2.50.1; the
+      same on a patch of one newline). That is the DEFAULT case, not the edge: for a REVIEWER
+      auditing an already-landed commit the tree is ALWAYS clean. And recipes here are glued with
+      `&&` — so without the guard the recipe stops at this step and never reaches `uv sync` at all.
+      The guard is exactly `[ ! -s "$P" ] || …`, and NOT `[ -s "$P" ] && …`: on an empty patch the
+      second returns 1 by itself and breaks the chain in exactly the same way (measured — both
+      forms);
+    - **`--binary` is mandatory.** Any STAGED binary without it yields `Binary files … differ` with
+      no index line, and `git apply` drops the WHOLE patch (exit 1, NOTHING is applied) — that is,
+      one such file silently cancels the entire step, text edits included. In THIS repo a
+      screenshot will not get in here by itself (`*.png` is ignored — `git check-ignore`), an
+      explicit `git add -f` is needed; but `--binary` is there precisely because the cost of the
+      mistake is the whole patch, not that one file.
+  - **The second half is the UNTRACKED files, and the patch does not carry them AT ALL.** A new
+    test module is an ordinary state of a task in this repo, and `git diff HEAD` does not see it:
+    measured — `git apply` returned 0, the edit to the tracked file arrived, and
+    `tests/unit/test_new_pin.py` was ABSENT from the clone. That is why the recipe has a copy
+    driven by `ls-files --others --exclude-standard`. It inherits your `.gitignore` and moves only
+    what is untracked-and-NOT-ignored: in this repo `.venv/`, `__pycache__/` and `.playwright-mcp/`
+    are ignored (verified with `git check-ignore`), so `.venv` does NOT move and the copy does not
+    degenerate into the `cp -R` of the bullet below. In a repo where the venv is not ignored it
+    will degenerate; the same command without `| sort` prints exactly what will move, look at it
+    BEFORE copying. Names with a newline inside will not survive the loop — there are none here.
+  - **Check the arrival with ANYTHING you like, only not with `git diff` on both sides.** That
+    check is CIRCULAR and agrees precisely when the file is lost: what is untracked is invisible to
+    `git diff` on BOTH sides. Measured on the same stand — the md5s of the tree's and the clone's
+    diffs MATCHED, while the new test module was not in the clone at all. So the recipe compares
+    the `ls-files --others` LISTS (an empty `diff` = it arrived), and `git status --porcelain`
+    shows the difference straight away: in the tree ` M SKILL.md` + `?? test_new_pin.py`, in the
+    clone only ` M SKILL.md`. This comparison has an honest boundary of its own: it is about NAMES,
+    not BYTES — measured, two directories with the same names and different contents give an empty
+    `diff` of the lists, so a `cp` that broke off will report "it arrived". In doubt, compare the
+    md5 of the file that IS the subject of the audit.
+  - **`git clone --no-hardlinks`, not `cp -R`.** git does not track `.venv`, so it does not reach
+    the clone AT ALL (verified on a fresh clone) and `uv sync` builds it anew — there is nothing to
+    inherit. `cp -R` DRAGS it along, and inside sits the editable install's `.pth` with an ABSOLUTE
+    path to the ORIGINAL `src`. It does not bite every time, and what decides is the RUNNER: a bare
+    `<copy>/.venv/bin/python` reads the stale `.pth` and imports the ORIGINAL `src` — a mutation
+    applied in the copy does not reach the interpreter at all (measured: a marker appended to the
+    copy is not visible, and `__file__` points into the original), and that is exactly the four
+    greens in a row from VMCP-148 (646); `uv run` in that same copy re-syncs the venv, rewrites the
+    `.pth` to the copy, and the mutation is visible. So `cp -R` is not "always broken" but "every
+    other time, depending on what you launched it with", which is worse: silent and irreproducible.
+    This is the same mechanism CLAUDE.md uses to explain the four greens in a row on VMCP-148
+    (646); which runner those rounds went through was not verified here.
+  - **Print `vikunja_mcp.__file__` every round — and with the SAME runner you run the rounds
+    with.** It is the cheapest check of the previous point, but not the only one
+    (`find_spec().origin`, `__path__`, `inspect.getsourcefile` give the same answer) and not
+    runner-independent: under `uv run` it FIXES the copy rather than catching the breakage — the
+    re-sync rewrites the `.pth` at the very moment of printing. If the runners diverge, the print
+    speaks about one interpreter while the rounds go in another. The control round does not catch
+    this and does not claim to.
+  - **Delete `__pycache__` BEFORE, and `PYTHONDONTWRITEBYTECODE=1` does NOT replace that.** The
+    variable forbids WRITING bytecode, not READING it. Measured from the `.pyc` header: validity is
+    the pair (source mtime in SECONDS, size), so an edit of the same LENGTH whose mtime did not
+    manage to cross a WHOLE second (a fast scripted sweep falls into that window) leaves the cache
+    valid — and under that variable the round read the OLD value; the new one appeared only after
+    deleting `__pycache__`. Do both, in that order.
+  - **Run `find` over YOUR OWN clone, not over the scratchpad.** The clone exists precisely so that
+    the pre-round cleanup is NARROW: the scratchpad is ONE per session, and a recursive
+    `find <scratchpad> -name __pycache__ -type d -prune -exec rm -rf {} +` wipes the caches of LIVE
+    neighbours in the middle of their runs — the orders of magnitude are in "The directory for temporary files is ONE per SESSION" ("What DOES collide"), so that the measurement lives in one place.
 
-  **Клона достаточно для ФАЙЛОВ — и только для них.** Те же два сценария, разведённые по двум
-  клонам, дали правильные числа с обеих сторон (`control 0 failed` у автора, `1 failed` у
-  аудитора), так что сам свип менять не надо; на 667 свип тоже перепрогнали в клоне. Но клон —
-  это тот же worktree по смыслу, и всё из «Что сталкивается» он НЕ разводит: имя контейнера,
-  порт, общий скрэтчпад у вас с аудитором по-прежнему одни. Просишь его проверить что-то
-  интеграционное — выводите имена из id, как там и написано. И правило РЕКУРСИВНО: поднимает
-  аудитор своего саб-агента — тому нужен ЕЩЁ один клон; двое пишущих в одном каталоге плохи
-  независимо от того, кто кому родитель.
-- **Три класса, где одной самопроверки не хватает.** Все три измерены на этих карточках:
-  - **УНАСЛЕДОВАННОЕ** — число или факт из карточки, брифа, чужого отчёта или прошлого
-    отбоя. Автор помнит, что мерил сам, и не помнит, что взял на веру. На 582 исполнитель
-    унаследовал ИЗ ТЕКСТА САМОГО ОТБОЯ ссылку «эти числа записаны в `[review]`-комменте
-    соседней карточки» — открыл комментарий, там их нет. На 603 «20 строк в четырёх полных
-    страницах» было подано как форма, которую отдал живой эндпойнт; живой отдал 22 как
-    5,5,5,5,2 — последняя страница НЕполная, то есть случай на запрос дороже.
-  - **АТРИБУЦИЮ** — «X говорит», «этот коммент раньше гласил», «карточка N измерила». На 582
-    ни один из ЧЕТЫРЁХ отбоев (посчитаны по комментам карточки: четыре `[review] NEEDS WORK`,
-    пятый вердикт — APPROVE) не был про неверное ИЗМЕРЕНИЕ — все четыре про ПРЕДЛОЖЕНИЯ о
-    замерах; ревьюер подытожил это как пять дефектов, четыре из них атрибуции (реестр
-    ретракций в самом файле длиннее — одиннадцать строк, туда вошли и непроблокирующие).
-    Присутствие числа в дереве не есть его происхождение — и поймал это не ревьюер сам, а его
-    же второй проход: ревьюер пометил утверждение «verified TRUE», убедившись, что числа в
-    дереве ЕСТЬ, и не посмотрев, кто их туда положил; отозвал он свой пункт сам, но уже по
-    чужой находке.
-  - **ПРАВКИ В УЖЕ ПРОВЕРЕННОМ** — починка предыдущего круга рождает новые завышения. На 603
-    круг переписал в ложное то утверждение, которое предыдущее ревью измерило ВЕРНЫМ, и не
-    перепрогнал; на 582 новый ложный универсал завёлся в абзаце, предостерегающем от
-    универсалов. Поэтому второй проход смотрит ВЕСЬ изменённый текст, а не только те места,
-    на которые указал ревьюер.
-- **Его находки — КАНДИДАТЫ, а не вердикт: судит владелец работы.** У второго прохода своя
-  характерная ошибка: он меряет отсутствие ПРИЗНАКА — метки, названия, формулировки — и
-  принимает его за отсутствие ФАКТА. Измерено на 582: аудитор погрепал два НАЗВАНИЯ, нашёл
-  их только во фразе, которая отдаёт оба соседней карточке, и выдал БЛОКИРУЮЩУЮ находку
-  «указатель на эту заметку неточен»; ревьюер открыл саму заметку — там лежали и результат,
-  и измеренный разбор издержек. Часть наблюдения была
-  верна (самой ТАБЛИЦЫ в заметке действительно не было, её завёл сосед), ошибочен был ВЫВОД.
-  Это тот же класс, что «присутствие числа — не его происхождение». На каждого кандидата
-  открывай ИСТОЧНИК, а не верь отчёту аудитора — и учти, что судят по-разному обе роли: на
-  594 проход был свой у каждой, и ревьюер из трёх флагов ДВА принял (как непроблокирующие
-  остатки, перемерив каждый) и один отклонил — соседний абзац того же докстринга на него уже
-  отвечает, — а исполнитель принял все пять и тоже перемерил каждый сам. Принять оптом —
-  значит заменить одну непроверяемую уверенность другой.
-- **Запускай РАНО и ПАРАЛЛЕЛЬНО — он читает сырьё, а не готовый текст.** Значит стартовать
-  он может, как только есть замеры, и его находки успеют попасть и в текст, и в вердикт.
-  Запущенный поздно, он приезжает ПОСЛЕ решения: на 594 самое ценное — что замысел верен по
-  БОЛЕЕ СИЛЬНОЙ причине, чем написанная, — приехало отдельным комментом уже после вердикта и
-  поменяло не формулировку, а саму задачу доработки. **Но «фиксируй вердикт СРАЗУ» это НЕ
-  отменяет:** не вернулся к моменту, когда ты уверен, — ставь вердикт, а находки допиши
-  отдельным `comment`, поставив маркер (`[review]`/`[worklog]`) в самом тексте: гейтов по
-  стадии и владению у него нет, он работает и из Review, и после вердикта, и второй
-  `review_task` для этого не нужен. Так и записаны post-verdict-заметки на 582, 594 и 603:
-  вердикт тулзы ВСЕГДА идёт первой строкой — `[review] APPROVE` либо `[review] NEEDS WORK`, —
-  а у этих её нет, значит дописаны они `comment`-ом. Обратное неверно: `[review]`-коммент без
-  этой строки не обязательно post-verdict-заметка (на 582 так стоит scope-note, приехавшая с
-  соседней карточки ещё ДО работы).
-- **Критерий остановки обязателен, иначе процедура не сходится.** Каждый круг рождает
-  примерно одно новое ложное предложение (оценка из APPROVE-вердикта 582, взвешенная им
-  против шести кругов КАРТОЧКИ; её собственный реестр ретракций даёт больше), поэтому
-  очередной круг может стоить дороже, чем купит. Останавливайся, когда оставшиеся находки
-  (а) не атрибуции, (б) не меняют ни одного решения читателя и (в) уже покрыты соседним
-  текстом; такие пиши в текст вердикта или комментом, а не заводи ими новый круг. Так
-  закрылись 582 (три уточнения записаны в APPROVE вместо ещё одного круга) и 603
-  (над-обобщение в одной оговорке зафиксировано post-verdict-заметкой; отчёт того аудита был
-  озаглавлен «ничего в новой прозе не ЛОЖНО», и ревьюер записал находку, а не стал
-  действовать по ней). **Остановился — реши ещё, КУДА находка идёт: не меняет действия
-  читателя, значит `comment`, а не новая карточка** (см. «ПОРОГ заведения» в секции
-  «Декомпозиция и файлинг находок»; тут это конъюнкт (б) из трёх, а там тот же вопрос стоит
-  ОДИН). Порог этот проход НЕ отменяет и не сокращает — он про то, куда
-  кладут его находки, а не про то, звать ли его.
-- **Инструмент атрибуции — `git log -S` по точной фразе, и у него три гочи.** Он
-  РЕГИСТРОЗАВИСИМЫЙ: перемерено в этом репо по `tests/unit/test_api_kanban.py` — фраза
-  `serves at most what /info states` даёт 2 коммита, она же с `AT MOST` — 4, а
-  `--regexp-ignore-case` — объединение из 5 (контроль с несуществующей строкой: 0 строк).
-  Один раз это уже спрятало настоящее совпадение и продатировало утверждение не тем кругом.
-  Вторая: команда `git log -S`, ВПИСАННАЯ в файл, который она опрашивает, меняет свой ответ —
-  два из тех четырёх попаданий как раз коммиты, добавившие цитату. Поэтому пиши «фраза
-  ПОЯВИЛАСЬ в», а не «возвращает ровно одно». Третья — из соседнего ряда, но бьёт ровно сюда:
-  в zsh `git show $rev:path` разбирается как модификатор параметра, а не как ревизия, поэтому
-  по-ревизионные счётчики МОЛЧА читаются нулями; квотируй — `git show "${rev}:path"`.
+  **A clone is enough for FILES — and only for them.** The same two scenarios, separated into two
+  clones, gave the right numbers on both sides (`control 0 failed` for the author, `1 failed` for
+  the auditor), so the sweep itself needs no changing; on 667 the sweep was re-run in a clone too.
+  But a clone is the same thing as a worktree in substance, and it separates NOTHING of "What DOES
+  collide": the container name, the port, the shared scratchpad are still one apiece between you
+  and the auditor. If you ask it to check something integration-shaped, derive the names from the
+  id, exactly as written there. And the rule is RECURSIVE: if the auditor raises its own subagent,
+  that one needs ANOTHER clone; two writers in one directory are bad regardless of who is whose
+  parent.
+- **Three classes where self-checking alone is not enough.** All three are measured on these cards:
+  - **INHERITED** — a number or a fact from the card, the brief, someone else's report or a
+    previous rejection. The author remembers what he measured himself and does not remember what he
+    took on trust. On 582 the implementer inherited FROM THE TEXT OF THE REJECTION ITSELF the
+    pointer "these numbers are written in the `[review]` comment of the neighbouring card" — he
+    opened the comment, they are not there. On 603 "20 rows across four full pages" was presented
+    as the shape a live endpoint returned; the live one returned 22 as 5,5,5,5,2 — the last page
+    NOT full, that is, the case costs one request more.
+  - **ATTRIBUTION** — "X says", "this comment used to read", "card N measured". On 582 not one of
+    the FOUR rejections (counted from the card's comments: four `[review] NEEDS WORK`, the fifth
+    verdict an APPROVE) was about a wrong MEASUREMENT — all four were about the SENTENCES about
+    measurements; the reviewer summed that up as five defects, four of them attribution (the
+    register of retractions in the file itself is longer — eleven lines, non-blocking ones went in
+    there too). The presence of a number in the tree is not its provenance — and what caught that
+    was not the reviewer himself but his own second pass: the reviewer marked a claim "verified
+    TRUE" after making sure the numbers ARE in the tree and without looking at who put them there;
+    he withdrew his own point himself, but already on someone else's finding.
+  - **EDITS TO ALREADY-VERIFIED TEXT** — fixing the previous round breeds new overstatements. On
+    603 a round rewrote into a falsehood the very claim the previous review had measured as TRUE,
+    and did not re-run it; on 582 a new false universal took hold in the paragraph warning against
+    universals. So the second pass looks at ALL the changed text, not only at the places the
+    reviewer pointed to.
+- **Its findings are CANDIDATES, not a verdict: the owner of the work judges.** The second pass has
+  a characteristic error of its own: it measures the absence of a MARKER — a label, a name, a
+  wording — and takes it for the absence of a FACT. Measured on 582: the auditor grepped for two
+  NAMES, found them only in a phrase that hands both to a neighbouring card, and issued a BLOCKING
+  finding "the pointer to this note is inaccurate"; the reviewer opened the note itself — both the
+  result and a measured accounting of the costs were lying there. Part of the observation was true
+  (the TABLE itself really was not in the note, a neighbour created it), what was wrong was the
+  CONCLUSION. This is the same class as "the presence of a number is not its provenance". For every
+  candidate open the SOURCE rather than trusting the auditor's report — and note that the two roles
+  judge differently: on 594 each had its own pass, and of three flags the reviewer accepted TWO (as
+  non-blocking leftovers, re-measuring each) and rejected one — the neighbouring paragraph of the
+  same docstring already answers it — while the implementer accepted all five and also re-measured
+  each himself. To accept wholesale is to replace one unverifiable certainty with another.
+- **Launch it EARLY and IN PARALLEL — it reads the raw material, not the finished text.** Which
+  means it can start as soon as the measurements exist, and its findings will make it into both the
+  text and the verdict. Launched late, it arrives AFTER the decision: on 594 the most valuable
+  thing — that the design is right for a STRONGER reason than the one written down — arrived as a
+  separate comment after the verdict, and changed not a wording but the rework task itself. **But
+  that does NOT cancel "record the verdict IMMEDIATELY":** if it has not come back by the moment
+  you are sure, set the verdict and append the findings as a separate `comment`, putting the marker
+  (`[review]`/`[worklog]`) in the text itself: it has no stage or ownership gates, it works from
+  Review and after the verdict alike, and a second `review_task` is not needed for that. That is
+  how the post-verdict notes on 582, 594 and 603 are written: the tool's verdict ALWAYS comes on
+  the first line — `[review] APPROVE` or `[review] NEEDS WORK` — and these do not have it, so they
+  were appended with `comment`. The converse does not hold: a `[review]` comment without that line
+  is not necessarily a post-verdict note (on 582 a scope-note stands that way, arrived from a
+  neighbouring card even BEFORE the work).
+- **A stopping criterion is mandatory, otherwise the procedure does not converge.** Each round
+  breeds roughly one new false sentence (an estimate from 582's APPROVE verdict, weighed there
+  against the CARD's six rounds; its own register of retractions gives more), so the next round can
+  cost more than it buys. Stop when the remaining findings (a) are not attribution, (b) change not
+  one decision of the reader's and (c) are already covered by the neighbouring text; write those
+  into the verdict text or into a comment instead of opening a new round with them. That is how 582
+  closed (three clarifications written into the APPROVE instead of one more round) and 603 (an
+  over-generalisation in one caveat recorded as a post-verdict note; that audit's report was titled
+  "nothing in the new prose is FALSE", and the reviewer recorded the finding rather than acting on
+  it). **Once you have stopped, decide one more thing — WHERE the finding goes: it does not change
+  the reader's actions, so it is a `comment` and not a new card** (see "The THRESHOLD for filing"
+  in the "Decomposition and filing findings" section; here it is conjunct (b) of three, while there
+  the same question stands ALONE). This pass does NOT cancel or shorten that threshold — it is
+  about where its findings are put, not about whether to call it.
+- **The attribution tool is `git log -S` on the exact phrase, and it has three gotchas.** It is
+  CASE-SENSITIVE: re-measured in this repo over `tests/unit/test_api_kanban.py` — the phrase
+  `serves at most what /info states` gives 2 commits, the same one with `AT MOST` gives 4, and
+  `--regexp-ignore-case` gives the union of 5 (control with a non-existent string: 0 lines). Once
+  this already hid a real match and dated a claim to the wrong round. The second: a `git log -S`
+  command WRITTEN INTO the file it interrogates changes its own answer — two of those four hits are
+  precisely the commits that added the quotation. So write "the phrase APPEARED in", not "returns
+  exactly one". The third is from a neighbouring row but lands exactly here: in zsh
+  `git show $rev:path` parses as a parameter modifier rather than as a revision, so per-revision
+  counters SILENTLY read as zeros; quote it — `git show "${rev}:path"`.
 
-## Декомпозиция, ревью и тупики — по справочникам
+## Decomposition, review and dead ends — in the reference files
 
-Три фазы, каждая нужна не всем и не всегда, поэтому вынесены целиком. Открывай ту, в
-которую упёрся:
+Three phases, each of them needed by not everyone and not always, so they are split out wholesale.
+Open the one you have run into:
 
-- **`references/decompose.md`** — когда задача не влезает в один заход или ты нашёл
-  что-то за её пределами. Неотменяемое: находка за пределами задачи — это `file_task`, а
-  не расширение своей; свою задачу молча не расширяй.
-- **`references/review.md`** — когда ты РЕВЬЮЕР. Неотменяемое: вердикт `approve` ставит
-  лейбл `reviewed`, который человек читает перед Done, поэтому он не формальность;
-  `needs_work` возвращает карточку в Build. Своё не ревьюишь ИЗ КОНТЕКСТА АВТОРА — в соло
-  карточка в Review твоя по определению, и ревьюит её сиблинг со свежим контекстом, а не тот,
-  кто писал код.
-- **`references/stuck.md`** — когда не можешь двигаться дальше, и что бывает ПОСЛЕ Review.
-  Неотменяемое: выход зависит от РОЛИ, и `call_human` (карточка) — это не консольный
-  вопрос; в Done задачу не двигает никто из агентов, это переход только для человека.
+- **`references/decompose.md`** — when the task does not fit into one go or you found something
+  outside its bounds. Non-negotiable: a finding outside the task is a `file_task`, not an expansion
+  of your own; do not silently expand your own task.
+- **`references/review.md`** — when YOU are the REVIEWER. Non-negotiable: an `approve` verdict sets
+  the `reviewed` label, which the human reads before Done, so it is not a formality; `needs_work`
+  returns the card to Build. You do not review your own work FROM THE AUTHOR'S CONTEXT — in a solo
+  setup a card in Review is yours by definition, and a sibling with a fresh context reviews it, not
+  whoever wrote the code.
+- **`references/stuck.md`** — when you cannot move any further, and what happens AFTER Review.
+  Non-negotiable: the way out depends on the ROLE, and `call_human` (a card) is not a console
+  question; nobody among the agents moves a task to Done, that transition is human-only.

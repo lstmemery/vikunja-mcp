@@ -1,185 +1,201 @@
-# Параллельный дренаж: слоты, `exclude`, возвраты, отказы `workspace`
+# The parallel drain: slots, `exclude`, returns, `workspace` refusals
 
-> **Справочник к SKILL.md, а не отдельные правила.** Читай **когда `wip.limit > 1` и ты ведёшь несколько агентов одновременно**.
-> Обязательное к исполнению живёт в самом SKILL.md — здесь разобраны формы ответов,
-> измеренные грабли и причины, по которым правило написано именно так.
+> **A reference for SKILL.md, not rules of its own.** Read it **when `wip.limit > 1` and you are running several agents at once**.
+> What is binding lives in SKILL.md itself — what is here is the shapes of the replies,
+> the measured gotchas and the reasons a rule is written exactly the way it is.
 
-- **Свободные слоты ЗАПОЛНЯЮТСЯ; перекрытие ловится на интеграции, а не предсказывается по
-  доске.** Пока `wip.free > 0` и `next_task` отдаёт задачу — клеймишь и диспатчишь, до лимита.
-  Придержать слот, потому что две карточки НА ВИД трогают один и тот же модуль («сериализую от
-  греха подальше»), НЕЛЬЗЯ: это подмена механизма проекта своей догадкой. Незаявленное
-  перекрытие файлов схема и не пытается предсказать заранее — она ДЕТЕКТИТ его в момент
-  интеграции: каждый пер-таск-агент перед пушем делает `git fetch origin && git rebase
-  origin/main`, ЗАНОВО прогоняет критерии готовности на перебазированном дереве и только потом
-  пушит (`git push origin HEAD:main`; отбило — сначала смотрит, КТО выиграл гонку, потом ещё
-  круг, до `2 × max(wip.limit, wip.active)`), конфликт разруливает сам, не вышло — `call_human`
-  (см. «Коммит+пуш
-  — часть перевода в Review»). Цена реального перекрытия
-  — один rebase у сиблинга; цена «я лучше сериализую» — простаивающие слоты на КАЖДОЙ задаче,
-  всегда. Единственное законное сужение дренажа — техническое: `workspace` не смог завести
-  дерево (см. «Не завелось — цикл НЕ роняем»), потому что двух агентов в одном каталоге не
-  держим никогда. Прикидка «эти задачи, кажется, перекроются» таким основанием НЕ является.
-- **И главное: очереди ты НЕ ВИДИШЬ — не рассуждай, будто видишь.** `next_task` отдаёт РОВНО
-  ОДНУ карточку за вызов и никогда — список свободной очереди: сколько там задач и какие они,
-  по его ответу неизвестно (единственный список, `waiting` при `starving:true`, перечисляет как
-  раз НЕклеймабельные, загейченные задачи). `exclude` тоже не фильтр очереди: он вычёркивает
-  карточку из ветвей «твоя активная / недоделанный клейм / предложение ревью», а свободную
-  очередь не сужает вовсе — там он не нужен, потому что свободная значит неассайненная, а
-  исключаешь ты то, что уже держишь, то есть назначенное на тебя. Поэтому «я посмотрел очередь
-  и решил, что эти задачи конфликтуют» — иллюзия: невидимых тебе карточек может быть больше,
-  чем видимых, и среди них — независимые, которые ты этой догадкой просто не начал. И карточки,
-  которые завёл ты сам (`decompose`, `file_task(queue=True)`), очередью не считай: это лишь ТВОЙ
-  вклад в неё — рядом лежит то, что положили человек и другие агенты.
-- **Заявленные зависимости — другое дело, и держат их тулзы, а не ты.** Всё выше — ТОЛЬКО про
-  НЕзаявленное перекрытие. `follows`/`blocked` гейтятся жёстко и без твоего участия: `claim`
-  откажет, а `next_task` такую карточку и не предложит, пока предшественник не доехал до
-  Review. А сказать «эти строго по очереди» — право ФИЛЕРА через `decompose(ordered=True)` (см.
-  «Декомпозиция и файлинг находок»), не насоса, придерживающего слот.
-- **`exclude` ведёшь ТЫ, и только в пределах тика.** Трекер не знает, жив ли твой саб-агент —
-  это факт харнесса, а не доски, поэтому назвать занятые задачи должен насос. Забыл — и
-  `next_task` честно отдаст задачу, на которой уже работает твой агент, как «твою активную»,
-  а ты задиспатчишь на неё второго. Убитый ход этот набор теряет — и это НОРМАЛЬНО: на
-  следующем тике пустой `exclude` вернёт задачу как «твою активную», и включается обычное
-  правило «агент упал → диспатчь свежий resume-агент» (см. «Кто выполняет работу»). Тот
-  вернётся в ТО ЖЕ дерево к своей недоделанной работе: `workspace <id>` на существующее дерево
-  ничего не создаёт, а отдаёт его же (`created: false`). Но это верно ровно для ЭТОГО пути
-  возврата (агент упал, задача так и осталась в Design/Build) — см. следующий пункт.
-- **Полнота `exclude` — это ещё и ВИДИМОСТЬ сигналов, а не только защита от двойного
-  диспатча.** Порядок ветвей в `next_task` жёсткий: твои активные → недоделанный клейм в Queue
-  → предложение ревью → проверка слотов (`wip_saturated`) → свободная очередь. Проверка слотов
-  стоит ПОСЛЕ первых трёх, поэтому активную задачу, которую ты не назвал, тебе отдадут как
-  «твою активную» РАНЬШЕ, чем до неё дойдёт очередь. Одна и та же доска в одну и ту же минуту
-  отвечает `wip_saturated: true` на полный `exclude` — и «твоя активная» с `wip.free: 0`, без
-  поля `wip_saturated` вовсе, на неполный. То есть `wip_saturated` — сигнал, который ты
-  получаешь, ТОЛЬКО если `exclude` полон.
-  - **Увидел resume при `wip.free == 0` — проверяй СВОЙ `exclude`, а не доску.** Если на этой
-    задаче у тебя УЖЕ живёт агент, то набор неполон: допиши id в `exclude` и зови `next_task`
-    заново (вот тогда и придёт `wip_saturated`), а второго агента на неё НЕ диспатчь — ровно
-    это `exclude` и предотвращает. Живого агента на ней нет — это штатный resume после
-    упавшего агента, диспатчь свежий. Ответ `next_task` при `wip.free == 0` напомнит об этом
-    в своём `note` — но сам набор знаешь только ты, поэтому и сверить его можешь только ты.
-  - **Слепнешь при этом не только к насыщению: предложения ревью тоже перебиваются.** Ветка
-    ревью стоит ВЫШЕ проверки слотов и слот не занимает, поэтому насыщенный насос с ПОЛНЫМ
-    `exclude` ревью всё равно получает; с неполным его перекрывает resume. (С #991 это верно и
-    в СОЛО, а раньше не было: ветка пропускала карточки, назначенные на тебя, а там они все
-    твои, так что ревью не приходило вовсе. Теперь приходит — и полнота `exclude` начинает
-    решать ещё и здесь, потому что снимает карточку с предложения только вердикт.)
-  - **Это НЕ баг, и порядок ветвей НЕ трогаем.** На нём держится `vikunja-mcp claimable` —
-    экспортируемая наружу проверка «есть ли работа для этого токена», которой внешний
-    супервайзер решает, поднимать ли агента вообще: она зовёт `next_task` с ПУСТЫМ `exclude`,
-    а значит до проверки слотов не доходит НИКОГДА и отвечает «есть работа: resume». Поднять
-    проверку слотов выше — и насыщенная доска с брошенной, вполне подхватываемой задачей
-    начнёт отвечать «работы нет», и resume-агента за ней никто уже не пришлёт.
-- **Два возврата, два дерева.** Вернуться к задаче можно ДВУМЯ разными способами, и дерево у
-  них разное; правило выше описывает один из них. Агент, который ждёт своё дерево ВСЕГДА, будет
-  искать в нём недоделанную работу, которой там никогда не было. И решает тут не то, ПОЧЕМУ
-  карточка вернулась, а один факт: сносили ли дерево через `--release`. А он сносит каталог и
-  ветку `task/<id>` ТОЛЬКО когда в дереве чисто и всё запушено — то есть «дерева нет» и «работа
-  уже в главной» это одно и то же утверждение, а не два.
-  - **Агент упал** (задача так и стоит в Design/Build за тобой, `--release` никто не звал):
-    `workspace <id>` отдаёт ТО ЖЕ дерево (`created: false`) — и коммиты, и НЕзакоммиченное на
-    месте. Два исключения: дерево, снятое с ветки прерванным ребейзом, придёт ОТКАЗОМ («build
-    worktree … DETACHED», см. «Отдельный случай») — сначала чинят его; а каталог, снесённый
-    ГРУБО (мимо `--release`), отведут ЗАНОВО (`created: true`) и переподключат к уцелевшей
-    ветке `task/<id>` — коммиты вернутся, незакоммиченное нет.
-  - **Карточку вернули из Review** (`needs_work` от ревьюера или человек руками) ПОСЛЕ
-    успешного пуша и `--release`: ни каталога, ни ветки — переподключаться не к чему.
-    `workspace <id>` режет СВЕЖЕЕ дерево от ТЕКУЩЕГО `origin/<главная ветка>`
-    (`created: true`), ушедшего вперёд на коммиты сиблингов. Это не потеря и не регресс: пуш
-    был успешным, значит правка предшественника УЖЕ в главной, а свежая база — лучшая из
-    возможных. Что было сделано, читай из `[review]`-коммента и запушенного диффа
-    (`git show <sha из evidence>`), а НЕ из рабочего каталога.
-  - **Возврат БЕЗ успешного пуша выглядит как первый случай, а не как второй** (типично — отказ
-    оркестратора принять непроверяемый evidence-sha, п. 3 тика): `--release` там откажет
-    («незапушенные коммиты»), и дерево с работой останется на месте.
-  - **Поэтому — проверяй, а не предполагай.** Две команды в дереве: `git status --porcelain` и
-    `git log --oneline origin/<главная ветка>..HEAD`. Обе пусты — незавершённой работы тут НЕТ
-    и искать нечего; непусты — вот она. Ответ честен на всех путях выше, включая редкий «ветка
-    утекла» (`branch_deleted: false`): тогда дерево переподключат к ней и база будет старее
-    текущей главной, а выправит это обычный `git fetch origin && git rebase origin/main` перед
-    пушем.
-  - **Специально НЕ сделано:** оставлять ветку `task/<id>` жить после `--release`, чтобы
-    возврат мог к ней переподключиться. Это сломало бы саму защиту релиза и копило бы по ветке
-    на КАЖДУЮ доделанную задачу; свежее дерево от текущей главной — поведение лучше, его просто
-    надо было проговорить.
-- **Ревью слот не занимает.** `wip.active` считает только Design/Build, назначенные на тебя;
-  карточка в Review — не твоя активная задача (см. «Дисциплина очереди»), поэтому фоновые
-  ревью дренаж не сужают, сколько бы их ни было.
-- **Ревьюер, вынеся вердикт, освобождает своё дерево:**
-  `vikunja-mcp workspace --release <id> --role review`. `--role review` тут ОБЯЗАТЕЛЕН — по
-  умолчанию `--release` снимает build-дерево, то есть чужое. Не освободишь — дерево будет
-  жить до тех пор, пока карточка не уйдёт из Review (кто её оттуда двигает — см. ниже), и
-  `--gc` раньше за него не возьмётся: живость review-дерева считается ПО РОЛИ, а не по
-  свежести, поэтому пока карточка в Review, свип его не трогает, сколько бы оно ни простояло
-  без единой записи — grace-окно до него даже не доходит. **И не коммить ВНУТРЬ review-дерева** (заметки, черновик
-  вердикта): оно detached, коммит в нём не достижим ни из одной ветки — `--release` откажется
-  его сносить, `--gc` тоже, и дерево останется навсегда. Второй раунд ревью по этой задаче
-  в него упрётся: `workspace <id> --role review --at <новый sha>` ОТКАЖЕТ («pinned at …»),
-  и это правильно — иначе ты бы молча получил дерево со СТАРЫМ кодом и вынес вердикт по нему.
-  Вердикт — комментом в трекер (`review_task`), а не коммитом в дерево.
-  - **Из Review карточку двигает не только человек — её двигает и ТВОЙ вердикт, а вместе с
-    ней умирает дерево.** `approve` карточку НЕ двигает (только метки), поэтому после него
-    дерево живёт, пока её не заберёт человек. А `review_task(verdict='needs_work')` уводит
-    карточку в Build — и с этой секунды для `--gc` твоё дерево МЁРТВОЕ, ровно как build-дерево
-    после `advance(to='review')`. Дальше его держит только grace-окно, а оно отсчитывается от
-    последней ЗАПИСИ в дереве: у чисто читающего ревью (Read, `git log`, `git show`) записей
-    нет вовсе, так что окно тикает от СОЗДАНИЯ дерева, а не от вердикта, и ревью длиннее окна
-    оказывается вне его ещё до того, как ты вынес вердикт. Проверено: заквиесценное дерево
-    следующий же свип отдаёт в `released`, каталога больше нет. Работа при этом не теряется
-    (дерево detached и чистое), цена ограничена исчезнувшим cwd — но правило поэтому ровно то
-    же, что у build-стороны после `advance`/`call_human` (см. «Чек-пойнть рано» и
-    «Коммит+пуш — часть перевода в Review»): **вынес вердикт — не считай, что ты всё ещё
-    стоишь в своём дереве**; понадобился каталог — зови `workspace <id> --role review --at
-    <sha>` заново, а не ходи в старый путь. Вердикт ради этого НЕ придерживай: «фиксируй
-    вердикт сразу» сильнее (потерянный вердикт — это повторное ревью с нуля, исчезнувший
-    каталог — один вызов `workspace`); просто то, чему нужен ЭТОТ каталог, делай ДО вердикта.
-  - **У `released: false` ЧЕТЫРЕ чтения, и твоё штатное — последнее.** `--release --role review`
-    по уже снесённому дереву возвращает код 0 и `code: "no-worktree"`: это не отказ ЗАЩИТЫ
-    («осталась несохранённая работа»), не прерванный ребейз и не человеческий лок, а успех
-    задним числом — делать НЕЧЕГО, повторять бессмысленно. Четвёртое чтение завёл #631:
-    `code: "locked"` — дерево заблокировал ЧЕЛОВЕК (`git worktree lock`), работа цела и ничего
-    не удалено, но снимать лок не тебе (`git worktree unlock` — того, кто поставил); назови
-    путь и лок в вердикте и не трогай каталог. Сбоем инструмента `released: false` не бывает
-    вообще никогда: у сбоя код 1 и поле `error`. Разбор кодов у `--release` один на обе роли и лежит
-    на build-стороне («Работал в своём worktree» в «Следах работы») — читай его там, а не
-    заводи себе второй.
-    **Но «один на обе роли» верно и в обратную сторону: `dirty` роли НЕ РАЗЛИЧАЕТ.** Один
-    оставленный в дереве файл — проба, черновик, ровно то, к чему зовёт «что может жить в
-    твоём дереве, пусть живёт в нём», — даёт `{"released": false, "code": "dirty"}`. А
-    ЛЕЧЕНИЕ там записано build-ское, «доведи до пуша и повтори», и тебе оно ЗАПРЕЩЕНО: дерево
-    detached, ветки нет, а коммит внутрь — это `unreachable-head` навсегда, причём ТИХО: такая
-    запись грейдится в `expected`, то есть в список «не смотреть», и её не увидит никто. Твоё
-    лечение одно: убери файл из дерева (нужен дальше — вынеси наружу, с id задачи в имени)
-    и повтори `--release`. Не уберёшь — когда карточка уйдёт из Review, запись ляжет в `kept`
-    (в `expected` `dirty` попадает только у BUILD-дерева и только под припаркованной карточкой;
-    ТВОЁ дерево не отбеливает ничто), и человек будет видеть её на каждом свипе — с того
-    момента, как дерево простоит без единой записи дольше grace-окна, — не зная, чья она.
-    **И ровно наоборот с ИГНОРИРУЕМЫМ файлом: он не даёт `dirty` вовсе.** Снял в своём
-    review-дереве `shot-<id>.png` (правило `*.png`) или сложил вывод браузера в
-    `.playwright-mcp/` — гвард этого не видит, дерево уйдёт штатным `released: true`, а файлы
-    вместе с ним. След останется один: `removed_ignored` в той же записи (разбор — там же, в
-    «Работал в своём worktree»). Значит всё, что нужно ПОСЛЕ вердикта, вынеси наружу ДО него.
-- **Не завелось — цикл НЕ роняем.** Когда `workspace` не смог сделать работу (не git-репо,
-  нет `origin`, путь занят посторонним каталогом, нет прав, `--gc` не достучался до трекера,
-  дерево полусоздано убитым `worktree add` — «HALF-CREATED», его чинит человек двумя командами
-  из текста ошибки),
-  он печатает `{"error": ...}` и возвращает код 1. Это НЕ повод встать и НЕ
-  повод объявить очередь пустой: работаешь в ОДИН слот в основном чекауте — ровно как в
-  последовательном режиме, — и дренируешь дальше. Пер-таск-агент без пути в брифе — тоже
-  нормальный случай: он работает там, где стоит. Ошибка повторяется тик за тиком — заведи
-  `file_task`, чтобы это увидел человек, а не деградируй молча вечно. **Не путай это с
-  `released: false` у `--release`:** тот приходит с кодом 0, и сбоем инструмента не является
-  ВООБЩЕ НИКОГДА — но и одного смысла у него нет: `dirty`/`unpushed` значат «осталась
-  несохранённая работа», а `no-worktree` — «дерева уже нет, и это в порядке». Смотри `code`,
-  а не сам факт `false` (разбор — в «Следах работы»).
-- **Отдельный случай: `workspace <id>` отказал словами «build worktree … DETACHED».** Это НЕ
-  сломанный инструмент и НЕ повод сузить дренаж: дерево живо, работа цела на ветке
-  `task/<id>`, но оно стоит не на ней — типично прерванный `git rebase origin/main` (убитый
-  ход обрывает его ровно так и оставляет дерево ЧИСТЫМ, поэтому по виду ничего не заметно).
-  Раньше `ensure` молча отдавал такое дерево как обычное, и resume-агент коммитил в
-  detached HEAD, а его `git push origin HEAD:main` пушил переигранный коммит вместо работы
-  ветки. Действие: диспатчи resume-агента КАК ОБЫЧНО (путь есть в тексте ошибки) и передай
-  ему диагностику целиком — первым делом он выполняет в этом дереве `git rebase --continue`
-  или `git rebase --abort` (какое именно — решает он, зная свою работу; `--abort`
-  выбрасывает переигранное), после чего `workspace <id>` снова отдаёт дерево штатно. Сам
-  инструмент этот выбор не делает и ничего не чинит молча.
+- **Free slots GET FILLED; overlap is caught at integration, not predicted from the board.**
+  While `wip.free > 0` and `next_task` hands back a task — claim and dispatch, up to the limit.
+  Holding a slot back because two cards LOOK like they touch the same module ("I'll serialise
+  them to be safe") is FORBIDDEN: that substitutes your guess for the project's mechanism. The
+  scheme does not even try to predict an undeclared file overlap in advance — it DETECTS it at
+  the moment of integration: every per-task agent runs `git fetch origin && git rebase
+  origin/main` before pushing, re-runs the acceptance criteria AFRESH on the rebased tree and
+  only then pushes (`git push origin HEAD:main`; rejected — it first looks at WHO won the race,
+  then takes another round, up to `2 × max(wip.limit, wip.active)`), resolves the conflict
+  itself, and when that fails — `call_human` (see "Commit+push is part of the transition to Review").
+  The price of a real overlap is one rebase for a sibling; the price of "I'd rather serialise"
+  is idle slots on EVERY task, always. The only legitimate narrowing of the drain is a technical
+  one: `workspace` could not create a tree (see "It didn't start — do NOT drop the loop"),
+  because two agents in one directory is something we never keep. A hunch that "these tasks look
+  like they'll overlap" is NOT such a ground.
+- **And the main thing: you do NOT SEE the queue — don't reason as if you do.** `next_task` hands
+  back EXACTLY ONE card per call and never a listing of the free queue: how many tasks are in it
+  and what they are is unknown from its reply (the one list there is, `waiting` under
+  `starving:true`, enumerates precisely the UNclaimable, gated tasks). `exclude` is not a queue
+  filter either: it strikes a card out of the "your active task / partial claim / review
+  offering" branches and does not narrow the free queue at all — it is not needed there, because
+  free means unassigned, and what you exclude is what you already hold, i.e. what is assigned to
+  you. So "I looked at the queue and decided these tasks conflict" is an illusion: there can be
+  more cards invisible to you than visible ones, and among them independent ones that your guess
+  simply never started. And do not take the cards you filed yourself (`decompose`,
+  `file_task(queue=True)`) for the queue: that is only YOUR contribution to it — beside them
+  lies what the human and other agents put there.
+- **Declared dependencies are a different matter, and the tools hold them, not you.** Everything
+  above is ONLY about UNdeclared overlap. `follows`/`blocked` are gated hard and without your
+  involvement: `claim` refuses, and `next_task` does not even offer such a card until the
+  predecessor has reached Review. And saying "these run strictly in order" is the FILER's right,
+  through `decompose(ordered=True)` (see "Decomposition and filing findings"), not the pump's by
+  holding a slot back.
+- **YOU maintain `exclude`, and only within the tick.** The tracker does not know whether your
+  subagent is alive — that is a fact of the harness, not of the board, so it is the pump that
+  must name the busy tasks. Forget, and `next_task` will honestly hand back the task your agent
+  is already working on as "your active task", and you will dispatch a second one onto it. A
+  killed turn loses that set — and that is FINE: on the next tick an empty `exclude` returns the
+  task as "your active task", and the ordinary rule kicks in, "the agent died → dispatch a fresh
+  resume agent" (see "Who does the work"). That one comes back to THE SAME tree and its
+  unfinished work: `workspace <id>` on an existing tree creates nothing and hands that same tree
+  back (`created: false`). But that holds for exactly THIS return path (the agent died, the task
+  stayed in Design/Build) — see the next item.
+- **A complete `exclude` is also the VISIBILITY of signals, not just protection from a double
+  dispatch.** The branch order in `next_task` is rigid: your active tasks → a partial claim in
+  Queue → a review offering → the slot check (`wip_saturated`) → the free queue. The slot check
+  sits AFTER the first three, so an active task you failed to name is handed back to you as
+  "your active task" BEFORE the turn ever reaches that check. The same board in the same minute
+  answers `wip_saturated: true` to a complete `exclude` — and "your active task" with
+  `wip.free: 0`, with no `wip_saturated` field at all, to an incomplete one. Which means
+  `wip_saturated` is a signal you get ONLY if `exclude` is complete.
+  - **Saw a resume at `wip.free == 0` — check YOUR `exclude`, not the board.** If an agent of
+    yours is ALREADY live on that task, the set is incomplete: add the id to `exclude` and call
+    `next_task` again (that is when `wip_saturated` arrives), and do NOT dispatch a second agent
+    onto it — that is exactly what `exclude` prevents. No live agent on it — this is the
+    ordinary resume after a dead agent, dispatch a fresh one. `next_task`'s reply at
+    `wip.free == 0` reminds you of this in its `note` — but only you know the set itself, so
+    only you can check it.
+  - **What you go blind to is not only saturation: review offerings get overridden too.** The
+    review branch sits ABOVE the slot check and takes no slot, so a saturated pump with a
+    COMPLETE `exclude` still gets its reviews; with an incomplete one a resume overrides them.
+    (Since #991 that holds in a SOLO setup too, and it did not before: the branch skipped cards
+    assigned to you, and there every card is yours, so a review never came at all. Now it does —
+    and a complete `exclude` starts deciding here as well, because the only thing that takes a
+    card off the offering is a verdict.)
+  - **This is NOT a bug, and we do NOT touch the branch order.** `vikunja-mcp claimable` rests
+    on it — the outward-EXPORTED check "is there work for this token?", by which an external
+    supervisor decides whether to boot an agent at all: it calls `next_task` with an EMPTY
+    `exclude`, and so NEVER reaches the slot check and answers "there is work: resume". Move the
+    slot check higher and a saturated board holding an abandoned, perfectly resumable task
+    starts answering "no work", and nobody will send a resume agent for it any more.
+- **Two returns, two trees.** There are TWO different ways to come back to a task, and their
+  trees differ; the rule above describes one of them. An agent that expects its own tree ALWAYS
+  will hunt in it for unfinished work that was never there. And what decides here is not WHY the
+  card came back, but one fact: whether the tree was torn down through `--release`. And that
+  removes the directory and the `task/<id>` branch ONLY when the tree is clean and everything is
+  pushed — so "there is no tree" and "the work is already on the main branch" are one statement,
+  not two.
+  - **The agent died** (the task still stands in Design/Build behind you, nobody called
+    `--release`): `workspace <id>` hands back THE SAME tree (`created: false`) — commits and
+    UNcommitted work both in place. Two exceptions: a tree taken off its branch by an
+    interrupted rebase comes back as a REFUSAL ("build worktree … DETACHED", see "A separate
+    case") — that gets fixed first; and a directory removed CRUDELY (around `--release`) is cut
+    AFRESH (`created: true`) and reattached to the surviving `task/<id>` branch — the commits
+    come back, the uncommitted work does not.
+  - **The card was returned from Review** (`needs_work` from a reviewer, or a human by hand)
+    AFTER a successful push and `--release`: neither directory nor branch — there is nothing to
+    reattach to. `workspace <id>` cuts a FRESH tree from the CURRENT `origin/<main branch>`
+    (`created: true`), which has moved ahead by the siblings' commits. That is neither a loss
+    nor a regression: the push succeeded, so the predecessor's change is ALREADY on the main
+    branch, and a fresh base is the best one there is. Read what was done from the `[review]`
+    comment and the pushed diff (`git show <sha from evidence>`), NOT from the working
+    directory.
+  - **A return WITHOUT a successful push looks like the first case, not the second** (typically
+    the orchestrator refusing an unverifiable evidence sha, step 3 of the tick): `--release`
+    refuses there ("unpushed commits"), and the tree with the work stays where it is.
+  - **So check, do not assume.** Two commands in the tree: `git status --porcelain` and
+    `git log --oneline origin/<main branch>..HEAD`. Both empty — there is NO unfinished work
+    here and nothing to look for; non-empty — there it is. The answer is honest on every path
+    above, including the rare "the branch leaked" (`branch_deleted: false`): there the tree is
+    reattached to it and the base will be older than the current main branch, which the ordinary
+    `git fetch origin && git rebase origin/main` before the push straightens out.
+  - **Deliberately NOT done:** letting the `task/<id>` branch live on after `--release` so that
+    a return could reattach to it. That would break the release's own protection and would pile
+    up one branch per EVERY finished task; a fresh tree from the current main branch is the
+    better behaviour — it just had to be said out loud.
+- **A review takes no slot.** `wip.active` counts only Design/Build assigned to you; a card in
+  Review is not your active task (see "Queue discipline"), so background reviews do not narrow
+  the drain, however many of them there are.
+- **Having cast a verdict, the reviewer releases its own tree:**
+  `vikunja-mcp workspace --release <id> --role review`. `--role review` is MANDATORY here — by
+  default `--release` takes down the build tree, i.e. somebody else's. Fail to release it and
+  the tree lives until the card leaves Review (who moves it out of there — see below), and
+  `--gc` will not take it before that: a review tree's liveness is counted BY ROLE, not by
+  freshness, so while the card is in Review the sweep does not touch it, however long it has
+  stood without a single write — the grace window never even reaches it. **And do NOT commit
+  INSIDE a review tree** (notes, a draft verdict): it is detached, a commit in it is reachable
+  from no branch — `--release` will refuse to remove it, `--gc` too, and the tree stays forever.
+  A second round of review on that task runs into it:
+  `workspace <id> --role review --at <new sha>` REFUSES ("pinned at …"), and that is right —
+  otherwise you would silently get a tree with the OLD code and cast a verdict on that. The
+  verdict goes as a comment to the tracker (`review_task`), not as a commit into the tree.
+  - **It is not only the human who moves a card out of Review — YOUR verdict moves it too, and
+    the tree dies along with it.** `approve` does NOT move the card (only the labels), so after
+    it the tree lives until a human takes the card away. But `review_task(verdict='needs_work')`
+    sends the card to Build — and from that second on your tree is DEAD to `--gc`, exactly like
+    a build tree after `advance(to='review')`. After that only the grace window holds it, and
+    that is counted from the last WRITE in the tree: a purely reading review (Read, `git log`,
+    `git show`) has no writes at all, so the window ticks from the tree's CREATION and not from
+    the verdict, and a review longer than the window falls outside it before you have even cast
+    the verdict. Verified: the very next sweep hands a quiesced tree back in `released`, and the
+    directory is gone. No work is lost by this (the tree is detached and clean), the cost is
+    bounded by a vanished cwd — but the rule is therefore exactly the build side's after
+    `advance`/`call_human` (see "Check-point early" and "Commit+push is part of the move to
+    Review"): **once you have cast the verdict, do not assume you are still standing in your own
+    tree**; needed the directory — call `workspace <id> --role review --at <sha>` again rather
+    than walking into the old path. Do NOT hold the verdict back for that: "record the verdict
+    at once" is the stronger rule (a lost verdict is a whole review again from scratch, a
+    vanished directory is one `workspace` call); simply do whatever needs THIS directory BEFORE
+    the verdict.
+  - **`released: false` has FOUR readings, and your ordinary one is the last.**
+    `--release --role review` over an already-removed tree returns exit code 0 and
+    `code: "no-worktree"`: that is not a refusal of the PROTECTION ("unsaved work is left"), not
+    an interrupted rebase and not a human's lock, but a success after the fact — there is
+    NOTHING to do and repeating it is pointless. The fourth reading was filed by #631:
+    `code: "locked"` — a HUMAN locked the tree (`git worktree lock`), the work is intact and
+    nothing was deleted, but taking the lock
+    off is not yours to do (`git worktree unlock` belongs to whoever set it); name the path and
+    the lock in your verdict and do not touch the directory. `released: false` is never, ever a
+    tool failure: a failure has exit code 1 and an `error` field. `--release`'s breakdown of the
+    codes is one for both roles and lives on the build side ("Worked in your own worktree", in
+    "Traces of the work") — read it there rather than growing a second one of your own.
+    **But "one for both roles" holds in the other direction too: `dirty` does NOT TELL the roles
+    apart.** One file left in the tree — a probe, a draft, exactly what "whatever can live in
+    your tree, let it live there" calls for — gives `{"released": false, "code": "dirty"}`. And
+    the CURE written there is the build one, "take it through to a push and repeat", and it is
+    FORBIDDEN to you: the tree is detached, there is no branch, and a commit into it is an
+    `unreachable-head` forever — and QUIETLY at that: such an entry grades into `expected`, i.e.
+    into the "do not look" list, and nobody will see it. Your cure is one: take the file out of
+    the tree (need it later — carry it outside, with the task id in the name) and repeat
+    `--release`. Fail to, and when the card leaves Review the entry lands in `kept` (`dirty`
+    reaches `expected` only for a BUILD tree and only under a parked card; nothing whitens YOUR
+    tree), and the human will see it on every sweep — from the moment the tree has stood without
+    a single write for longer than the grace window — without knowing whose it is.
+    **And it is exactly the other way round with an IGNORED file: it does not give `dirty` at
+    all.** Took a `shot-<id>.png` in your own review tree (the `*.png` rule) or put the
+    browser's output into `.playwright-mcp/` — the guard does not see it, the tree goes with an
+    ordinary `released: true`, and the files go with it. One trace is left: `removed_ignored` in
+    that same entry (the breakdown is in the same place, "Worked in your own worktree"). So
+    everything you need AFTER the verdict, carry outside BEFORE it.
+- **It didn't start — do NOT drop the loop.** When `workspace` could not do the work (not a git
+  repo, no `origin`, the path taken by a foreign directory, no permissions, `--gc` could not
+  reach the tracker, a tree half-created by a killed `worktree add` — "HALF-CREATED", which a
+  human fixes with the two commands from the error text), it prints `{"error": ...}` and returns
+  exit code 1. That is NOT a reason to stop and NOT a reason to declare the queue empty: you
+  work in ONE slot in the main checkout — exactly as in sequential mode — and keep draining. A
+  per-task agent with no path in its brief is a normal case too: it works where it stands. The
+  error repeats tick after tick — file a `file_task` so a human sees it, rather than degrading
+  silently forever. **Do not confuse this with `--release`'s `released: false`:** that one comes
+  with exit code 0, and is NEVER EVER a tool failure — but it does not carry one single meaning
+  either: `dirty`/`unpushed` mean "unsaved work is left", while `no-worktree` means "the tree is
+  already gone, and that is fine". Read the `code`, not the bare fact of `false` (the breakdown
+  is in "Traces of the work").
+- **A separate case: `workspace <id>` refused with the words "build worktree … DETACHED".** This
+  is NOT a broken tool and NOT a reason to narrow the drain: the tree is alive, the work is
+  intact on the `task/<id>` branch, but the tree is not standing on it — typically an
+  interrupted `git rebase origin/main` (a killed turn breaks it off exactly like that and leaves
+  the tree CLEAN, so nothing shows from the outside). `ensure` used to hand such a tree back
+  silently as an ordinary one, and the resume agent committed into a detached HEAD, while its
+  `git push origin HEAD:main` pushed the replayed commit instead of the branch's work. Action:
+  dispatch the resume agent AS USUAL (the path is in the error text) and hand it the whole
+  diagnostic — the first thing it does in that tree is `git rebase --continue` or
+  `git rebase --abort` (which one is its call, knowing its own work; `--abort` throws away what
+  was replayed), after which `workspace <id>` hands the tree back normally again. The tool itself
+  does not make that choice and fixes nothing silently.

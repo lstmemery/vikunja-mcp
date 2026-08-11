@@ -479,7 +479,7 @@ def _doc_surface(surface: str) -> str:
 # come back). A table rather than one expected string because the three surfaces retired three
 # different spellings, in two languages and two grammatical moods — see the pin below.
 _RETIRED_NAME_ADVICE = {
-    "skill": ("ИМЯ ПАРАМЕТРА ПРОВЕРЯТЬ НЕ НАДО", "ПРОВЕРЬ ИМЯ ПАРАМЕТРА"),
+    "skill": ("DO NOT CHECK THE PARAMETER NAME", "check the parameter name FIRST"),
     "docstring": ("no longer one of the possibilities", "a misspelled parameter name"),
 }
 

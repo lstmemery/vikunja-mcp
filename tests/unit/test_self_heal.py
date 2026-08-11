@@ -155,5 +155,5 @@ def test_packaged_skill_declares_the_managed_contract():
     """SKILL.md must carry the same 'local edits are overwritten' contract the hook does,
     so the on-start refresh is never a surprise, and must name the opt-out env var."""
     text = _packaged_skill_text()
-    assert "перезаписаны" in text                                    # local edits overwritten
+    assert "local\n     edits will be overwritten" in text           # local edits overwritten
     assert setup_cmd.SKILL_SYNC_OPT_OUT_ENV in text                 # names the opt-out

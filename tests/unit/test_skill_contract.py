@@ -108,7 +108,7 @@ def _freshness_section(text: str) -> str:
     Scoped to its own section, like `_gc_section`: `install-skill` and the sync's opt-out env are
     named in the MANAGED header too, so a whole-file substring could not tell "the rule is still
     stated" from "the header still mentions the sync"."""
-    start = text.find("\n## Какую копию этих правил ты читаешь\n")
+    start = text.find("\n## Which copy of these rules you are reading\n")
     assert start != -1, "SKILL.md no longer states which copy of itself is authoritative"
     end = text.find("\n## ", start + 1)
     assert end != -1, "the freshness section no longer ends where the next section begins"
@@ -295,7 +295,7 @@ def _exclude_completeness_bullet(text: str) -> str:
     whole-file substring could not tell "the rule is still stated" from "the words still occur
     somewhere". Deleting this bullet must fail the pin even though every word in it survives
     elsewhere."""
-    start = text.find("\n- **Полнота `exclude`")
+    start = text.find("\n- **A complete `exclude` is also the VISIBILITY of signals")
     assert start != -1, \
         "SKILL.md no longer tells the pump what an incomplete `exclude` costs it (#527)"
     end = text.find("\n- **", start + 1)
@@ -326,11 +326,11 @@ def test_the_rulebook_says_wip_saturated_needs_a_complete_exclude_and_the_code_a
     The behavioural half drives the real Workflow to both outcomes, so a future reordering of
     next_task's branches fails HERE too, not only in some distant hub."""
     bullet = _exclude_completeness_bullet(_skill_text())
-    assert "ТОЛЬКО если `exclude` полон" in bullet, \
+    assert "ONLY if `exclude` is complete" in _flat(bullet), \
         "SKILL.md no longer says wip_saturated requires a COMPLETE exclude"
-    assert "проверяй СВОЙ `exclude`, а не доску" in bullet, \
+    assert "check YOUR `exclude`, not the board" in bullet, \
         "SKILL.md no longer tells the pump where to look when a resume arrives at free:0"
-    assert "порядок ветвей НЕ трогаем" in bullet, \
+    assert "we do NOT touch the branch order" in bullet, \
         "SKILL.md no longer says the branch order is deliberate — the next reader will 'fix' it"
     assert "vikunja-mcp claimable" in bullet, \
         "SKILL.md no longer names the contract that the branch order protects"
@@ -421,7 +421,7 @@ def _tick_step_3(text: str) -> str:
     Scoped to its own list item, like `_integration_recipe` and `_gc_section`: `review_task` and
     `call_human` are named all over the rulebook, so a whole-file substring could not tell "step 3
     still prescribes this" from "some other section mentions the tool"."""
-    m = re.search(r"\n  3\. Агент вернулся с итогом(.*?)\n  4\. ", text, re.S)
+    m = re.search(r"\n  3\. An agent came back with its result(.*?)\n  4\. ", text, re.S)
     assert m, "the orchestrator tick's step 3 is no longer where this pin can find it"
     return m.group(1)
 
@@ -573,9 +573,9 @@ def _standing_record_bullet(text: str) -> str:
     and "каждый свип" are words the section uses elsewhere (the `expected` notes above it), so a
     section-wide substring could not tell "the cadence rule is still stated" from "the words
     survive nearby"."""
-    start = text.find("     - **Стоячая запись приходит на КАЖДОМ свипе")
+    start = text.find("     - **A standing record arrives on EVERY sweep")
     assert start != -1, "SKILL.md no longer states the cadence of a standing --gc record"
-    end = text.find("\n     `--gc` ходит ОДИН", start)
+    end = text.find("\n     `--gc` goes ALONE", start)
     if end == -1:
         # The rulebook split put this bullet in `references/gc-report.md` and left the `--gc`
         # argument rule in the core, so the anchor that used to follow it now PRECEDES it in the
@@ -584,7 +584,7 @@ def _standing_record_bullet(text: str) -> str:
     assert end != -1, "the cadence bullet no longer ends where the --gc argument rule begins"
     bullet = text[start:end]
     assert 0 < len(bullet) < len(text), "the cadence slice is not a proper subset of SKILL.md"
-    assert "Незнакомый `code`" not in bullet, "the slice swallowed the preceding bullet"
+    assert "An unfamiliar `code`" not in bullet, "the slice swallowed the preceding bullet"
     return bullet
 
 
@@ -592,7 +592,7 @@ def _unreachable_head_note(text: str) -> str:
     """The `expected` (2) note — the reviewer's in-tree commit, and the ONE record on this board
     that no pipeline step ever clears. Sliced to the note itself so that restoring the old
     unconditional wording ("запись вечная") fails here rather than hiding inside the section."""
-    start = text.find("       (2) `unreachable-head` у REVIEW-дерева")
+    start = text.find("       (2) `unreachable-head` on a REVIEW tree")
     assert start != -1, "SKILL.md no longer explains the review tree's unreachable-head record"
     end = text.find("\n     - ", start)
     assert end != -1, "the unreachable-head note no longer ends where the next bullet begins"
@@ -876,21 +876,21 @@ def test_the_standing_gc_record_is_reported_under_the_conditions_the_rulebook_na
     # (the first draft of this test pinned "НЕ продлевает" raw and went red on a line break alone).
     bullet, note = _flat(bullet), _flat(note)
     minutes = workspace_cmd._REAP_GRACE_SECONDS // 60
-    assert f"grace-окна ({minutes} мин)" in bullet, \
+    assert f"grace window ({minutes} min)" in bullet, \
         "the cadence bullet no longer names the window, or names a length the code disagrees with"
-    assert "окно НЕ продлевает" in bullet, \
+    assert "does NOT extend the window" in bullet, \
         "the bullet no longer says the sweep itself does not renew the window (VMCP-90's fix)"
-    assert "ПОДКАТАЛОГЕ" in bullet, \
+    assert "not in a SUBDIRECTORY" in bullet, \
         "the bullet stopped warning that a write below the top level does not renew the window"
-    assert "ПЕРВОМ же свипе" in bullet, \
+    assert "on the VERY FIRST sweep" in bullet, \
         "the bullet stopped saying a tree that was already quiet is reported the instant it dies"
-    assert "ВНЕ Review" in note and "grace-окна" in note, \
+    assert "stands OUTSIDE Review" in note and "older than the grace window" in note, \
         "the unreachable-head note lost one of the two conditions its record actually has"
-    assert "в пайплайне нет шага" in note, \
+    assert "there is no step in the pipeline" in note, \
         "the note no longer says what IS permanent here — that nothing in the pipeline clears it"
-    assert "`git branch <имя> <sha заметок>`" in note, \
+    assert "`git branch <name> <sha of the notes>`" in note, \
         "the note stopped naming the one command that actually makes the notes commit reachable"
-    assert "этим выходом НЕ является" in note, \
+    assert "is NOT that way out" in note, \
         "the note dropped its warning that reset --hard is not the same exit — it measurably is not"
     # Three more positive pins, added because the second pass INVERTED each of these sentences and
     # the whole suite stayed green — the exact drift this card exists to stop. Each guards a claim
@@ -898,13 +898,13 @@ def test_the_standing_gc_record_is_reported_under_the_conditions_the_rulebook_na
     assert "--no-reflogs" in note, \
         "the note dropped the fsck flag — bare `git fsck --unreachable` stays SILENT while the " \
         "worktree stands, so without it the command shown proves the opposite of what is claimed"
-    assert "окно УЖЕ истекло" in note, \
+    assert "the window has ALREADY expired" in note, \
         "the note went back to promising that the NEAREST sweep reaps after `git branch` — " \
         "measured false for a young tree and for one holding a forgotten file"
-    assert "ДОЛЬШЕ окна" in bullet, \
+    assert "stood quiet LONGER than the window" in bullet, \
         "the bullet dropped the condition again: a tree written to just before its card died is " \
         "NOT reported on the first sweep, which is what the unconditional version promised"
-    assert "ИГНОРИРУЕМОЕ" in bullet, \
+    assert "does not show IGNORED paths" in bullet, \
         "the bullet stopped saying `dirty` cannot see ignored files — the one measured way a " \
         "sweep destroys something the 'no work is lost' promise sounds like it covers"
 
@@ -937,13 +937,13 @@ def _two_returns_rule(text: str) -> str:
     Sliced to its own top-level bullet, like `_gc_section` / `_tick_step_3`: `created`,
     `--release` and `task/<id>` are named all over the parallel-drain section, so a whole-file
     substring could not tell "the split is still stated" from "the words survive somewhere"."""
-    start = text.find("- **Два возврата, два дерева.**")
+    start = text.find("- **Two returns, two trees.**")
     assert start != -1, "SKILL.md no longer splits the two ways a task comes back to an agent"
     end = text.find("\n- **", start + 1)
     assert end != -1, "the two-returns rule no longer ends where the next top-level bullet begins"
     section = text[start:end]
     assert 0 < len(section) < len(text), "the two-returns slice is not a proper subset of SKILL.md"
-    assert "Ревью слот не занимает" not in section, "the slice swallowed the following bullet"
+    assert "A review takes no slot" not in section, "the slice swallowed the following bullet"
     return section
 
 
@@ -1065,9 +1065,13 @@ def test_the_two_ways_a_task_comes_back_hand_back_the_trees_the_rulebook_promise
     # and the rulebook says both outcomes in the payload's own vocabulary, plus the two-command
     # check that answers "is there unfinished work here?" without the agent having to guess
     assert "`created: false`" in rule, "the rule no longer names the crash path's `created: false`"
-    assert "`created: true`" in rule, "the rule no longer names the bounce path's `created: true`"
+    # NOT a bare "`created: true`": the crash bullet ALSO carries that token (the crudely removed
+    # directory that is cut afresh and reattached), so the bare form is satisfied by a clause that
+    # is not the bounce — measured, deleting the bounce path's own token left it GREEN.
+    assert "cuts a FRESH tree from the CURRENT `origin/<main branch>` (`created: true`)" \
+        in _flat(rule), "the rule no longer names the bounce path's `created: true`"
     assert "git status --porcelain" in rule and \
-        "git log --oneline origin/<главная ветка>..HEAD" in _flat(rule), \
+        "git log --oneline origin/<main branch>..HEAD" in _flat(rule), \
         "the rule lost the two commands that settle it without guessing"
 
 
@@ -1194,13 +1198,14 @@ def test_the_integration_retry_ceiling_is_pinned():
     src = _workflow_src()
 
     # the three sites that carry the ceiling itself
-    assert "ещё круг, до `2 × max(wip.limit, wip.active)`)" in flat, \
+    assert "another round, up to `2 × max(wip.limit, wip.active)`)" in flat, \
         "the parallel-drain rule no longer states the `2 × max(...)` integration retry ceiling"
-    assert "до 2 × max(wip.limit, wip.active) кругов" in recipe, \
+    assert "up to 2 × max(wip.limit, wip.active) rounds" in recipe, \
         "the integration recipe's push step no longer states the `2 × max(...)` retry ceiling"
-    assert "круги кончились (`2 × max(wip.limit, wip.active)`, см. «Откуда потолок»)" in flat, \
+    assert 'the rounds have run out (`2 × max(wip.limit, wip.active)`, see "Where the ceiling ' \
+        'comes from")' in flat, \
         "the escalation sentence no longer spends the `2 × max(...)` rounds before call_human"
-    assert "`wip.active` из того же" in flat, \
+    assert "Name `wip.active` from that same response" in flat, \
         "the dispatch brief no longer carries wip.active — the ceiling collapses back to the limit"
 
     # the diagnosis: a round is owed only for a race that was LOST, and the count cannot say
@@ -1208,20 +1213,20 @@ def test_the_integration_retry_ceiling_is_pinned():
         "the recipe no longer diagnoses WHO won the race before spending a round"
     assert "call_human" in recipe, \
         "the recipe no longer escalates straight away when the range is empty (no race at all)"
-    assert "«N кругов подряд, вот что" in flat, \
+    assert '"N rounds in a row, and here is what landed' in flat, \
         "the escalation asks with a COUNT again — the human needs the LIST of what won each round"
 
     # the variable the formula reads, and the fallback for when the brief does not carry it
-    assert "`wip.limit` из ответа `next_task`" in flat, \
+    assert "`wip.limit` from the `next_task` response" in flat, \
         "the dispatch brief no longer carries wip.limit — every agent falls back to the default"
-    assert "— **бери 6**" in flat, \
+    assert "— **take 6**" in flat, \
         "the brief-less fallback is gone — `2 × wip.limit` is then an unfillable variable"
     assert 'result["wip"] = wip' in src, \
         "SKILL.md computes the ceiling from next_task's `wip`, but with_wip stopped attaching it"
     assert '"limit": limit' in src, \
         "SKILL.md computes the ceiling from `wip.limit`, but the payload lost its `limit` field"
 
-    for old in ("ещё круг, до 3)", "до 3 кругов", "отбило 3 раза подряд"):
+    for old in ("another round, up to 3)", "up to 3 rounds", "3 rounds in a row"):
         assert old not in text, \
             f"the reverted 3-round ceiling is back in SKILL.md ({old!r}) — see this test's docstring"
 
@@ -1272,7 +1277,7 @@ def _ceiling_derivation_section(text: str) -> str:
     That third place lives INSIDE this slice, so anything added to the fallback sentence is read by
     the table regexes below. VMCP-102 (559) rewrote it and deliberately kept the `при <n> — <m>`
     shape out of the new prose; a future edit must do the same or move the regexes."""
-    start = text.find("- **Откуда потолок и почему он")
+    start = text.find("- **Where the ceiling comes from and why it is")
     assert start != -1, (
         "SKILL.md no longer opens its «Откуда потолок» derivation where this pin can find it. If "
         "the bullet was legitimately reworded, move this anchor — do not delete the check"
@@ -1281,7 +1286,7 @@ def _ceiling_derivation_section(text: str) -> str:
     assert end != -1, "the derivation bullet no longer ends where the next bullet begins"
     section = text[start:end]
     assert 0 < len(section) < len(text), "the derivation slice is not a proper subset of SKILL.md"
-    assert "Достиг потолка" not in section, "the slice swallowed the escalation bullet after it"
+    assert "Hit the ceiling" not in section, "the slice swallowed the escalation bullet after it"
     return section
 
 
@@ -1404,8 +1409,8 @@ def test_the_ceiling_numbers_in_both_files_re_derive_from_their_own_formula():
     # --- SKILL.md: «Откуда потолок», the same derivation written for agents
     skill = _flat(_ceiling_derivation_section(_skill_text()))
     default_match = re.search(
-        r"При дефолтном лимите (\d+) худший механический прогон равен (\d+), "
-        r"а потолок — \*\*(\d+)\*\*",
+        r"At the default limit of (\d+) the worst mechanical run equals (\d+) "
+        r"and the ceiling is \*\*(\d+)\*\*",
         skill,
     )
     assert default_match, (
@@ -1414,13 +1419,13 @@ def test_the_ceiling_numbers_in_both_files_re_derive_from_their_own_formula():
     )
     skill_default, skill_worst = int(default_match.group(1)), int(default_match.group(2))
     skill_ceilings = {skill_default: int(default_match.group(3))}
-    narrow = re.search(r"при лимите (\d+) потолок (\d+)", skill)
+    narrow = re.search(r"at a limit of (\d+) the ceiling is (\d+)", skill)
     assert narrow, (
         "SKILL.md's «Откуда потолок» no longer states the sequential case (limit 1), the instance "
         "that proves the rule is a formula and not the default's constant; update this regex"
     )
     skill_ceilings[int(narrow.group(1))] = int(narrow.group(2))
-    for limit, ceiling in re.findall(r"при (\d+) — (\d+)", skill):
+    for limit, ceiling in re.findall(r"at (\d+) it is (\d+)", skill):
         skill_ceilings[int(limit)] = int(ceiling)
     re_derive("SKILL.md's «Откуда потолок»", skill_default, skill_worst, skill_ceilings)
 
@@ -1448,13 +1453,13 @@ def _shared_resources_section(text: str) -> str:
     The section itself stayed in the core; only its browser subsection became
     `references/browser.md`, so the pins about shared resources still see both.
     """
-    start = text.find("## Общие ресурсы: worktree изолирует ФАЙЛЫ")
+    start = text.find("## Shared resources: a worktree isolates FILES")
     assert start != -1, "the shared-resource section is no longer where this pin can find it"
     end = text.find("\n## ", start + 1)
     assert end != -1, "the shared-resource section no longer ends at the next top-level heading"
     section = text[start:end]
     assert 0 < len(section) < len(text), "the slice is not a proper subset of SKILL.md"
-    assert "## Кто выполняет работу" not in section, "the slice swallowed the following section"
+    assert "## Who does the work" not in section, "the slice swallowed the following section"
     # The browser subsection used to close this section and now lives in `references/browser.md`.
     # APPENDED rather than merged, because one pin below asserts ORDER — shared-resource rules
     # first, browser rules after — which is the layout the section always had.
@@ -1557,23 +1562,23 @@ def test_the_shared_browser_rule_stays_detectable_rather_than_wishful():
     # `Page URL` and `browser_snapshot` each occur elsewhere in this very section (the
     # no-isolation-parameter bullet names both tools), so a bare-token pin is satisfied by
     # prose that instructs nothing. That is the nit review raised, and this is its fix.
-    assert "зови `browser_snapshot` и сверяй `Page URL`" in flat, \
+    assert "call `browser_snapshot` and cross-check the `Page URL`" in flat, \
         "the rule no longer tells the agent to verify WITH browser_snapshot — `Page URL` is the " \
         "one line browser_take_screenshot never prints, so the check would be looking at nothing"
-    assert "не печатает `Page URL` НИКОГДА" in flat, \
+    assert "`browser_take_screenshot` NEVER prints `Page URL`" in flat, \
         "the rule no longer states that browser_take_screenshot never prints `Page URL` — an " \
         "agent that looks for it there finds nothing and reads that as 'no mismatch'"
-    assert "Нет строки — нет подтверждения" in flat, \
+    assert "No line — no confirmation" in flat, \
         "the rule no longer says a MISSING line is not confirmation — that is the fail-open " \
         "this rework exists to close (absence of evidence read as evidence of absence)"
     # WHAT TO DO about a mismatch: the branch IS the rule
-    assert "перейди заново" in flat, \
+    assert "navigate again, re-shoot" in flat, \
         "the rule may still carry the `Page URL` token but no longer says what to DO when it " \
         "does not match (re-navigate and re-shoot) — a token is a word, not an instruction"
-    assert "вывод не делай" in flat, \
+    assert "draw no conclusion" in flat, \
         "the rule no longer forbids CONCLUDING from a page that may be a sibling's — " \
         "detect-don't-prevent is worthless if the agent may still use what it saw"
-    assert "`attach_file` отдавай АБСОЛЮТНЫЙ путь `<главный чекаут>/.playwright-mcp/<имя>`" in flat, \
+    assert "Give `attach_file` an ABSOLUTE path `<main checkout>/.playwright-mcp/<name>`" in flat, \
         "the browser rule no longer says WHICH path attach_file must be given (absolute, in " \
         "the MAIN checkout's `.playwright-mcp/`) — the bare token now also occurs in the " \
         "verify-before-attach clause, so pinning the word alone would survive deleting the path " \
@@ -1585,12 +1590,12 @@ def test_the_shared_browser_rule_stays_detectable_rather_than_wishful():
     # makes the instruction executable. The value itself is checked against this repo's ignore
     # rules next door, by `test_every_filename_skill_md_prescribes_is_excluded_by_this_repos_
     # gitignore` — that pin holds the PATH, these hold the INSTRUCTION and its measured gotcha.
-    assert "`filename` ВСЕГДА давай с префиксом `.playwright-mcp/`" in flat, \
+    assert "ALWAYS give `filename` with the `.playwright-mcp/` prefix" in flat, \
         "the rule no longer tells the agent WHERE a caller-chosen `filename` must point. That " \
         "directory is the only axis covering the four tools that write the page's TEXT " \
         "(snapshot/console/network/evaluate): their names are `.md`/`.txt`/`.json`/none and " \
         "their bytes have no signature, so #629's two layers reach neither"
-    assert "Каталог перед этим СОЗДАЙ" in flat and "ENOENT" in flat, \
+    assert "CREATE the directory before that" in flat and "ENOENT" in flat, \
         "the rule no longer states that the directory must EXIST first. Measured on " \
         "@playwright/mcp 0.0.78: a caller-chosen filename is resolved by a function that does " \
         "not mkdir (unlike the auto-named path, which does), so on a missing `.playwright-mcp/` " \
@@ -1602,7 +1607,7 @@ def test_the_shared_browser_rule_stays_detectable_rather_than_wishful():
         "agent stands — that is the one part an agent cannot reconstruct, because the artifact " \
         "goes to the MCP server's workspace and not to the tree it is standing in. An attack pass " \
         "deleted this fenced block with both prose pins intact and the whole suite stayed green"
-    assert "Граница этого правила" in flat and "ПРАВИЛО, а не замок" in flat, \
+    assert "The bound of this rule" in flat and "a RULE, not a lock" in flat, \
         "the rule lost the clause saying what it does NOT do — that a bare name is still accepted " \
         "and the spill is not root-confined. That is not decoration: this whole card exists " \
         "because #629's first draft claimed a completeness it did not have, and a rule read as a " \
@@ -1612,7 +1617,7 @@ def test_the_shared_browser_rule_stays_detectable_rather_than_wishful():
     assert "browser_tabs" in section, \
         "the rule no longer explains that a tab is not isolation (global, shifting indices)"
     # the disproved claim this rework removed must not come back
-    assert "В каждом ответе печатается" not in flat, \
+    assert "response prints `Page URL" not in flat, \
         "the disproved claim that EVERY browser response prints `Page URL:` is back — it is " \
         "false for browser_take_screenshot, and it is what made the check fail open"
 
@@ -1639,7 +1644,11 @@ def test_the_shared_resource_rules_name_a_knob_the_agent_can_actually_reach():
     fenced integration recipe, found 2"), which is precisely the cross-invariant collision this
     assertion exists to make loud."""
     section = _shared_resources_section(_skill_text())
-    assert "id" in section and "$ID" in section, \
+    # The two DERIVATIONS, not the tokens: `id` is a substring of ordinary English prose and `$ID`
+    # survives elsewhere in the section (the scratchpad bullet's role suffix), so the token form is
+    # satisfied by a recipe that has gone back to the fixed name and port — measured, that exact
+    # mutation left the token pin GREEN.
+    assert "NAME=vikunja-test-$ID" in section and "PORT=$((20000 + ID" in section, \
         "the isolate-by-task-id recipe lost the task id it derives every shared name from"
     assert "docker rm -f" in section, \
         "the recipe no longer cleans up — a leaked container holds its name and port all day"
@@ -1656,7 +1665,7 @@ def _drain_width_section(text: str) -> str:
     `claim` and `active` appear all over the rulebook (the queue-discipline bullet, the parallel
     drain, the retry ceiling), so a whole-file substring could not tell "the rule is still stated
     where the pump reads the payload" from "some other section happens to use the words"."""
-    start = text.find("- **`limit` — гейт на ОДИН переход (`claim`)")
+    start = text.find("- **`limit` is a gate on ONE transition (`claim`)")
     assert start != -1, \
         "the rulebook no longer states that `limit` gates ONE transition, not the active count"
     end = text.find("\n- **`wip_saturated", start)
@@ -1700,11 +1709,11 @@ def test_the_wip_overshoot_the_rulebook_describes_is_one_the_code_produces():
     tests/unit/test_workflow_wip.py, which is also where the "advance(to='build') is NOT such a
     path" correction lives."""
     section = _drain_width_section(_skill_text())
-    assert "гейт" in section and "claim" in section, \
+    assert "gate on ONE transition (`claim`)" in _flat(section), \
         "the drain-width rule no longer says WHICH transition the limit gates"
-    assert "`active` ЗАКОННО" in section and "больше" in section, \
+    assert "`active` LEGITIMATELY runs HIGHER than `limit`" in _flat(section), \
         "the rulebook no longer states that active may legitimately exceed limit"
-    assert "НЕ порча доски" in section, \
+    assert "NOT board corruption" in section, \
         "the rulebook no longer tells the pump that an overshoot is not board corruption"
     assert "max(0, limit − active)" in _flat(section), \
         "the rulebook no longer explains why `free` cannot show the overshoot"
@@ -1785,8 +1794,8 @@ def test_the_browser_answer_leads_with_the_isolation_an_agent_can_launch_itself(
     lost it, is the same defect this card was returned for: a check that reports success from the
     wrong evidence."""
     section = _shared_resources_section(_skill_text())
-    own = section.find("#### Свой браузер")
-    shared = section.find("#### Общий браузер")
+    own = section.find("#### Your own browser")
+    shared = section.find("#### The shared browser")
     assert own != -1, \
         "the section no longer has a 'свой браузер' subsection — the card's answer (an agent " \
         "CAN have its own browser) is gone, leaving only the disproved 'cannot be done'"
@@ -1847,10 +1856,10 @@ def test_the_browser_answer_leads_with_the_isolation_an_agent_can_launch_itself(
         "is not a leak on its own: measured, the default is `<cwd>/.playwright-mcp/`, which this " \
         "repo ignores. It is the naming rule. Prose about the flag is not a command — this round " \
         "measured green on the value-checking pin next door with the flag gone from the fence"
-    for old in ("изнутри его изолировать НЕЛЬЗЯ", "НЕ выполнимо"):
-        assert old not in section, \
-            f"the disproved framing is back in SKILL.md ({old!r}) — an agent CAN launch its " \
-            "own isolated browser; see this test's docstring"
+    assert "is achievable, and it is the default answer" in _flat(section), \
+        "the section no longer opens by saying the card's request — a browser that does not " \
+        "disturb the siblings — IS achievable and is the default answer. That sentence is what " \
+        "replaced the disproved 'cannot be done'; see this test's docstring"
 
 
 def _landed_check() -> str:
@@ -1924,16 +1933,16 @@ def test_a_rejected_push_asks_whether_the_work_landed_before_it_escalates():
         "a sibling on top has a NON-empty range, so that order sends it round again — and the "
         "retry rebases the already-upstream commit away and mis-attributes the evidence sha"
     )
-    assert "человека НЕ зови" in recipe, (
+    assert "do NOT call a human" in recipe, (
         "the recipe no longer says that a landed push spends no round and wakes nobody — the exit-0 "
         "branch without its verdict is the half-stated rule an agent fills in with a guess"
     )
 
-    assert "**Код 0 — работа НА ГЛАВНОЙ**" in flat, \
+    assert "**Exit 0 — the work is ON MAIN**" in flat, \
         "the prose lost the exit-0 verdict: a landed push is evidence, not an escalation"
-    assert "**Код 1 — работы там нет**" in flat, \
+    assert "**Exit 1 — the work is not there**" in flat, \
         "the prose lost the exit-1 verdict, which is the branch that must still escalate"
-    assert "ВЫБРАСЫВАЕТ твой коммит" in flat, (
+    assert "THROWS AWAY your commit" in flat, (
         "the prose no longer says WHY the landed check comes first — without the dropped-commit "
         "measurement the order reads as arbitrary and gets tidied back"
     )
@@ -1997,7 +2006,7 @@ def test_the_brief_less_ceiling_reads_the_repo_toml_before_it_falls_back():
         f"without it the instruction reads like a guess about a file that might be absent"
     )
 
-    m = re.search(r"— \*\*бери (\d+)\*\*", section)
+    m = re.search(r"— \*\*take (\d+)\*\*", section)
     assert m, (
         "SKILL.md's last-resort ceiling is no longer stated in a shape this pin can read. Reword "
         "freely — but update this regex, do not drop the check"
@@ -2011,13 +2020,13 @@ def test_the_brief_less_ceiling_reads_the_repo_toml_before_it_falls_back():
         f"The constant is only legitimate while it EQUALS the derivation on that one domain"
     )
 
-    assert section.index(config.REPO_FILE) < section.index("**бери "), (
+    assert section.index(config.REPO_FILE) < section.index("**take "), (
         "the brief-less rule quotes its constant before it tells the agent to read the real limit. "
         "A fallback offered first is a fallback taken first — which is how a consumer at "
         "wip_limit = 4 ends up escalating on arithmetic despite having the number on disk"
     )
 
-    assert "он прочитает `wip_limit` из репо-конфига" in _flat(text), (
+    assert "it will read `wip_limit` from the repo config itself" in _flat(text), (
         "the orchestrator's dispatch brief still promises the agent a bare default when the limit "
         "is not named. Both halves have to agree, or the brief keeps teaching the old behaviour"
     )
@@ -2036,7 +2045,10 @@ def _rule_boundary_bullet(text: str) -> str:
     ends the slice earlier; both shapes are correct, neither can silently widen to the file.
     """
     section = _shared_resources_section(text)
-    start = section.find("- **Граница правила.**")
+    # `- **The bound of this rule.**` is a DIFFERENT bullet in the same section (the one about
+    # `.playwright-mcp/` being ignored only here), and it sits ABOVE this one — so the anchor is
+    # the exact article: "the rule", not "this rule". Measured on the shipped text: one match each.
+    start = section.find("- **The bound of the rule.**")
     assert start != -1, \
         "SKILL.md no longer draws the boundary of the shared-browser rules (one session's " \
         "subagents) — an agent meeting a SECOND `claude` session has nothing to read"
@@ -2044,7 +2056,7 @@ def _rule_boundary_bullet(text: str) -> str:
     bullet = section[start:] if end == -1 else section[start:end]
     assert 0 < len(bullet) < len(section), \
         "the rule-boundary slice is not a proper subset of the shared-resources section"
-    assert "#### Общий браузер" not in bullet, "the slice swallowed the subsection heading"
+    assert "#### The shared browser" not in bullet, "the slice swallowed the subsection heading"
     return bullet
 
 
@@ -2095,16 +2107,16 @@ def test_the_cross_session_boundary_names_the_fix_and_not_only_the_symptom():
     loudly from the slicer; re-wrap the paragraph ACROSS two of the pinned phrases and rewrite
     the cost sentence -> PASS, by design (`_flat` is what makes a reflow a non-event)."""
     flat = _flat(_rule_boundary_bullet(_skill_text()))
-    assert "`mcp-<канал>-<sha256(корень воркспейса)[:7]>`" in flat, \
+    assert "`mcp-<channel>-<sha256(workspace root)[:7]>`" in flat, \
         "the bullet no longer derives the browser profile from the workspace root — the " \
         "scope claim below it becomes an assertion the reader has no reason to believe"
-    assert "РАЗНЫЕ репозитории не сталкиваются никогда" in flat, \
+    assert "DIFFERENT repositories never collide" in flat, \
         "the bullet no longer says different workspace roots never collide — an agent will " \
         "read every unrelated browser failure as this one"
     assert '`PLAYWRIGHT_MCP_ISOLATED` = `"true"`' in flat, \
         "the bullet no longer names the fix with its VALUE — envToBoolean accepts only " \
         '"true"/"1" and IGNORES anything else, so the value is the fix, not decoration'
-    assert "в блоке `env` файла `.claude/settings.json`" in flat, \
+    assert "in the `env` block of the file `.claude/settings.json`" in flat, \
         "the bullet no longer says WHERE the variable goes (the `env` block of a project " \
         "`.claude/settings.json`) — the bare path also occurs in the sentence after it"
 
@@ -2144,15 +2156,15 @@ def test_the_cross_session_boundary_forecloses_the_storage_state_non_fix():
     keeping the instruction -> FAIL; soften "НЕ ПИШЕТСЯ обратно НИКОГДА" to "пишется редко"
     -> FAIL; re-wrap the paragraph across every pinned phrase -> PASS."""
     flat = _flat(_rule_boundary_bullet(_skill_text()))
-    assert "`PLAYWRIGHT_MCP_STORAGE_STATE` эту цену НЕ отменяет" in flat, \
+    assert "`PLAYWRIGHT_MCP_STORAGE_STATE` does NOT cancel that cost" in flat, \
         "the bullet states the cost of `--isolated` (logins stop persisting) without the " \
         "measured verdict on the remedy upstream's README appears to offer for it — the " \
         "reader is left one search away from re-deriving tracker #585"
-    assert "не предлагай его как починку" in flat, \
+    assert "do not offer it as a fix" in flat, \
         "the bullet no longer INSTRUCTS an agent not to propose PLAYWRIGHT_MCP_STORAGE_STATE " \
         "as the fix — and this is the bullet an agent reads while standing in someone else's " \
         "project, where a confident wrong suggestion is the whole risk"
-    assert "НЕ ПИШЕТСЯ обратно НИКОГДА" in flat, \
+    assert "is NEVER written back" in flat, \
         "the bullet no longer says WHY the remedy is not one (the file is only ever read, " \
         "never written back, so a login does not reach the next session). An instruction " \
         "without its reason is the first thing a later agent overrules"
@@ -2383,7 +2395,7 @@ def _browser_section(text: str) -> str:
     `references/browser.md` rather than the bundle: a bundle search finds the stub.
     """
     text = _reference("browser.md")
-    start = text.index("### Браузер (playwright)")
+    start = text.index("### Browser (playwright)")
     # `references/browser.md` IS this section, so there is no following `## ` to stop at any
     # more; before the split the section ended at the next top-level heading of the one big file.
     rest = text.find("\n## ", start)
@@ -2427,9 +2439,9 @@ def test_a_playwright_tool_count_in_the_rulebook_names_the_version_it_was_measur
     """
     section = _browser_section(_skill_text())
 
-    claims = list(_TOOL_COUNT_CLAIM.finditer(section))
+    claims = list(_TOOL_COUNT_CLAIM_EN.finditer(section))
     assert claims, (
-        "no '<number> тулов' claim found in the browser section of SKILL.md — either the "
+        "no '<number> tools' claim found in the browser section of SKILL.md — either the "
         "rulebook stopped making one (then delete this pin) or the pattern stopped matching "
         "it (then fix the pattern). A pin that scans nothing passes for the wrong reason."
     )
@@ -2759,13 +2771,13 @@ def _reviewer_tree_rule(text: str) -> str:
     the rule was stated twice for build and only IMPLIED for review («дерево будет жить, пока
     карточка не уйдёт из Review» — while `needs_work` IS that departure).
     """
-    start = text.find("- **Ревьюер, вынеся вердикт, освобождает своё дерево:**")
+    start = text.find("- **Having cast a verdict, the reviewer releases its own tree:**")
     assert start != -1, "SKILL.md no longer has a rule about the reviewer's own worktree"
     end = text.find("\n- **", start + 1)
     assert end != -1, "the reviewer's tree rule no longer ends where the next top-level bullet does"
     bullet = text[start:end]
     assert 0 < len(bullet) < len(text), "the reviewer-tree slice is not a proper subset of SKILL.md"
-    assert "Не завелось" not in bullet, "the slice swallowed the following bullet"
+    assert "It didn't start" not in bullet, "the slice swallowed the following bullet"
     return bullet
 
 
@@ -2814,7 +2826,7 @@ def test_the_reviewers_tree_rule_says_its_own_verdict_can_take_the_directory_awa
     assert 'self._move(task_id, "Build")' in review_src[needs_work_at:], \
         "needs_work no longer takes the card out of Review — the whole hazard this rule " \
         "documents (your own verdict kills your tree) would be gone"
-    assert "`approve` карточку НЕ двигает" in flat, \
+    assert "`approve` does NOT move the card" in flat, \
         "the reviewer's rule no longer says approve leaves the card (and the tree) alone"
     assert "needs_work" in flat, \
         "the reviewer's rule no longer names the verdict that takes its own directory away"
@@ -2824,10 +2836,10 @@ def test_the_reviewers_tree_rule_says_its_own_verdict_can_take_the_directory_awa
         "gc now consults the grace window BEFORE by-role liveness — SKILL.md tells the " \
         "reviewer the window is never even reached while the card sits in Review"
 
-    assert "не считай, что ты всё ещё стоишь в своём дереве" in flat, \
+    assert "do not assume you are still standing in your own tree" in flat, \
         "the reviewer is no longer told not to assume its cwd survived the verdict — the " \
         "phrase still occurs in the BUILD agent's sections, which is why this pin is scoped"
-    assert "`workspace <id> --role review --at <sha>` заново" in flat, \
+    assert "call `workspace <id> --role review --at <sha>` again" in flat, \
         "the reviewer is no longer told HOW to get a directory back (re-ensure it), only that " \
         "it may be gone"
 
@@ -2839,14 +2851,14 @@ def _degraded_workspace_bullet(text: str) -> str:
     Sliced for the same reason as `_reviewer_tree_rule`: every refusal code it contrasts is also
     explained, at length, in the `--release` breakdown further down, so a file-wide substring
     cannot tell "this bullet still distinguishes them" from "the words exist somewhere"."""
-    start = text.find("- **Не завелось — цикл НЕ роняем.**")
+    start = text.find("- **It didn't start — do NOT drop the loop.**")
     assert start != -1, \
         "SKILL.md no longer tells the pump that a failed `workspace` is not a reason to stop"
     end = text.find("\n- **", start + 1)
-    assert end != -1, "the «Не завелось» bullet no longer ends where the next top-level bullet does"
+    assert end != -1, "the «it didn't start» bullet no longer ends where the next bullet does"
     bullet = text[start:end]
-    assert 0 < len(bullet) < len(text), "the «Не завелось» slice is not a proper subset of SKILL.md"
-    assert "Ревьюер, вынеся вердикт" not in bullet, "the slice swallowed the preceding bullet"
+    assert 0 < len(bullet) < len(text), "the «it didn't start» slice is not a subset of SKILL.md"
+    assert "Having cast a verdict" not in bullet, "the slice swallowed the preceding bullet"
     return bullet
 
 
@@ -2887,7 +2899,7 @@ def _wip_saturated_bullet(text: str) -> str:
     reason: `wip_saturated`, `ScheduleWakeup` and «пустая очередь» each occur many times in this
     rulebook, so a whole-file substring could not tell "the rule is still stated where the pump
     reads the payload" from "the words survive somewhere else"."""
-    start = text.find("\n- **`wip_saturated: true` — это НЕ пустая очередь")
+    start = text.find("\n- **`wip_saturated: true` is NOT an empty queue.")
     assert start != -1, \
         "SKILL.md no longer tells the pump that wip_saturated is not an empty queue"
     end = text.find("\n- **", start + 1)
@@ -2925,7 +2937,9 @@ def test_the_rulebook_quotes_the_saturated_message_and_the_payload_still_renders
     bullet = _wip_saturated_bullet(text)
     assert _SATURATED_NUMBERS_4_OF_3 in _flat(bullet), \
         "SKILL.md no longer quotes the rendered number pair it calls the payload's only prose view"
-    assert "ScheduleWakeup" in bullet and "НЕ уступай ход" in bullet, \
+    # `_flat` on the imperative, not on the raw bullet: the shipped sentence wraps between "do"
+    # and "NOT yield the turn", and a re-wrap of a paragraph must not turn a rule pin red.
+    assert "ScheduleWakeup" in bullet and "do NOT yield the turn" in _flat(bullet), \
         "the rulebook no longer forbids idling the tick on a saturated board"
 
     api = FakeAPI(buckets=workflow.STAGES)
@@ -2956,7 +2970,7 @@ def test_the_rulebook_quotes_the_saturated_message_and_the_payload_still_renders
 def _stuck_section(text: str) -> str:
     """Sliced out of `references/stuck.md`, which owns this section now."""
     text = _reference("stuck.md")
-    start = text.find("\n## Застрял? Выход зависит от РОЛИ\n")
+    start = text.find("\n## Stuck? The way out depends on your ROLE\n")
     assert start != -1, "SKILL.md no longer has the section that routes a stuck agent by role"
     end = text.find("\n## ", start + 1)
     assert end != -1, "the stuck section no longer ends where the next section begins"
@@ -3067,7 +3081,7 @@ def _reviewer_bullet(text: str) -> str:
     _reviewer_bullet(text)` could pass on text that is not the reviewer's bullet at all. So the
     end is whichever comes first, the next top-level bullet or the next heading (sub-bullets are
     indented and do not match), and the guard below still names the bullet above."""
-    start = text.find("\n- **У РЕВЬЮЕРА оба выхода выше нерабочие")
+    start = text.find("\n- **For the REVIEWER both ways out above are dead")
     assert start != -1, "SKILL.md no longer has the bullet written for a stuck REVIEWER"
     end = text.find("\n## ", start + 1)
     assert end != -1, "the reviewer bullet no longer ends where the next section begins"
@@ -3076,7 +3090,7 @@ def _reviewer_bullet(text: str) -> str:
         end = min(end, following)
     bullet = text[start:end]
     assert 0 < len(bullet) < len(text), "the reviewer slice is not a proper subset of SKILL.md"
-    assert "внешняя блокировка" not in bullet, "the slice swallowed the return_task bullet above it"
+    assert "an external blocker" not in bullet, "the slice swallowed the return_task bullet above it"
     return bullet
 
 
@@ -3211,8 +3225,8 @@ def test_exactly_ONE_agent_tool_walks_a_card_out_of_Review(tmp_path):
         "the two sweeps stopped differing at all — one of them is not building the state it claims"
 
     # the prose that rests on it
-    bullet = _reviewer_bullet(_skill_text())
-    assert "РОВНО ОДИН" in bullet, \
+    bullet = _flat(_reviewer_bullet(_skill_text()))
+    assert "EXACTLY ONE agent tool walks a card out of Review" in bullet, \
         "the reviewer's bullet no longer states the one-mover invariant it was rewritten around"
 
 
@@ -3446,13 +3460,13 @@ def _return_task_bullet(text: str) -> str:
     are counts over a file other cards edit. The clone is not ceremony: run in the live worktree,
     an earlier sweep here raced a second agent's on the same two files, and an unmutated control
     is what caught it — #702.)"""
-    start = text.find("\n- **`return_task`** — внешняя блокировка")
+    start = text.find("\n- **`return_task`** — an external blocker")
     assert start != -1, "SKILL.md no longer describes return_task in the stuck section"
     end = text.find("\n- **", start + 1)
     assert end != -1, "the return_task bullet no longer ends where the next top-level bullet does"
     bullet = text[start:end]
     assert 0 < len(bullet) < len(text), "the return_task slice is not a proper subset of SKILL.md"
-    assert "У РЕВЬЮЕРА" not in bullet, "the slice swallowed the reviewer's bullet"
+    assert "For the REVIEWER" not in bullet, "the slice swallowed the reviewer's bullet"
     return bullet
 
 
@@ -3574,13 +3588,13 @@ def test_the_rulebook_names_BOTH_stages_return_task_refuses_from():
     bullet = _return_task_bullet(text)
 
     # the RULE, not its vocabulary: which stages are shut, spelled out
-    assert "ОТКАЗЫВАЕТ из ДВУХ стадий — Review и Done" in bullet, \
+    assert "It REFUSES from TWO stages — Review and Done" in bullet, \
         "the bullet no longer states WHICH stages return_task refuses from (#590 Review, #626 Done)"
     # ...and it must be stated ONCE. A second copy — a card quoting an older formulation of the
     # gate, which this bullet's meta-prose invites — would leave the pin unable to tell the live
     # rule from the quotation, and measurably lets the promise be gutted next to a quote that
     # still reads correctly (#700, «quoted anchor» in the docstring).
-    assert bullet.count("ОТКАЗЫВАЕТ из ДВУХ стадий — Review и Done") == 1, \
+    assert bullet.count("It REFUSES from TWO stages — Review and Done") == 1, \
         "the rule is spelled out TWICE in this bullet; the pin can no longer tell which is live"
     assert "file_task" in bullet, \
         "the bullet no longer routes unusable Done work to file_task, the one channel left"
@@ -3604,7 +3618,7 @@ def test_the_rulebook_names_BOTH_stages_return_task_refuses_from():
     # brackets, and a span ending at the first «)» reddens on any bracket that lands between the
     # anchor and the list — a card ref, an inline-code aside, a gloss on one stage inside the
     # list, or the list simply being written before the rule. All four measured; see the docstring.
-    head_end = bullet.find("\n  - **", bullet.find("ОТКАЗЫВАЕТ из ДВУХ стадий"))
+    head_end = bullet.find("\n  - **", bullet.find("It REFUSES from TWO stages"))
     assert head_end != -1, "the return_task bullet no longer has the sub-bullets naming its gates"
     open_list = "\n".join(_top_level_parens(bullet[:head_end]))
     for stage in workflow.STAGES:
@@ -3655,13 +3669,13 @@ def _decompose_bullet(text: str) -> str:
     deletion this pin exists to catch. Stated precisely, because the honest half matters too: the
     verbatim RULE string is gone at either scope, so it is the token assertions — «Done», the open
     stage list — that the bullet slice makes meaningful, not every assertion here."""
-    start = text.find("\n- **`decompose` — про ТВОЙ таск.**")
+    start = text.find("\n- **`decompose` is about YOUR task.**")
     assert start != -1, "SKILL.md no longer describes decompose in the decomposition section"
     end = text.find("\n- **", start + 1)
     assert end != -1, "the decompose bullet no longer ends where the next top-level bullet does"
     bullet = text[start:end]
     assert 0 < len(bullet) < len(text), "the decompose slice is not a proper subset of SKILL.md"
-    assert "Жизненный цикл эпика" not in bullet, "the slice swallowed the epic-lifecycle bullet"
+    assert "The life cycle of an epic" not in bullet, "the slice swallowed the epic-lifecycle bullet"
     return bullet
 
 
@@ -3737,7 +3751,7 @@ def test_the_rulebook_names_BOTH_stages_decompose_refuses_from():
     bullet = _decompose_bullet(text)
 
     # the RULE, not its vocabulary: which stages are shut, spelled out
-    rule_at = bullet.find("**Он ОТКАЗЫВАЕТ из ДВУХ стадий — Review и Done")
+    rule_at = bullet.find("**It REFUSES from TWO stages — Review and Done")
     assert rule_at != -1, \
         "the decompose bullet no longer states WHICH stages decompose refuses from " \
         "(#663 Review, #649 Done)"
@@ -3779,10 +3793,10 @@ def test_the_rulebook_names_BOTH_stages_decompose_refuses_from():
         )
 
     # the caveat next door must still carry the CLASS, not a counter-example #649 removed
-    stuck = _return_task_bullet(text)
+    stuck = _flat(_return_task_bullet(text))
     assert "#649" in stuck, \
         "the return_task caveat still names decompose as an OPEN bypass, or stopped naming it"
-    assert "следующий мутирующий тул" in stuck, \
+    assert "the next mutating tool that moves a card and does not check the stage" in stuck, \
         "the caveat decayed into 'every door is shut' — the class is still open by construction"
 
     # the code: both doors really are shut, and the five others really are open
@@ -3819,13 +3833,13 @@ def _crashed_agent_bullet(text: str) -> str:
     "the restart rule now covers a dead reviewer" from "step 3 still explains the same mechanism
     for its own purpose", which was exactly the gap: the restart rule promised a mechanism
     (`next_task` hands the task back) that exists for build and NOT for review."""
-    start = text.find("- **Пер-таск-агент УПАЛ (ошибка рантайма/API)")
+    start = text.find("- **The per-task agent CRASHED (a runtime/API error)")
     assert start != -1, "SKILL.md no longer tells the pump to restart a crashed per-task agent"
     end = text.find("\n- **", start + 1)
     assert end != -1, "the crashed-agent bullet no longer ends where the next top-level bullet does"
     bullet = text[start:end]
     assert 0 < len(bullet) < len(text), "the crashed-agent slice is not a proper subset of SKILL.md"
-    assert "Пер-таск-агент ведёт ВЕСЬ таск сам" not in bullet, \
+    assert "The per-task agent runs the WHOLE task itself" not in bullet, \
         "the slice swallowed the following bullet"
     return bullet
 
@@ -3839,7 +3853,7 @@ def _independent_review_section(text: str) -> str:
     HEAD` is in the integration recipe, `git show <sha из evidence>` is in «Два возврата, два
     дерева», and `[review]` appears throughout. A whole-file substring would stay green with the
     reviewer's own rule deleted."""
-    start = text.find("\n## Независимое ревью изменений")
+    start = text.find("\n## Independent review of changes")
     assert start != -1, "SKILL.md no longer has a section on independent review"
     end = text.find("\n## ", start + 1)
     assert end != -1, "the independent-review section no longer ends where the next section begins"
@@ -3850,7 +3864,7 @@ def _independent_review_section(text: str) -> str:
     # added exactly such a reference inside this section («см. «Застрял? Выход зависит от РОЛИ»»),
     # turning a slice guard into a ban on pointing at a neighbour. A cross-reference by name is
     # legitimate rulebook prose; a swallowed HEADING is the thing that would break the slice.
-    assert "\n## Застрял?" not in section, "the slice swallowed the following section"
+    assert "\n## Stuck?" not in section, "the slice swallowed the following section"
     return section
 
 
@@ -3904,12 +3918,12 @@ def test_the_restart_rule_covers_a_dead_reviewer_and_the_double_dispatch_it_cost
     control and not a different selection. Re-wrapping the paragraph is a PASS by construction
     rather than a measured round — `_flat` normalises the wrapping before any of these match."""
     flat = _flat(_crashed_agent_bullet(_skill_text()))
-    assert "Упал РЕВЬЮЕР" in flat, \
+    assert "A REVIEWER crashed" in flat, \
         "the restart rule no longer says anything about a reviewer that died"
-    assert "механизм ЕСТЬ" in flat, \
+    assert "since #991 the mechanism EXISTS" in flat, \
         "the restart rule no longer says a dead reviewer IS handed back — #991 made it true, " \
         "and a rulebook still claiming otherwise sends the pump chasing a phantom"
-    assert "клади в `exclude`" in flat, \
+    assert "put the id of a dispatched review into `exclude`" in flat, \
         "the restart rule no longer names the cost the re-offer brings: without exclude the " \
         "same card is offered twice inside one tick and two reviewers land on one piece of " \
         "work. A bare `exclude` substring is NOT enough here — the word occurs twice in this " \
@@ -3949,25 +3963,25 @@ def test_the_reviewer_is_told_to_establish_it_is_looking_at_the_reviewed_code():
     that mutant); drop the round-2 `[review]` clause from the dossier list -> FAIL; make the
     pinned-at check unconditional -> FAIL; re-wrap -> PASS by design."""
     flat = _flat(_independent_review_section(_skill_text()))
-    assert "при ЛЮБОМ `wip.limit`" in flat, \
+    assert "your own tree at ANY `wip.limit`, not only in a parallel drain" in flat, \
         "the reviewer is no longer told its own worktree is not a parallel-drain-only affair"
     assert "git rev-parse HEAD" in flat, \
         "the reviewer is no longer told to verify its tree holds the sha under review"
-    assert "git show <sha из evidence>" in flat, \
+    assert "git show <sha from evidence>" in flat, \
         "the reviewer with no tree is no longer given the fallback that reads the RIGHT code"
-    assert "прошлый `[review]`" in flat, \
+    assert "the previous `[review]`" in flat, \
         "the round-2 reviewer is no longer told to read the previous verdict"
     # the placement residue this card rules on: the reviewer's tree rules are WRITTEN, but they
     # live inside a section headed `wip.limit > 1`, so at limit 1 nothing routes the reviewer to
     # them. Fixed by POINTING from the rubric (always read) rather than by moving the text.
-    assert "Ревьюер, вынеся вердикт, освобождает своё дерево" in flat, \
+    assert "Having cast a verdict, the reviewer releases its own tree" in flat, \
         "the rubric no longer points at the bullet holding the rest of the reviewer's tree " \
         "rules — at wip.limit 1 the reviewer never reaches that section on its own"
-    assert "Параллельный дренаж" in flat, \
+    assert "The parallel drain" in flat, \
         "the rubric no longer warns that the pointed-at bullet sits behind a wip.limit > 1 " \
         "heading that does not apply to the reviewer"
     # ...and the pointer must keep resolving: a renamed target would leave a dangling reference
-    assert "- **Ревьюер, вынеся вердикт, освобождает своё дерево:**" in _skill_text(), \
+    assert "- **Having cast a verdict, the reviewer releases its own tree:**" in _skill_text(), \
         "the bullet the rubric points at no longer exists under that name"
 
     ensure_src = inspect.getsource(workspace_cmd._ensure_locked)
@@ -4012,9 +4026,9 @@ def test_the_reviewers_release_rule_carries_the_refusal_its_own_cure_cannot_answ
     role-conditional -> FAIL; add CODE_DIRTY to `_EXPECTED_IN_A_REVIEW_TREE` -> FAIL; re-wrap ->
     PASS by design."""
     flat = _flat(_reviewer_tree_rule(_skill_text()))
-    assert "`dirty` роли НЕ РАЗЛИЧАЕТ" in flat, \
+    assert "`dirty` does NOT TELL the roles apart" in flat, \
         "the reviewer is no longer told the dirty refusal is aimed at it too"
-    assert "убери файл из дерева" in flat, \
+    assert "take the file out of the tree" in flat, \
         "the reviewer is no longer given the ONE cure it is allowed to run"
 
     # the state the prose is about: a REVIEW tree the reviewer left one file in
@@ -4058,9 +4072,9 @@ def test_the_skill_verification_trap_is_addressed_to_the_reviewer_as_well():
     MUTATION-CHECKED by putting the build-only wording back while `[review]` stays everywhere else
     in the file -> FAIL."""
     flat = _flat(_freshness_section(_skill_text()))
-    assert "ни РЕВЬЮЕРУ" in flat, \
+    assert "nor by the REVIEWER" in flat, \
         "the snapshot trap no longer names the role that most often walks into it"
-    assert "`[review]` у ревьюера" in flat, \
+    assert "`[review]` for the reviewer" in flat, \
         "the trap still tells only the implementer where to record what it checked"
 
 
@@ -4086,9 +4100,9 @@ def test_the_container_name_recipe_says_the_reviewers_id_is_not_its_own():
     quoted docker refusals and the mandatory `docker rm -f` -> FAIL."""
     section = _shared_resources_section(_skill_text())
     flat = _flat(section)
-    assert "РЕВЬЮЕР: он ЧУЖОЙ" in flat, \
+    assert "REVIEWER: it is SOMEBODY # ELSE'S" in flat, \
         "the id-derived naming recipe no longer warns the reviewer that the id is not its own"
-    assert "убьёт ЕГО работающий контейнер" in flat, \
+    assert 'docker\'s "delete it and retry" kills ITS work' in flat, \
         "the recipe no longer names the destructive outcome the loud refusal routes an obedient " \
         "reader towards"
     # controls: the collision the warning is about must still be constructible from this recipe
@@ -4110,7 +4124,7 @@ def _second_pass_section(text: str) -> str:
     rubric". The heading is anchored WITH its `## ` prefix because the section's title is also
     cited from two other places (the implementer's `advance(to='review')` bullet and the reviewer's
     `review_kind` rubric) — a bare title match would land on one of those pointers instead."""
-    start = text.find("\n## Второй независимый проход по СВОЕМУ тексту\n")
+    start = text.find("\n## A second independent pass over YOUR OWN text\n")
     assert start != -1, \
         "SKILL.md no longer has the section on a second independent pass over one's own prose"
     end = text.find("\n## ", start + 1)
@@ -4124,7 +4138,8 @@ def _second_pass_section(text: str) -> str:
     # nominative title every other cross-reference in this file uses). It does NOT weaken the
     # swallow check: a slice that really ran past the boundary necessarily contains the heading
     # LINE, so anchoring on `\n## ` still catches it, and stops catching legitimate citations.
-    assert "\n## Декомпозиция и файлинг" not in section, "the slice swallowed the following section"
+    assert "\n## Decomposition, review and dead ends" not in section, \
+        "the slice swallowed the following section"
     return section
 
 
@@ -4155,10 +4170,10 @@ def test_the_post_verdict_note_rides_on_a_comment_tool_with_no_stage_or_ownershi
     flat = _flat(_second_pass_section(_skill_text()))
     assert "`comment`" in flat, \
         "the second-pass rule no longer names the tool a post-verdict finding is appended with"
-    assert "по стадии и владению" in flat, \
+    assert "no stage or ownership gates" in flat, \
         "the rule no longer says the comment tool is free of stage/ownership gates — the reason " \
         "it can be used at all once the verdict is in"
-    assert "после вердикта" in flat, \
+    assert "works from Review and after the verdict alike" in flat, \
         "the rule no longer says the note may be written AFTER the verdict is recorded"
 
     # the state the rule is about: someone ELSE's card, in Review, already judged
@@ -4233,7 +4248,7 @@ def test_only_the_review_tool_writes_a_comment_that_opens_with_its_verdict_line(
     flat = _flat(section)
     assert "`[review] APPROVE`" in flat and "`[review] NEEDS WORK`" in flat, \
         "the rule no longer quotes the two verdict lines a reader tells the tool's comment by"
-    assert "первой строкой" in flat, \
+    assert "the tool's verdict ALWAYS comes on the first line" in flat, \
         "the rule no longer says the verdict line is the FIRST line — the discriminator is gone"
 
     api = FakeAPI(buckets=workflow.STAGES)
@@ -4515,40 +4530,45 @@ def test_the_second_pass_runs_in_its_own_clone_and_the_recipe_carries_the_workin
     section = _second_pass_section(_skill_text())
     prose = _second_pass_prose(section)
 
-    assert "ГДЕ он работает" in prose, \
+    assert "WHERE it works" in prose, \
         "the second-pass rule no longer says WHERE the auditor works — the gap 702 closed is back"
-    assert "ШУМНО" in prose and "ТИХО" in prose, \
+    assert "a foreign MUTANT under your round — LOUD" in prose \
+        and "a foreign RESTORE under your round — SILENT" in prose, \
         "the rule no longer names BOTH axes of the collision; the silent one is the reason it " \
         "exists, and a rule that names only the loud one leaves the false green uncovered"
-    assert "НЕ закреплена за ролью" in prose, \
+    assert "is NOT tied to a role" in prose, \
         "the rule no longer says the victim is not fixed to a role — both writers restore, so " \
         "the silent axis lands on the AUTHOR too, and those are the numbers that reach the commit"
-    assert "селекцию" in prose, \
+    assert "NON-OVERLAPPING selections" in prose, \
         "the rule no longer qualifies the loud axis with the selection overlap it depends on — " \
         "measured, with disjoint one-test pins the control round is green and catches nothing"
-    assert "а не `cp -R`" in prose and "не «всегда сломано»" in prose, \
+    assert "`git clone --no-hardlinks`, not `cp -R`" in prose \
+        and 'is not "always broken"' in prose, \
         "the rule no longer WARNS against `cp -R` — the copy that drags .venv and can leave the " \
         "mutation never reaching the interpreter. Pinned by the warning's own wording, not by " \
         "the token: this card added a CROSS-REFERENCE to `cp -R` elsewhere in the section, and " \
         "measured, that reference alone kept a bare `\"cp -R\" in prose` green with the entire " \
         "warning deleted"
-    assert "vikunja_mcp.__file__" in prose and "ТЕМ ЖЕ раннером" in prose, \
+    assert "Print `vikunja_mcp.__file__` every round" in prose \
+        and "with the SAME runner you run the rounds" in prose, \
         "the rule no longer EXPLAINS printing which src it actually imports — the fence line " \
         "alone is a command with no reason attached, and the reason is runner-dependent. The " \
         "runner clause is pinned SEPARATELY because the token alone is also spoken by the " \
         "bullet's own heading: deleting the whole explanation left it satisfied, measured"
-    assert "PYTHONDONTWRITEBYTECODE" in prose and "Делай оба, в этом порядке" in prose, \
+    assert "PYTHONDONTWRITEBYTECODE" in prose and "Do both, in that order" in prose, \
         "the rule no longer PAIRS the bytecode variable with deleting the caches first — the " \
         "variable stops Python WRITING bytecode, not READING a stale .pyc. The pairing is " \
         "pinned by the sentence that states it, not by `__pycache__`: that token also appears " \
         "in this section's ignore list and in its `find` bullet, and measured, either kept the " \
         "old conjunct green with the whole measured sub-bullet deleted"
-    assert "exit 128" in prose and "НЕОТСЛЕЖИВАЕМЫЕ файлы" in prose, \
+    assert "exit 128" in prose \
+        and "The second half is the UNTRACKED files, and the patch does not carry them AT ALL" \
+        in prose, \
         "the rule no longer states the two ways the clone comes up SHORT — an empty patch aborts " \
         "`git apply` (exit 128, the reviewer's default case) and untracked files never travel. " \
         "The untracked half is pinned by its CLAIM, not by `ls-files --others`, which the " \
         "circularity bullet below also says: deleting the whole claim left that satisfied"
-    assert "ЦИРКУЛЯРНА" in prose, \
+    assert "That check is CIRCULAR" in prose, \
         "the rule no longer warns that comparing `git diff` on both sides is circular — it " \
         "agrees precisely when an untracked file was lost"
 
@@ -4570,7 +4590,7 @@ def test_the_second_pass_runs_in_its_own_clone_and_the_recipe_carries_the_workin
     list_at = _step('git -C "$TREE" ls-files --others --exclude-standard')
     copy_at = _step("while IFS= read -r f; do")
     sync_at = _step("cd \"$CLONE\" && uv sync")
-    marker_at = _step("# --- дальше в брифе аудитора")
+    marker_at = _step("# --- the auditor's brief starts here")
 
     assert clone_at < apply_at, \
         "the recipe now patches before it clones — `git apply` would run against a clone that " \
@@ -4727,16 +4747,16 @@ def _post_push_ci_bullet(text: str) -> str:
     same run later), `[skip ci]` and its family live in the marker bullet above, and «прогон» is
     everywhere. A file-wide substring could not tell "the build-side rule is still stated" from
     "the reviewer's copy of it survives", which is exactly the drift these pins exist to catch."""
-    start = text.find("  - **После пуша проверок ДВЕ")
+    start = text.find("  - **After the push there are TWO checks")
     assert start != -1, (
         "SKILL.md no longer opens its post-push bullet where this pin can find it. If the bullet "
         "was legitimately reworded, move this anchor — do not delete the check"
     )
-    end = text.find("\n  - **Пуш обязателен", start)
+    end = text.find("\n  - **The push is mandatory", start)
     assert end != -1, "the post-push bullet no longer ends where the «Пуш обязателен» bullet begins"
     bullet = text[start:end]
     assert 0 < len(bullet) < len(text), "the post-push slice is not a proper subset of SKILL.md"
-    assert "Пуш обязателен" not in bullet, "the slice swallowed the following bullet"
+    assert "The push is mandatory" not in bullet, "the slice swallowed the following bullet"
     return bullet
 
 
@@ -4841,48 +4861,48 @@ def test_the_post_push_check_reads_the_runs_OUTCOME_and_not_only_its_existence()
     bullet = _flat(_post_push_ci_bullet(text))
 
     # 1. the existing marker guard is DEEPENED, not replaced: its bullet must still be there
-    assert "**В СООБЩЕНИИ КОММИТА не должно быть литерального ci-skip-маркера" in text, (
+    assert "**A COMMIT MESSAGE must contain no literal ci-skip marker" in text, (
         "the ci-skip marker bullet is gone. The outcome check was added ALONGSIDE it, not instead "
         "of it — a green-looking task with no run at all is still the louder failure"
     )
 
     # 2. both checks are named, and the sha-precise form carries its measured caveat
-    assert "**СУЩЕСТВОВАНИЕ — сразу после пуша.**" in bullet, \
+    assert "**EXISTENCE — right after the push.**" in bullet, \
         "the post-push bullet no longer states the existence check — the ci-skip guard lost its home"
-    assert "**ИСХОД — ОДИН взгляд, ПОСЛЕДНИМ действием хода.**" in bullet, (
+    assert "**THE OUTCOME — ONE look, as the LAST action of the turn.**" in bullet, (
         "the post-push bullet no longer states the OUTCOME check, which is the whole of 614: "
         "'a run exists' was true on all seven red runs nobody noticed"
     )
     assert 'gh run list --commit "$(git rev-parse HEAD)"' in bullet, \
         "the existence check no longer quotes a form that produces the FULL sha"
-    assert "40-символьный" in bullet and "`[]`" in bullet, (
+    assert "FULL 40-character one" in bullet and "`[]`" in bullet, (
         "the full-sha caveat is gone. `gh run list --commit <short sha>` returns [] with exit 0 — "
         "measured — so without it the recipe manufactures a false 'no run' ci-skip alarm"
     )
 
     # 3. THE load-bearing property: `status` decides, `conclusion` only means something after it
-    assert "`conclusion` осмыслен ТОЛЬКО при `status == \"completed\"`" in bullet, (
+    assert "`conclusion` is meaningful ONLY at `status == \"completed\"`" in bullet, (
         "the rule no longer says `conclusion` is meaningful only once `status` is completed. "
         "Without that premise an agent branches on `conclusion` and reads every in-flight run as "
         "not-green — the naive form this card exists to rule out"
     )
-    assert "сломанная проверка" in bullet, (
+    assert "\"`conclusion` is not `success` ⇒ not green\" is a broken check" in bullet, (
         "the bullet no longer NAMES the broken form (`conclusion` != success ⇒ not green). "
         "Stating the right rule without the wrong one is what gets tidied back"
     )
 
     # 4. three states, and the third is neither verdict and is not waited on
-    for branch in ("`completed` + `success`", "`completed` + `failure`", "не `completed`"):
+    for branch in ("`completed` + `success`", "`completed` + `failure`", "not `completed`"):
         assert branch in bullet, f"the post-push bullet no longer answers the {branch} state"
-    assert "не `completed` — это **НЕИЗВЕСТНО**, а не «зелёно» и не «красно»" in bullet, (
+    assert "not `completed` — that is **UNKNOWN**, neither \"green\" nor \"red\"" in bullet, (
         "the in-flight state lost its own name. Calling it green hides the measured hole; calling "
         "it red cries wolf on the common case — it has to be reported as unknown"
     )
-    assert "Не жди" in bullet, (
+    assert "Do not wait" in bullet, (
         "the in-flight branch no longer forbids waiting — 'wait for green' is the other naive form, "
         "and it blocks an agent for minutes and dies with a killed turn"
     )
-    assert "не пиши «прогон в порядке»" in bullet, (
+    assert "do not write \"the run is fine\"" in bullet, (
         "the in-flight branch no longer FORBIDS reporting the run as fine. Naming the state "
         "«НЕИЗВЕСТНО» and then telling the agent to treat it as fine passes every other pin here "
         "— measured: that exact rewrite kept this test green until this assertion was added"
@@ -4890,13 +4910,13 @@ def test_the_post_push_check_reads_the_runs_OUTCOME_and_not_only_its_existence()
 
     # 5. the deferral needs a real addressee: the reviewer's backstop must exist
     review = _flat(_independent_review_section(text))
-    assert "ты единственный, кто по построению ОПОЗДАЛ" in review, (
+    assert "you are the only one who by construction is LATE" in review, (
         "the reviewer's CI-outcome backstop is gone, so the build side's «не дождался» branch now "
         "hands the unknown case to nobody — which is the original hole with an extra step"
     )
-    assert "--commit <ПОЛНЫЙ sha из evidence>" in review, \
+    assert "--commit <FULL sha from evidence>" in review, \
         "the reviewer's backstop no longer names a sha-precise command it can actually run"
-    assert "САМ ПО СЕБЕ ещё не `needs_work`" in review, (
+    assert "A red run BY ITSELF is not yet `needs_work`" in review, (
         "the reviewer's backstop lost the grading. A red run bounced without reading `jobs` turns "
         "an environment failure into a round trip through the implementer"
     )
@@ -4912,8 +4932,16 @@ def test_the_post_push_check_reads_the_runs_OUTCOME_and_not_only_its_existence()
     # control; both files restored sha256-identical; `FAILED `/`ERROR ` lines counted separately):
     # control 0 failed; revert the reviewer sentence to the bare «без разговоров» -> 1 failed;
     # delete CLAUDE.md's «"No run" has a SECOND cause» paragraph -> 1 failed.
-    for site, where in ((bullet, "the post-push existence check"), (review, "the reviewer")):
-        assert "прогон заводится на ВЕРШИНУ пуша" in site, (
+    # #997 translated the two surfaces INDEPENDENTLY, and they came out with different wordings
+    # of the same rule — their only common substring is the bare `TIP`, which is far too short to
+    # pin (it occurs in ordinary prose). So each site carries its own phrase rather than one
+    # shared literal; both directions were measured red under deletion.
+    tip_sites = (
+        (bullet, "the post-push existence check", "a run is created for the push's TIP"),
+        (review, "the reviewer", "a run is started on the TIP of a push"),
+    )
+    for site, where, phrase in tip_sites:
+        assert phrase in site, (
             f"{where} no longer says a run belongs to the push's TIP, so 'no run on the full sha' "
             f"reads as a swallowed ci-skip marker again — false on ~5% of landings"
         )
@@ -4921,7 +4949,7 @@ def test_the_post_push_check_reads_the_runs_OUTCOME_and_not_only_its_existence()
             f"{where} no longer names the command that separates the two causes "
             f"(`git log --oneline <full sha>..origin/main` — is there a descendant with a run?)"
         )
-    assert "дерево ИМЕННО на твоём коммите не гонял никто" in bullet, (
+    assert "nobody ran the tree AT your commit" in bullet, (
         "the existence check no longer says what stays true in the BENIGN branch. Without it the "
         "new step reads as 'all clear' — but nothing ever gated the tree at that commit"
     )
@@ -4945,7 +4973,7 @@ def test_the_post_push_check_reads_the_runs_OUTCOME_and_not_only_its_existence()
     # test's own message promised "one measurement written down twice". A bare "60" substring
     # would not fix that either (it matches any number containing 60), so each file is read
     # through its own phrasing and the two values are compared.
-    skill_median = re.search(r"медиана (\d+) с", bullet)
+    skill_median = re.search(r"median (\d+) s", bullet)
     claude_median = re.search(r"median (\d+) s", claude)
     assert skill_median, "SKILL.md's outcome bullet no longer states a median run duration"
     assert claude_median, "CLAUDE.md's outcome paragraph no longer states a median run duration"
@@ -4972,7 +5000,7 @@ def test_the_post_push_check_reads_the_runs_OUTCOME_and_not_only_its_existence()
 def _after_review_section(text: str) -> str:
     """Sliced out of `references/stuck.md`, which owns this section now."""
     text = _reference("stuck.md")
-    start = text.find("\n## После Review\n")
+    start = text.find("\n## After Review\n")
     assert start != -1, "SKILL.md no longer has the section written to a post-review implementer"
     end = text.find("\n## ", start + 1)
     section = text[start:] if end == -1 else text[start:end]
@@ -4996,7 +5024,7 @@ def _needs_work_cycle_bullet(text: str) -> str:
     above the anchor can never enter it. Note that `_reviewer_bullet`'s twin guard names the
     bullet ABOVE and therefore cannot fire; that is known dead weight there, not a pattern to
     copy, and saying so here is cheaper than letting the next reader mirror it."""
-    start = text.find("\n- **Цикл needs_work")
+    start = text.find("\n- **The needs_work cycle")
     assert start != -1, "SKILL.md no longer has the bullet describing the needs_work cycle"
     end = text.find("\n## ", start + 1)
     assert end != -1, "the needs_work-cycle bullet no longer sits inside a section"
@@ -5005,7 +5033,7 @@ def _needs_work_cycle_bullet(text: str) -> str:
         end = min(end, following)
     bullet = text[start:end]
     assert 0 < len(bullet) < len(text), "the needs_work-cycle slice is not a proper subset"
-    assert "Мульти-идентити" not in bullet, "the slice swallowed the bullet below it"
+    assert "Multi-identity" not in bullet, "the slice swallowed the bullet below it"
     return bullet
 
 
@@ -5085,7 +5113,7 @@ def test_the_implementer_RECEIVING_a_needs_work_report_is_told_it_may_be_a_QUEST
 
     # ── prose: the RECEIVER is told to recognise a question and where to forward it
     receiver = _after_review_section(text)
-    assert "ВОПРОС К ЧЕЛОВЕКУ" in receiver, (
+    assert "A QUESTION TO THE HUMAN" in receiver, (
         "«После Review» no longer tells the implementer a [review] NEEDS WORK report may be a "
         "QUESTION rather than a defect — the recognition step the whole channel hangs on"
     )
@@ -5093,7 +5121,8 @@ def test_the_implementer_RECEIVING_a_needs_work_report_is_told_it_may_be_a_QUEST
         "«После Review» no longer names the tool that forwards the reviewer's question. The "
         "recognition without the route leaves the agent to guess the human's answer itself"
     )
-    assert "review_task(verdict='needs_work')` не пингует" in receiver, (
+    assert "`review_task(verdict='needs_work')` pings" in receiver \
+            and "NOBODY (zero requests" in receiver, (
         "«После Review» no longer states the measured fact that makes forwarding URGENT: hop1 "
         "pages nobody, so the human learns of the question only from the implementer's call"
     )
@@ -5101,11 +5130,11 @@ def test_the_implementer_RECEIVING_a_needs_work_report_is_told_it_may_be_a_QUEST
     # tool while explaining WHY the reviewer cannot use it, so the bare token stays green with
     # the split BRANCH deleted — measured, that mutation passed until this assert named the
     # route instead of the word.
-    assert "`decompose` из Build" in receiver, (
+    assert "`decompose` from Build" in receiver, (
         "«После Review» no longer routes the split branch of a needs_work report. A binary "
         "defect-or-question rule sends «this should be split» to rework — measured below"
     )
-    assert "`return_task` из Build" in receiver, (
+    assert "`return_task` from Build" in receiver, (
         "«После Review» no longer routes the external-block branch — the fourth thing a "
         "needs_work report can be, and the one a ternary defect/question/split rule sends to "
         "rework. `return_task` is shut from Review (#590) and open to the owner from Build, so "
@@ -5116,7 +5145,8 @@ def test_the_implementer_RECEIVING_a_needs_work_report_is_told_it_may_be_a_QUEST
     # формы `to=`», a count hidden in a word, true only while AGENT_ADVANCE holds two keys and
     # silently wrong on a third. Pinned in the derivation-shaped wording instead, because the
     # sweep DOES re-derive the forms and would go red only if a new one also moved the card.
-    assert "каждая форма `to=`" in receiver and "каждый вердикт" in receiver, (
+    assert "every `to=` form of `advance`" in receiver \
+            and "every verdict of `review_task`" in receiver, (
         "«После Review» is back to COUNTING the forms its Review-side sweep covered. The sweep "
         "derives them, so the number in the prose can go stale while the suite stays green — say "
         "which forms are covered, not how many there were on the day somebody looked"
@@ -5125,7 +5155,7 @@ def test_the_implementer_RECEIVING_a_needs_work_report_is_told_it_may_be_a_QUEST
     # shipped once and drafted once more. Pinned by the instruction it gives, not by the hedge
     # around it: a reader acts on «спроси человека», and a hedge with no action would leave the
     # guessing in place.
-    assert "не подошло НИЧЕГО" in receiver and "НЕ УГАДЫВАЙ" in receiver, (
+    assert "NOTHING in the list fits" in receiver and "do NOT GUESS" in receiver, (
         "«После Review» lost the catch-all branch, so its enumeration reads as closed again. "
         "Every closed version of this list has so far been measurably incomplete, and a missing "
         "member routes to rework by default — name the fallback, not a count"
@@ -5133,12 +5163,12 @@ def test_the_implementer_RECEIVING_a_needs_work_report_is_told_it_may_be_a_QUEST
     # The no-assignee caveat has to generalise over the routes, not name one of them: naming a
     # single refusal invites trying the next route down the list, and all of them refuse
     # identically (measured at the end of this test).
-    assert "отказывают ВСЕ маршруты выше" in receiver, (
+    assert "ALL the routes above refuse" in receiver, (
         "«После Review»'s no-assignee caveat is back to naming one refusing tool. With several "
         "routes listed above it, a reader who is told only that `call_human` refuses will try "
         "`return_task` next — and get the same refusal, having burned a round to learn it"
     )
-    assert "НЕЗАВЕРШЁННЫМ предшественником" in receiver, (
+    assert "UNFINISHED predecessor" in receiver, (
         "«После Review» lost the second measured edge. Both edges are pinned as prose because "
         "the measurement below only proves the BEHAVIOUR — an agent that is not told a branch "
         "can be gated away reads its refusal as the rulebook being wrong about the branch"
@@ -5150,7 +5180,7 @@ def test_the_implementer_RECEIVING_a_needs_work_report_is_told_it_may_be_a_QUEST
         "the needs_work-cycle bullet is back to promising Review as the only destination. In the "
         "question branch the card goes to Your Call instead, and there is no reviewer to push"
     )
-    assert "родитель уезжает в **Backlog** с меткой `epic`" in cycle, (
+    assert "the parent leaves for **Backlog** with the `epic` label" in cycle, (
         "the needs_work-cycle bullet no longer names the split branch's DESTINATION. A bare "
         "`decompose` token would not do here either — the same bullet names the tool while "
         "explaining why the reviewer cannot call it, so only the destination is branch-specific"
@@ -5159,12 +5189,12 @@ def test_the_implementer_RECEIVING_a_needs_work_report_is_told_it_may_be_a_QUEST
     # is what tells the two apart. Deliberately not a phrase spanning the two — «**Backlog** с
     # меткой `blocked`» wraps in the file, and this test's own docstring records that a wrapped
     # phrase is invisible to a contiguous search, which would make the assert reflow-fragile.
-    assert "меткой `blocked`" in cycle, (
+    assert "the `blocked` label" in cycle, (
         "the needs_work-cycle bullet no longer names the external-block branch's DESTINATION. "
         "The orchestrator reading this bullet needs to know a `blocked` card went to Backlog "
         "for human re-triage and is not coming back to Review on its own"
     )
-    assert "не читай список как закрытый" in cycle, (
+    assert "do not read the list" in cycle, (
         "the needs_work-cycle bullet promises its branch list is complete again. It is the "
         "orchestrator's half of the same enumeration «После Review» keeps open, and the two "
         "going out of step leaves the orchestrator dispatching on a closed list after the "
@@ -5635,15 +5665,15 @@ def test_skill_and_tool_docstring_tell_agents_to_echo_the_filed_ref_not_build_on
     # the bullet is 3504 characters today, holds all three literals, and holds `filed.ref` once —
     # which is also the file's only occurrence, so the count assert costs nothing and refuses the
     # second copy that would make the pin unable to tell the live rule from a quotation of it.
-    ref_rule = text[text.index("Ссылайся на задачу человекочитаемо"):]
+    ref_rule = text[text.index("Refer to a task in a human-readable way"):]
     ref_rule = ref_rule[:ref_rule.index("\n- ")]
     assert ref_rule.count("filed.ref") == 1, \
         "SKILL.md's «Ссылайся» bullet no longer names `filed.ref` exactly once (#735/#756) — " \
         "at zero, 'do not invent one' asks for a value the agent believes it lacks; above one, " \
         "the pin can no longer tell the live rule from a quotation of an older one"
-    assert "СОБИРАТЬ его самому нельзя" in ref_rule, \
+    assert "ASSEMBLING one yourself is not allowed" in ref_rule, \
         "SKILL.md no longer forbids composing a ref by hand — the #660 failure mode"
-    assert "ПОСТОРОННЮЮ" in ref_rule, \
+    assert "UNRELATED LIVE card" in ref_rule, \
         "SKILL.md no longer says WHY a composed ref is worse than none: it resolves to a live " \
         "unrelated card rather than announcing itself as broken"
 
@@ -5657,7 +5687,7 @@ def test_skill_and_tool_docstring_tell_agents_to_echo_the_filed_ref_not_build_on
 
 def _commit_recipe_slice(text: str) -> str:
     """The rulebook's paragraph on how to BUILD a commit message — VMCP-229 (773)."""
-    start = text.find("СОБИРАЙ ТЕЛО КОММИТА ЧЕРЕЗ")
+    start = text.find("BUILD THE COMMIT BODY WITH")
     assert start != -1, (
         "SKILL.md no longer tells agents how to build a commit message. That paragraph is the "
         "whole of #773: without it the default is `git commit -m \"…\"`, where an unescaped "

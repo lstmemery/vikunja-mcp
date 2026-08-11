@@ -1,115 +1,121 @@
-# Декомпозиция и файлинг находок
+# Decomposition and filing findings
 
-> **Справочник к SKILL.md, а не отдельные правила.** Читай **когда задача не влезает в один заход или ты нашёл что-то за её пределами**.
-> Обязательное к исполнению живёт в самом SKILL.md — здесь разобраны формы ответов,
-> измеренные грабли и причины, по которым правило написано именно так.
+> **A reference for SKILL.md, not rules of its own.** Read it **when a task does not fit into one go or you found something outside it**.
+> What is BINDING lives in SKILL.md itself — what is worked out here is the response shapes,
+> the measured gotchas and the reasons a rule is written exactly the way it is.
 
-## Декомпозиция и файлинг находок
+## Decomposition and filing findings
 
-- **`decompose` — про ТВОЙ таск.** Задача больше ~половины дня работы или из
-  нескольких несвязных тем — `decompose` на подзадачи (каждая — самостоятельно
-  проверяемый результат). Подзадачи встанут в Queue, родитель уедет эпиком в Backlog.
-  **`ordered` — не косметика, а решение о параллельности.** `ordered=False` (дефолт) значит
-  не «порядок неважен», а «эти подзадачи можно строить ОДНОВРЕМЕННО, разными агентами в
-  разных деревьях» — при `wip.limit > 1` оркестратор именно так и поступит, и два агента
-  начнут править один файл от одной базы. Сомневаешься, трогают ли подзадачи один и тот же
-  код (или вторая опирается на интерфейс из первой), — ставь `ordered=True`: цепочка
-  `precedes` отпускает следующую подзадачу ровно тогда, когда предыдущая доехала до Review,
-  а к этому моменту её коммит УЖЕ в главной ветке (пуш — часть перевода в Review), так что
-  следующая отведёт своё дерево от базы, где предшественник есть.
-  **Он ОТКАЗЫВАЕТ из ДВУХ стадий — Review и Done, — а работает из пяти остальных** (Backlog,
-  Queue, Design, Build, Your Call). «Работает» тут про СТАДИЮ: гард владения на месте и там,
-  чужую карточку `decompose` не разберёт ни из одной из пяти. Из Review (#663) — потому что
-  решение «эту работу надо дробить» принимается в Build, а не над карточкой, которую уже
-  проверяют. Измерено: до гейта `decompose` уводил стоящую под ревью карточку в Backlog без
-  ассайни, с меткой `epic` и двумя новыми детьми в Queue, а ОДОБРЕННУЮ (метка `reviewed`, ждёт
-  человеческого Done) — сразу с `reviewed` и `epic` ОДНОВРЕМЕННО; это та же форма, что #590
-  закрыла у `return_task`. Увидел в ревью, что задачу надо разбить, — отправляй её обратно через
-  `review_task(task_id, verdict='needs_work', report=<почему дробить>)`: карточка вернётся
-  ИМПЛЕМЕНТЕРУ в Build, и `decompose` сделает он, её владелец (вернуть карточку в Build может и
-  человек руками). Находка вне слайса карточки — `file_task`, но не автоматом:
-  см. «ПОРОГ заведения» ниже в этой же секции. Из Done (#649) — потому
-  что карточку туда поставил ЧЕЛОВЕК, и обратный ход из Done тоже его: «в Done двигает только
-  человек» держится в ОБЕ стороны. Это вторая половина того же обхода, что #626 закрыла у
-  `return_task`, и измерено, что до гейта `decompose` уводил принятую человеком карточку в
-  Backlog без ассайни, с `reviewed` и `epic` ОДНОВРЕМЕННО и двумя новыми детьми в Queue —
-  доска утверждала, что принятая работа стала недособранным контейнером. Работа, которую
-  принятая карточка выявила, — это НОВАЯ работа, а не разбиение текущей: заводи `file_task`
-  (`related_task_id` на неё) человеку на триаж; `call_human` из Done тоже отказывает, а
-  вернуть саму карточку в работу может только человек руками.
-- **Жизненный цикл эпика (контейнер, не работа).** Родитель с меткой `epic` — это
-  контейнер: `next_task` его НЕ предлагает, `claim` откажет (работай над детьми, не над
-  контейнером). Двигать эпик по стадиям агент не может и не должен. Когда ПОСЛЕДНИЙ ребёнок
-  эпика доходит до Review, `advance` этого ребёнка сам вешает на эпик метку `epic-ready` и
-  коммент `[эпик собран]` (best-effort сайд-эффект, тебе в payload ничего не добавляет и не
-  роняет твой advance, даже если запись в эпик упадёт) — чтобы человек с одного взгляда видел
-  собранный контейнер. Дальше весь набор (дети + эпик) в Done уводит ЧЕЛОВЕК — в Done двигает
-  только он. Отбил ребёнка обратно из Review — маркер может устареть, человек это увидит.
-- **`file_task` — про НАХОДКУ вне твоего таска.** Наткнулся по ходу работы на
-  баг/техдолг, не относящийся к текущей задаче, — не чини молча и не тащи в свой
-  диф: заведи `file_task(title, description?, priority?, related_task_id?, queue?)`.
-  Задача ляжет в Backlog (НЕ Queue — приоритизирует человек) с маркером `[filed-by-agent]`;
-  передай `related_task_id` своей текущей задачи, чтобы связать находку с контекстом.
-  Это ортогонально decompose: decompose дробит ТВОЮ большую задачу на подзадачи в
-  Queue, `file_task` паркует стороннюю по смыслу находку в Backlog на триаж человеку.
-- **ПОРОГ заведения: находка по ПРОЗЕ становится КАРТОЧКОЙ, только если меняет то, что
-  читатель СДЕЛАЕТ. Иначе — КОММЕНТАРИЕМ на карточку, чей текст обсуждается.** Сам ВОПРОС не
-  новый — «не меняют ни одного решения читателя» уже стоит в критерии остановки второго
-  прохода (секция «Второй независимый проход по СВОЕМУ тексту»). Но НЕ переноси то правило
-  сюда целиком: там этот вопрос — ОДИН ИЗ ТРЁХ конъюнктов, рядом с «не атрибуции» и «уже
-  покрыты соседним текстом», и решает он, крутить ли ещё круг; здесь он стоит ОДИН и решает,
-  заводить ли карточку. Спрашивай буквально: прочитав исправленный текст, агент сделает
-  ЧТО-ТО ДРУГОЕ — другую команду, другую ветку, другой вывод из ответа тула? Да — карточка.
-  Нет (формулировка точнее, пример нагляднее, два соседних абзаца спорят друг с другом, но
-  действие из обоих одно) — `comment` на ту карточку, чей текст ты обсуждаешь: `get_task`
-  отдаёт все комменты, так что находку увидит следующий, кто откроет ЭТУ КАРТОЧКУ. Дорога
-  «текст → карточка» при этом ровно одна и неявная — `git blame` до коммита и трейлер
-  `(tracker #N)` в нём; сам файл её не обещает.
-  - **СКОУП: правило про находку, которую ты собрался ЗАВОДИТЬ, то есть ВНЕ твоего слайса.**
-    Находку в СВОЁМ ещё не сданном тексте чини В ЭТОМ ЖЕ диффе — «закомментирую вместо
-    починки» порог не разрешает, и второй проход им не сокращается. Из той же сессии:
-    блокирующая находка второго прохода по #874 уехала ВТОРЫМ КОММИТОМ той же карточки
-    (`ad2a77a` → `a44c4c7`), а не комментарием и не новой карточкой. И карточка на ЧУЖОЙ
-    доске комментарием недостижима — `comment` ходит только по своему проекту, так что там
-    по-прежнему `file_task(project_id=…)`.
-  - **Зачем порог — учёт ЧЕЛОВЕКА по одной сессии дренажа (2026-08-06), и он про ДИНАМИКУ, а
-    не про качество.** 13 карточек в Backlog на старте, 11 содержательных приземлений, 10
-    заведённых карточек, BACKLOG стал 17 — работа НЕ СХОДИТСЯ. В приземлившихся диффах 1095
-    добавленных строк, из них 640 (58 %) проза (комменты и докстринги). Пять из десяти
-    заведённых — чистая проза и пины. Ни одна из ТЕХ находок ложной не была: цепочка
-    работает, плоха ДИНАМИКА — класс «текст A противоречит тексту B» и «утверждение шире
-    своего замера» САМОВОСПРОИЗВОДИТСЯ, потому что починка это новый текст, а следующий
-    аккуратный проход меряет уже его. **Числа НЕ перевыводятся ни из гита, ни с доски** —
-    это ручной учёт за ту сессию, а не срез дерева: в тот день в главную приземлилось 20
-    коммитов (без бампов), и ни одно окно из 11 подряд не даёт 1095. Не «уточняй» их
-    пересчётом — они меняются только вместе с новым замером человека.
-  - **ГРАНИЦА: правило про ПРОЗУ. Находка о ПОВЕДЕНИИ заводится карточкой как и раньше,
-    независимо от размера.** Гейт, который не отказывает; тул, который двигает карточку не
-    туда; порядок веток в `next_task` — это поведение, и однострочный дифф тут ничего не
-    смягчает. Порог трогает тот класс, что его породил, а он ДВОЙНОЙ: и «утверждение шире
-    своего замера», и «текст A противоречит тексту B» — то есть не только заявленный замер,
-    но и согласованность текста с соседним текстом.
-  - **Чего порог НЕ отменяет — и это часть решения, а не оговорка.** Ни второй независимый
-    проход, ни независимое ревью. Оба окупились в ТОЙ ЖЕ сессии, по которой считали порог:
-    второй проход поймал блокирующий дефект #874 РАНЬШЕ ревью, а ревью поймало в #860 замену
-    громкой потери отчёта на тихий ложный отчёт. Режется ИСТОЧНИК карточек, а не проверки:
-    проверки проводи ровно так же, а их находки складывай комментарием, если действие
-    читателя они не меняют. Прочитал этот порог как разрешение не звать второй проход или не
-    ревьюить — прочитал не то.
-- **`queue=True` — ТОЛЬКО когда человек явно попросил завести задачу в работу**
-  (ответ на карточке Your Call, прямое «заведи задачу на X» в чате/комментах): его
-  указание и есть триаж, карточка ляжет сразу в Queue ТВОЕГО проекта — неассайненная,
-  сразу клеймабельная любым агентом. СВОИ находки в Queue не заводи никогда — им
-  дорога в Backlog (дефолт), приоритизирует человек. С кросс-проектным `project_id`
-  не сочетается (отказ, ничего не создано): чужую Queue наполняешь не ты — их
-  Backlog триажит их человек.
-- **Находка живёт в ЧУЖОМ проекте/репо — заводи прямо в их Backlog.** Если правка нужна
-  на стороне другого проекта (его репо, его агент), передай
-  `file_task(..., project_id=<id целевого проекта>)`: карточка ляжет в Backlog ЦЕЛЕВОГО
-  проекта (триажит их человек), маркер `[filed-by-agent]` назовёт твой проект, а
-  `related_task_id` свяжет её с твоей текущей задачей через границу проектов — это канал
-  координации агент→агент. Не чини чужой репо в своём диффе и не паркуй чужую работу в
-  СВОЙ Backlog. id целевого проекта бери из контекста задачи/от человека; не знаешь —
-  `call_human`, не угадывай. Нет доступа у токена — получишь внятный отказ (граница —
-  сам скоуп-токен), карточка не создастся. Заведённую карточку твои `get_task`/`comment`
-  не увидят (она на чужой доске) — след у тебя остаётся через `related`-связь.
+- **`decompose` is about YOUR task.** A task bigger than about half a day of work, or made of
+  several unrelated themes — `decompose` it into subtasks (each one an independently verifiable
+  result). The subtasks go into Queue, the parent leaves for Backlog as an epic.
+  **`ordered` is not cosmetics, it is a decision about parallelism.** `ordered=False` (the default)
+  does not mean "the order does not matter", it means "these subtasks can be built AT THE SAME
+  TIME, by different agents in different trees" — at `wip.limit > 1` the orchestrator will do
+  exactly that, and two agents will start editing one file off one base. If you are unsure whether
+  the subtasks touch the same code (or whether the second one leans on an interface from the
+  first) — set `ordered=True`: the `precedes` chain releases the next subtask exactly when the
+  previous one has reached Review, and by that moment its commit is ALREADY in the main branch
+  (the push is part of the move to Review), so the next one will take its own tree off a base where
+  the predecessor exists.
+  **It REFUSES from TWO stages — Review and Done — and works from the other five** (Backlog,
+  Queue, Design, Build, Your Call). "Works" here is about the STAGE: the ownership guard is in
+  place there too, `decompose` will not break up someone else's card from any of the five. From
+  Review (#663) — because the decision "this work has to be split" is taken in Build, not over a
+  card that is already being reviewed. Measured: before the gate `decompose` took a card standing
+  under review off to Backlog with no assignee, with the `epic` label and two new children in
+  Queue, and an APPROVED one (the `reviewed` label, waiting for a human Done) — straight away with
+  `reviewed` and `epic` AT THE SAME TIME; that is the same shape #590 closed at `return_task`. If
+  you saw in review that a task has to be split — send it back through
+  `review_task(task_id, verdict='needs_work', report=<why it must be split>)`: the card returns to
+  the IMPLEMENTER in Build, and `decompose` is done by them, its owner (a human can also return a
+  card to Build by hand). A finding outside the card's slice — `file_task`, but not automatically:
+  see "the THRESHOLD for filing" below in this same section. From Done (#649) — because the card
+  was put there by a HUMAN, and the way back out of Done is theirs too: "only a human moves things
+  into Done" holds in BOTH directions. This is the second half of the same bypass #626 closed at
+  `return_task`, and it is measured that before the gate `decompose` took a card the human had
+  accepted off to Backlog with no assignee, with `reviewed` and `epic` AT THE SAME TIME and two new
+  children in Queue — the board claimed that accepted work had become a half-assembled container.
+  Work that an accepted card revealed is NEW work, not a split of the current one: file a
+  `file_task` (`related_task_id` pointing at it) for the human to triage; `call_human` from Done
+  refuses too, and only a human can put the card itself back into work by hand.
+- **The life cycle of an epic (a container, not work).** A parent with the `epic` label is a
+  container: `next_task` does NOT offer it, `claim` refuses (work on the children, not on the
+  container). An agent cannot and must not move an epic through the stages. When the LAST child of
+  an epic reaches Review, that child's `advance` itself hangs the `epic-ready` label on the epic
+  and an `[эпик собран]` comment (a best-effort side effect: it adds nothing to your payload and
+  does not fail your advance, even if the write to the epic falls over) — so a human sees an
+  assembled container at a glance. From there the whole set (children + epic) is taken to Done by
+  the HUMAN — only they move things into Done. If you bounced a child back out of Review, the
+  marker can go stale, and the human will see that.
+- **`file_task` is about a FINDING outside your task.** If along the way you run into a bug or
+  tech debt that does not belong to the current task — do not fix it silently and do not drag it
+  into your diff: file `file_task(title, description?, priority?, related_task_id?, queue?)`.
+  The task lands in Backlog (NOT Queue — a human prioritises) with a `[filed-by-agent]` marker;
+  pass the `related_task_id` of your current task to tie the finding to its context.
+  This is orthogonal to decompose: decompose splits YOUR big task into subtasks in
+  Queue, `file_task` parks a finding that belongs elsewhere in Backlog for a human to triage.
+- **The THRESHOLD for filing: a finding about PROSE becomes a CARD only if it changes what the
+  reader WILL DO. Otherwise — a COMMENT on the card whose text is under discussion.** The QUESTION
+  itself is not new — "change not a single decision of the reader" already stands in the stopping
+  criterion of the second pass (the section "A second independent pass over YOUR OWN text"). But do
+  NOT carry that rule over here wholesale: there this question is ONE OF THREE conjuncts, next to
+  "not attribution" and "already covered by the neighbouring text", and it decides whether to turn
+  another round; here it stands ALONE and decides whether to file a card. Ask it literally: having
+  read the corrected text, will an agent do SOMETHING DIFFERENT — a different command, a different
+  branch, a different conclusion out of a tool's answer? Yes — a card. No (the wording is more
+  precise, the example more vivid, two neighbouring paragraphs argue with each other but the action
+  out of both is one) — `comment` on the card whose text you are discussing: `get_task` returns all
+  comments, so the finding will be seen by the next one who opens THAT CARD. The road "text → card"
+  is exactly one and implicit — `git blame` down to the commit and the `(tracker #N)` trailer in
+  it; the file itself does not promise it.
+  - **SCOPE: the rule is about a finding you are ABOUT TO FILE, that is, one OUTSIDE your slice.**
+    A finding in YOUR OWN not-yet-delivered text you fix IN THE SAME diff — "I will comment
+    instead of fixing" is not something the threshold permits, and the second pass is not
+    shortened by it. From the same session: the blocking finding of the second pass over #874 left
+    as a SECOND COMMIT on the same card (`ad2a77a` → `a44c4c7`), not as a comment and not as a new
+    card. And a card on SOMEONE ELSE'S board is unreachable by comment — `comment` only travels
+    within your own project, so there it is still `file_task(project_id=…)`.
+  - **Why there is a threshold — one drain session's accounting of the HUMAN (2026-08-06), and it
+    is about the DYNAMICS, not about quality.** 13 cards in Backlog at the start, 11 substantive
+    landings, 10 cards filed, BACKLOG became 17 — the work DOES NOT CONVERGE. In the landed diffs
+    1095 added lines, of them 640 (58 %) prose (comments and docstrings). Five of the ten filed
+    are pure prose and pins. Not one of THOSE findings was false: the chain works, what is bad is
+    the DYNAMICS — the class "text A contradicts text B" and "a claim wider than its measurement"
+    REPRODUCES ITSELF, because a fix is new text, and the next careful pass measures that one.
+    **The numbers are NOT re-derivable, neither from git nor from the board** — this is manual
+    accounting for that session, not a slice of the tree: that day 20 commits landed in the main
+    branch (bumps excluded), and no window of 11 in a row gives 1095. Do not "refine" them by
+    recounting — they move only together with a new measurement by the human.
+  - **BOUNDARY: the rule is about PROSE. A finding about BEHAVIOUR is filed as a card as before,
+    regardless of size.** A gate that does not refuse; a tool that moves a card to the wrong place;
+    the order of branches in `next_task` — that is behaviour, and a one-line diff softens nothing
+    here. The threshold touches the class that produced it, and that class is DOUBLE: both "a claim
+    wider than its measurement" and "text A contradicts text B" — that is, not only the declared
+    measurement, but also the text's consistency with the text beside it.
+  - **What the threshold does NOT cancel — and that is part of the decision, not a caveat.**
+    Neither the second independent pass, nor the independent review. Both paid off in the SAME
+    session the threshold was counted on: the second pass caught the blocking defect of #874
+    EARLIER than review, and review caught, in #860, a loud loss of the report being replaced by a
+    quiet false report. What is being cut is the SOURCE of cards, not the checks: run the checks
+    exactly as before, and put their findings into a comment if they do not change what the reader
+    does. If you read this threshold as permission not to call a second pass or not to review —
+    you read the wrong thing.
+- **`queue=True` — ONLY when a human explicitly asked for a task to be filed into work**
+  (an answer on a Your Call card, a direct "file a task for X" in chat or in comments): their
+  instruction IS the triage, the card will land straight in YOUR project's Queue — unassigned,
+  immediately claimable by any agent. NEVER file your OWN findings into Queue — their road is
+  Backlog (the default), a human prioritises. It does not combine with a cross-project `project_id`
+  (refusal, nothing created): someone else's Queue is not yours to fill — their Backlog is triaged
+  by their human.
+- **The finding lives in SOMEONE ELSE'S project/repo — file it straight into their Backlog.** If
+  the fix is needed on another project's side (its repo, its agent), pass
+  `file_task(..., project_id=<id of the target project>)`: the card will land in the TARGET
+  project's Backlog (their human triages it), the `[filed-by-agent]` marker will name your project,
+  and `related_task_id` will tie it to your current task across the project boundary — this is the
+  agent→agent coordination channel. Do not fix someone else's repo in your diff and do not park
+  someone else's work in YOUR Backlog. Take the target project's id from the task context or from
+  the human; if you do not know it — `call_human`, do not guess. If the token has no access — you
+  get a clear refusal (the boundary is the scoped token itself), the card is not created. Your
+  `get_task`/`comment` will not see the card you filed (it is on someone else's board) — the trace
+  that stays with you is the `related` link.
