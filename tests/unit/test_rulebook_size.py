@@ -29,9 +29,9 @@ byte count would report roughly 1.6x its real size and the ceiling would mean no
 THE UNIT IS A PROXY, AND KNOWING WHICH ONE MATTERS (#998). What this gate is defending is
 CONTEXT, and context is priced in TOKENS. Characters stand in for tokens well enough while a
 file stays in one language, and not at all across a change of language: measured, Cyrillic
-prose runs about 0.46-0.48 tokens per character against 0.25-0.28 for Latin (the Latin figure
-is the range over all 12 Latin markdown files this repo tracks, 0.2487-0.2834, not one sample),
-so English says the same thing in slightly MORE characters for noticeably fewer tokens: a real
+prose runs 0.44-0.47 tokens per character against 0.25-0.28 for Latin — each range measured over
+a NAMED population of this repo's own markdown (7 Cyrillic files, 12 Latin), never extrapolated
+from a sample — so English says the same thing in slightly MORE characters for fewer tokens: a real
 SKILL.md section translated by hand measured 1.69x more tokens in Russian, and an independent
 reviewer's translation of a different section 1.63x. TOKENS ARE THE THIRD UNIT, and
 the bytes-versus-characters argument above did not consider them — it is still correct, so do
@@ -172,27 +172,45 @@ def test_each_ceiling_declares_the_script_it_was_derived_in():
 
     Measured (tiktoken cl100k_base, which is OpenAI's tokenizer — a PROXY for the one that
     actually counts here, so read the RATIO and not the absolutes): Cyrillic prose runs about
-    0.46-0.48 tokens per character; Latin 0.25-0.28, which is the RANGE over all 12 Latin
-    markdown files this repo tracks (0.2487 for docs/dossier/browser.md to 0.2834 for
-    docs/dossier/config.md) rather than one sample — every tree-derived figure in this docstring
-    measured at `d3884bc`. Same content translated by hand: a real SKILL.md section came out
+    0.44-0.47 tokens per character (0.4431 for skills/tracker/references/gc-report.md to 0.4709
+    for references/review.md, over the 7 Cyrillic markdown files this repo tracks); Latin
+    0.25-0.28 (0.2487 for docs/dossier/browser.md to 0.2834 for docs/dossier/config.md, over
+    all 12). EACH RANGE IS THE OBSERVED SPREAD OF A NAMED POPULATION — that phrasing is the
+    correction itself, see below — and every tree-derived figure here was measured at
+    `d3884bc`. Same content translated by hand: a real SKILL.md section came out
     1.69x cheaper in English, and an independent reviewer's translation of a different section
     1.63x. Those two are properties of a SAMPLE, not of the tree, so they carry no anchor and
     should not be treated as constants. English is therefore slightly LONGER in characters
     (1.07x on that section) and distinctly cheaper in tokens.
 
-    NONE OF THESE FIGURES IS GATED, and that is a limitation rather than an oversight: checking
-    them needs a tokenizer, the only available one fetches over the network, and this file
-    refuses to put that in CI (see the module docstring). The sha anchor is the substitute the
-    repo already has — it does not re-derive the number, it guarantees a reader who wants to
-    check CAN, because the tree is named and reachable (test_measured_figure_anchors.py).
+    THE TOKEN FIGURES ARE NOT GATED — and that is narrower than "none of them is", which is what
+    round 2 wrote. What genuinely cannot be checked here is anything needing a tokenizer: the
+    per-character rates and the 5.12x that follows from them, because the only available
+    tokenizer fetches over the network and this file refuses to put that in CI (see the module
+    docstring). For those, the sha anchor is the substitute the repo already has — it does not
+    re-derive the number, it guarantees the tree is named and reachable
+    (test_measured_figure_anchors.py). The rest is checked rather than trusted: the Cyrillic
+    SHARES are what this test computes itself, and 2.88x is plain arithmetic over `_CEILINGS`,
+    so it is asserted below instead of quoted — CLAUDE.md's rule that a figure a reader will ACT
+    on should be an assert, applied to the one figure here that can be.
 
-    DO NOT ROUND THESE, and this is the defect that sent round 1 back. Round 1 wrote 0.46 and
-    0.23 and derived "5.8x" from them while claiming to use "each file's own measured rate" —
-    self-contradictory, since those rates are 0.4645 and 0.2608 and give 5.12x. Worse, 0.23 came
-    from one hand-written paragraph and sits BELOW every Latin file in this repo, so the
-    re-derivation this test PRESCRIBES would have come out 7-13% too generous: the procedure the
-    gate hands you would have quietly loosened the gate.
+    NAME THE POPULATION OR DO NOT WRITE THE RANGE. This took THREE rounds, each failing the same
+    way, which is why the rule is stated rather than the numbers merely fixed:
+
+    * Round 1 wrote 0.46 and 0.23 and derived "5.8x" from them while claiming to use "each
+      file's own measured rate" — self-contradictory, since those rates are 0.4645 and 0.2608
+      and give 5.12x. Worse, 0.23 came from ONE hand-written paragraph and sits BELOW every
+      Latin file here.
+    * Round 2 fixed Latin against all 12 files and then invented "0.46-0.48" for Cyrillic out
+      of two samples rounded outward. Measured over the 7 real files it is 0.4431-0.4709: 0.48
+      is above every one of them and 0.46 cuts the minimum off. Committed two paragraphs after
+      the words DO NOT ROUND THESE.
+
+    Both errors point the SAME way — a low Latin rate or a high Cyrillic one both inflate the
+    budget, and this test's refusal PRESCRIBES re-deriving a ceiling from them, so each would
+    have handed the reader a procedure that quietly loosened the gate (7-13% and 3.3%). A range
+    invented from samples is not a conservative estimate; it is an unmeasured claim wearing the
+    costume of one.
 
     Two consequences, and the second is why this test exists rather than a paragraph:
 
@@ -224,7 +242,26 @@ def test_each_ceiling_declares_the_script_it_was_derived_in():
     the band widened with no translation -> 0 failed, correctly, since there is nothing to
     catch; the declared script dropped from the entries -> 2 failed; control (closing, restored)
     0 failed, 0 errors, collected 4.
+
+    The 2.88x assert was swept separately, same discipline, same control: control 0 failed,
+    collected 4; CLAUDE.md's ceiling raised 40 000 -> 50 000 -> 1 failed, collected 4; control
+    0 failed. Deleting the assert itself was also run and gives 0 failed — recorded because it
+    is DEGENERATE rather than informative: removing an assertion cannot fail the test that
+    holds it, so that round is not evidence of anything and the raise above is.
     """
+    # The one figure in the prose above that needs no tokenizer, so it is derived rather than
+    # quoted: if the ceilings move, this recomputes instead of going stale, and the docstring's
+    # "2.88x in characters against 5.12x in tokens" cannot silently drift on its character half.
+    ratio = (
+        _CEILINGS["src/vikunja_mcp/skills/tracker/SKILL.md"][0] / _CEILINGS["CLAUDE.md"][0]
+    )
+    assert abs(ratio - 2.88) < 0.01, (
+        f"the ceilings are now {ratio:.2f}x apart in characters, not the 2.88x this test's "
+        f"docstring quotes beside its 5.12x in tokens. Re-measure the token side before "
+        f"editing the prose: the whole point of the pair is that the two units disagree, and "
+        f"updating only the half that needs no tokenizer would hide exactly that"
+    )
+
     for relative, entry in _CEILINGS.items():
         assert len(entry) == 3, (
             f"the ceiling for {relative} does not declare the script it was derived in. "
@@ -245,9 +282,10 @@ def test_each_ceiling_declares_the_script_it_was_derived_in():
             f"language while its ceiling of {ceiling} characters did not. DO NOT simply raise "
             f"or lower that number to fit. The ceiling bounds CONTEXT COST, which is counted "
             f"in tokens, and characters only stand in for tokens at a rate that depends on the "
-            f"language: 0.46-0.48 tokens/character for Cyrillic against 0.25-0.28 for Latin "
-            f"(the range over this repo's 12 Latin markdown files — do not round it DOWN, a "
-            f"lower rate yields a more generous ceiling). "
+            f"language: 0.44-0.47 tokens/character for Cyrillic against 0.25-0.28 for Latin "
+            f"(the observed spread over this repo's own markdown, 7 Cyrillic files and 12 "
+            f"Latin — measure your new text, do not widen these outward from a sample: a low "
+            f"Latin rate or a high Cyrillic one both yield a more generous ceiling). "
             f"Re-derive the ceiling from a token measurement of the NEW text so it preserves "
             f"the same budget, then update the declared script in the same commit"
         )
