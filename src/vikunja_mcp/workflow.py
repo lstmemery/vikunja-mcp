@@ -398,6 +398,29 @@ class Workflow:
         notifier: WebhookNotifier | None = None, wip_limit: int | None = None,
         require_review_independence: bool = False,
     ):
+        # #992: refuse a non-int HERE. Passed a Config (the measured mistake — `Workflow(api,
+        # cfg)` instead of `Workflow(api, cfg.project_id)`), the object used to be stored
+        # silently and then interpolated into a URL, so the first sign of it was
+        # `VikunjaError: Vikunja API 404: {"message":"Not Found"}` two layers down — a message
+        # that points at a missing project or a token without access, never at this line.
+        #
+        # `bool` is excluded EXPLICITLY because `isinstance(True, int)` is True in Python: a
+        # bare isinstance check would pass a bool straight through to the same 404 this guard
+        # exists to remove. The VALUE is never shown — a Config carries the API token, a secret
+        # of the same class as `.vikunja-mcp.env`, and exception text reaches stderr, logs,
+        # worklogs and tracker comments. TypeError rather than WorkflowError on purpose: every
+        # production site passes `cfg.project_id`, which `load_config` has already put through
+        # `int()`, so this cannot reach the stdio server — while `_tool` would have turned a
+        # WorkflowError into an `{"error": ...}` result, dressing a programming bug up as a
+        # gate refusing politely. See tests/unit/test_workflow_project_id_guard.py.
+        if isinstance(project_id, bool) or not isinstance(project_id, int):
+            raise TypeError(
+                f"project_id must be an int, got {type(project_id).__name__}. Pass "
+                f"cfg.project_id, not the Config itself. The value is deliberately not shown "
+                f"here: a Config carries the API token. Without this check the wrong type "
+                f"reaches the request URL and surfaces later as 'Vikunja API 404: Not Found', "
+                f"which reads as a missing project rather than as a bad argument."
+            )
         self.api = api
         self.project_id = project_id
         # optional WIP gate: when true, claim() refuses a new task while you already
