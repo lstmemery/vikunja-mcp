@@ -16,9 +16,11 @@
   which is therefore **READ-ONLY BY CONTRACT** (comment on `next_task` + a no-writes unit
   test): the hub polls it per loop tick, so a side effect there becomes a per-poll tracker
   mutation. Born from a dogfood regression: the hub used to guess from kanban BUCKET
-  PRESENCE, so a Review column holding 25 tasks all assigned to the agent (done work
-  awaiting a human's Done) read as "work!" forever — ~144 no-op agent boots/day ≈ $105/day
-  — while `next_task` rightly offered nothing (you never review your own work). The JSON
+  PRESENCE, so a Review column holding 25 tasks all assigned to the agent and all already
+  ruled on (done work awaiting a human's Done) read as "work!" forever — ~144 no-op agent
+  boots/day ≈ $105/day — while `next_task` rightly offered nothing. Since #991 the guard
+  that keeps that board quiet is worklog FRESHNESS, not authorship: an own card still owed
+  a review is claimable on purpose, and the lane empties as verdicts land. The JSON
   keys and the exit-code split are a public cross-repo contract; changing them breaks the
   hub's check (fail-closed: its loops go red until both sides move together).
   **STDERR is the opposite kind of channel — a breadcrumb trail, explicitly NOT a contract**

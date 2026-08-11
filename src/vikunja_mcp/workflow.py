@@ -809,9 +809,11 @@ class Workflow:
           unconditional and solo review stops working outright, for this repo and for every
           consumer on `stable` — the reason the human chose the flag (option B) over a hard gate.
         * In MULTI-IDENTITY it IS the hole this card was filed for. There "you don't review your
-          own work" rests ENTIRELY on next_task's OFFER filter, which hands out only cards that
-          are not yours. An offer filter is a hint, not a gate: it never sees a direct
-          `review_task` call. And a self-approval is not cosmetic — `approve` writes `reviewed`,
+          own work" rests ENTIRELY on next_task's OFFER, and since #991 that rests less: with the
+          flag off the offer no longer WITHHOLDS your own card, it only ranks it behind everyone
+          else's and hands it over once none are left. An offer is a hint either way, never a
+          gate: neither form sees a direct `review_task` call. And a self-approval is not
+          cosmetic — `approve` writes `reviewed`,
           the label a human reads when deciding Done, so afterwards it is INDISTINGUISHABLE from
           an independently accepted card.
 

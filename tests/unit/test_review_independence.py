@@ -1,5 +1,10 @@
-"""#37: `require_review_independence` — the repo-toml flag that promotes "you do not review
-your own work" from a convention to a GATE on `review_task`.
+"""#37 and #991: `require_review_independence` — the repo-toml flag that promotes "you do not
+review your own work" from a convention to a GATE, and the ONE switch both surfaces now read.
+
+#37 put the gate on `review_task`. #991 put the same flag on next_task's OFFER, which had been
+skipping the caller's own cards unconditionally — so the two tools disagreed, next_task refusing
+to offer what review_task would accept. Read this file as one flag with two halves; the second
+half starts at its own banner below, with its own sweep record.
 
 WHAT THIS FILE HAS TO PROTECT IS BOTH DIRECTIONS AT ONCE, and they pull opposite ways:
 
@@ -35,9 +40,12 @@ moving the gate to AFTER the approve verdict is written -> 3 failed, 0 errors, c
 control (closing, restored) 0 failed, 0 errors, collected 170, clone clean. Collected is equal
 in every round, so each number is a delta against the control and not a different selection.
 """
+import inspect
+
 import pytest
 
 from tests.unit.fakes import FakeAPI
+from vikunja_mcp import claimable_cmd, server, workflow
 from vikunja_mcp.workflow import STAGES, Workflow, WorkflowError
 
 REVIEWER_ID = 77
@@ -328,3 +336,71 @@ def test_off_someone_elses_card_is_offered_before_your_own():
     # and mine is not LOST, only deprioritised: exclude theirs and it comes forward.
     second = wf.next_task(exclude=[theirs["id"]])
     assert second["task"]["id"] == mine["id"], second
+
+
+# --- the AGENT-FACING copy has to move with the branch, #991 round 2 ------------------------
+#
+# WHY THESE EXIST AT ALL. Round 1 changed the branch, the rulebook and its references, and
+# still left `next_task`'s own tool docstring saying the offer is "not your own" — read by
+# every agent in every session, and the single most likely place to be believed. It survived
+# because NOTHING pinned it: the rulebook has test_skill_contract, the dossier is prose nobody
+# executes, and the tool docstrings had no tie to the code they describe. An independent
+# reviewer found it by reading; that is not a mechanism, so here is one.
+#
+# The tie is deliberately to the CODE, not to a wording: each test first establishes what the
+# branch actually does, and only then requires the copy to agree. Delete the condition and
+# these fail for the same reason the prose would become false.
+#
+# MUTATION SWEEP for these two, one selection throughout (this file + test_claimable_cmd.py +
+# test_skill_contract.py + test_server.py), `__pycache__` cleared and PYTHONDONTWRITEBYTECODE=1
+# each round, `-q` dropped so `collected` is printed, rounds read by COUNTING lines beginning
+# `FAILED ` and `ERROR ` separately: control (opening) 0 failed, 0 errors, collected 178; the
+# next_task tool docstring reverted to its pre-#991 «and not your own» -> 1 failed, 0 errors,
+# collected 178; the claimable header crediting authorship again for the 2026-07-14 board -> 1
+# failed, 0 errors, collected 178; the offer branch itself made unconditional, i.e. the copy
+# left true and the CODE broken -> 6 failed, 0 errors, collected 178; control (closing,
+# restored) 0 failed, 0 errors, collected 178. Collected is equal in every round. The first two
+# rounds are the point: BOTH of those wordings shipped in round 1 of this card and no round
+# would have gone red, which is why an independent reviewer had to find them by reading.
+
+
+def _offer_branch_source() -> str:
+    src = inspect.getsource(workflow.Workflow.next_task)
+    return src[src.index('for t in sorted(board.get("Review", [])'):]
+
+
+def test_the_next_task_tool_docstring_agrees_with_the_offer_branch():
+    """CLAUDE.md calls tool docstrings agent-facing RULES, to be kept prescriptive — so a stale
+    one is not a documentation nit, it is a rule that lies. This one lying costs money: an agent
+    told the offer is never its own card will not cast a verdict on it, nothing then trips the
+    freshness guard, and `claimable` answers kind='review' on every poll — the 2026-07-14
+    no-op boot loop, rebuilt out of prose."""
+    assert "self.require_review_independence and my_id in self._assignee_ids(t)" \
+        in _offer_branch_source(), \
+        "the offer branch stopped being conditional — fix this test WITH the docstring"
+
+    doc = server.next_task.__doc__
+    assert doc, "next_task lost its docstring — that IS the agent's copy of this rule"
+    assert "not your own" not in doc, \
+        "the tool docstring still says the review offer excludes your own card, which the " \
+        "branch above no longer does with the flag off (its default)"
+    assert "YOUR OWN INCLUDED" in doc, \
+        "the tool docstring no longer states the fact an agent must act on: it WILL be offered " \
+        "its own card, and it is expected to review it from a fresh context"
+    assert "require_review_independence" in doc, \
+        "the docstring states the default but not the flag that changes it"
+    assert "exclude" in doc, \
+        "the docstring omits the cost of the re-offer — a card stays in this lane until a " \
+        "verdict lands, so a dispatched review must be excluded for the rest of the tick"
+
+
+def test_the_claimable_module_docstring_no_longer_credits_authorship():
+    """The same stale sentence lived in `claimable_cmd`'s own header, where it explains the
+    $105/day incident to whoever next touches the cross-repo contract. Left alone it would
+    teach the opposite of the fix: that an own card in Review is by definition nothing to do."""
+    doc = claimable_cmd.__doc__
+    assert doc, "claimable_cmd lost its module docstring"
+    assert "you never independently review your own work" not in doc, \
+        "the incident write-up still credits the authorship filter for keeping that board " \
+        "quiet; since #991 it is worklog freshness, and the difference is the whole fix"
+    assert "FRESHNESS" in doc, "the write-up does not name the guard that actually holds it"

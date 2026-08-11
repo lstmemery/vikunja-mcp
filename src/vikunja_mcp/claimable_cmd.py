@@ -12,11 +12,22 @@ loops go red rather than silently idling), but it breaks.
 
 WHY THIS EXISTS. The hub used to GUESS claimability its own way, from kanban BUCKET
 PRESENCE. On 2026-07-14 this project's own board proved that wrong and expensive:
-Queue/Design/Build were empty while Review held 25 tasks ALL assigned to the agent
-(done work awaiting a HUMAN's Done move). Bucket presence read "work!" forever, yet
-next_task correctly offers nothing — you never independently review your own work
-(workflow.py, the Review pull path). Result: ~144 no-op agent boots/day ≈ $105/day
-for zero work. So the hub stops guessing and asks the gates themselves: this runs the
+Queue/Design/Build were empty while Review held 25 tasks ALL assigned to the agent and
+ALL already carrying a verdict — done work awaiting a HUMAN's Done move, the one
+transition no agent tool can make. Bucket presence read "work!" forever, yet next_task
+correctly offers nothing. Result: ~144 no-op agent boots/day ≈ $105/day for zero work.
+
+WHICH GUARD MAKES THAT BOARD QUIET CHANGED IN #991, and the distinction now matters to
+anyone reading this. It used to be authorship — "you never review your own work" — and
+that was too wide: it also silenced cards with a report and NO verdict, which are cards
+AWAITING review, so in a solo setup kind='review' could never be produced at all and the
+hub never woke an agent for a pending review. Authorship is now checked only where a repo
+sets require_review_independence; what holds the 2026-07-14 board quiet is worklog
+FRESHNESS — every card there had been ruled on. An own card still owed a review IS
+claimable, on purpose, and the lane empties as verdicts land (pinned in
+test_claimable_cmd: 25 cards, 25 rounds, then kind='empty').
+
+So the hub stops guessing and asks the gates themselves: this runs the
 SAME Workflow.next_task() the agent runs, so the exported verdict has ZERO drift from
 the agent's own by construction — one implementation of the rules, not two.
 

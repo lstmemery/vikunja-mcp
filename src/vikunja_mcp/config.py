@@ -72,8 +72,9 @@ class Config:
     # So it ships INERT and a repo flips it true in the same step it provisions a reviewer token.
     #
     # What it closes is the MULTI-IDENTITY hole (measured, see review_task): there "you don't
-    # review your own work" rests ENTIRELY on next_task's OFFER filter, which hands out only other
-    # people's cards — a hint, not a gate, since it does not stop a direct review_task call. And
+    # review your own work" rests ENTIRELY on next_task's OFFER, which since #991 only PREFERS
+    # other people's cards and hands yours out once none are left — a hint that got weaker, and
+    # never a gate, since neither form stops a direct review_task call. And
     # `approve` writes the `reviewed` label a human reads when deciding Done, so a self-approved
     # card is indistinguishable after the fact from an independently accepted one.
     require_review_independence: bool = False

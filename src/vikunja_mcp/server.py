@@ -395,9 +395,18 @@ def _tool(fn):
 def next_task(exclude: list[int] | None = None) -> dict:
     """What to do next, in order: (1) YOUR active task (Design/Build, incl. one bounced
     back from Your Call), (2) a task in Queue assigned to you, (3) a task in Review
-    awaiting independent review — ANY card except an epic container, with no fresh verdict
-    and not your own (review_kind names the rubric: 'bug' or 'change'), (4) the top FREE
-    task in Queue. Never hands out a task assigned to someone else — those are "for humans".
+    awaiting independent review — ANY card except an epic container, with no fresh verdict,
+    YOUR OWN INCLUDED (review_kind names the rubric: 'bug' or 'change'), (4) the top FREE
+    task in Queue. Your own is included because this is NOT an authorship check: in a solo
+    setup one token is the whole fleet, so every card in Review is yours and a filter would
+    offer nothing at all. Independence rests on reviewing from a FRESH CONTEXT — a sibling
+    agent, never the one that wrote the code — which nothing server-side can observe. Only
+    a repo setting require_review_independence = true skips your own here, and there it
+    matches review_task, which would refuse your verdict anyway. Cards that are NOT yours
+    are offered first while any remain. A card leaves this lane only when a verdict lands,
+    so a dispatched review belongs in `exclude` for the rest of the tick — otherwise the
+    same card is handed out again and two reviewers land on one piece of work.
+    Never hands out a task assigned to someone else — those are "for humans".
     Leaves Backlog, blocked, and epic containers (label epic — a container, not a unit of
     work) alone. Do not CLAIM more than wip.limit at once — the repo toml's wip_limit where it
     sets one (or 1 for the legacy enforce_single_wip = true), else THREE by default; the `wip`
