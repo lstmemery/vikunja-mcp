@@ -1372,8 +1372,11 @@ def test_review_flow_for_bug_labels(env):
     wf.advance(t["id"], to="review", worklog="w", evidence="e",
                root_cause="the state was not subscribed to event X")
 
-    # имплементеру (assignee) ревью НЕ предлагается
-    assert "review" not in wf.next_task()
+    # имплементеру (assignee) ревью ПРЕДЛАГАЕТСЯ: с #991 пропуск по авторству условен на
+    # require_review_independence, а он по умолчанию false — в соло иначе не отдалась бы
+    # НИ ОДНА карточка. Полный разбор обоих направлений — test_review_independence.py.
+    mine = wf.next_task()
+    assert mine.get("review") is True and mine["task"]["id"] == t["id"]
 
     # свободному агенту — предлагается
     api2 = api  # тот же борд, другой "я"

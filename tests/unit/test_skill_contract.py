@@ -3854,11 +3854,24 @@ def _independent_review_section(text: str) -> str:
     return section
 
 
-def test_the_restart_rule_says_its_own_mechanism_is_build_only():
-    """VMCP-118 (591): the pump's restart rule rests on «снова зовёт `next_task` (задача всё ещё
-    за ним)». That premise is TRUE for a build agent and FALSE for a reviewer, and the rulebook
-    stated only the half that holds — the catalogue's «упавший review-саб-агент нигде не
-    перезапускается».
+def test_the_restart_rule_covers_a_dead_reviewer_and_the_double_dispatch_it_costs():
+    """VMCP-118 (591), INVERTED BY #991 — and the inversion is why this test kept its slice and
+    its code anchor while both assertions changed. 591's finding was that the pump's restart rule
+    rests on «снова зовёт `next_task` (задача всё ещё за ним)», a premise TRUE for a build agent
+    and FALSE for a reviewer, because the review-offer branch skipped cards assigned to the caller
+    and in a solo setup every card in Review is the caller's. The rulebook therefore had to say
+    that a dead reviewer is never handed back.
+
+    #991 made that skip conditional on `require_review_independence` (default false), so the
+    premise now holds for BOTH roles: a card with no verdict is re-offered on every tick, since
+    only a verdict removes it. The rulebook must no longer say the mechanism is missing.
+
+    WHAT REPLACES THE OLD PIN IS THE NEW COST, not nothing. The same re-offer that resurrects a
+    dead reviewer also hands the SAME card out twice WITHIN a tick, so the pump can dispatch two
+    reviewers onto one piece of work. That is what `exclude` now prevents and what the rulebook
+    now has to say — under the old behaviour `exclude` was inert here, and the rulebook said so
+    in as many words. A translation of this bullet that keeps the reassuring half («механизм
+    есть») and drops the obligation would leave the pump double-dispatching quietly.
 
     MEASURED before the prose was written (real `Workflow` over FakeAPI, solo setup — the dogfood
     one), and DESCRIBED rather than transcribed, because none of the three is a payload any call
@@ -3872,29 +3885,45 @@ def test_the_restart_rule_says_its_own_mechanism_is_build_only():
     first spelling of this paragraph read as a transcript, VMCP-170 (694). Read the payloads off
     the code or off a run, never off this docstring.
 
-    Anchored in the branch that causes it: the review-offer loop must keep skipping cards assigned
-    to the caller (delete that conjunct and a dead reviewer WOULD be reminded, making this
-    paragraph false), and the resume path that DOES hand build work back must still exist — that
-    contrast is the whole point of the added clause.
+    Anchored in the branch that causes it, and the anchor is now the CONDITION rather than the
+    skip: make the review-offer skip unconditional again and the re-offer disappears, so both
+    halves of the new bullet — the mechanism AND the double-dispatch it costs — go false at once.
+    The resume path that hands build work back must still exist, since the bullet still draws the
+    two roles as parallel rather than opposite.
 
-    MUTATION-CHECKED: delete the added sub-bullet while step 3 of the drain tick keeps the same
-    sentence verbatim -> FAIL (a whole-file substring on that sentence stays GREEN on the same
-    mutant, which is why this is sliced); make the review branch stop skipping my own cards ->
-    FAIL; re-wrap the paragraph -> PASS by design (`_flat`)."""
+    MUTATION SWEEP, one selection throughout (this file + test_review_independence.py +
+    test_claimable_cmd.py + test_workflow_gates.py), `__pycache__` cleared and
+    PYTHONDONTWRITEBYTECODE=1 each round, `-q` dropped so `collected` is printed, and each round
+    read by COUNTING lines beginning `FAILED ` and `ERROR ` separately rather than by the first
+    `N failed` in stdout: control (opening) 0 failed, 0 errors, collected 223; drop the
+    `require_review_independence` conjunct from the offer skip, back to the pre-#991
+    unconditional form -> 6 failed, 0 errors, collected 223; delete the `exclude` obligation
+    sentence from this bullet -> 1 failed, 0 errors, collected 223; delete the «механизм ЕСТЬ»
+    claim -> 1 failed, 0 errors, collected 223; control (closing, restored) 0 failed, 0 errors,
+    collected 223. Collected is equal in every round, so each number is a delta against the
+    control and not a different selection. Re-wrapping the paragraph is a PASS by construction
+    rather than a measured round — `_flat` normalises the wrapping before any of these match."""
     flat = _flat(_crashed_agent_bullet(_skill_text()))
     assert "Упал РЕВЬЮЕР" in flat, \
         "the restart rule no longer says anything about a reviewer that died"
-    assert "пропускает карточки, назначенные на тебя" in flat, \
-        "the restart rule no longer names WHY a dead reviewer is never handed back"
+    assert "механизм ЕСТЬ" in flat, \
+        "the restart rule no longer says a dead reviewer IS handed back — #991 made it true, " \
+        "and a rulebook still claiming otherwise sends the pump chasing a phantom"
+    assert "клади в `exclude`" in flat, \
+        "the restart rule no longer names the cost the re-offer brings: without exclude the " \
+        "same card is offered twice inside one tick and two reviewers land on one piece of " \
+        "work. A bare `exclude` substring is NOT enough here — the word occurs twice in this " \
+        "bullet, so matching it would stay green with the obligation itself deleted"
 
     src = inspect.getsource(workflow.Workflow.next_task)
     review_at = src.index('for t in sorted(board.get("Review", [])')
-    assert "my_id in self._assignee_ids(t)" in src[review_at:], \
-        "the review-offer branch no longer skips cards assigned to the caller — SKILL.md tells " \
-        "the pump a dead reviewer is never reminded, which would become false"
+    assert "self.require_review_independence and my_id in self._assignee_ids(t)" \
+        in src[review_at:], \
+        "the review-offer branch skips cards assigned to the caller UNCONDITIONALLY again — " \
+        "SKILL.md tells the pump a dead reviewer IS reminded, which would become false"
     assert "_my_active_tasks" in src, \
         "next_task no longer has the resume path for active work — the build half of the " \
-        "contrast the restart rule draws would be gone"
+        "parallel the restart rule draws would be gone"
 
 
 def test_the_reviewer_is_told_to_establish_it_is_looking_at_the_reviewed_code():

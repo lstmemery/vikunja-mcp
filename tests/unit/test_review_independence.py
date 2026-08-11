@@ -236,3 +236,95 @@ def test_on_in_a_solo_setup_nobody_can_review_and_the_refusal_says_so():
     assert "require_review_independence" in msg
     assert "tracker-reviewer" in msg
     assert "nobody" in msg
+
+
+# --- the SAME flag on next_task's OFFER, #991 -------------------------------------------
+#
+# The defect these pin is a DIVERGENCE between two tools, not a missing feature. Until #991
+# the offer filter skipped a card assigned to the caller UNCONDITIONALLY, while `review_task`
+# accepted that very verdict whenever the flag was off (the first test in this file). So
+# next_task refused to OFFER what review_task would happily RECORD, and in a solo setup —
+# where CLAUDE.md calls one scoped token the condition of operation — every card in Review is
+# the caller's, so nothing was ever offered and `claimable`'s kind='review' was unreachable.
+# Both surfaces now read the same flag.
+#
+# MUTATION SWEEP for #991, one selection throughout (this file + test_claimable_cmd.py +
+# test_skill_contract.py + test_workflow_gates.py), `__pycache__` cleared and
+# PYTHONDONTWRITEBYTECODE=1 each round, `vikunja_mcp.__file__` printed every round and resolving
+# inside this checkout, `-q` dropped so `collected` is printed, and each round read by COUNTING
+# lines beginning `FAILED ` and `ERROR ` separately rather than by the first `N failed` in
+# stdout: control (opening) 0 failed, 0 errors, collected 223; the authorship skip made
+# UNCONDITIONAL again, i.e. the pre-#991 code -> 6 failed, 0 errors, collected 223; the
+# authorship skip DELETED outright, so the flag stops mattering in either direction -> 2 failed,
+# 0 errors, collected 223; the sort reverted to a bare `-priority`, dropping not-mine-first
+# -> 1 failed, 0 errors, collected 223; the worklog-FRESHNESS check deleted -> 5 failed, 0
+# errors, collected 223, which is what makes the dogfood board in test_claimable_cmd.py
+# non-vacuous now that authorship no longer filters it; control (closing, restored) 0 failed, 0
+# errors, collected 223. Collected is equal in every round, so each number is a delta against
+# the control and not a different selection.
+
+
+def _offerable(api, wf, *, assignee=None, priority=0, title="job"):
+    """A card sitting in Review with a [worklog] and no verdict — the shape the offer branch
+    accepts. Built through the API rather than through `advance` so the card can belong to an
+    identity this Workflow does not authenticate as."""
+    task = api.add_task(title, "Review", priority=priority,
+                        assignee=assignee if assignee is not None else api.me_user)
+    api.add_comment(task["id"], "[worklog] did the work, checked by running")
+    return task
+
+
+def test_off_a_card_in_review_is_offered_to_its_own_assignee():
+    """THE SOLO PATH, and the whole point of #991. With the flag off the offer filter must not
+    hide the card from the identity that implemented it: independence is carried by the agents'
+    separated CONTEXTS (a sibling reviewer dispatched with a fresh context), which nothing
+    server-side can observe — the same reading that makes `review_task` accept the verdict.
+    Measured before the fix: three next_task ticks on ONE such card answered "the queue is
+    empty — no work for the agent" every time."""
+    api = FakeAPI(buckets=STAGES)
+    wf = Workflow(api, project_id=3)
+    assert wf.require_review_independence is False
+    task = _offerable(api, wf)
+
+    out = wf.next_task()
+
+    assert out.get("review") is True, out
+    assert out["stage"] == "Review"
+    assert out["task"]["id"] == task["id"]
+
+
+def test_on_a_card_in_review_is_still_hidden_from_its_own_assignee():
+    """The other direction, and the one that must NOT move: with the flag on, authorship is a
+    GATE, so offering the author their own card would advertise work `review_task` is about to
+    refuse. This is the pin that makes the fix conditional rather than a deletion."""
+    api = FakeAPI(buckets=STAGES)
+    wf = Workflow(api, project_id=3, require_review_independence=True)
+    _offerable(api, wf)
+
+    out = wf.next_task()
+
+    assert out.get("task") is None, out
+    assert out.get("review") is None
+
+
+def test_off_someone_elses_card_is_offered_before_your_own():
+    """The residual #991 opens and what closes most of it. `require_review_independence = false`
+    does NOT mean "solo" — it means the key was never set, which is also every MULTI-IDENTITY
+    repo that never opted in. There the offer filter was the only thing keeping an author away
+    from their own card (`_require_review_independence`'s docstring says so). Making the offer
+    unconditional would hand it straight back, so the sort prefers cards that are NOT yours;
+    your own arrives only once no one else's is left. Priority is deliberately stacked AGAINST
+    the expected answer, so a test that passed on the old `-priority` sort alone cannot pass
+    here by accident."""
+    api = FakeAPI(buckets=STAGES)
+    wf = Workflow(api, project_id=3)
+    other = {"id": 77, "username": "agent-impl"}
+    mine = _offerable(api, wf, priority=5, title="mine, urgent")
+    theirs = _offerable(api, wf, assignee=other, priority=1, title="theirs, ordinary")
+
+    first = wf.next_task()
+    assert first["task"]["id"] == theirs["id"], first
+
+    # and mine is not LOST, only deprioritised: exclude theirs and it comes forward.
+    second = wf.next_task(exclude=[theirs["id"]])
+    assert second["task"]["id"] == mine["id"], second

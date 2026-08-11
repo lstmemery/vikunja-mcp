@@ -47,24 +47,78 @@ def test_classify_next_covers_every_next_task_shape(result, expected):
     assert classify_next(result) == expected
 
 
-def test_dogfood_review_bucket_full_of_my_tasks_is_not_claimable():
-    """THE 2026-07-14 dogfood regression, pinned at the source: Queue/Design/Build
-    empty, Review holds 25 tasks ALL assigned to the caller (done work awaiting a
-    HUMAN's Done move). The hub's old bucket-presence heuristic read that board as
-    "work!" forever, while next_task correctly offers nothing (you never review your
-    own work) — ~144 no-op agent boots/day ≈ $105/day for zero work. The exported
-    verdict MUST therefore be claimable=false.
+def test_dogfood_review_bucket_of_my_already_reviewed_tasks_is_not_claimable():
+    """THE 2026-07-14 dogfood regression, pinned at the source: Queue/Design/Build empty,
+    Review holds 25 tasks ALL assigned to the caller and ALL already carrying a verdict —
+    done work awaiting a HUMAN's Done move, which is the ONE transition no agent tool can
+    make. The hub's old bucket-presence heuristic read that board as "work!" forever —
+    ~144 no-op agent boots/day ≈ $105/day for zero work. The exported verdict MUST be
+    claimable=false.
 
-    Every card carries a [worklog] ON PURPOSE — that is what the real board looked like,
-    because advance(to='review') hard-requires a report and posts one. Without it the
-    worklog-freshness guard would filter these cards on its own and this test would pass
-    even with the own-work guard deleted: vacuous. With it, `my_id in assignees` is the
-    ONLY thing between this board and a claimable=true, so the pin bites if it's removed."""
+    WHICH GUARD HOLDS THIS CHANGED IN #991, AND THE BOARD HAD TO BE BUILT HONESTLY FOR IT.
+    Until then the cards here carried a [worklog] and NO verdict, and what filtered them was
+    `my_id in assignees` — "you never review your own work". But a card in Review with a
+    report and no verdict is, by this product's own definition, a card AWAITING review; the
+    old shape was therefore claiming that 25 unreviewed cards were nothing to do, which is
+    exactly the defect #991 was filed for (in a solo setup EVERY card in Review is the
+    caller's, so review was unreachable and `kind='review'` could never be produced).
+    So the [review] comment above is not decoration — it is what "awaiting a human's Done
+    move" actually looks like, and the guard that now holds this board quiet is the
+    WORKLOG-FRESHNESS one. Non-vacuous either way: delete the freshness check and this
+    board goes claimable again (measured).
+
+    The complementary case — the same 25 cards WITHOUT a verdict — is claimable on purpose
+    now, and terminates; both are pinned in the two tests below."""
     api = FakeAPI(buckets=STAGES)
     wf = Workflow(api, project_id=3)
     for i in range(25):
         t = api.add_task(f"shipped {i}", "Review", assignee=api.me_user)
         api.add_comment(t["id"], f"[worklog]\nСделано: shipped {i}\n\nEvidence: sha{i}")
+        api.add_comment(t["id"], "[review] APPROVE\nreproduced and checked")
+    assert classify_next(wf.next_task()) == {
+        "claimable": False, "kind": "empty", "task_id": None,
+    }
+
+
+def test_dogfood_my_own_cards_awaiting_review_are_claimable_as_review():
+    """The #991 fix at the exported surface, and the reason `kind='review'` stops being
+    unreachable in a solo setup. Same 25 cards, same single identity, no verdicts: this
+    board has 25 real reviews owed on it, so the hub SHOULD launch an agent. Before #991
+    it read as `kind='empty'` and hgdev-acp never woke anyone for a pending review."""
+    api = FakeAPI(buckets=STAGES)
+    wf = Workflow(api, project_id=3)
+    for i in range(25):
+        t = api.add_task(f"shipped {i}", "Review", assignee=api.me_user)
+        api.add_comment(t["id"], f"[worklog]\nСделано: shipped {i}\n\nEvidence: sha{i}")
+    out = classify_next(wf.next_task())
+    assert (out["claimable"], out["kind"]) == (True, "review"), out
+
+
+def test_dogfood_the_solo_review_offer_terminates_instead_of_looping():
+    """What keeps #991 from re-opening the $105/day hole from the other side. Making a solo
+    board claimable is only safe if the work RUNS OUT: an agent that keeps being launched
+    against cards it never clears is the 2026-07-14 incident again, just with a different
+    kind string. Measured here rather than argued — cast a verdict on whatever is offered
+    and the board goes quiet after exactly 25 rounds, one per card, because each verdict
+    trips the freshness guard for good.
+
+    THE CONDITION IS THAT VERDICTS ARE ACTUALLY CAST, and that is a RULEBOOK obligation, not
+    something this code can enforce: an agent told "your own card is not yours to review"
+    would leave every card unfiltered and the loop would never end. That is why #991 rewrote
+    the passages in SKILL.md and references/stuck.md that said so."""
+    api = FakeAPI(buckets=STAGES)
+    wf = Workflow(api, project_id=3)
+    for i in range(25):
+        t = api.add_task(f"shipped {i}", "Review", assignee=api.me_user)
+        api.add_comment(t["id"], f"[worklog]\nСделано: shipped {i}\n\nEvidence: sha{i}")
+
+    rounds = 0
+    while (offer := wf.next_task()).get("task") is not None:
+        rounds += 1
+        assert rounds <= 25, "the review offer never runs out — the no-op boot loop is back"
+        wf.review_task(offer["task"]["id"], verdict="approve", report="checked by running")
+
+    assert rounds == 25
     assert classify_next(wf.next_task()) == {
         "claimable": False, "kind": "empty", "task_id": None,
     }

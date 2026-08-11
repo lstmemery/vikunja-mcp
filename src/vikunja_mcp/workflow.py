@@ -1140,14 +1140,41 @@ class Workflow:
         # not just bug fixes — EXCEPT an epic container (label epic), whose code lives in its
         # children (each reviewed on its own advance), so there is nothing to review here. The
         # epic skip keys off the LABEL, never the presence of subtasks (same migration-guard
-        # principle as the sequence gate). Two guards keep the pump safe: skip a task assigned
-        # to the caller (never review your own work) and skip one whose verdict is fresher than
-        # its last report (else an already-reviewed card is handed back forever and the queue
-        # never advances — the freshness check just below).
-        for t in sorted(board.get("Review", []), key=lambda t: -t.get("priority", 0)):
+        # principle as the sequence gate). Two guards keep the pump safe: skip a task whose
+        # verdict is fresher than its last report (else an already-reviewed card is handed back
+        # forever and the queue never advances — the freshness check just below), and, WHERE THE
+        # REPO ASKED FOR IT, skip one assigned to the caller.
+        #
+        # AUTHORSHIP IS READ OFF `require_review_independence`, THE SAME FLAG `review_task`
+        # GATES ON (#991). Until then this skip was UNCONDITIONAL, and the two tools disagreed:
+        # next_task refused to OFFER a card whose verdict `review_task` would accept without a
+        # murmur (pinned by test_off_by_default_a_self_verdict_is_still_accepted). In a SOLO
+        # setup — one scoped token for the whole fleet, which CLAUDE.md calls the condition of
+        # operation, not a degradation — every card in Review is the caller's, so the branch
+        # offered NOTHING, ever: measured, three ticks on one such card answered "the queue is
+        # empty" three times, and `claimable`'s kind='review' was unreachable in principle, so
+        # an external supervisor never woke an agent for a pending review. What the filter could
+        # not do there is supply independence: with one token the server cannot tell two
+        # contexts apart, so it only blinded the pump. With the flag ON authorship IS a gate, so
+        # the skip stays — offering a card `review_task` is about to refuse is worse than
+        # silence.
+        #
+        # THE SORT CARRIES WHAT THE FLAG NO LONGER DOES. `require_review_independence = false`
+        # does not mean "solo"; it also means a MULTI-IDENTITY repo that never set the key, and
+        # there this filter WAS the only thing keeping an author off their own card (see
+        # `_require_review_independence`). So not-mine sorts ahead of mine: someone else's card
+        # is offered while any is left, and your own only when none is. A hint, like the filter
+        # it replaces — a direct `review_task` call never consulted either — and the repo that
+        # wants a gate turns the flag on.
+        def _offer_rank(t: dict) -> tuple[bool, int]:
+            return (my_id in self._assignee_ids(t), -t.get("priority", 0))
+
+        for t in sorted(board.get("Review", []), key=_offer_rank):
             if t["id"] in excluded:
                 continue
-            if self._has_label(t, LABEL_EPIC) or my_id in self._assignee_ids(t):
+            if self._has_label(t, LABEL_EPIC):
+                continue
+            if self.require_review_independence and my_id in self._assignee_ids(t):
                 continue
             # вердикт актуален, только если он свежее последнего отчёта: после цикла
             # needs_work -> доработка -> Review задача должна снова попасть к ревьюеру
