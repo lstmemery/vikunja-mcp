@@ -33,7 +33,7 @@ one assignee) review is initiated by the same side that wrote the change — by 
   sibling may be working in it right now; read `git show <sha from evidence>` and name in the
   verdict what you looked with.
   And know WHERE everything else about your tree lives — how to release it, the four readings of
-  `released: false`, the `dirty` refusal: in the bullet "Having cast a verdict, the reviewer releases its own tree", and that one stands INSIDE the section "The parallel drain (when
+  `released: false`, the `dirty` refusal: in the bullet "Having cast a verdict, the reviewer releases its own tree", and that one stands INSIDE the section "Parallel drain (when
   `wip.limit > 1`)". The section heading does not apply to you: that bullet is yours at ANY
   limit — it is just that at `limit: 1` you would otherwise never get to it at all.
 - **Having checked the sha, look at the OUTCOME of the CI run on it — you are the only one who by

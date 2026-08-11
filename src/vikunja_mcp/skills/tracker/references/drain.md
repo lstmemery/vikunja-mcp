@@ -137,7 +137,7 @@
     the verdict. Verified: the very next sweep hands a quiesced tree back in `released`, and the
     directory is gone. No work is lost by this (the tree is detached and clean), the cost is
     bounded by a vanished cwd — but the rule is therefore exactly the build side's after
-    `advance`/`call_human` (see "Check-point early" and "Commit+push is part of the move to
+    `advance`/`call_human` (see "Check-point early" and "Commit+push is part of the transition to
     Review"): **once you have cast the verdict, do not assume you are still standing in your own
     tree**; needed the directory — call `workspace <id> --role review --at <sha>` again rather
     than walking into the old path. Do NOT hold the verdict back for that: "record the verdict

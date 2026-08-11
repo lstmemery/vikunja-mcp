@@ -649,7 +649,7 @@ where. Here — what must not be broken:
     text with the marker NOT at the start and it is not offered. Two consequences: lay the report
     chunks down BEFORE `advance` (as written above), and do not write a `[worklog]`-prefixed
     comment onto a card that already carries a verdict — you will dispatch an extra round of
-    review. Do NOT leave a placeholder like `Done: probe` in the `[worklog]` — in even the
+    review. Do NOT leave a placeholder like `Сделано: probe` in the `[worklog]` — in even the
     shortest worklog, write that the full report is in separate comments above, otherwise the
     card's journal will claim one thing while another was done.
   - **There is NO THRESHOLD AT ALL — do not guess about it and do not size the report to it.** A

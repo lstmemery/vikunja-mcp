@@ -64,10 +64,22 @@ _TRACKER = REPO_ROOT / "src/vikunja_mcp/skills/tracker"
 # the quote immediately after the verb missed the second form entirely — the mutation that
 # renames a target while leaving its pointers behind stayed GREEN until this alternative existed.
 # Adding a verb or a noun widens the gate, which is fine; narrowing it is what needs a reason.
-_POINTER = re.compile(
-    r'(?:see|See|under|in)\s+(?:the\s+)?(?:section|bullet|item|rule|paragraph|heading)?\s*'
-    r'"([^"]{6,95})"'
-)
+_NOUN = r'(?:the\s+)?(?:section|bullet|item|rule|paragraph|heading)?\s*'
+_TRIGGER = re.compile(r'(?:see|See|under|in)\s+' + _NOUN + r'(?="[^"]{6,95}")')
+# A pointer may name SEVERAL targets in one breath — `see "A" and "B"`. Scanning only the first
+# is the FOURTH blind side this gate shipped with, found by an independent reviewer: breaking
+# the first name reddened, replacing the second with a heading that does not exist stayed GREEN,
+# and six unfollowable pointers were live and passing at the time. So a trigger opens a CHAIN,
+# and every link in it is checked.
+# The connector between links is BOUNDED prose rather than a fixed word list: measured, the
+# rulebooks join two names with everything from ` and ` to `, and that one stands INSIDE the
+# section `. A word list kept missing the long ones one at a time, so the rule is instead: the
+# next quoted name still belongs to the same pointer while the gap is short and does not end a
+# sentence. `.` followed by a space closes the chain, and so does `)` — a pointer written
+# inside a parenthetical ends WITH that parenthetical, and what follows is new prose. Both
+# terminators were added because of a measured FALSE POSITIVE, not defensively.
+_QUOTED = re.compile(r'"([^"]{6,95})"')
+_CHAIN_GAP = 60
 
 
 def _rulebooks() -> list[pathlib.Path]:
@@ -113,14 +125,23 @@ def test_every_rulebook_pointer_names_something_that_exists():
         # body, so the fallback always succeeded and this whole gate was vacuous. Both mutations
         # written to prove it bites (re-break a pointer; re-introduce the three-named bullet)
         # came back GREEN until this line existed.
-        own = _norm(_POINTER.sub(" ", body))
-        for m in _POINTER.finditer(body):
-            phrase = _norm(m.group(1).strip().rstrip(":.,—"))
+        names = []
+        for trig in _TRIGGER.finditer(body):
+            pos = trig.end()
+            while (link := _QUOTED.search(body, pos)) is not None:
+                gap = body[pos:link.start()]
+                if len(gap) > _CHAIN_GAP or ". " in gap or ")" in gap:
+                    break
+                names.append(link.group(1))
+                pos = link.end()
+        own = _norm(re.sub(r'"[^"]{6,95}"', " ", body))
+        for raw in names:
+            phrase = _norm(raw.strip().rstrip(":.,—"))
             if any(phrase == t or phrase in t for t in titles):
                 continue
             if phrase in own:          # names prose in its own file — see the docstring
                 continue
-            broken.append(f"{f.name}: \"{m.group(1)}\"")
+            broken.append(f"{f.name}: \"{raw}\"")
 
     assert not broken, (
         "these pointers name a section or bullet that no rulebook has, so an agent following "

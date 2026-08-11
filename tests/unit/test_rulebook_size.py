@@ -38,8 +38,9 @@ Cyrillic half of that is now HISTORY — after #997 there is not one Cyrillic ma
 above 2 000 characters — and the Latin half moved with the new text: 0.2380 to 0.2840 over 20
 files, its new minimum being the freshly translated `references/gc-report.md`, below the whole
 of the old band. Same content, hand-translated, cost 1.69x more tokens in Russian on one real
-SKILL.md section and 1.63x on another; the whole rulebook came out at 1.66x once measured
-end to end.
+SKILL.md section and 1.63x on another; measured end to end the whole rulebook came out at
+1.649x, and SKILL.md alone at 1.656x — the card had estimated 1.77x from a single
+hand-written paragraph, so that estimate was ~7% optimistic.
 
 TOKENS ARE THE THIRD UNIT, and the bytes-versus-characters argument above did not consider them
 — it was correct for its own question, so do not "fix" it. The reason this gate is not simply
@@ -69,15 +70,17 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 # The script is load-bearing, not a label: characters are a PROXY for the tokens this gate
 # actually cares about, and the rate differs by language (see the script test at the bottom).
 # BOTH ARE LATIN SINCE #997, so the two ceilings are finally in one currency: 3.15x apart in
-# characters against 3.06x in tokens (126 000 x 0.2535 = 31 942 against 40 000 x 0.2608 =
+# characters against 3.06x in tokens (126 000 x 0.2534 = 31 934 against 40 000 x 0.2608 =
 # 10 432). They used to disagree by nearly half — 2.88x in characters was 5.12x in tokens at
 # `d3884bc`, when SKILL.md was 85.6% Cyrillic by letter and CLAUDE.md 0.0%.
 #
 # SKILL.md's ceiling ROSE from 115 000 to 126 000 in this unit while the budget it stands for
-# FELL from 53 419 tokens to 31 942, a 40% ratchet down in the unit that matters. That is the
-# case this gate was labelled for, resolved the way it prescribes: the character headroom was
-# held constant (10 161, the same room for a rule or two that it always had) and the number
-# re-derived around the new text rather than bumped until the file fitted.
+# FELL from 53 419 tokens to 31 934, a 40.2% ratchet down in the unit that matters. That is the
+# case this gate was labelled for, resolved the way it prescribes: the ceiling was derived from
+# the character headroom the file always had (10 161) rather than bumped until the file fitted.
+# The headroom it actually ships with is 9 959 — the translated text kept moving under later
+# fixes, and this figure is the one measured LAST, immediately before the push, which is the
+# only figure a reader can check. All figures here measured at `7bc02c9`+.
 #
 # Headroom is deliberately modest — a few thousand characters, i.e. a rule or two — because a
 # generous ceiling is the same as no ceiling.

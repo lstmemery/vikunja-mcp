@@ -3977,7 +3977,7 @@ def test_the_reviewer_is_told_to_establish_it_is_looking_at_the_reviewed_code():
     assert "Having cast a verdict, the reviewer releases its own tree" in flat, \
         "the rubric no longer points at the bullet holding the rest of the reviewer's tree " \
         "rules — at wip.limit 1 the reviewer never reaches that section on its own"
-    assert "The parallel drain" in flat, \
+    assert "Parallel drain (when" in flat, \
         "the rubric no longer warns that the pointed-at bullet sits behind a wip.limit > 1 " \
         "heading that does not apply to the reviewer"
     # ...and the pointer must keep resolving: a renamed target would leave a dangling reference
