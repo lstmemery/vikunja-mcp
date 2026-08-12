@@ -49,11 +49,24 @@ def test_classify_next_covers_every_next_task_shape(result, expected):
 
 def test_dogfood_review_bucket_of_my_already_reviewed_tasks_is_not_claimable():
     """THE 2026-07-14 dogfood regression, pinned at the source: Queue/Design/Build empty,
-    Review holds 25 tasks ALL assigned to the caller and ALL already carrying a verdict —
-    done work awaiting a HUMAN's Done move, which is the ONE transition no agent tool can
-    make. The hub's old bucket-presence heuristic read that board as "work!" forever —
-    ~144 no-op agent boots/day ≈ $105/day for zero work. The exported verdict MUST be
-    claimable=false.
+    Review holding 25 tasks ALL assigned to the caller, written up at the time as done work
+    awaiting a HUMAN's Done move — which is the ONE transition no agent tool can make. The
+    hub's old bucket-presence heuristic read that board as "work!" forever — ~144 no-op agent
+    boots/day ≈ $105/day for zero work — while the gates themselves offered nothing. The
+    exported verdict MUST be claimable=false.
+
+    THE VERDICTS BELOW ARE THIS TEST'S CONSTRUCTION, NOT A MEASUREMENT OF THAT BOARD, and the
+    two are worth keeping apart. About the CODE, and checkable: a card in Review carrying a
+    verdict is what "awaiting a human's Done move" looks like here — for a normal card, an
+    `epic` container being the standing exception, since nobody reviews one at all. That is
+    the shape built below. About HISTORY: the same-day write-up in `713bcdf` characterises
+    the 25 as done work awaiting that move, and that is the whole of what this tree has —
+    no measurement of what the cards actually carried, and the explicit verdict clause was
+    back-filled here a month later by the fixture rebuild at `8132e2e`. So this test does not
+    claim it, and does not need to: what the incident MEASURED survives either answer — 144
+    boots a day did zero work, the hub's guess and the verdict the gates would hand an agent
+    being two different things. Asking the gates is the fix either way. (Provenance, and the
+    git-log commands with their traps, in docs/dossier/claimable.md.)
 
     WHICH GUARD HOLDS THIS CHANGED IN #991, AND THE BOARD HAD TO BE BUILT HONESTLY FOR IT.
     Until then the cards here carried a [worklog] and NO verdict, and what filtered them was

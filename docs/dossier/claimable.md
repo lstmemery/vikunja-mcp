@@ -16,10 +16,10 @@
   which is therefore **READ-ONLY BY CONTRACT** (comment on `next_task` + a no-writes unit
   test): the hub polls it per loop tick, so a side effect there becomes a per-poll tracker
   mutation. Born from a dogfood regression: the hub used to guess from kanban BUCKET
-  PRESENCE, so a Review column holding 25 tasks all assigned to the agent and all already
-  ruled on (done work awaiting a human's Done) read as "work!" forever — ~144 no-op agent
-  boots/day ≈ $105/day — while `next_task` rightly offered nothing. Since #991 the guard
-  that keeps that board quiet is worklog FRESHNESS, not authorship: an own card still owed
+  PRESENCE, so a Review column holding 25 tasks all assigned to the agent — written up at
+  the time as done work awaiting a human's Done — read as "work!" forever — ~144 no-op agent
+  boots/day ≈ $105/day — while the gates themselves offered nothing. Since #991 what keeps
+  FINISHED own work quiet is worklog FRESHNESS, not authorship: an own card still owed
   a review is claimable on purpose, and the lane empties as verdicts land. The JSON
   keys and the exit-code split are a public cross-repo contract; changing them breaks the
   hub's check (fail-closed: its loops go red until both sides move together).
@@ -73,3 +73,69 @@
   lanes, and the exit-code split did not move; #521 pinned that IDENTITY, never the sizes (54
   B/140 B are just what this board and this server said that day). Do not let it grow a consumer — its shape may change in any release, and a hub
   that parsed it would need the rollout dance the JSON keys need.
+
+## What the 2026-07-14 board carried — and why nothing here claims to know (#1002)
+
+The incident above is the reason this command exists, so its write-up gets repeated in three
+places — this file, the module header, and the docstring of
+`test_dogfood_review_bucket_of_my_already_reviewed_tasks_is_not_claimable`. All three used to
+finish the sentence for the reader: 25 cards in Review, all the agent's, and all of them
+already ruled on — spelled **ALL already carrying a verdict** in the two code files and
+"all already ruled on" here. Nothing in this tree measures that last part. #991's independent
+reviewer flagged it on round 2 as a non-blocking finding, that card's author checked it
+against the primary source and confirmed it as reconstruction, and #1002 is the removal.
+
+**The STRING is young; the CLAIM is as old as the command, and keeping those apart is the
+lesson.** `git log -S 'ALL already carrying a verdict'` finds two commits that ADDED it (the
+same two under `--regexp-ignore-case`; a nonexistent-string control returns none), one per
+file: it entered at `8132e2e`, #991's round 1, in the TEST docstring, and `0373de4` — the
+round-2 sweep whose stated job was fixing four descriptions of the old behaviour — copied it
+into the module header and into this file. Re-run that command AFTER #1002 and it returns
+THREE, because `-S` reports every commit where the occurrence count CHANGED, removals
+included; a clean demonstration on a neighbour is `git log -S 'you never independently review
+your own work'`, which returns `713bcdf` (added) and `0373de4` (removed).
+
+The claim itself is older than any of that, and softer. `713bcdf` — the same day, 11:29 —
+already called the 25 "done work awaiting a HUMAN's Done move", which for a normal card means
+one carrying a verdict; it simply never said the word. Sixteen minutes
+later `e3a45ad` rebuilt the fixture with `[worklog]`s and justified it with a live-board
+statement of its own — that every Review card DID carry a worklog, "so the own-work guard was
+the ONLY thing between 25 own cards and a `claimable:true`" — and the parenthetical it gave as
+grounds is `advance(to='review')` hard-requires a report, i.e. DERIVED from the product, not
+observed on the board. So the habit is there from day one, in both directions: the board gets
+described from what the code implies. #991's rebuild then had to give the fixture verdicts —
+without them it pinned the authorship guard while claiming to pin the incident — and that
+shape was written back as history in words, after which a documentation sweep carried it to
+two more files. ATTRIBUTION in SKILL.md's sense, with the extra sting that the sweep FIXING
+stale copy is what spread it.
+
+**Do not go re-derive it from the tracker.** Vikunja does persist what would answer it —
+`review_task` posts a `[review]` comment and sets `reviewed`/`review-failed`, and comments
+carry `created`, which is exactly what the freshness guard reads. What is missing is the other
+half: no stage history, so WHICH 25 cards stood in Review that day is not recoverable from
+today's board (the #1002 card reports 278 in Done; not re-counted here). hgdev-acp's logs for
+those 24 h are the obvious external source, and the session transcripts for that day are
+another; neither was consulted, because of the paragraph below.
+
+**Nothing rests on the answer, which is why the honest form costs nothing.** Two shapes are
+pinned side by side in `test_claimable_cmd`, both over `FakeAPI` and both with
+`require_review_independence` at its default of false: 25 own cards WITH verdicts are held
+quiet by worklog freshness (`kind='empty'`), and the same 25 WITHOUT verdicts are claimable as
+`kind='review'` and run dry after 25 rounds — the second only because the test casts a verdict
+each round, which is a rulebook obligation and not a property of the code (its own pin says so
+in capitals). Turn the flag ON and the without-verdicts board reads `kind='empty'` again, by
+authorship. So what those pins settle is the CODE's answer per shape, not which shape the live
+board had: finished work is quiet today, a card still owed a review launches an agent — on
+purpose, that being the #991 fix and not the regression returning. Nor are those two the only
+shapes a Review card can have (an `epic` container sits there done and unreviewable, a
+hand-parked card has no `[worklog]` at all), which is a second reason not to argue history
+from them. And what the incident MEASURED survives every answer anyway — 144 boots a day did
+zero work, because the hub's guess and the verdict the gates would hand an agent were two
+different things. That is the whole point of the command, and it never needed the clause.
+
+**Tool gotcha, paid for here:** `git log -S` matches RAW bytes, so a phrase that a file wraps
+across a line break is invisible to it. `all already ruled on` — this file's own spelling of
+the clause until #1002 — returned zero commits for exactly that reason, which reads
+identically to "was never written"; the one-line fragment `all already` finds `0373de4`
+straight away, which is how the wrap was told apart from an absence. Grep the file first to
+see where the phrase breaks, then search for a fragment that fits on one line.

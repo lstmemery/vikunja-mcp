@@ -12,20 +12,27 @@ loops go red rather than silently idling), but it breaks.
 
 WHY THIS EXISTS. The hub used to GUESS claimability its own way, from kanban BUCKET
 PRESENCE. On 2026-07-14 this project's own board proved that wrong and expensive:
-Queue/Design/Build were empty while Review held 25 tasks ALL assigned to the agent and
-ALL already carrying a verdict — done work awaiting a HUMAN's Done move, the one
-transition no agent tool can make. Bucket presence read "work!" forever, yet next_task
-correctly offers nothing. Result: ~144 no-op agent boots/day ≈ $105/day for zero work.
+Queue/Design/Build were empty while Review held 25 tasks ALL assigned to the agent,
+written up at the time as done work awaiting a HUMAN's Done move, the one transition no
+agent tool can make. Bucket presence read "work!" forever, yet the gates themselves offered
+nothing. Result: ~144 no-op agent boots/day ≈ $105/day for zero work.
 
-WHICH GUARD MAKES THAT BOARD QUIET CHANGED IN #991, and the distinction now matters to
+WHICH GUARD MAKES SUCH A BOARD QUIET CHANGED IN #991, and the distinction now matters to
 anyone reading this. It used to be authorship — "you never review your own work" — and
 that was too wide: it also silenced cards with a report and NO verdict, which are cards
 AWAITING review, so in a solo setup kind='review' could never be produced at all and the
 hub never woke an agent for a pending review. Authorship is now checked only where a repo
-sets require_review_independence; what holds the 2026-07-14 board quiet is worklog
-FRESHNESS — every card there had been ruled on. An own card still owed a review IS
-claimable, on purpose, and the lane empties as verdicts land (pinned in
-test_claimable_cmd: 25 cards, 25 rounds, then kind='empty').
+sets require_review_independence; what keeps FINISHED own work quiet is worklog FRESHNESS,
+a verdict not OLDER than the report. What the 2026-07-14 cards carried was never measured:
+the same-day write-up characterised them as done work, and until #1002 this header went
+further and said they all carried verdicts — which came from the fixture's shape, not from
+that board (provenance in docs/dossier/claimable.md). It no longer says, and does not need
+to: ruled on, freshness holds them quiet; still owed a review, that card is claimable on
+purpose today, which is the #991 fix and not the regression coming back. Both shapes are
+pinned in test_claimable_cmd (25 ruled-on cards ⇒ kind='empty'; the same 25 without
+verdicts ⇒ one review offer each, and the lane runs dry after 25 rounds only because a
+verdict is cast each round — that condition is a RULEBOOK obligation, not something this
+code can enforce).
 
 So the hub stops guessing and asks the gates themselves: this runs the
 SAME Workflow.next_task() the agent runs, so the exported verdict has ZERO drift from
