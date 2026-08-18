@@ -1,219 +1,227 @@
-# vikunja-mcp
+<h1 align="center">vikunja-mcp</h1>
 
-A workflow-level MCP server for [Vikunja](https://vikunja.io) — not a generic
-task CRUD wrapper. It exposes a small set of tools that push an agent through
-a fixed pipeline, and the gates (what's allowed from which stage, what
-evidence is required) live in the tools themselves, not in prompts:
+<p align="center">
+  <strong>A tracker your coding agents can be left alone with.</strong><br>
+  An MCP server that turns a self-hosted <a href="https://vikunja.io">Vikunja</a> board into a
+  pipeline with gates — where the rules live in the tools, not in a prompt you hope was read.
+</p>
+
+<p align="center">
+  <a href="https://github.com/ufna/vikunja-mcp/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ufna/vikunja-mcp/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/ufna/vikunja-mcp/releases"><img alt="release" src="https://img.shields.io/github/v/tag/ufna/vikunja-mcp?label=release&color=blue"></a>
+  <img alt="python" src="https://img.shields.io/badge/python-3.11%2B-blue">
+  <a href="https://modelcontextprotocol.io"><img alt="MCP" src="https://img.shields.io/badge/MCP-server-8A2BE2"></a>
+  <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-green"></a>
+</p>
+
+![The seven-column board an agent actually works](docs/images/board.png)
+
+## What this is
+
+Most task-tracker integrations are CRUD wrappers: they hand an agent `create_task`,
+`update_task`, `delete_task` and hope the prompt keeps it honest. This one does the opposite.
+It exposes twelve narrow tools, and each one refuses the moves that would break the process:
 
 ```
-Backlog → Queue → Design → Build → Review → Done
+Backlog → Queue → Design → Build → Review → [human] → Done
                      ↕        ↕
-                     Your Call
+                  Your Call        (+ independent review of every task in Review)
 ```
 
-- `Backlog` and `Done` are human territory (triage in, sign-off out) —
-  agents never move a task into `Done` themselves.
-- `Queue → Design → Build → Review` is the agent loop: claim, spec, build,
-  hand off for review.
-- `Your Call` (abbreviated `YC`) is a side branch reachable from `Design`/`Build`
-  when an agent needs a decision or input; the human answers and moves it back.
+- **`Backlog` and `Done` are human territory.** Triage in at one end, sign off at the other.
+  There is no argument to `advance` that reaches `Done` — an agent that tries is told
+  *only a human moves a task to Done after review*.
+- **`Queue → Design → Build → Review` is the agent loop.** Claim a task, write a spec to leave
+  Design, produce a worklog and an evidence sha to leave Build.
+- **`Your Call`** is the side branch for when an agent needs a decision it should not make
+  alone. It keeps its assignment and its context; the human answers on the card.
 
-Run that loop under Claude Code's `/loop` with no interval — that lets the model
-self-pace. The agent drains the queue one task at a time and schedules its own
-wake-ups when the queue is empty, so it keeps working without a human
-re-prompting it each turn.
+Gates are guardrails for agents, not a security boundary — the real boundary is the scoped
+API token Vikunja mints. See [SECURITY.md](SECURITY.md).
 
-## Install
+## Why
+
+An autonomous agent left running against a plain task API drifts in ways that are individually
+reasonable and collectively useless: it marks its own work done, it starts the next thing before
+finishing this one, it "fixes" a bug by deleting the test, and the only record of any of it is a
+chat log that scrolled away three hours ago.
+
+None of that is fixed by a longer prompt. The prompt is advice; the tool call is the decision
+point. So the process is enforced where the decision happens:
+
+| Instead of hoping the agent… | …the tool refuses |
+| --- | --- |
+| doesn't grade its own homework | `advance(to="done")` — always rejected, Done is human-only |
+| writes down a plan before coding | `advance(to="build")` without a `spec` |
+| says what it did and where | `advance(to="review")` without a `worklog` **and** an `evidence` sha |
+| works on one thing at a time | `claim` past the project's WIP limit |
+| escalates instead of guessing | `call_human` exists, and parks the card without dropping it |
+| leaves a trail a human can audit | every transition writes a marked comment on the card |
+
+What you get back is a board where each card carries its own history — the claim, the plan, the
+work, the independent verdict — in the order it happened.
+
+## What it looks like in practice
+
+A card that has been all the way through the loop. Nothing here was typed by a human: the
+markers, the labels and the stage are what the tools wrote as the agents moved it.
+
+<img src="docs/images/task-trail.png" alt="A task's comment trail: claim, spec, worklog with an evidence sha, and an independent review verdict" width="820">
+
+Read top to bottom, that is `claim` → `advance(to="build", spec=…)` → `advance(to="review",
+worklog=…, evidence=…)` → a **different** agent's `review_task(verdict="approve", report=…)`.
+The `reviewed` label is what the verdict left behind; the card now sits in Review waiting for
+a human to sign it off. Every task gets that review, not just bug fixes — only an `epic`
+container is exempt, because its code lives in its children.
+
+And when the agent hits a decision that isn't its to make, it parks the card instead of
+guessing:
+
+<img src="docs/images/yourcall.png" alt="A card parked in Your Call with the agent's question and its recommendation" width="820">
+
+The card keeps its assignee, so it comes back to the same agent when you answer. Set
+`VIKUNJA_NOTIFY_WEBHOOK` and you also get a Slack-shaped ping with a deep link, so parking a
+question doesn't mean waiting for someone to notice a board.
+
+## Quick start
+
+**1. Install** — no clone needed, `uvx` runs it straight from the repo:
 
 ```bash
-uvx --from git+https://github.com/ufna/vikunja-mcp@v0.1.0 vikunja-mcp
+uvx --from git+https://github.com/ufna/vikunja-mcp@stable vikunja-mcp --version
 ```
 
-Register it with Claude Code via `.mcp.json`:
+**2. Create the board.** With an admin token, this creates the project if it's missing and
+reconciles the seven canonical columns (it also migrates a default Vikunja board's
+`Todo`/`Doing` columns, and prints ready-to-commit config snippets):
 
-```json
-{
-  "mcpServers": {
-    "tracker": {
-      "command": "uvx",
-      "args": ["--refresh-package", "vikunja-mcp", "--from", "git+https://github.com/ufna/vikunja-mcp@stable", "vikunja-mcp"]
-    }
-  }
-}
+```bash
+VIKUNJA_TOKEN=<admin token> uvx --from git+https://github.com/ufna/vikunja-mcp@stable \
+  vikunja-mcp setup --project "My Project" --share agent-bot:write --url https://vikunja.example.com
 ```
 
-Or register it with [opencode](https://opencode.ai) via `opencode.json`
-(repo root, or `~/.config/opencode/opencode.json` globally; `.jsonc` also
-works). MCP servers live under a top-level `mcp` key, and a local (stdio)
-server takes the command and its arguments as one `command` array
-([docs](https://opencode.ai/docs/mcp-servers/)):
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "tracker": {
-      "type": "local",
-      "command": ["uvx", "--refresh-package", "vikunja-mcp", "--from", "git+https://github.com/ufna/vikunja-mcp@stable", "vikunja-mcp"],
-      "enabled": true
-    }
-  }
-}
-```
-
-As with `.mcp.json`, no token goes in this file — the server reads it from the
-same four config layers below (`VIKUNJA_TOKEN`, `.vikunja-mcp.env`, or the user
-env file). This repo commits exactly such an `opencode.json` at its root to
-dogfood itself against the `stable` channel.
-
-To hand an opencode agent the tracker process rules (queue discipline, stage
-gates, `call_human` vs `return_task`), run `vikunja-mcp install-skill` — it
-installs the packaged `SKILL.md` for both Claude Code and opencode and prints an
-`instructions` line to add to your `opencode.json`:
-
-```json
-{
-  "instructions": ["/home/you/.config/opencode/skills/tracker/SKILL.md"]
-}
-```
-
-opencode also auto-loads `AGENTS.md` from the repo root (falling back to
-`CLAUDE.md`), so the rules can live there instead — see
-[opencode rules](https://opencode.ai/docs/rules/).
-
-## Configuration
-
-Config is resolved from four layers, in priority order:
-
-1. **Environment variables** — `VIKUNJA_URL`, `VIKUNJA_TOKEN`, `VIKUNJA_PROJECT_ID`
-   (plus optional `VIKUNJA_NOTIFY_WEBHOOK`, below)
-2. **Repo-local env file** `.vikunja-mcp.env` (`KEY=VALUE` lines, same
-   directory as `.vikunja-mcp.toml`, found by the same walk-up) —
-   per-project token for machines that work across multiple repos, without
-   touching the user env file. **Never commit it** — add it to the
-   consuming repo's `.gitignore`
-3. **Repo file** `.vikunja-mcp.toml` (found by walking up from the cwd) —
-   `url` and `project_id`, safe to commit (no secret)
-4. **User env file** `~/.config/vikunja-mcp/env` (`KEY=VALUE` lines,
-   `chmod 600`) — the usual place for `VIKUNJA_TOKEN`
+**3. Point the repo at it.** Commit `.vikunja-mcp.toml`; keep the token out of it:
 
 ```toml
-# .vikunja-mcp.toml (commit this)
 [tracker]
 url = "https://vikunja.example.com"
 project_id = 12
-project = "My Project"   # informational label; not used for lookup
+wip_limit = 3          # how many Design/Build tasks one token may claim into at once
 ```
 
-```
-# .vikunja-mcp.env (same directory as .vikunja-mcp.toml — gitignore it, never commit)
+```bash
+# .vikunja-mcp.env — same directory, gitignored, NEVER committed
 VIKUNJA_TOKEN=tk_xxxxxxxxxxxx
 ```
 
-```
-# ~/.config/vikunja-mcp/env (chmod 600, keep out of git)
-VIKUNJA_URL=https://vikunja.example.com
-VIKUNJA_TOKEN=tk_xxxxxxxxxxxx
-VIKUNJA_PROJECT_ID=12
-```
+**4. Register the server** with Claude Code (`.mcp.json`) or [opencode](https://opencode.ai)
+(`opencode.json`). Both subscribe to the moving `stable` branch, so releases roll out on the
+next session start with no per-repo bumps:
 
-Note: the token is *never* read from `.vikunja-mcp.toml` — only from
-`VIKUNJA_TOKEN` (env), `.vikunja-mcp.env`, or the user env file — so
-`.vikunja-mcp.toml` has nothing secret in it and is safe to commit.
-`.vikunja-mcp.env` uses the same `KEY=VALUE` parsing rules as the user env
-file (quoted values, trailing `# comment` stripping on unquoted ones), and
-all four keys (`VIKUNJA_URL`/`VIKUNJA_TOKEN`/`VIKUNJA_PROJECT_ID`/
-`VIKUNJA_NOTIFY_WEBHOOK`) may appear in it.
-
-### Your Call webhook notification (optional)
-
-Set `VIKUNJA_NOTIFY_WEBHOOK` to a Slack-compatible incoming-webhook URL and
-`call_human` pings it whenever it parks a card in *Your Call* — one message,
-minimal Slack shape (`{"text": ...}`), carrying the task ref, title, the
-question, and a deep-link to the card:
-
-```
-VIKUNJA_NOTIFY_WEBHOOK=https://hooks.slack.example/services/T000/B000/xxxx
+```json
+{ "mcpServers": { "tracker": {
+    "command": "uvx",
+    "args": ["--refresh-package", "vikunja-mcp",
+             "--from", "git+https://github.com/ufna/vikunja-mcp@stable", "vikunja-mcp"]
+} } }
 ```
 
-A webhook URL is a secret of the token's class (whoever holds it can post
-into your channel), so it follows the same rule: read from the env layers
-only, **never** from the committed `.vikunja-mcp.toml`. Unset = off, zero
-behavior change. Delivery is best-effort by contract — one attempt, 5s
-timeout, no retries; a down or misconfigured gateway costs only the ping
-(the tool result reports `notified: false`), never the parked question.
+```json
+{ "$schema": "https://opencode.ai/config.json", "mcp": { "tracker": {
+    "type": "local",
+    "command": ["uvx", "--refresh-package", "vikunja-mcp",
+      "--from", "git+https://github.com/ufna/vikunja-mcp@stable", "vikunja-mcp"],
+    "enabled": true
+} } }
+```
 
-## Tools
+**5. Teach the agent the process** — `vikunja-mcp install-skill` installs the packaged
+tracker skill (queue discipline, when to escalate, what a worklog owes a reviewer) for both
+Claude Code and opencode. For Claude Code it also provisions a conditional `SessionStart`
+hook so that inside a tracker-configured project a bare `/loop` drains the queue instead of
+falling back to the generic "don't start work on your own" default. Outside such a project
+the hook emits nothing.
+
+Then run the loop. `/loop 10m` for unattended work, plain `/loop` when you're watching.
+
+## The twelve tools
 
 | Tool | Gate / behavior |
 | --- | --- |
-| `next_task()` | Returns your active task in Design/Build first (incl. one bounced back from Your Call), else the top-priority free task in Queue. Never returns Backlog or `blocked`-labeled tasks. One task at a time. |
-| `claim(task_id)` | Queue → Design only. Assign-then-verify: assigns you, re-reads the task, and backs off if someone else was assigned in the same window (race lost — call `next_task` again). |
-| `get_task(task_id)` | Dossier: description, stage, assignees, labels, full comment thread. |
-| `comment(task_id, text)` | Adds a progress note to the task's comment log. |
-| `advance(task_id, to, spec=, worklog=, evidence=)` | `to="build"`: Design → Build, requires `spec`. `to="review"`: Build → Review, requires `worklog` + `evidence`. `to="done"` is always rejected — Done is human-only. Task must be assigned to you. |
-| `call_human(task_id, question)` | Design/Build → `Your Call` (aka `YC`). Keeps your assignment (not a review step, not an external block); posts `question` as a comment. With `VIKUNJA_NOTIFY_WEBHOOK` set, also pings the humans' Slack-compatible webhook (best-effort). |
-| `return_task(task_id, reason)` | For external blockers (no access, missing dependency, someone else's service down). Unassigns you, adds a `blocked` label, moves the task to Backlog for human re-triage. |
-| `decompose(task_id, subtasks)` | Requires ≥2 subtasks (each needs a `title`). Creates each as a new task with a `parenttask` relation to the parent and drops it in Queue. Parent is unassigned, labeled `epic`, and moved to Backlog. |
-| `file_task(title, description=, priority=, related_task_id=)` | Files an out-of-scope finding (a bug or bit of tech-debt spotted mid-work) into **Backlog** for human triage — not Queue. Stamps a `[filed-by-agent]` comment marker and, when `related_task_id` is given, links it to the originating task with a `related` relation. Distinct from `decompose`, which splits your *own* oversized task into Queue subtasks. |
+| `next_task()` | One thing, in order: your active Design/Build card (including one bounced back from Your Call), then a Queue card already assigned to you, then a card in Review awaiting an independent verdict, then the top free Queue card. Never offers Backlog, a `blocked`-labeled card, or an epic container. |
+| `claim(task_id)` | Queue → Design only, and only under the WIP limit. Assign-then-verify: it assigns you, re-reads the card, and backs off if someone else won the same window. |
+| `get_task(task_id)` | The dossier: description, stage, assignees, labels, attachments, full comment thread. |
+| `comment(task_id, text)` | A progress note on the card. |
+| `advance(task_id, to, spec=, worklog=, evidence=)` | `to="build"` needs a `spec`; `to="review"` needs a `worklog` **and** an `evidence` sha. `to="done"` is always rejected. The card must be assigned to you. |
+| `review_task(task_id, verdict, report)` | `approve` or `needs_work`, with a report of what you ran. Applies the `reviewed` / `review-failed` label; `needs_work` sends the card back to the implementer in Build. You must not be the author — enforceable as a hard gate once a second identity exists. |
+| `call_human(task_id, question)` | Design/Build → Your Call, keeping your assignment. Posts the question and, if configured, pings a webhook. |
+| `return_task(task_id, reason)` | For *external* blockers (no access, a dependency missing, someone else's service down). Unassigns you, adds `blocked`, returns the card to Backlog for re-triage. |
+| `decompose(task_id, subtasks)` | Splits your own oversized task into ≥2 Queue subtasks linked to the parent; the parent becomes an `epic` container in Backlog. |
+| `file_task(title, …)` | Files an out-of-scope finding into **Backlog** for human triage — never straight into Queue. Optionally linked to the card you found it on. |
+| `attach_file(task_id, path, note=)` | Attaches a local file — typically a screenshot of the finished work — so the reviewer can *see* the result. Journals itself on the card. |
+| `download_attachment(task_id, attachment_id)` | Returns a path to read, not base64, so a screenshot never bloats the agent's context. |
 
-## Project setup
+## Beyond the tools
+
+Three commands round out the loop; none of them speak MCP, and the SDK is imported lazily so
+they don't pay for it.
+
+**`vikunja-mcp claimable`** — one JSON line answering "is there claimable work for this token
+right now?", exit 0 if the check ran. It calls the real `next_task()`, so it cannot drift from
+the gates, and it is read-only by contract. Built for a supervisor that would otherwise boot a
+paid agent session every poll tick just to discover there was nothing to do.
+
+**`vikunja-mcp workspace <id>`** — a per-task git worktree on a throwaway `task/<id>` branch,
+so several agents can drain the queue in parallel without fighting over one checkout.
+`--release` pushes and cleans up; `--gc` reaps orphans and fast-forwards your main checkout.
+Its safety rule is one line: **push OK → remove, push FAIL → keep.** Dirty, unpushed or
+unreachable work is reported, never destroyed. (One real exception, documented rather than
+papered over: git-*ignored* files are invisible to the dirty check. Carry screenshots out of
+the worktree before you release it — see [the dossier](docs/dossier/workspace.md).)
+
+**`vikunja-mcp setup` / `install-skill`** — idempotent board reconcile, and the agent-facing
+skill install described above. Both are safe to re-run; the MCP server also self-heals the
+installed skill on start, so a moving `stable` refreshes it automatically.
+
+## Configuration
+
+Four layers, highest priority first:
+
+1. **Environment** — `VIKUNJA_URL`, `VIKUNJA_TOKEN`, `VIKUNJA_PROJECT_ID`, `VIKUNJA_NOTIFY_WEBHOOK`
+2. **`.vikunja-mcp.env`** — repo-local `KEY=VALUE` file beside the toml, **gitignored**. The
+   per-project token for a machine that works across several repos.
+3. **`.vikunja-mcp.toml`** — committed, found by walking up from the cwd. Safe to commit
+   because it holds no secret.
+4. **`~/.config/vikunja-mcp/env`** — the usual home for a personal `VIKUNJA_TOKEN` (`chmod 600`).
+
+Two rules make that split matter, and they run in opposite directions:
+
+- **A secret is never read from the toml.** Not the token, not the webhook URL. So the
+  committed file cannot leak one even by accident.
+- **Team policy is never read from the environment.** `wip_limit` and
+  `require_review_independence` are toml-only, because they describe how *the project* works,
+  not which machine you're on. Unset, `wip_limit` is **3** — not "unlimited"; `wip_limit = 0`
+  is a config error, because "no limit" is deliberately not expressible.
+
+`worktree_root` sits on the machine side of that line, so there the environment does win.
+
+Full reasoning, including why the WIP limit gates one transition rather than policing a count:
+[docs/dossier/config.md](docs/dossier/config.md).
+
+## Releases
+
+Consumers subscribe to the moving `stable` branch. Every green push to `main` auto-bumps the
+patch version, tags `vX.Y.Z`, and moves `stable` onto it — so a fix reaches every consuming
+repo at their next session start, with no PR bots and no per-repo version bumps. Immutable
+tags remain the history and the rollback points:
 
 ```bash
-VIKUNJA_TOKEN=<admin token> vikunja-mcp setup --project NAME [--share user:read|write|admin ...] --url URL
+git branch -f stable vX.Y.Z && git push -f origin stable   # rollback to a known-good tag
 ```
 
-Creates the project if it doesn't exist (matched by title), then
-creates/reconciles the seven canonical buckets in order, migrates known
-default-Vikunja buckets (`Todo`/`To-Do`/`To-do` → Queue, `Doing` → Build,
-moving their tasks), removes empty non-canonical buckets (leaves non-empty
-unknown ones alone with a warning), sets Backlog as the default bucket and
-Done as the done bucket, applies any `--share` grants, and prints ready-to-
-commit `.vikunja-mcp.toml` + `.mcp.json` + `opencode.json` snippets.
-
-```bash
-vikunja-mcp install-skill
-```
-
-Copies the packaged tracker skill (queue discipline, comment-trail
-expectations, `call_human` vs `return_task`) to both
-`~/.claude/skills/tracker/SKILL.md` (Claude Code) and
-`~/.config/opencode/skills/tracker/SKILL.md` (opencode), and prints the
-`instructions` line to wire the latter into an `opencode.json`.
-
-For Claude Code it *also* auto-provisions a conditional **`SessionStart` hook**
-(a small `~/.claude/hooks/vikunja-tracker-orchestrator.sh` registered under
-`hooks.SessionStart` in `~/.claude/settings.json`) so you don't have to paste an
-orchestrator redirect into each project's `CLAUDE.md`. On every session start the
-hook walks up from the cwd for a `.vikunja-mcp.toml`; **only** inside a
-tracker-configured project it injects a short standing-context that redirects a
-bare `/loop` to the tracker orchestrator (drain the Queue: `next_task` → `claim`
-→ dispatch a per-task agent) instead of Claude Code's generic autonomous-loop
-default — outside a tracker project it emits nothing, so it never affects your
-other repos. It's dependency-free (POSIX `sh`, no `jq`), idempotent (re-running
-never duplicates the entry and preserves your other hooks and settings), and
-takes effect after you restart Claude Code. The full playbook still lives in the
-`tracker` skill; the hook just points `/loop` at it.
-
-## Releases: the `stable` channel
-
-Consumers subscribe to the moving `stable` branch with `--refresh-package`
-in `.mcp.json` — every MCP server start re-resolves the channel, so releases
-roll out to all repos automatically (no per-consumer bumps, no PR bots).
-Immutable `vX.Y.Z` tags remain the release history and rollback points.
-Admin one-offs (`setup`, `install-skill`) may use `@main`.
-
-**Patch releases are automatic**: every green push to `main` triggers a CI job
-that bumps the patch version in both files, tags `vX.Y.Z`, and moves `stable`
-onto it — so `stable` always tracks the latest green `main` with no manual step.
-
-Manual steps remain for **minor/major bumps** and **rollback**:
-
-1. bump `version` in `pyproject.toml` and `__version__` in `src/vikunja_mcp/__init__.py`
-   (only for a minor/major — patches are automated)
-2. commit, wait for CI green
-3. `git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z`
-4. `git branch -f stable vX.Y.Z && git push -f origin stable`  # rollout (rollback: same, older tag)
+Minor and major bumps are a hand-edited commit; CI resumes auto-patching from the new baseline.
+[docs/dossier/releases.md](docs/dossier/releases.md) has the race analysis behind the atomic
+push and the forward-only channel.
 
 ## Development
 
@@ -223,25 +231,16 @@ uv run ruff check .
 uv run pytest tests/unit -q
 ```
 
-Integration tests exercise a real Vikunja instance and are skipped unless
-`VIKUNJA_TEST_URL` is set:
+Integration tests run against a real Vikunja container and skip themselves without
+`VIKUNJA_TEST_URL` — the recipe is in [CONTRIBUTING.md](CONTRIBUTING.md), along with the
+house rules that are less obvious than they look (why line length is two numbers, and why a
+mutation sweep without a control round measures nothing).
 
-```bash
-docker run -d --name vikunja -p 3456:3456 \
-  -e VIKUNJA_DATABASE_TYPE=sqlite -e VIKUNJA_DATABASE_PATH=/tmp/vikunja.db \
-  -e VIKUNJA_FILES_BASEPATH=/tmp/files \
-  -e VIKUNJA_SERVICE_JWTSECRET=ci-secret \
-  -e VIKUNJA_SERVICE_PUBLICURL=http://localhost:3456/ \
-  -e VIKUNJA_SERVICE_ENABLEREGISTRATION=true \
-  vikunja/vikunja:2.3.0
-timeout 60 bash -c 'until curl -sf http://localhost:3456/api/v1/info; do sleep 1; done'
+## Documentation
 
-VIKUNJA_TEST_URL=http://localhost:3456 uv run pytest tests/integration -q
-```
-
-Vikunja rate-limits `/login` (10 requests/60s shared with `/register`); the
-integration `conftest` retries on HTTP 429 with backoff (up to ~150s worst
-case across a full run) — expected, not a bug.
+[**docs/**](docs/) — the rules live in `CLAUDE.md`; the *evidence* lives in nine dossiers, one
+per subsystem. If you are about to change a guard, its dossier is where the measurement that
+put it there is written down.
 
 ## License
 

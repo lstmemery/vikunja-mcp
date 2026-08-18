@@ -187,13 +187,30 @@ dist/
 # test_the_extension_rules_do_not_reach_a_screenshot_under_another_name.
 #
 # PRICE, which is why this is a decision and not a tidy-up: `git add -A` will no longer take a
-# legitimate image or PDF. Affordable because this repo has none — measured 2026-08-02,
-# `git ls-files` returns nothing for any of the four, and `git log --all --name-only` (broader
-# than `--diff-filter=A`: ANY commit touching such a path, on any ref, not just additions)
-# returns nothing either. That is the same standing `*.html` above already has, and the present
-# tense of it is held by a test rather than by this sentence. A deliberate asset stays
-# committable via `git add -f <path>`, which
-# refuses out loud first. Case-dependent exactly like the storage-state list below: `shot.PNG` is
+# legitimate image or PDF. It USED TO BE ZERO and no longer is, which is the update the old
+# wording demanded of whoever spent it first. Until the public-README pass this repo tracked no
+# image at all — measured 2026-08-02, `git ls-files` returned nothing for any of the four and
+# `git log --all --name-only` (broader than `--diff-filter=A`: ANY commit touching such a path,
+# on any ref, not just additions) returned nothing either.
+#
+# THREE PNGs are tracked now, and they are the whole of it: `docs/images/board.png`,
+# `docs/images/task-trail.png` and `docs/images/yourcall.png` — screenshots of a THROWAWAY local
+# Vikunja seeded with a fictional project, taken for the README so a reader can see the pipeline
+# before installing anything. They carry no real board, no real task and no session state; the
+# container they came from was destroyed with them in it.
+#
+# WHAT DID NOT CHANGE, and is the reason this stayed an ignore rule plus a forced add rather than
+# an un-ignored `docs/images/`: `git add -A` still cannot take a picture. Un-ignoring the
+# directory would have made it the one place browser spill lands unnoticed, since a spilled
+# screenshot COPIED there is indistinguishable by name from a deliberate one. So the door is
+# still `git add -f <path>`, which refuses out loud first, and the three paths above are
+# enumerated EXACTLY — not globbed — in test_repo_browser_isolation.py's
+# DELIBERATE_IMAGE_ASSETS, where the tracked set is asserted EQUAL to that list. A fourth
+# picture, or one of these three going missing, is red until someone edits that tuple: the
+# decision stays a decision. (An already-tracked file's later EDITS need no `-f` — ignore rules
+# govern untracked paths only — so refreshing a screenshot is an ordinary commit.)
+#
+# Case-dependent exactly like the storage-state list below: `shot.PNG` is
 # covered on a macOS checkout and NOT on Linux, where CI runs — no leak follows, because the
 # magic-byte scan reads bytes rather than names on either platform.
 *.png

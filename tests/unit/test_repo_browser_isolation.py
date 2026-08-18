@@ -241,6 +241,25 @@ MAGIC_PREFIX_BYTES = 8
 # argument is still true, so widening the rules and re-measuring the price happen in one place.
 ARTIFACT_EXTENSION_GLOBS = ("*.png", "*.jpg", "*.jpeg", "*.pdf")
 
+# The images this repo tracks ON PURPOSE — the README's screenshots of a throwaway demo board.
+#
+# EXACT PATHS, NEVER A GLOB, and that is the entire design of this constant. A `docs/images/*`
+# allowance would let the next spilled screenshot in under a plausible name, which is precisely
+# the failure both gates below exist to make loud; enumerating them means a fourth picture costs
+# an edit HERE, in the file that argues about pictures, rather than passing silently. The tracked
+# set is asserted EQUAL to this tuple rather than a superset of it, so a deleted or renamed asset
+# is red too — the list cannot quietly stop describing the repo.
+#
+# What the allowance is NOT is a hole in the byte scan: `_scan_for_browser_binary_signature` still
+# reports these three as PNGs, and only the REPO-level pin subtracts them by path. Every
+# clone-driven round below drives the same scanner with no allowance at all, so nothing about the
+# detection weakened — what changed is one assertion's expected set.
+DELIBERATE_IMAGE_ASSETS = (
+    "docs/images/board.png",
+    "docs/images/task-trail.png",
+    "docs/images/yourcall.png",
+)
+
 # --- #703: what SKILL.md PRESCRIBES as a caller-chosen `filename` ---------------------------
 #
 # The residual #629 measured and left open on purpose: the four tools that write the page's own
@@ -1576,8 +1595,29 @@ def test_no_file_of_browser_artifact_shape_is_reachable_by_git():
     #819: the state it is about is a DISAGREEMENT between two copies, and planting one here means
     holding a real screenshot in the repo whose guard forbids it. The scan is a function now and
     the rounds that replace these live beside their pins, on a throwaway clone.
+
+    THE ALLOWANCE IS SUBTRACTED HERE AND NOWHERE INSIDE THE SCANNER, which is what keeps every
+    round above and every clone-driven pin below measuring the unchanged detector: the three
+    README screenshots ARE reported by `_scan_for_browser_binary_signature` as PNGs, exactly as a
+    spilled one would be, and this test drops them BY PATH after the fact. So the sentence the old
+    assertion ended on — "this repo has tracked no image or PDF in its history" — is what changed,
+    not the scan; `DELIBERATE_IMAGE_ASSETS` and the .gitignore paragraph carry its replacement.
+    Subtracting by path also means a PNG that merely LIVES in `docs/images/` under a fourth name
+    is still an offender, since the allowance is the enumerated list rather than the directory.
+
+    MUTATION-CHECKED for the allowance, same selection and method as the sibling gate
+    (`tests/unit/test_repo_browser_isolation.py`, `__pycache__` deleted per round,
+    `collected 124 items` every round, `FAILED ` lines counted): control 0 failed; a real PNG
+    copied to a FOURTH name under `docs/images/` and `git add -f`-ed, mutation 2 failed — this
+    gate and the tracked-set gate together. Then, holding that same fourth file in place, the
+    allowance widened from the three exact paths to the DIRECTORY (`startswith("docs/images/")`),
+    control 0 failed; mutation 1 failed — this gate went quiet and only the tracked-set gate was
+    left standing, which is the measured reason the allowance is an enumerated list. Closing
+    control 0 failed, on the restored tree.
     """
     offenders, unreadable = _scan_for_browser_binary_signature(REPO_ROOT)
+    offenders = [o for o in offenders
+                 if o.rsplit(" (", 1)[0] not in DELIBERATE_IMAGE_ASSETS]
 
     assert not unreadable, \
         f"{unreadable} — git lists these as publishable but their bytes could not be read from " \
@@ -1592,7 +1632,8 @@ def test_no_file_of_browser_artifact_shape_is_reachable_by_git():
         "picture of whatever page the browser had open, from a PUBLIC repo. The extension list " \
         "in .gitignore does not cover every name — that is expected, and is why this check " \
         "reads bytes. If the file is a deliberate asset rather than spill, it needs `git add " \
-        "-f` AND a decision recorded here: this repo has tracked no image or PDF in its history"
+        "-f` AND its exact path added to DELIBERATE_IMAGE_ASSETS, which is the only allowance " \
+        f"this gate has and today holds exactly {list(DELIBERATE_IMAGE_ASSETS)}"
 
 
 @requires_git_checkout
@@ -1600,9 +1641,9 @@ def test_no_image_or_pdf_asset_is_tracked_today():
     """The PRICE argument of #629, pinned — because it is what makes these rules affordable.
 
     Excluding four whole extensions is only cheap while the repo has nothing of them. Measured
-    2026-08-02: `git ls-files` returns nothing for any of them, and `git log --all --name-only`
+    2026-08-02: `git ls-files` returned nothing for any of them, and `git log --all --name-only`
     — deliberately broader than `--diff-filter=A`, since it reports ANY commit that touched such
-    a path on ANY ref rather than only additions — returns nothing either. That is the same
+    a path on ANY ref rather than only additions — returned nothing either. That is the same
     standing `*.html` above already had when its rule went in.
 
     The measurement is DATED rather than given as "over N commits", which is how the first draft
@@ -1610,28 +1651,59 @@ def test_no_image_or_pdf_asset_is_tracked_today():
     the same tree, because siblings land while a card is being written — and `--all` counts other
     agents' `task/*` branches too, so it was never the denominator the sentence implied.
 
-    The day someone `git add -f`s a legitimate diagram, that sentence in .gitignore stops being
-    true and the price stops being zero — so this fails then, deliberately. It is not a vote
-    against ever committing an asset; it is the requirement that doing so update the paragraph
-    that currently tells the reader it has never happened.
+    THAT DAY CAME, and this docstring is the update the old wording demanded rather than a
+    weakening of it. The public-README pass committed three screenshots of a throwaway demo board
+    — `DELIBERATE_IMAGE_ASSETS` — so "this repo has none" stopped being true and the price stopped
+    being zero. The old text said what to do about it: rewrite the .gitignore paragraph with the
+    new price, which that commit does, in the same commit as this.
+
+    WHAT THE GATE BECAME IS STRICTER IN ONE DIRECTION AND LOOSER IN NO OTHER. It asserts the
+    tracked set is EQUAL to that tuple, not a superset of it. Equal, because a subset check would
+    only have caught the fourth picture: a deliberate asset DELETED, renamed, or moved leaves the
+    tuple describing a repo that no longer exists, and nothing else in the suite reads these paths
+    — the README's `<img src>` is prose, and no gate resolves it. So both directions are red here,
+    and the tuple stays a description rather than a wish.
+
+    It is deliberately NOT a `docs/images/*` glob. The whole hazard is that a spilled screenshot
+    copied into an assets directory looks exactly like a deliberate one, so the allowance is by
+    exact path and a fourth image costs an edit to the constant — a decision, recorded where the
+    argument about pictures already lives.
 
     Distinct from the shape scan next door, which needs the file to still START with a magic
     number: this one fires on a tracked `.png` that is empty, truncated or re-encoded, and it
     reads the INDEX, which no ignore rule can retract a path from.
 
-    MUTATION-CHECKED (real artifact, `git rm --cached` and delete afterwards): control PASS;
-    `git add -f` a real screenshot as `docs/diagram.png` -> FAIL, `git now carries
-    ['docs/diagram.png']`; the same forcing under the root name `shot.png` -> FAIL naming that
-    instead, which is the round showing this reads the INDEX rather than a fixed path.
+    MUTATION-CHECKED against the PRE-allowance gate (real artifact, `git rm --cached` and delete
+    afterwards): control PASS; `git add -f` a real screenshot as `docs/diagram.png` -> FAIL, `git
+    now carries ['docs/diagram.png']`; the same forcing under the root name `shot.png` -> FAIL
+    naming that instead, which is the round showing this reads the INDEX rather than a fixed path.
+    Those rounds pin the READ (index, by glob) and survive the change, because the read is what
+    they mutated; what they do NOT reach is the allowance, whose own rounds are recorded below.
+
+    MUTATION-CHECKED for the allowance, selection `tests/unit/test_repo_browser_isolation.py`,
+    `__pycache__` deleted before each round, `collected 124 items` every round, counted by lines
+    beginning `FAILED ` (never by pytest's `N failed` line, which in this repo reads a mutant's own
+    docstring back): control 0 failed; a fourth real PNG `git add -f`-ed under `docs/images/`,
+    mutation 2 failed — this gate AND the byte scan next door, the intended overlap. One name
+    DROPPED from the tuple while its file stays tracked, control 0 failed; mutation 2 failed —
+    also both, and that pair was the correction: it was written as 1 before it was run, because
+    dropping a name stops the sibling gate subtracting that path too. One name ADDED that no file
+    backs, control 0 failed; mutation 1 failed — this gate alone, since nothing is tracked for the
+    byte scan to see. That last round is the one that makes this EQUALITY rather than containment:
+    a superset check passes it. Closing control 0 failed, on the restored tree.
     """
     listed = _git("ls-files", "--", *ARTIFACT_EXTENSION_GLOBS)
     assert listed.returncode == 0, f"git ls-files failed: {listed.stderr.strip()}"
-    assert not listed.stdout.split(), \
-        f"git now carries {listed.stdout.split()} — the .gitignore paragraph justifying " \
-        f"{list(ARTIFACT_EXTENSION_GLOBS)} says this repo tracks no image or PDF and never has, " \
-        "which is what makes excluding those extensions cost nothing. If this asset is " \
-        "deliberate, that paragraph has to be rewritten with the new price; if it is browser " \
-        "spill, it has to come out of the index — an ignore rule does not retract a tracked path"
+    tracked = sorted(listed.stdout.split())
+    assert tracked == sorted(DELIBERATE_IMAGE_ASSETS), \
+        f"git carries {tracked} — the .gitignore paragraph justifying " \
+        f"{list(ARTIFACT_EXTENSION_GLOBS)} names exactly {list(DELIBERATE_IMAGE_ASSETS)} as the " \
+        "images this repo tracks on purpose, and this is the pin that keeps that sentence true " \
+        "in BOTH directions. An extra path: if it is a deliberate asset, add it to " \
+        "DELIBERATE_IMAGE_ASSETS and say in .gitignore what it is and where it came from; if it " \
+        "is browser spill, it has to come out of the index — an ignore rule does not retract a " \
+        "tracked path. A missing path: the constant now describes a repo that does not exist, so " \
+        "either restore the file or drop its name here in the same commit"
 
 
 @requires_git_checkout
