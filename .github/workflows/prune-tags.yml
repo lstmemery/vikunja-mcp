@@ -1,0 +1,58 @@
+# Reap the middle of the auto-release tag stream.
+#
+# DELIBERATELY NOT PART OF ci.yml. The release path is the documented race-prone one (atomic
+# push, graded refusals, a bump commit that races the landing that triggered it), and adding
+# ref DELETION to it would put a new failure class exactly where failures are hardest to read.
+# This runs on its own schedule, touches no branch, and cannot make a release fail.
+#
+# The retention rule lives in scripts/prune_tags.py and is pinned by tests/unit/test_prune_tags.py
+# — not here. This file only decides WHEN it runs and whether it may delete.
+name: prune-tags
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"        # Mondays 04:17 UTC — off the hour, away from landing traffic
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Actually delete (unchecked = print the plan and change nothing)"
+        type: boolean
+        default: false
+      keep_recent:
+        description: "Size of the contiguous newest-versions window"
+        type: string
+        default: "40"
+
+permissions:
+  contents: write               # deleting a tag is a ref write; nothing else is needed
+
+concurrency:
+  group: prune-tags             # never two pruners on one remote
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # all history AND all tags — the pruner reads the whole list
+
+      # checkout fetches the triggering ref; the pruner needs `stable` too, because a tag the
+      # channel points at must survive whatever the retention rule says about its age.
+      - name: fetch every branch so the channel tip is readable
+        run: git fetch --quiet --tags origin "+refs/heads/*:refs/remotes/origin/*"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: plan
+        run: python scripts/prune_tags.py --keep-recent "${{ inputs.keep_recent || 40 }}"
+
+      # A scheduled run applies; a manual one applies only when the box was ticked. The plan
+      # above has already been printed either way, so a refusal here still leaves a readable log.
+      - name: apply
+        if: github.event_name == 'schedule' || inputs.apply
+        run: |
+          python scripts/prune_tags.py --keep-recent "${{ inputs.keep_recent || 40 }}" --apply

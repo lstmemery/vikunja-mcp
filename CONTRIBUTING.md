@@ -115,3 +115,18 @@ in-flight run renders `conclusion` as the empty string rather than null.
 Don't bump versions by hand for a patch. Every green push to `main` auto-bumps, tags, and moves
 the `stable` branch. Minor and major bumps are a deliberate hand-edited commit; rollback is
 moving `stable` back onto an older tag. See [`docs/dossier/releases.md`](docs/dossier/releases.md).
+
+Because that cuts a tag per landing (~8 a day), a weekly `prune-tags` workflow reaps the middle
+of the stream. It keeps every `vX.Y.0`, the newest 40 versions contiguously, one tag a day for
+the last 30 days, one a week beyond that, and whatever `stable` and `main` currently point at.
+The rule is a pure function in `scripts/prune_tags.py`, pinned by tests — change it there, not
+in the YAML, and run it with no `--apply` first to see the plan:
+
+```bash
+python scripts/prune_tags.py            # prints what it would delete, touches nothing
+```
+
+Note what a tag *is* before widening that rule: it is cut only by the green-only `release` job,
+so it is a durable record that CI passed at that commit — durable in a way GitHub's run history
+is not, since runs expire. Pruning buys readability, not space (every tag points at a commit
+reachable from `main`, so deleting one frees no objects).
