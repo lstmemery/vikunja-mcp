@@ -1,10 +1,12 @@
 """THE TEXT `workflow.py` HANDS BACK TO AN AGENT IS ENGLISH — the one string population the
 `language` key deliberately does not reach (tracker #1166).
 
-THREE POPULATIONS, AND THIS FILE OWNS THE THIRD. `cardtext.py` holds what the tool writes onto a
-CARD, keyed by language, and `tests/unit/test_card_text_is_ascii.py` plus
-`tests/unit/test_card_language.py` pin it. An agent's own `spec`/`worklog`/`question` is
-unconstrained by design. What is left is what a TOOL CALL returns to its caller — a
+THREE POPULATIONS, AND THIS FILE OWNS THE THIRD — this file's triple, which is NOT the one
+`docs/dossier/config.md` draws (its third row is the wire format, the markers), so do not read the
+two as the same table. `cardtext.py` holds what the tool writes onto a CARD, keyed by language,
+and `tests/unit/test_card_text_is_ascii.py` plus `tests/unit/test_card_language.py` pin it. An
+agent's own `spec`/`worklog`/`question` is unconstrained by design. What is left is what a TOOL
+CALL returns to its caller — a
 `WorkflowError` message, and the `message`/`note` keys of a `next_task` payload. #1165 put that
 population OUT of the table on purpose, and `cardtext.py`'s own docstring says so in the bullet
 naming `WorkflowError` text and the `note`/`message` strings in tool payloads: their audience is
@@ -24,18 +26,23 @@ name. Neither is card text, so neither ASCII gate could see them — and what th
 held was worse than nothing on one of the two: `test_workflow_sequence_gate.py` asserted
 `"цикл" in res["message"].lower()`, so TRANSLATING that message was the red test, and two further
 pins over the same message read its interpolated values through contiguous literals, one of them
-spelling `задач(и)`. The fallback is the mirror case: its branch IS exercised, by
-`test_claim_refuses_childless_epic_gracefully` in `test_workflow_epic_skip.py`, which matches on
-the word "container" and never looks at the tail of the sentence. That is the shape this file is
-against — a green suite that renders the string and does not read it.
+spelling `задач(и)`. The fallback is the mirror case, and TWO tests drove it rather than one:
+`test_claim_refuses_childless_epic_gracefully` and `test_claim_refuses_epic_container`, both in
+`test_workflow_epic_skip.py`, since the latter's epic has no subtasks either. Both match on the
+word "container" and neither looks at the tail of the sentence — measured by this card's
+independent second pass, which restored the Russian in `claim` and got 13 collected from that
+file, control 0 failed and that mutation 0 failed, i.e. a round in which nothing moved at all.
+That is the shape this file is against — a green suite that renders the string and does not read
+it.
 
 THE UNIT IS CYRILLIC, NOT ASCII, AND THAT IS MEASURED RATHER THAN CHOSEN. The card-text gates next
 door assert ASCII, which is right for them: a marker is a wire format and a card body is prose
 this repo keeps typographically plain. This population is different — it is English prose full of
 em dashes and arrows, so an ASCII pin over it is red on arrival. The test below named for that
-asserts it as a PROPERTY rather than writing the count down, because the count moves with every
-refusal anyone adds. What the Cyrillic unit costs is stated where it is felt: a
-lookalike inside a Latin word (`а` for `a`) is caught, a Greek or Hebrew string would not be, and
+asserts a FLOOR rather than the exact count — the closest to a property this gets, since the exact
+number moves with every refusal anyone adds, while "there are still plenty" does not. What the
+Cyrillic unit costs is stated where it is felt: a lookalike inside a Latin word (`а` for `a`) is
+caught, a Greek or Hebrew string would not be, and
 neither would an English sentence translated into a language written in Latin script. The defect
 it is pinned against is the one that happened, twice, in a repo whose other language is Russian.
 
@@ -46,9 +53,16 @@ English" — the per-language prose lives in `cardtext.py`, which is exactly whe
 belongs. Docstrings are exempt because #1164 left the Russian code documentation alone on
 purpose, and `workflow.py`'s docstrings are read by a human in the source, never shipped to an
 agent (`server.py`'s tool docstrings ARE shipped, and are a neighbouring population this file
-does not cover — filed separately). What the scan cannot see is text composed elsewhere and
-interpolated in, which is `cardtext.py`'s job and pinned there; the two runtime tests below cover
-that for the two paths this card is about, by rendering them and reading the result.
+does not cover — filed separately). What the scan cannot see is text composed in ANOTHER module
+and interpolated in, and for THIS population nothing else covers it either: pointing at
+`cardtext.py` would be wrong, since that table is for CARD text and this population is
+deliberately out of it. Measured by this card's independent second pass, which built the case
+rather than arguing it — a module-level constant in `api.py` interpolated into `claim`'s
+already-taken refusal, i.e. genuinely agent-facing text in exactly this population: control 0
+failed / 0 errors / 4 collected, that mutation 0 failed / 0 errors / 4 collected here, and the
+card-text gates next door 16 passed on the same mutant. The two runtime tests below close that
+for the two paths THIS card is about, by rendering them and reading the result; a third path
+would need its own.
 
 MUTATION SWEEP. Selection is this file alone, so no collateral test can stand in for the pin. Run
 in a CLONE of the worktree, `__pycache__` deleted and `PYTHONDONTWRITEBYTECODE=1` before every
@@ -160,10 +174,12 @@ def test_an_ascii_unit_would_be_red_on_arrival():
         if not lit.isascii() and not _CYRILLIC.search(lit)
     ]
     assert len(plain_but_not_ascii) >= 40, (
-        f"only {len(plain_but_not_ascii)} non-ASCII, non-Cyrillic literal(s) left in workflow.py "
-        f"— if that has genuinely fallen to zero, the ASCII unit the card-text gates use becomes "
-        f"available here too and this file should adopt it. Until then it would fail on the em "
-        f"dashes and arrows this module's English prose is written with"
+        f"only {len(plain_but_not_ascii)} non-ASCII, non-Cyrillic literal(s) left in workflow.py. "
+        f"This is a DRIFT RATCHET, not the property: an ASCII unit here is red at any count above "
+        f"ZERO, so a genuine zero — and nothing short of it — is what would make the card-text "
+        f"gates' ASCII unit available to this file too. Anything between is a signal to re-measure "
+        f"before concluding either way; the em dashes and arrows this module's English prose is "
+        f"written with are what the count is made of"
     )
 
 
@@ -200,9 +216,10 @@ def test_the_predecessor_cycle_payload_is_all_one_language(env):
 def test_the_childless_epic_refusal_is_english_to_its_last_word(env):
     """The tail of a sentence is where a translation gets forgotten, and nothing read this one.
 
-    `test_workflow_epic_skip.py::test_claim_refuses_childless_epic_gracefully` drives this exact
-    branch and matches on "container", so `его подзадачами` rode the last four words of an
-    English refusal through a green suite for as long as it existed.
+    Two tests in `test_workflow_epic_skip.py` drive this exact branch —
+    `test_claim_refuses_childless_epic_gracefully` and `test_claim_refuses_epic_container`, whose
+    epic has no subtasks either — and both match on "container", so `его подзадачами` rode the
+    last two words of an English refusal through a green suite for as long as it existed.
     """
     api, wf = env
     epic = api.add_task("empty epic", "Queue", labels=("epic",))

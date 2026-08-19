@@ -177,24 +177,30 @@ what the shipped design already says, and the sharpest evidence is inside the on
 for a pin here is not that nothing tested these strings — it is that something did, in the wrong
 direction. `test_workflow_sequence_gate.py` asserted `"цикл" in res["message"].lower()`, i.e. a
 translation of that message was a RED test — measured on the shipped tree, selection
-`test_workflow_sequence_gate.py -k two_cycle` (67 collected, 1 selected), control 0 failed / 0
+`test_workflow_sequence_gate.py -k two_cycle` (67 collected at `454b298`, 1 selected), control 0
+failed / 0
 errors, that assert put back under the English message 1 failed — and the two other pins over the
 same message read its interpolated values through contiguous literals, one of which spelled
 `задач(и)`. So the tree carried TWO asserts a translation had to defeat outright and two more
 constraining the message's punctuation, and none at all that would have noticed the field was
 Russian in the first place. The epic fallback is the mirror case:
-`test_workflow_epic_skip.py::test_claim_refuses_childless_epic_gracefully` drives that exact
-branch and matches on the word "container", so the Russian tail rode through a green suite for as
-long as it existed. The translation therefore kept the message's rendered STRUCTURE — closed loop,
+TWO tests in `test_workflow_epic_skip.py` drive that exact branch —
+`test_claim_refuses_childless_epic_gracefully` and `test_claim_refuses_epic_container`, whose epic
+has no subtasks either — and both match on the word "container", so the Russian tail rode through
+a green suite for as long as it existed — the second pass restored the Russian and measured that
+file at 13 collected, control 0 failed and the mutation 0 failed, a round in which nothing moved.
+The translation therefore kept the message's rendered STRUCTURE — closed loop,
 count, `Tasks in the cycle: <detail>` — and moved the pins with it, rather than rewriting prose
 whose shape two tests (one of them parametrized over three cycle sizes) depend on.
 
 **The unit is CYRILLIC, not ASCII, and that is measured.** The card-text gates next door assert
 ASCII, which is right for them: a marker is a wire format. This population is English prose full
 of em dashes and arrows, so an ASCII pin over it is red on arrival — dozens of offenders in this
-module alone. The count is not written down anywhere: the file asserts the PROPERTY instead
+module alone. The exact count is not written down: the file asserts a FLOOR instead
 (`test_an_ascii_unit_would_be_red_on_arrival`), because the number moves with every refusal
-anyone adds and a stale figure is exactly the argument for "just use ASCII here too". What the
+anyone adds and a stale figure is exactly the argument for "just use ASCII here too". A floor is
+not the property — only a count of ZERO would make the ASCII unit available here — and the assert
+says so where it fires. What the
 narrower unit costs is shown rather than claimed — a sweep round translates the same fallback into
 GREEK and the Cyrillic scan stays green while the runtime pin catches it.
 
@@ -204,14 +210,17 @@ beginning `FAILED `: control 0 failed / 0 errors / 4 collected before every roun
 reverted to its pre-#1166 Russian 2 failed; the epic fallback reverted 2 failed; a Cyrillic
 literal that reaches no agent at all (assigned to an unused local) 1 failed, the static scan
 alone; the fallback translated into Greek 1 failed, the runtime pin alone. Separately, on
-`test_workflow_sequence_gate.py -k cycle` (67 collected, 11 selected): control 0 failed / 0
+`test_workflow_sequence_gate.py -k cycle` (67 collected at `454b298`, 11 selected): control 0
+failed / 0
 errors, and the stage-for-ref mutation that section was built around still gives its recorded 3
 failed after the translation, now rendering `Tasks in the cycle: Queue in 'Queue'; …`.
 
 **What is left, measured across the whole package rather than assumed.** An AST audit of every
 non-docstring string literal in `src/vikunja_mcp` leaves, outside `cardtext.py`'s deliberate `ru`
-column, exactly one: `api.py`'s `AssertionError("unreachable: …")`, which is agent-visible only on
-a path asserted not to exist. In DOCSTRINGS the interesting survivors are `server.py`'s two tool
+column, exactly one: `api.py`'s `AssertionError("unreachable: …")`, on a path asserted not to
+exist — and `server._tool` converts only `WorkflowError`/`ConfigError`/`VikunjaError`/
+`httpx.HTTPError`, so even if it fired it would not render as a tool `{"error": …}` at all.
+In DOCSTRINGS the interesting survivors are `server.py`'s two tool
 descriptions, which the MCP SDK ships to the agent — unlike `workflow.py`'s docstrings, which a
 human reads in the source and which this gate deliberately exempts. Both are filed as
 VMCP-296 (1170) rather than fixed here, because whether a Russian EXAMPLE inside an English tool
