@@ -689,6 +689,14 @@ def file_task(
     prioritizes), marks it with a [filed-by-agent] comment and, if related_task_id is
     given, adds a 'related' relation to the task it was found during. No ownership needed
     — this is a new card.
+    THE MARKER RECORDS THE FILING, NOT WHERE THE CARD IS NOW (#1167). It is a dated
+    provenance stamp; the column is live state, and the human this tool asks to triage
+    moves cards out of Backlog by hand. So a Backlog-marked card sitting in Queue is the
+    ORDINARY shape of a card that has been triaged, not a contradiction — on the four
+    cards that raised #1167 the server's own request log named a human in the web UI, four
+    times out of four. Do not read a card's column off its journal. And note what the
+    board cannot tell you: it records no mover, so neither can this tool — that answer
+    came from a log on the server, not from anything here.
     QUEUE OPT-IN: pass queue=True ONLY when a human explicitly asked you to file this
     task as work to do (their instruction IS the triage — e.g. an answer on a Your Call
     card, or a direct "заведи задачу на X" in chat/comments): the card lands in YOUR

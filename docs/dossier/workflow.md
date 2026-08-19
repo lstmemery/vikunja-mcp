@@ -18,3 +18,127 @@
   and resets a stale `reviewed`/`review-failed`). An epic container is the lone
   exception: its code lives in its children, each reviewed on its own advance.
   Behavior changes belong here, with a unit test per gate.
+
+## `file_task`'s Backlog contract and the four cards that "escaped" it (#1167)
+
+**The report.** On 2026-08-19 the orchestrator observed that VMCP-292 (1166) was physically in the
+**Queue** bucket while its only journal line was the Backlog variant of the marker —
+`[filed-by-agent] заведено агентом для триажа человеком (по ходу работы над #1164)`, the `ru` column
+of `cardtext.py`'s `filed_backlog` row and what the server was writing at v0.2.321. (This board is
+on the `en` default now, so the string to grep for today is `filed by an agent for human triage`;
+the observation is historical and correct for its moment.) It filed #1167 without diagnosing, which
+was right: the pair really does look impossible from the source. `workflow.file_task` picks the
+destination and the marker off the SAME flag (`stage = "Queue" if queue else "Backlog"`, then `elif
+queue:` / `else:` for the text), in one function, with nothing between them. Over the next three
+hours the same thing happened to three more cards — 1167, 1168 and 1169. All four went into bucket
+44, which is what the log below shows directly; for 1167 and 1168 the orchestrator also recorded the
+tool's own `"stage": "Backlog"` payload on the card. All four were later found in Queue, and all
+four still carry the Backlog marker, read back off the cards. The card's own journal escalated it
+from "one odd card" to "the Backlog contract is not holding", and named the worry precisely:
+`file_task`'s whole point is that a finding an agent discovered ITSELF waits for a human to
+prioritise it, so a card reaching Queue anyway is claimable by `next_task` and countable by the
+hub's `claimable` poll, with the triage step skipped silently.
+
+**Why the board could not answer it.** Both candidate actors write the SAME endpoint —
+`POST /projects/10/views/40/buckets/{bucket}/tasks` — so bucket membership, `created`/`updated`
+timestamps and the view's `default_bucket_id` are all blind to who called it. The orchestrator's
+own read-only rounds ruled out a task-row overwrite (`created == updated` on cards that had
+moved) and the "no placement falls into the default bucket" artifact (the default bucket IS
+Backlog, so a card with no placement would surface THERE), and made a pure elapsed-time trigger
+unlikely — its own comment is careful that a LONGER timer was not ruled out. None of it named a
+mover. `GET /tasks/<id>` carries no history field, and nothing else this investigation reached
+through the API named one either, so that was the end of what the board could say.
+
+**What settled it: the server's own HTTP log.** Vikunja logs every request, and the container on
+the tracker box held 153 743 lines reaching back to its 2026-07-24 startup line — the whole
+window and three weeks either side of it. Read with `docker logs vikunja`, which changes nothing
+on the server. Two signatures, and they do not overlap.
+
+Filing is identical on all four cards and is exactly `file_task`'s call order — create, move,
+relation, marker (this one is 1169, at 10:27:37Z; 1166, 1167 and 1168 differ only in the id and
+the timestamp):
+
+```
+PUT  /api/v1/projects/10/tasks                        201
+POST /api/v1/projects/10/views/40/buckets/44/tasks         <- 44 = Backlog
+PUT  /api/v1/tasks/1169/relations                     201
+PUT  /api/v1/tasks/1169/comments                      201
+```
+
+The move into Queue is a different animal. The delay from filing to drag is not a constant and
+not a timer — 33 min for 1166, 19 min for 1167, 7.5 min for 1168, 1 h 53 min for 1169, i.e. the
+pace of a person working through a column. This is 1166, at 09:31:19Z:
+
+```
+POST /api/v1/user/token/refresh
+GET  /api/v1/avatar/ufna?size=40
+GET  /api/v1/notifications?page=1
+GET  /api/v1/projects/10/views/40/tasks?filter=&...&expand%5B%5D=comment_count&per_page=25
+POST /api/v1/tasks/1166/position                           <- 178 ms before the bucket write
+POST /api/v1/projects/10/views/40/buckets/45/tasks         <- 45 = Queue
+GET  /api/v1/notifications?page=1                          <- and every 10 s after that
+```
+
+**The discriminator is the position endpoint.** `POST /tasks/<id>/position` is a request this
+package cannot emit: `grep -rn "/position" src/` prints nothing at all, and the only thing here
+that writes a card's COLUMN is `api.move_task`, which POSTs `{"task_id": ...}` to the bucket
+endpoint and nothing else. On 2026-08-19 it was called exactly FOUR times, on exactly the four
+cards — 1166 at 09:31:19.123Z, 1167 at 10:05:54.182Z, 1168 at 10:05:54.762Z, 1169 at 12:20:16.291Z
+— and in every one of the four the VERY NEXT request in the log is that card's move into bucket
+45, 173–178 ms later. It is not a rare endpoint, which is the other half of the reading: 681 calls
+to it across the whole log, i.e. an ordinary thing a human does to this board.
+
+**What is NOT the discriminator, said out loud, because it is the tempting half.** A browser was
+logged into this board all day, so `/user/token/refresh`, `/notifications` polling every 10 s and
+avatar fetches sit around EVERYTHING, the agent's own filing sequences included — the 1164 filing
+(the control, two paragraphs down) has a `token/refresh` 23 ms before its `PUT /projects/10/tasks`
+and an `avatar/ufna` in the middle of it. Ambient browser noise proves a browser was open; it does
+not attach to the write beside it. What does attach is the position call, because it names the
+task id in its own path.
+
+The control that makes the discriminator mean something is in the same log: 1164 and 1165 landed
+in bucket **45** at 08:37 through the filing signature above and with NO `/position` call anywhere
+near them. Same destination bucket, same endpoint, and exactly ONE element different. That they
+were `queue=True` filings is not read off the log, which cannot see a flag: 1164's journal carries
+the Queue variant of the marker, read off the card, and the filing signature itself rules out a
+hand-made card (a human does not `PUT` a relation and a comment within 350 ms of creating one).
+
+One inference is marked rather than hidden: a `buckets/45/tasks` line carries the task id in its
+BODY, not its path, so the log does not name the card. For 1166 and 1169 the pairing is
+unambiguous by isolation. For 1167 and 1168 both writes land inside the same second (10:05:54.356
+and 10:05:54.935) and each is assigned to its card by interleaving order with the two position
+calls that name them. That is an inference, a tight one, and not a reading.
+
+**Diagnosis.** Hypothesis 1 — something moved the card after it was filed — with the mover named:
+a human, triaging Backlog in the web UI. `file_task`'s contract held on all four cards, and the
+triage step the card feared was being skipped is the very thing the log records happening: a
+person opened the board and moved each card by hand. (What is measured is the ACTION, one card at
+a time, from a browser session. Nobody can measure how carefully they read first — but a human
+touching each card individually is exactly what the Backlog contract asks for, and it is more
+than a bypass would leave behind.) And the fourth card is the one that closes it: 1169 was the
+orchestrator's own CONTROL for "not everything drifts", still in Backlog after 94 minutes — it
+was dragged at 12:20:16Z like the rest, so the control was never a control, only a card the human
+had not reached yet.
+
+**The reading error underneath, which is the part worth keeping.** The marker is a DATED
+PROVENANCE STAMP about the filing. The bucket is LIVE STATE. A comment cannot go stale because a
+card moved, so the two disagreeing is the normal condition of any card a human has triaged — and
+the more faithfully `file_task` does its job, the more such cards there will be. What made it
+read as a contradiction was treating the journal as a statement of current placement.
+
+**What shipped, and what deliberately did not.** No code fix — there was no defect. The prose
+correction went where the filing agent reads it (`server.file_task`'s docstring), and the two
+halves of the diagnosis that ARE properties of this code are pinned in
+`tests/unit/test_backlog_placement.py`: the marker distinguishes its two destinations in both
+languages, and no registered tool pointed at a Backlog card moves it into Queue — with that
+second pin's reach measured and written into its own docstring, since 12 of the 20 rows it drives
+are refusals and only two reach a move at all. Rewriting the
+Backlog marker to name its column was considered and dropped: the reader here had already read
+the marker correctly, so a clearer destination would not have helped, and it would have churned
+`cardtext.py`'s two-language table for nothing.
+
+**What is still blind, and stays blind.** Nothing in this package can say who moved a card. The
+board API surfaced no history to this token, and the only thing that answered the question was a
+log on the server, reachable by ssh and gone whenever that container's log rotates. So the next
+Backlog-to-Queue surprise is answerable the same way or not at all — which is the reason this
+entry records the request signatures rather than only the conclusion.
