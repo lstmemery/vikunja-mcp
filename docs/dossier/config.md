@@ -57,10 +57,32 @@
   That last shape is why the gate reads assignees through `_kanban_assignees_may_be_stale`
   rather than raw — judged off the board copy it would find nobody and pass precisely the card
   whose other protection is already gone. A genuinely ownerless card still passes (no author to
-  exclude) and its `needs_work` still routes to Queue. Wired in `server._build_workflow` only,
-  NOT in `claimable_cmd`'s Workflow: that one runs `next_task` and nothing else, so the flag
-  could never be consulted there and passing it would be dead wiring on the one path that must
-  stay read-only and cheap.
+  exclude) and its `needs_work` still routes to Queue.
+  **Wired at BOTH construction sites — `server._build_workflow` AND `claimable_cmd` — since
+  VMCP-295 (1169).** Until then it was wired in the server only, justified by "that one runs
+  `next_task` and nothing else, so the flag could never be consulted there and passing it would be
+  dead wiring on the one path that must stay read-only and cheap". TRUE at #37, stale from #991
+  on, and refuted on BOTH halves. **Not dead:** the authorship skip in `next_task`'s
+  review-offering branch was already there and UNCONDITIONAL, and #991 made it conditional on the
+  flag (`workflow.py`, the `continue` guarded by `self.require_review_independence and my_id in
+  self._assignee_ids(t)`) — so from that card on `next_task` is exactly a caller of the flag — measured on an identical `FakeAPI` board, one card driven claim →
+  build → review by ONE identity, `classify_next(wf.next_task())` answers `{"claimable": true,
+  "kind": "review"}` with the flag false and `{"claimable": false, "kind": "empty"}` with it true.
+  **Not a cost either — about the GUARD, which is as far as the claim goes:** `next_task`
+  resolves `my_id = self._me()["id"]` unconditionally at its top, so the guard issues no request
+  of its own, and when it FIRES it `continue`s BEFORE that card's `comments()` fetch. It does NOT
+  follow that the whole call is cheaper: the `continue` sends the loop on to the queue branches,
+  which fetch per candidate, and on a board of gated Queue cards that is 7 api calls against 2.
+  The three measured boards are in `docs/dossier/claimable.md`.
+  **What generalises, and is the part to keep: a `Config` key that `Workflow` READS is wired at
+  BOTH sites** — `claimable`'s whole stated property is a verdict with ZERO drift from the
+  agent's own, and a kwarg present on one side only IS that drift. `notify_webhook` →
+  `notifier` is the only remaining asymmetry between these TWO sites and is a real one:
+  `call_human` alone touches the notifier, and `claimable` calls `next_task` alone. (There is a
+  THIRD site — `workspace_cmd._build_workflow`, which wires no Config key at all; why that is
+  currently safe is in `docs/dossier/claimable.md`, and it is a fact about what `--gc` calls, not
+  a guarantee.) Shipping the fix was inert where it could be checked — no `.vikunja-mcp.toml`
+  found on the author's disk sets the flag — and the answer moves only for a repo that does.
 
 ## `language` (tracker #1165) — a FOURTH key on `wip_limit`'s side of the split
 
@@ -122,11 +144,14 @@ refuted it. That flag is NOT consulted only by `review_task`: since #991 it is r
 `self.require_review_independence and my_id in self._assignee_ids(t)`). Measured on an identical
 `FakeAPI` board, claim -> build -> review, `classify_next(wf.next_task())` answers
 `{"claimable": true, "kind": "review"}` with the flag false and
-`{"claimable": false, "kind": "empty"}` with it true. So its absence from `claimable_cmd` is a
+`{"claimable": false, "kind": "empty"}` with it true. So its absence from `claimable_cmd` WAS a
 real divergence from the MCP server for any repo that sets it, and the sentence justifying the
 omission — in `server._build_workflow`'s comment and in the `require_review_independence` bullet
-above — has been stale since #991. Filed as VMCP-295 (1169); NOT fixed here, because changing what
-`claimable` answers changes a cross-repo contract. It is inert in this repo, which sets no flag.
+above — had been stale since #991. Filed as VMCP-295 (1169); NOT fixed in THAT card, because
+changing what `claimable` answers changes a cross-repo contract and belonged in a card of its
+own. 1169 then wired it, so the flag is now passed at both sites — the resolution and its cost
+measurement are in the `require_review_independence` bullet above. It was inert in this repo
+throughout, which sets no flag.
 
 **What the `en` column is, exactly:** #1164's text unchanged, and checked at the only level that
 settles it — the CARDS, not the source. One driver script exercising all six product-prose

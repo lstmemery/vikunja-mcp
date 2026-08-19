@@ -12,7 +12,8 @@
   claimable verdict (ONE JSON line `{"claimable","kind","task_id"}`, exit 0 = the check
   ran / 1 = it failed) that hgdev-acp's repo-agent loop spawns (`uvx …@stable vikunja-mcp
   claimable`) as its pre-launch idle check, instead of re-implementing next_task's gates
-  hub-side. It runs the REAL `Workflow.next_task()` — zero gate drift by construction —
+  hub-side. It runs the REAL `Workflow.next_task()` — zero gate drift by construction, and
+  see "Construction is not automatic" below for the one thing that phrase does NOT cover —
   which is therefore **READ-ONLY BY CONTRACT** (comment on `next_task` + a no-writes unit
   test): the hub polls it per loop tick, so a side effect there becomes a per-poll tracker
   mutation. Born from a dogfood regression: the hub used to guess from kanban BUCKET
@@ -139,3 +140,109 @@ the clause until #1002 — returned zero commits for exactly that reason, which 
 identically to "was never written"; the one-line fragment `all already` finds `0373de4`
 straight away, which is how the wrap was told apart from an absence. Grep the file first to
 see where the phrase breaks, then search for a fragment that fits on one line.
+
+## Construction is not automatic: the `require_review_independence` drift (#1169)
+
+**"Zero gate drift by construction" is a property of running the same `next_task`, and it holds
+only while the `Workflow` around it is CONSTRUCTED from the same `Config` keys ON THE PATH IT
+TAKES.** (Not from the same keys outright — `notifier` is absent here and always was, legitimately,
+because nothing this path calls can reach it.) It stopped holding for exactly one key, silently,
+from #991 until this card.
+
+`require_review_independence` was wired in `server._build_workflow` and deliberately not here,
+justified in two places by the same sentence, the two copies differing only in one conjunction —
+"that one runs `next_task` and nothing else, so the flag could never be consulted there and
+passing it would be dead wiring on the one path that must stay read-only and cheap". That was TRUE
+when it was written at #37, when the flag was read by `review_task` alone. #991 falsified it, and the mechanism is worth getting right because the
+obvious phrasing is wrong: the skip was ALREADY inside `next_task`, and UNCONDITIONAL. What that
+card did was make it conditional on the flag — `8132e2e` split
+`if self._has_label(t, LABEL_EPIC) or my_id in self._assignee_ids(t)` into two `continue`s, the
+second guarded by `self.require_review_independence and my_id in self._assignee_ids(t)`, and
+`workflow.py`'s own comment there says "Until then this skip was UNCONDITIONAL". So #991 did not
+move a skip in; it made `next_task` a READER of the flag. Neither sentence was revisited.
+
+VMCP-291 (1165)'s independent second pass found that out while checking the same justification,
+which that card was about to REUSE for `language`; it measured the divergence, wrote the refutation into `docs/dossier/config.md`,
+and filed this card rather than widening its own scope.
+
+**The measurement**, re-derived here from a script of this card's own, on an identical `FakeAPI`
+board — one card driven claim → build → review by ONE identity, then
+`classify_next(wf.next_task())`:
+
+| `require_review_independence` | exported verdict |
+| --- | --- |
+| `False` | `{"claimable": true, "kind": "review", "task_id": 107}` |
+| `True` | `{"claimable": false, "kind": "empty", "task_id": null}` |
+
+So for any repo whose toml set the flag, `claimable` and the MCP server answered DIFFERENTLY
+about the same board — and `claimable`, the permissive side, is the one the hub steers on. On the
+board above, where the caller's own card in Review is the only thing there is to offer, that is
+the 2026-07-14 no-op-boot shape narrowed to one flag: the hub launches an agent whose own
+`next_task` then hands it nothing.
+
+**It is NOT always that shape, and the wider sentence is the one to avoid.** Put ONE free Queue
+card on the same board and the flag-on answer is `{"claimable": true, "kind": "queue", "task_id":
+111}` — the agent boots and does have work; what the missing kwarg produced there is a WRONG
+`kind` and `task_id`, which the hub persists onto a run row (`claimable.go`: "H2 writes Kind into
+a run row → API → SPA"). Gate the Queue cards behind unfinished predecessors instead and the
+flag-on answer is `starving`. Wasted boot, mislabelled row, third verdict again: the invariant
+across the three boards is the DISAGREEMENT, not any one of its shapes.
+
+**Why WIRING it was the resolution rather than a human's call on the contract**, since the card
+posed both. The permissive branch has no upside to trade. With the flag ON the launched agent's
+own `next_task` will not offer it THAT card either, and `review_task` would refuse its verdict on
+it anyway — that pair is what the flag MEANS — so answering `review` about it buys no fail-open
+margin. What it buys instead is one of the shapes above: a boot for nothing, or a run row carrying
+a `kind` and `task_id` the agent never acted on.
+
+The public contract is untouched in SHAPE — no key renamed, no exit code repurposed, and the
+value the verdict moves TO is one the hub already handles: `empty` sits in the not-claimable
+branch of `kindIsClaimable` (hgdev-acp `internal/hub/vikunja/claimable.go`, read 2026-08-19)
+beside `starving` and `cycle`, and the hub's own cross-check of `claimable` against `kind` agrees
+with `claimable: false`, so nothing fail-closes. How OFTEN each kind occurs is not measured here
+and nothing in this argument needs it. And the change was inert on the machine it was written on: `find /Users/ufna/w -maxdepth 3`
+enumerates seven REPOS holding a `.vikunja-mcp.toml` (vikunja-mcp, hgdev-acp, hgdev-infra,
+birdman, both dogiators repos, TurboSnailsParking), and the deeper sweep that also catches linked
+worktrees' copies finds sixteen FILES; not one of the sixteen sets the flag. Read the scope
+exactly: that is one developer's disk, not the population on the public moving `stable` channel,
+which no measurement here reaches. What it does buy is that the change ships inert where it can be
+checked, and the fix is a one-line revert where it cannot.
+
+**The cost argument was wrong in the other direction too — but only about the GUARD, and that
+is the claim worth making.** `next_task` resolves `my_id = self._me()["id"]` unconditionally at
+its top (third statement of the body, no branch and no early return above it), so the guard is a
+boolean `and` over an already-fetched value and issues no request of its own; and when it FIRES it
+`continue`s BEFORE that card's `comments()` fetch. Both are properties of the guard, and on this
+path `next_task` is the flag's only reader at all — the other site, `_require_review_independence`,
+belongs to `review_task`, which this command never calls.
+
+**What does NOT follow is that the whole call gets cheaper, and this file said so for one round
+before the measurement took it back.** The `continue` does not end `next_task`; it sends the loop
+on to the stuck-claim and free-queue branches, which fetch per candidate. Warm api calls by that
+same `next_task` (marginal work — the driving has memoised `me` and the kanban view; a cold
+instance adds both and reads 4 against 3 on the first board), flag off against flag on:
+
+| board | flag off | flag on |
+| --- | --- | --- |
+| own card in Review, nothing else | 2 (`view_tasks`, `comments`) | **1** (`view_tasks`) |
+| + one free Queue card | 2 | **2** (`view_tasks`, `get_task`) |
+| + three Queue cards gated by unfinished predecessors | 2 | **7** (`view_tasks`, 6×`get_task`) |
+
+So: the guard is free, and the total is the BOARD's business, up as readily as down.
+
+**What to carry forward:** a `Config` key that `Workflow` READS on a given path is wired at
+EVERY site that builds one — and there are THREE in this package, not the two this card started
+by comparing: `server._build_workflow`, `claimable_cmd.run_claimable`, and
+`workspace_cmd._build_workflow` (`Workflow(api, cfg.project_id)`), which wires NO Config keys at
+all. The third is safe TODAY and it is worth knowing why rather than assuming: `--gc` uses it for
+`liveness_board` / `active_task_ids` / `review_task_ids` / `parked_task_ids`, and none of those
+reads any keyword setting. That is a fact about what `--gc` happens to call, not a guarantee — it
+is the same shape that produced this card, one layer over.
+
+Between the two RICH sites the only remaining asymmetry is `notify_webhook` → `notifier`, and it
+is the legitimate kind: only `call_human` touches the notifier, and this path calls `next_task`
+alone, so no board state can reach it. That audit covered every `Config` field, not just the one
+the card named: `url`/`token` build the `VikunjaAPI` handed in as `api` and `project_id` is
+`Workflow`'s second positional, so all three already arrive here; `project_name` and
+`worktree_root` are not `Workflow` parameters at all; and
+`enforce_single_wip`/`wip_limit`/`language` were already wired.

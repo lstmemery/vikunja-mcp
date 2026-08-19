@@ -38,6 +38,15 @@ So the hub stops guessing and asks the gates themselves: this runs the
 SAME Workflow.next_task() the agent runs, so the exported verdict has ZERO drift from
 the agent's own by construction — one implementation of the rules, not two.
 
+THAT PROPERTY IS ABOUT THE CONSTRUCTION AS MUCH AS ABOUT THE CALL, and it is the one part
+of it a reader has to keep: the same `next_task` inside a Workflow built from DIFFERENT
+Config keys is a different set of gates. So a Config key `Workflow` READS on this path is
+wired at the call below as well as in `server._build_workflow` — and a third site,
+`workspace_cmd._build_workflow`, wires none at all, which is safe only because `--gc` calls
+no method that reads one. `require_review_independence` was not wired here; the drift that
+made it matter ran from #991 to VMCP-295 (1169), and it was real and measured — see the
+comment on that kwarg and docs/dossier/claimable.md.
+
 next_task is READ-ONLY (verified call inventory: me / kanban_view / view_tasks (which itself
 probes GET /info once, cached, for the page size) / get_task / comments — all GETs; pinned by
 test_claimable_cmd.test_the_check_makes_no_writes), so the hub may poll this at any cadence
@@ -460,19 +469,35 @@ def run_claimable() -> int:
             VikunjaAPI(cfg.url, cfg.token, event_hooks={"request": [trail]}), cfg.project_id,
             enforce_single_wip=cfg.enforce_single_wip,
             wip_limit=cfg.wip_limit,
+            # THE CONSTRUCTION SITE IS PART OF THE NO-DRIFT PROPERTY (VMCP-295, 1169). This
+            # kwarg was absent here from the day the flag existed (#37), on a justification that
+            # was TRUE then — `review_task` was its only reader — and that quietly stopped being
+            # true at #991, which made next_task's already-present, until-then UNCONDITIONAL
+            # authorship skip conditional on the flag. Nobody revisited the sentence, so the
+            # drift ran from #991 to this card. Measured on an identical FakeAPI board (one card
+            # driven claim -> build -> review by ONE identity), `classify_next(wf.next_task())`
+            # answered {"claimable": true, "kind": "review"} with the flag false and
+            # {"claimable": false, "kind": "empty"} with it true: the two sides DISAGREED, and
+            # on that board the disagreement is the $105/day no-op-boot shape above, narrowed to
+            # repos that set the flag. On a board with free Queue work it is instead a WRONG
+            # `kind`/`task_id` on a hub run row — the constant is the disagreement, not any one
+            # shape. Wiring it is not a cost either, about the GUARD: next_task resolves `my_id`
+            # whatever the flag says, so no request is added, and when the guard FIRES it skips
+            # that card's `comments()` fetch. The TOTAL is the board's business — measured, a
+            # board of gated Queue cards costs 7 calls with the flag on against 2 with it off.
+            # Pinned end-to-end (a classifier unit test cannot see a construction site) by
+            # test_claimable_cmd.test_the_toml_review_independence_flag_reaches_the_exported_verdict
+            # and its flag-absent control. `notify_webhook` -> `notifier` is the one Config key
+            # `Workflow` takes that is still deliberately absent here: `call_human` alone touches
+            # the notifier, and this path calls `next_task` alone.
+            require_review_independence=cfg.require_review_independence,
             # `language` is emitted by next_task itself — the one call this command makes — so
             # without this line the payload would report a `ru` project as `en`. classify_next
             # reduces it to the three-key hub contract and never reads it, so the VERDICT cannot
-            # change either way; this is about the payload not lying.
-            #
-            # Deliberately NOT justified as "unlike require_review_independence, which is dead
-            # here". That contrast was written, and measuring it refuted it: since #991 the flag
-            # is read INSIDE next_task's review-offering branch, so on an identical board
-            # `classify_next` answers {"claimable": true, "kind": "review"} with the flag false
-            # and {"claimable": false, "kind": "empty"} with it true. Its absence here is a real
-            # divergence from the MCP server for any repo that sets it — filed as VMCP-295 (1169),
-            # not fixed in this card, because changing what `claimable` answers is a change to a
-            # cross-repo contract and belongs in a card of its own.
+            # change either way; this is about the payload not lying. (#1165 first reached for
+            # the contrast "unlike `require_review_independence`, which is deliberately dead
+            # here" and its own second pass refuted it; that retracted wording, and the
+            # measurement that killed it, are kept verbatim in docs/dossier/config.md.)
             language=cfg.language,
         )
         verdict = classify_next(wf.next_task())

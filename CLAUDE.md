@@ -155,9 +155,12 @@ measured shape of both exemptions.
 - `src/vikunja_mcp/claimable_cmd.py` — `vikunja-mcp claimable`: the sibling-EXPORTED
   claimable verdict (ONE JSON line `{"claimable","kind","task_id"}`, exit 0 = the check
   ran / 1 = it failed) that hgdev-acp's repo-agent loop spawns as its pre-launch idle
-  check. It runs the REAL `Workflow.next_task()` — zero gate drift by construction — which
-  is therefore **READ-ONLY BY CONTRACT**: the hub polls it per loop tick, so a side effect
-  there becomes a per-poll tracker mutation. **The JSON keys and the exit-code split are a
+  check. It runs the REAL `Workflow.next_task()` — zero gate drift by construction, which is a
+  property of the CONSTRUCTION as much as of the call, so **a `Config` key `Workflow` reads on a
+  path is wired at EVERY site that builds one** — three here (tracker #1169: one missing kwarg
+  let `claimable` disagree with the server's own `next_task`). Running that real `next_task`
+  is also what makes it **READ-ONLY BY CONTRACT**: the hub polls it per loop tick, so a side
+  effect there becomes a per-poll tracker mutation. **The JSON keys and the exit-code split are a
   public cross-repo contract**; changing them breaks the hub's check. **STDERR is the
   opposite kind of channel — a breadcrumb trail, explicitly NOT a contract** (tracker
   #536): ONE line, one token per tracker request, written BEFORE the request and flushed

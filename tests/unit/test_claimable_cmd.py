@@ -704,3 +704,89 @@ def test_wip_saturation_is_unreachable_for_the_standalone_check():
     result = wf.next_task()
     assert "wip_saturated" not in result
     assert classify_next(result) == {"claimable": True, "kind": "resume", "task_id": task["id"]}
+
+
+# --- VMCP-295 (1169): require_review_independence reaches the exported verdict -------------------
+
+def _card_in_review_written_by_the_caller() -> tuple[FakeAPI, dict]:
+    """One card driven Queue -> Design -> Build -> Review by ONE identity, through the real gates.
+
+    Hand-forging that state would defeat the point of the two tests below: what they separate
+    is the board where the only card in Review is the CALLER'S OWN work still awaiting a
+    review — precisely the shape next_task's offering loop asks the flag about — and a
+    forged card could be the right shape by accident while the gates disagree."""
+    api = FakeAPI(buckets=STAGES)
+    wf = Workflow(api, project_id=3)
+    task = api.add_task("shipped", "Queue")
+    wf.claim(task["id"])
+    wf.advance(task["id"], to="build", spec="the plan")
+    wf.advance(task["id"], to="review", worklog="the report", evidence="deadbeef")
+    return api, task
+
+
+def _hub_layers(monkeypatch, tmp_path, toml: str) -> None:
+    """The hub's own layer-1 env plus a repo toml — the ONLY layer that carries the flag.
+
+    A toml and not an env var, because config.py refuses to read this key from any env layer
+    (pinned in test_config: it is committed team policy, like wip_limit). load_config walks UP
+    from cwd, so the toml is written into tmp_path and cwd moved there."""
+    (tmp_path / ".vikunja-mcp.toml").write_text(toml)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("VIKUNJA_URL", "https://tracker.example.com")
+    monkeypatch.setenv("VIKUNJA_TOKEN", "tok-value")
+    monkeypatch.setenv("VIKUNJA_PROJECT_ID", "3")
+
+
+def test_the_toml_review_independence_flag_reaches_the_exported_verdict(
+    monkeypatch, capsys, tmp_path,
+):
+    """THE PIN: run_claimable builds its OWN Workflow, so a repo policy key that is not passed
+    at that construction site is simply not in force here — and since #991 this one is read
+    INSIDE next_task's review-offering branch, where it decides whether an own-authored card is
+    offered at all. Unwired, the exported verdict says claimable/review on a board the MCP
+    server's own next_task calls empty: the hub then boots an agent for a review its tracker
+    tools would refuse, which is the class of no-op boot this whole command exists to stop.
+
+    END-TO-END through run_claimable, not classify_next, deliberately: the defect lives at the
+    CONSTRUCTION SITE and a unit test of the classifier cannot see it.
+
+    MUTATION-PROVED rather than asserted, selection `tests/unit/test_claimable_cmd.py` with
+    `collected 52 items` in both rounds: control 0 failed; deleting
+    `require_review_independence=cfg.require_review_independence` from run_claimable -> 1 failed,
+    and the one FAILED line names this test. The sibling below stays GREEN under that same
+    mutation, which is correct and is why it is a control and not a second pin: it fixes the
+    DEFAULT, which an unwired build produces too."""
+    api, task = _card_in_review_written_by_the_caller()
+    _hub_layers(monkeypatch, tmp_path, (
+        '[tracker]\nrequire_review_independence = true\n'
+    ))
+    monkeypatch.setattr(claimable_cmd, "VikunjaAPI", lambda url, token, **_: api)
+
+    assert claimable_cmd.load_config().require_review_independence is True, \
+        "the fixture is vacuous unless the toml this walk-up finds is the one just written"
+    assert run_claimable() == 0
+
+    lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.strip()]
+    assert len(lines) == 1, "stdout IS the machine contract: exactly one JSON line"
+    assert json.loads(lines[0]) == {"claimable": False, "kind": "empty", "task_id": None}
+    assert task["id"]  # the card exists; it is the FLAG that keeps it out of the verdict
+
+
+def test_without_the_flag_that_same_board_is_offered_as_a_review(monkeypatch, capsys, tmp_path):
+    """THE CONTROL, and it is what makes the test above a measurement rather than a coincidence:
+    same fixture, same identity, same card, one line of toml removed. The default is FALSE, so
+    an own-authored card awaiting a review IS claimable here — the #991 behaviour, without which
+    an external supervisor would never wake an agent for a pending review in a solo setup.
+
+    Without this pair a broken board (no worklog, an epic label, a wrong project id) would make
+    the first test pass for reasons that have nothing to do with the flag."""
+    api, task = _card_in_review_written_by_the_caller()
+    _hub_layers(monkeypatch, tmp_path, '[tracker]\n')
+    monkeypatch.setattr(claimable_cmd, "VikunjaAPI", lambda url, token, **_: api)
+
+    assert claimable_cmd.load_config().require_review_independence is False
+    assert run_claimable() == 0
+
+    lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.strip()]
+    assert len(lines) == 1
+    assert json.loads(lines[0]) == {"claimable": True, "kind": "review", "task_id": task["id"]}

@@ -241,9 +241,26 @@ def _build_workflow(cfg) -> Workflow:
         WebhookNotifier(cfg.notify_webhook, tracker_url=cfg.url)
         if cfg.notify_webhook else None
     )
-    # require_review_independence is wired HERE and deliberately NOT in claimable_cmd's Workflow:
-    # that one runs `next_task` and nothing else, so the flag could never be consulted there —
-    # passing it would be dead wiring on the one path that must stay read-only and cheap (#37).
+    # require_review_independence is wired HERE and — since VMCP-295 (1169) — in claimable_cmd's
+    # Workflow too. It used to be wired here ONLY, justified by "that one runs `next_task` and
+    # nothing else, so the flag could never be consulted there — passing it would be dead wiring
+    # on the one path that must stay read-only and cheap". TRUE at #37, STALE from #991 on, and
+    # refuted on BOTH halves. Not dead: the authorship skip in next_task's review-offering branch
+    # was already there and UNCONDITIONAL, and #991 made it conditional on the flag — so from that
+    # card on, `next_task` is exactly a caller of it. Measured on an identical FakeAPI board (one
+    # card driven claim -> build -> review by ONE identity), `classify_next(wf.next_task())`
+    # answers {"claimable": true, "kind": "review"} with the flag false and {"claimable": false,
+    # "kind": "empty"} with it true — the two sides DISAGREE, which is the defect; what the
+    # flag-on answer is instead depends on the board (empty, queue and starving all measured).
+    # Not a cost either, about the GUARD: next_task resolves `my_id` whatever the flag says, so
+    # no request is added, and when it FIRES it skips that card's `comments()` fetch — the total
+    # is the board's business, not the guard's. THE RULE THAT REPLACES THAT SENTENCE: a Config
+    # key `Workflow` READS on a given path is wired at EVERY site that builds one (three here —
+    # this one, claimable_cmd, and workspace_cmd's), because `claimable`'s stated property is a
+    # verdict with ZERO drift from the agent's own, and a kwarg present on one side only IS that
+    # drift. Between THIS site and claimable_cmd's the one legitimate asymmetry left is
+    # `notify_webhook` -> `notifier`: `call_human` alone touches it, and that path calls
+    # `next_task` alone. Full accounting in docs/dossier/claimable.md and config.md.
     return Workflow(
         VikunjaAPI(cfg.url, cfg.token), cfg.project_id,
         enforce_single_wip=cfg.enforce_single_wip,
