@@ -142,3 +142,77 @@ board API surfaced no history to this token, and the only thing that answered th
 log on the server, reachable by ssh and gone whenever that container's log rotates. So the next
 Backlog-to-Queue surprise is answerable the same way or not at all — which is the reason this
 entry records the request signatures rather than only the conclusion.
+
+## What a TOOL CALL returns is English — and a green test held the Russian in place (#1166)
+
+**The rule.** `workflow.py` writes for two different readers and only one of them has a language
+setting. What goes onto a CARD is `cardtext.py`'s two-column table, keyed by `language`. What a
+tool call RETURNS — a `WorkflowError` message, the `message`/`note` keys of a `next_task` payload
+— is prompt content: it lands in an orchestrator's log and in a per-task agent's context, it is
+deliberately OUT of that table (#1165 put it there, and `cardtext.py`'s own docstring says so in
+the bullet naming `WorkflowError` text and the `note`/`message` strings in tool payloads), and it
+is therefore ONE language for every consumer whatever their toml says. That language is English,
+the one the README, CLAUDE.md and SKILL.md are written in. Pinned by
+`tests/unit/test_agent_facing_text_is_english.py`.
+
+**What was actually there.** #1164's rule 2 is an INSTRUCTION — "Leave it English; do not fold
+it into any later localization" — and this card enforces it rather than overturning it. The claim
+that the text ALREADY was English is not in that rule at all: it appears as "(it already is)" in
+#1164's own build note and `[worklog]`, paraphrasing its own card, and is quoted from there by
+#1166's description. Two strings said otherwise: `_cycle_signal`'s five-line `message`,
+sitting in the same returned dict as a fully English `note` — one payload, one field in each
+language — and `claim`'s epic-container fallback, which rendered `его подзадачами` at the end of
+an otherwise English sentence whenever the epic had no subtasks to name. Both were STRINGS
+returned to an agent, not code comments, so #1164's own ASCII gate neither did nor should have
+covered them.
+
+**Why translating and not retracting the parenthetical.** The card offered both. The second is
+not actionable in this repo: `grep` over everything `git ls-files` carries finds that parenthetical
+in no tracked file except the two this card adds, which quote it in order to place it. It lives in
+a card's COMMENTS, so "correct it" would edit a landed card's journal — which this tool cannot do,
+comments being append-only — and change nothing a reader of this code can see. The first option is
+what the shipped design already says, and the sharpest evidence is inside the one return dict.
+
+**THE FINDING WORTH KEEPING: a green test was holding the Russian in place.** The reason to look
+for a pin here is not that nothing tested these strings — it is that something did, in the wrong
+direction. `test_workflow_sequence_gate.py` asserted `"цикл" in res["message"].lower()`, i.e. a
+translation of that message was a RED test — measured on the shipped tree, selection
+`test_workflow_sequence_gate.py -k two_cycle` (67 collected, 1 selected), control 0 failed / 0
+errors, that assert put back under the English message 1 failed — and the two other pins over the
+same message read its interpolated values through contiguous literals, one of which spelled
+`задач(и)`. So the tree carried TWO asserts a translation had to defeat outright and two more
+constraining the message's punctuation, and none at all that would have noticed the field was
+Russian in the first place. The epic fallback is the mirror case:
+`test_workflow_epic_skip.py::test_claim_refuses_childless_epic_gracefully` drives that exact
+branch and matches on the word "container", so the Russian tail rode through a green suite for as
+long as it existed. The translation therefore kept the message's rendered STRUCTURE — closed loop,
+count, `Tasks in the cycle: <detail>` — and moved the pins with it, rather than rewriting prose
+whose shape two tests (one of them parametrized over three cycle sizes) depend on.
+
+**The unit is CYRILLIC, not ASCII, and that is measured.** The card-text gates next door assert
+ASCII, which is right for them: a marker is a wire format. This population is English prose full
+of em dashes and arrows, so an ASCII pin over it is red on arrival — dozens of offenders in this
+module alone. The count is not written down anywhere: the file asserts the PROPERTY instead
+(`test_an_ascii_unit_would_be_red_on_arrival`), because the number moves with every refusal
+anyone adds and a stale figure is exactly the argument for "just use ASCII here too". What the
+narrower unit costs is shown rather than claimed — a sweep round translates the same fallback into
+GREEK and the Cyrillic scan stays green while the runtime pin catches it.
+
+**The sweep**, selection `tests/unit/test_agent_facing_text_is_english.py` alone, in a clone,
+`__pycache__` cleared and `PYTHONDONTWRITEBYTECODE=1` per round, rounds read by counting lines
+beginning `FAILED `: control 0 failed / 0 errors / 4 collected before every round; the `message`
+reverted to its pre-#1166 Russian 2 failed; the epic fallback reverted 2 failed; a Cyrillic
+literal that reaches no agent at all (assigned to an unused local) 1 failed, the static scan
+alone; the fallback translated into Greek 1 failed, the runtime pin alone. Separately, on
+`test_workflow_sequence_gate.py -k cycle` (67 collected, 11 selected): control 0 failed / 0
+errors, and the stage-for-ref mutation that section was built around still gives its recorded 3
+failed after the translation, now rendering `Tasks in the cycle: Queue in 'Queue'; …`.
+
+**What is left, measured across the whole package rather than assumed.** An AST audit of every
+non-docstring string literal in `src/vikunja_mcp` leaves, outside `cardtext.py`'s deliberate `ru`
+column, exactly one: `api.py`'s `AssertionError("unreachable: …")`, which is agent-visible only on
+a path asserted not to exist. In DOCSTRINGS the interesting survivors are `server.py`'s two tool
+descriptions, which the MCP SDK ships to the agent — unlike `workflow.py`'s docstrings, which a
+human reads in the source and which this gate deliberately exempts. Both are filed as
+VMCP-296 (1170) rather than fixed here, because whether a Russian EXAMPLE inside an English tool
+description is a leftover or an illustration that the value is free-form is a triage question.

@@ -1528,11 +1528,11 @@ class Workflow:
         loop = " → ".join([n["ref"] for n in nodes] + [nodes[0]["ref"]])
         detail = "; ".join(f"{n['ref']} in '{n['stage']}'" for n in nodes)
         message = (
-            f"ЦИКЛ предшественников — {loop}: {len(nodes)} задач(и) взаимно ждут друг друга "
-            f"(follows/blocked-связи образуют петлю), поэтому НИЧЕГО в цикле не клеймабельно и "
-            f"цепочка НЕ разблокируется сама. Это НЕ пустая очередь и НЕ обычное голодание "
-            f"хвоста: разорвать цикл может только человек, убрав одну follows/blocked-связь в "
-            f"вебе. Задачи в цикле: {detail}"
+            f"PREDECESSOR CYCLE — {loop}: {len(nodes)} task(s) wait on each other "
+            f"(their follows/blocked relations form a loop), so NOTHING in the cycle is "
+            f"claimable and the chain will NOT unblock itself. This is NOT an empty queue and "
+            f"NOT an ordinary starving tail: only a human can break it, by removing one "
+            f"follows/blocked relation in the web UI. Tasks in the cycle: {detail}"
         )
         return {
             "task": None,
@@ -1563,7 +1563,7 @@ class Workflow:
         if self._has_label(task, LABEL_EPIC):
             related = self.api.get_task(task_id).get("related_tasks") or {}
             subtasks = related.get("subtask") or []
-            kids = ", ".join(self._ref(s) for s in subtasks) or "его подзадачами"
+            kids = ", ".join(self._ref(s) for s in subtasks) or "its subtasks"
             raise WorkflowError(
                 f"{self._ref(task)} is an epic CONTAINER (label epic), not a unit of work — "
                 f"there is nothing to claim on the container itself. Its code/evidence lives in "

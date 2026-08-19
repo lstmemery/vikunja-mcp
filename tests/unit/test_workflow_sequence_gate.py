@@ -578,7 +578,7 @@ def test_decompose_ordered_single_child_rejected_no_relation(env):
 
 def test_two_cycle_reported_as_cycle_naming_both_tasks(env):
     """A 2-cycle (A follows B, B follows A) -> the distinguishable CYCLE signal: task None,
-    cycle True, cycle_tasks naming BOTH, message says 'цикл' and both refs. It must NOT read as a
+    cycle True, cycle_tasks naming BOTH, message says 'cycle' and both refs. It must NOT read as a
     starving tail (no `starving` key) nor as an empty queue."""
     api, wf = env
     a = api.add_task("A", "Queue")
@@ -592,7 +592,7 @@ def test_two_cycle_reported_as_cycle_naming_both_tasks(env):
     assert res != EMPTY and res["message"] != EMPTY["message"]
     assert {n["id"] for n in res["cycle_tasks"]} == {a["id"], b["id"]}
     assert a["identifier"] in res["message"] and b["identifier"] in res["message"]
-    assert "цикл" in res["message"].lower()
+    assert "cycle" in res["message"].lower()
 
 
 def test_three_cycle_reported_naming_all_three(env):
@@ -1141,6 +1141,14 @@ def test_the_starving_message_is_the_plain_tail_plus_the_retriage_escalation_and
 # than argued. The repair is therefore not another PER-IDENTIFIER check but a CONTIGUOUS literal
 # spanning a value in its position — `in msg` is still the operator, what changed is what the
 # literal covers: the surviving copy is rendered with different punctuation and cannot satisfy it.
+# THE RENDERING ABOVE IS QUOTED AS IT WAS MEASURED, on a tree where this message was still
+# Russian; VMCP-292 (1166) translated its prose and touched neither the interpolated values nor
+# the punctuation around them. Re-run there rather than reasoned about, selection
+# `test_workflow_sequence_gate.py -k cycle` (67 collected, 11 selected): control 0 failed /
+# 0 errors, the same stage-for-ref mutation 3 failed / 0 errors — this section's own three
+# params, exactly as recorded above — and the mutant now renders
+# `Tasks in the cycle: Queue in 'Queue'; Build in 'Build'; Design in 'Design'`, i.e. the line
+# above with its lead-in translated and every identity still gone.
 #
 # BOTH SIDES ABSOLUTE, which is 606's rule and the reason these pins can disagree with the code.
 # `_spelled_ref` respells the ref format in THIS FILE, so no literal below is derived from
@@ -1229,7 +1237,7 @@ def test_the_cycle_message_pins_the_closed_loop_every_ref_beside_its_own_stage_a
     assert f"— {' → '.join(refs + refs[:1])}: " in msg, msg
     # 2. the task count — the one value here with no machine-readable twin anywhere in the payload
     #    (`cycle_tasks` merely permits counting a list).
-    assert f": {count} задач(и) " in msg, msg
+    assert f": {count} task(s) " in msg, msg
     # 3. the detail: every ref beside ITS OWN stage, in order, and nothing after it.
     assert msg.endswith("; ".join(f"{r} in '{s}'" for r, s in zip(refs, stages))), msg
 
