@@ -86,7 +86,8 @@ def reconcile(api, project_title: str, shares: list[tuple[str, int]]) -> int:
         if title in canonical and canonical[title]["id"] == bucket["id"]:
             continue
         if bucket.get("tasks"):
-            print(f"  !! бакет '{title}' не пуст и не каноничен — оставлен, разбери руками")
+            print(f"  !! bucket '{title}' is neither empty nor canonical — left alone, "
+                  f"sort it out by hand")
             continue
         api.delete_bucket(pid, view["id"], bucket["id"])
 
@@ -102,13 +103,17 @@ def reconcile(api, project_title: str, shares: list[tuple[str, int]]) -> int:
 
 
 def _print_snippets(pid: int, project_title: str, url: str) -> None:
-    print("\n--- .vikunja-mcp.toml (закоммить в корень рабочего репо) ---")
+    print("\n--- .vikunja-mcp.toml (commit this at the root of the working repo) ---")
     print(f'[tracker]\nurl = "{url}"\nproject_id = {pid}\nproject = "{project_title}"')
     print(
-        "\nТокен туда не кладём: создай рядом .vikunja-mcp.env с VIKUNJA_TOKEN=...\n"
-        "и добавь .vikunja-mcp.env в .gitignore рабочего репо — коммитить нельзя."
+        "\nThe token does NOT go in there: create .vikunja-mcp.env beside it with\n"
+        "VIKUNJA_TOKEN=..., and add .vikunja-mcp.env to the working repo's .gitignore —\n"
+        "it must never be committed."
     )
-    print("\n--- .mcp.json (Claude Code; закоммить рядом; канал stable = авто-раскатка релизов) ---")
+    print(
+        "\n--- .mcp.json (Claude Code; commit it beside the toml; the stable channel "
+        "auto-rolls out releases) ---"
+    )
     print(
         '{ "mcpServers": { "tracker": {\n'
         '    "command": "uvx",\n'
@@ -116,7 +121,10 @@ def _print_snippets(pid: int, project_title: str, url: str) -> None:
         '             "--from", "git+https://github.com/ufna/vikunja-mcp@stable", "vikunja-mcp"]\n'
         "} } }"
     )
-    print("\n--- opencode.json (opencode; закоммить рядом; та же stable-раскатка, токен так же внешний) ---")
+    print(
+        "\n--- opencode.json (opencode; commit it beside the toml; same stable rollout, "
+        "token just as external) ---"
+    )
     print(
         '{ "$schema": "https://opencode.ai/config.json", "mcp": { "tracker": {\n'
         '    "type": "local",\n'
@@ -136,14 +144,15 @@ def run_setup(argv: list[str]) -> int:
 
     token = os.environ.get("VIKUNJA_TOKEN")
     if not args.url or not token:
-        print("нужны --url (или VIKUNJA_URL) и VIKUNJA_TOKEN (админский) в env", file=sys.stderr)
+        print("need --url (or VIKUNJA_URL) and VIKUNJA_TOKEN (an admin token) in env",
+              file=sys.stderr)
         return 2
 
     shares = []
     for raw in args.share:
         user, _, perm = raw.partition(":")
         if perm not in PERMISSIONS:
-            print(f"--share {raw}: permission должен быть read|write|admin", file=sys.stderr)
+            print(f"--share {raw}: permission must be read|write|admin", file=sys.stderr)
             return 2
         shares.append((user, PERMISSIONS[perm]))
 
@@ -289,7 +298,7 @@ def install_skill(dest_root=None, opencode_root=None) -> None:
     # the skill and the core tells the agent which reference to open at which phase.
     oc_refs = [oc_skill.parent / "references" / ref.name for ref in _packaged_references()]
     listed = ", ".join(f'"{path}"' for path in [oc_skill, *oc_refs])
-    print(f'  добавь в opencode.json: "instructions": [{listed}]')
+    print(f'  add to opencode.json: "instructions": [{listed}]')
 
 
 def _packaged_references() -> list:

@@ -66,8 +66,8 @@ def test_advance_review_report_includes_root_cause(env):
         root_cause="стейт лобби не подписан на смену экипировки",
     )
     report = next(c for c in api.comments_text(t["id"]) if c.startswith("[worklog]"))
-    assert "Причина: стейт лобби не подписан" in report
-    assert "Сделано: починил рендер титула" in report
+    assert "Root cause: стейт лобби не подписан" in report
+    assert "Worklog: починил рендер титула" in report
     assert "Evidence: commit deadbeef" in report
 
 
@@ -91,7 +91,7 @@ def test_call_human_keeps_assignee(env):
     wf.call_human(t["id"], question="какой из двух вариантов деплоя выбрать?")
     assert api.stage_of(t["id"]) == "Your Call"
     assert api.tasks[t["id"]]["assignees"][0]["id"] == api.me_user["id"]
-    assert any(c.startswith("[нужен человек]") for c in api.comments_text(t["id"]))
+    assert any(c.startswith("[needs-human]") for c in api.comments_text(t["id"]))
 
 
 def test_return_task_unassigns_labels_and_moves_to_backlog(env):
@@ -1007,7 +1007,7 @@ def test_file_task_cross_project_lands_in_targets_backlog(env):
     assert res["filed"]["stage"] == "Backlog"
     assert (new_id, t["id"], "related") in api.relations   # связь через границу проектов
     marker = next(c for c in api.comments_text(new_id) if c.startswith("[filed-by-agent]"))
-    assert f"из проекта id={wf.project_id}" in marker      # provenance для людей цели
+    assert f"from project id={wf.project_id}" in marker    # provenance для людей цели
     assert f"#{t['id']}" in marker
 
 
@@ -1047,8 +1047,8 @@ def test_file_task_explicit_own_project_id_is_todays_behavior(env):
     assert "project_id" not in res["filed"]    # без кросс-добавок в результате
     marker = next(c for c in api.comments_text(new_id) if c.startswith("[filed-by-agent]"))
     assert marker == (
-        f"[filed-by-agent] заведено агентом для триажа человеком "
-        f"(по ходу работы над #{t['id']})"
+        f"[filed-by-agent] filed by an agent for human triage "
+        f"(found while working on #{t['id']})"
     )
 
 
@@ -1878,21 +1878,21 @@ def test_attach_file_unknown_task_is_actionable(env, tmp_path):
 
 def test_attach_file_journals_the_upload_as_an_attach_comment(env, tmp_path):
     """#184: a successful upload leaves a TRACE in the comment journal — the human browsing the
-    comments sees '[attach] shot.png (image/png, 2.0 КБ)' in the stream instead of having to
+    comments sees '[attach] shot.png (image/png, 2.0 KB)' in the stream instead of having to
     discover the file in the attachments widget. Name, mime and human-readable size are all in
-    the comment; without a note there is no dangling ' — ' separator."""
+    the comment; without a note there is no dangling ' - ' separator."""
     api, wf, t = env
     src = tmp_path / "shot.png"
     src.write_bytes(b"x" * 2048)
     res = wf.attach_file(t["id"], str(src))
     assert res["journal_comment"] is True
     journal = [c for c in api.comments_text(t["id"]) if c.startswith("[attach]")]
-    assert journal == ["[attach] shot.png (image/png, 2.0 КБ)"]
+    assert journal == ["[attach] shot.png (image/png, 2.0 KB)"]
 
 
 def test_attach_file_note_lands_in_the_journal_comment(env, tmp_path):
     """The agent says WHAT the file shows via note= — it rides in the SAME journal comment, so
-    the human reads 'бот приложил board.png — доска после reconcile' as part of the story, not
+    the human reads 'бот приложил board.png - доска после reconcile' as part of the story, not
     as two disconnected entries."""
     api, wf, t = env
     src = tmp_path / "board.png"
@@ -1901,17 +1901,17 @@ def test_attach_file_note_lands_in_the_journal_comment(env, tmp_path):
     journal = [c for c in api.comments_text(t["id"]) if c.startswith("[attach]")]
     assert len(journal) == 1
     assert "board.png" in journal[0]
-    assert journal[0].endswith("— доска после reconcile")
+    assert journal[0].endswith("- доска после reconcile")
 
 
 def test_attach_file_blank_note_is_ignored(env, tmp_path):
-    """A whitespace-only note is not a note: the journal line stays clean (no trailing ' — ')."""
+    """A whitespace-only note is not a note: the journal line stays clean (no trailing ' - ')."""
     api, wf, t = env
     src = tmp_path / "s.png"
     src.write_bytes(b"png")
     wf.attach_file(t["id"], str(src), note="   ")
     journal = [c for c in api.comments_text(t["id"]) if c.startswith("[attach]")]
-    assert journal == ["[attach] s.png (image/png, 3 Б)"]
+    assert journal == ["[attach] s.png (image/png, 3 B)"]
 
 
 def test_attach_file_journal_comment_failure_never_fails_the_upload(env, tmp_path, monkeypatch):
@@ -1937,10 +1937,15 @@ def test_attach_file_journal_comment_failure_never_fails_the_upload(env, tmp_pat
 
 
 def test_human_size_units():
-    """Journal sizes are human-readable (Б/КБ/МБ) — a human reads '1.4 МБ', not 1468006."""
-    assert _human_size(512) == "512 Б"
-    assert _human_size(2048) == "2.0 КБ"
-    assert _human_size(5 * 1024 * 1024) == "5.0 МБ"
+    """Journal sizes are human-readable (B/KB/MB) — a human reads '1.4 MB', not 1468006. The
+    units are ASCII since #1164: this string is rendered into the [attach] card comment, and
+    every string the TOOL ITSELF authors onto a card is ASCII (an agent's own note is not, and
+    the test two rows down still passes a Russian one through). The pin that would catch a
+    regression here is tests/unit/test_card_text_is_ascii.py's runtime assert, not its source
+    scan — the scan cannot follow a value across a function boundary."""
+    assert _human_size(512) == "512 B"
+    assert _human_size(2048) == "2.0 KB"
+    assert _human_size(5 * 1024 * 1024) == "5.0 MB"
 
 
 # --- вложения: hardening (#146) — sanitize имени, post-read caps, id-confusion --------
@@ -3023,7 +3028,7 @@ def test_a_bug_with_a_root_cause_advances_and_the_cause_lands_in_the_journal(env
                root_cause="the state was never subscribed to event X")
     assert api.stage_of(t["id"]) == "Review"
     journal = [c["comment"] for c in api.comments(t["id"]) if "[worklog]" in c["comment"]]
-    assert any("Причина: the state was never subscribed" in c for c in journal)
+    assert any("Root cause: the state was never subscribed" in c for c in journal)
 
 
 def test_the_root_cause_gate_does_not_spread_beyond_bugs(env):

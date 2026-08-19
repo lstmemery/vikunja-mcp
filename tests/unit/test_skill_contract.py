@@ -234,7 +234,7 @@ def test_next_task_and_advance_signal_keys_are_grounded_in_the_code():
 def test_comment_markers_the_skill_cites_are_still_emitted():
     """Grep-convention markers the skill points humans/agents at must still be the ones the code
     writes. Curated to the markers the skill shows in bracket form; the others the code emits
-    ([claim]/[worklog]/[blocked]/[decompose]/[нужен человек]) the skill doesn't cite verbatim, so
+    ([claim]/[worklog]/[blocked]/[decompose]/[needs-human]) the skill doesn't cite verbatim, so
     they are out of this contract by design (add one here only once the skill starts citing it)."""
     text = _skill_text()
     src = _workflow_src()

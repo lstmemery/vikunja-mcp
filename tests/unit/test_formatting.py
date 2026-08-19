@@ -3,7 +3,7 @@ from vikunja_mcp.formatting import html_to_text, text_to_html
 
 # markers the workflow greps for; escaping must leave every one of them byte-for-byte
 MARKERS = [
-    "[claim]", "[spec]", "[worklog]", "[review]", "[нужен человек]",
+    "[claim]", "[spec]", "[worklog]", "[review]", "[needs-human]",
     "[blocked]", "[decompose]", "[filed-by-agent]", "[review] APPROVE",
     "[review] NEEDS WORK",
 ]
@@ -60,14 +60,14 @@ def test_markers_survive_and_stay_greppable():
 
 
 def test_worklog_shaped_report_keeps_structure_round_trip():
-    raw = "[worklog]\nПричина: X\nСделано: Y\n\nEvidence: commit abc123"
+    raw = "[worklog]\nRoot cause: X\nWorklog: Y\n\nEvidence: commit abc123"
     html = text_to_html(raw)
     # two paragraphs (the blank line before Evidence), line breaks inside the first
     assert html.count("<p>") == 2
     assert "<br>" in html
     back = html_to_text(html)
     assert back.startswith("[worklog]")
-    for fragment in ("Причина: X", "Сделано: Y", "Evidence: commit abc123"):
+    for fragment in ("Root cause: X", "Worklog: Y", "Evidence: commit abc123"):
         assert fragment in back
     # the newline structure is preserved for a human/agent reading it
     assert "\n" in back

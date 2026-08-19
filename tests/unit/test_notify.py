@@ -10,7 +10,7 @@ payload/URL are exactly the bytes a real gateway would receive. Contract under p
   * unset -> no notifier, no 'notified' key: behavior bit-for-bit as before;
   * best-effort -> a 500 / timeout / refused connection costs the PING (notified:false plus
     one stderr note, NEVER stdout — a stray byte corrupts the MCP stdio protocol), never the
-    parked question: the card still lands in Your Call with its [нужен человек] comment;
+    parked question: the card still lands in Your Call with its [needs-human] comment;
   * ordering -> a REFUSED call_human (empty question / wrong stage / not mine) pings nothing.
 
 #802 adds the LENGTH half of that contract. A Telegram-backed gateway does not truncate an
@@ -74,7 +74,7 @@ def test_call_human_posts_one_slack_message():
     assert res["moved_to"] == "Your Call"
     # the pre-existing behavior is untouched
     assert api.stage_of(t["id"]) == "Your Call"
-    assert any(c.startswith("[нужен человек]") for c in api.comments_text(t["id"]))
+    assert any(c.startswith("[needs-human]") for c in api.comments_text(t["id"]))
 
 
 def test_no_webhook_configured_keeps_result_shape():
@@ -106,7 +106,7 @@ def test_call_human_survives_webhook_failure(failure, capsys):
     assert res["moved_to"] == "Your Call"
     assert res["notified"] is False
     assert api.stage_of(t["id"]) == "Your Call"
-    assert any(c.startswith("[нужен человек]") for c in api.comments_text(t["id"]))
+    assert any(c.startswith("[needs-human]") for c in api.comments_text(t["id"]))
     out, err = capsys.readouterr()
     assert out == ""          # stdout is the MCP protocol channel — must stay untouched
     assert "webhook" in err   # the operator-facing trace of the swallowed failure

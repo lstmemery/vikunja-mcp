@@ -86,7 +86,7 @@ def test_dogfood_review_bucket_of_my_already_reviewed_tasks_is_not_claimable():
     wf = Workflow(api, project_id=3)
     for i in range(25):
         t = api.add_task(f"shipped {i}", "Review", assignee=api.me_user)
-        api.add_comment(t["id"], f"[worklog]\nСделано: shipped {i}\n\nEvidence: sha{i}")
+        api.add_comment(t["id"], f"[worklog]\nWorklog: shipped {i}\n\nEvidence: sha{i}")
         api.add_comment(t["id"], "[review] APPROVE\nreproduced and checked")
     assert classify_next(wf.next_task()) == {
         "claimable": False, "kind": "empty", "task_id": None,
@@ -102,7 +102,7 @@ def test_dogfood_my_own_cards_awaiting_review_are_claimable_as_review():
     wf = Workflow(api, project_id=3)
     for i in range(25):
         t = api.add_task(f"shipped {i}", "Review", assignee=api.me_user)
-        api.add_comment(t["id"], f"[worklog]\nСделано: shipped {i}\n\nEvidence: sha{i}")
+        api.add_comment(t["id"], f"[worklog]\nWorklog: shipped {i}\n\nEvidence: sha{i}")
     out = classify_next(wf.next_task())
     assert (out["claimable"], out["kind"]) == (True, "review"), out
 
@@ -123,7 +123,7 @@ def test_dogfood_the_solo_review_offer_terminates_instead_of_looping():
     wf = Workflow(api, project_id=3)
     for i in range(25):
         t = api.add_task(f"shipped {i}", "Review", assignee=api.me_user)
-        api.add_comment(t["id"], f"[worklog]\nСделано: shipped {i}\n\nEvidence: sha{i}")
+        api.add_comment(t["id"], f"[worklog]\nWorklog: shipped {i}\n\nEvidence: sha{i}")
 
     rounds = 0
     while (offer := wf.next_task()).get("task") is not None:
@@ -152,7 +152,7 @@ def test_someone_elses_review_with_worklog_is_claimable():
     wf = Workflow(api, project_id=3)
     other = {"id": 77, "username": "agent-other"}
     t = api.add_task("their change", "Review", assignee=other)
-    api.add_comment(t["id"], "[worklog]\nСделано: X\n\nEvidence: sha")
+    api.add_comment(t["id"], "[worklog]\nWorklog: X\n\nEvidence: sha")
     assert classify_next(wf.next_task()) == {
         "claimable": True, "kind": "review", "task_id": t["id"],
     }
@@ -195,7 +195,7 @@ def test_the_new_stage_key_leaves_the_exported_kind_untouched():
     wf.claim(free["id"])                                   # get it out of the way of the offer
     other = {"id": 77, "username": "agent-other"}
     theirs = api.add_task("their change", "Review", assignee=other)
-    api.add_comment(theirs["id"], "[worklog]\nСделано: X\n\nEvidence: sha")
+    api.add_comment(theirs["id"], "[worklog]\nWorklog: X\n\nEvidence: sha")
 
     result = wf.next_task(exclude=[free["id"]])
     assert result["stage"] == "Review", "the review offer must carry its stage"
@@ -215,7 +215,7 @@ def test_the_check_makes_no_writes():
     api.add_task("free", "Queue")
     other = {"id": 77, "username": "agent-other"}
     r = api.add_task("their change", "Review", assignee=other)
-    api.add_comment(r["id"], "[worklog]\nСделано: X\n\nEvidence: sha")
+    api.add_comment(r["id"], "[worklog]\nWorklog: X\n\nEvidence: sha")
 
     def snapshot():
         return copy.deepcopy((

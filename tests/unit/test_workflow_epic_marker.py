@@ -1,7 +1,7 @@
 """Part 2 of the epic lifecycle (#118): advance→review marks a COMPLETE epic, best-effort.
 
 When the LAST child of an epic reaches Review-or-Done, the agent finishing that child leaves a
-visible marker on the EPIC — the `epic-ready` label plus an `[эпик собран]` comment — so the human
+visible marker on the EPIC — the `epic-ready` label plus an `[epic-ready]` comment — so the human
 sees the container is assembled and can close the whole set (only a human moves anything to Done;
 the epic is never moved by an agent). The marker is a deliberately ADDITIVE cross-task write (a
 label + comment on a DIFFERENT card than the one being advanced), so it is STRICTLY best-effort:
@@ -39,7 +39,7 @@ def _labels(api, task_id):
 
 
 def _epic_comments(api, epic_id):
-    return [c for c in api.comments_text(epic_id) if c.startswith("[эпик собран]")]
+    return [c for c in api.comments_text(epic_id) if c.startswith("[epic-ready]")]
 
 
 # --- happy path: last child completes the epic ---

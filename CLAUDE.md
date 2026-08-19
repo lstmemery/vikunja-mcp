@@ -116,7 +116,7 @@ measured shape of both exemptions.
   → **Dossier: `docs/dossier/api.md`**
 - `src/vikunja_mcp/workflow.py` — the product rules: stages, gates, assign-then-verify
   claim (with self-heal), review offering (verdict vs worklog timestamps), comment markers
-  `[claim] [spec] [worklog] [нужен человек] [blocked] [decompose] [review] [attach]` plus
+  `[claim] [spec] [worklog] [needs-human] [blocked] [decompose] [review] [attach]` plus
   mutually-exclusive verdict labels `reviewed`/`review-failed` (push-review of EVERY task,
   not just bug fixes — tracker #117: `advance(to='review')` nudges `review_needed` +
   `review_kind` (`'bug'`|`'change'`) for any card WITHOUT the `epic` label, and resets a

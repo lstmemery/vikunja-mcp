@@ -43,7 +43,7 @@
   container: `next_task` does NOT offer it, `claim` refuses (work on the children, not on the
   container). An agent cannot and must not move an epic through the stages. When the LAST child of
   an epic reaches Review, that child's `advance` itself hangs the `epic-ready` label on the epic
-  and an `[эпик собран]` comment (a best-effort side effect: it adds nothing to your payload and
+  and an `[epic-ready]` comment (a best-effort side effect: it adds nothing to your payload and
   does not fail your advance, even if the write to the epic falls over) — so a human sees an
   assembled container at a glance. From there the whole set (children + epic) is taken to Done by
   the HUMAN — only they move things into Done. If you bounced a child back out of Review, the

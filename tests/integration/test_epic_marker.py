@@ -7,7 +7,7 @@ it embeds there — `labels` (and `assignees`, nested `related_tasks`) come back
 task genuinely carries them; only scalars survive. Our FakeAPI once returned those sub-dicts fully
 populated, so the fake agreed with the fake: 12 unit tests were green while the marker was a silent
 no-op in production. This test drives the whole path server → marker → server: the LAST child of a
-real epic reaches Review and the epic must gain `epic-ready` + the `[эпик собран]` comment. Read off
+real epic reaches Review and the epic must gain `epic-ready` + the `[epic-ready]` comment. Read off
 a hollowed sub-dict again and it goes red; the unit tests would not.
 """
 import uuid
@@ -37,7 +37,7 @@ def epicproj(boss_jwt, agent_jwts):
 
 
 def test_epic_marker_fires_against_real_hollowed_related_tasks(epicproj):
-    """Last child of a real epic reaches Review → the epic gains `epic-ready` + the `[эпик собран]`
+    """Last child of a real epic reaches Review → the epic gains `epic-ready` + the `[epic-ready]`
     comment, driven end to end through the server's hollowed related_tasks. The behavioural
     assertions (not a JSON shape) are what catch the sub-dict-label regression the units missed."""
     boss, pid, view, buckets, wf1 = epicproj
@@ -70,12 +70,12 @@ def test_epic_marker_fires_against_real_hollowed_related_tasks(epicproj):
     wf1.advance(last["id"], to="build", spec="do the last piece")
     wf1.advance(last["id"], to="review", worklog="did the last piece", evidence="abc123")
 
-    # THE assertion (behaviour, not shape): the epic now carries `epic-ready` AND the `[эпик собран]`
+    # THE assertion (behaviour, not shape): the epic now carries `epic-ready` AND the `[epic-ready]`
     # comment — proof the marker worked against the real server. Red if a sub-dict label read returns.
     epic_labels = [lb["title"] for lb in boss.get_task(epic["id"]).get("labels") or []]
     assert LABEL_EPIC_READY in epic_labels
     epic_comments = [c["comment"] for c in boss.comments(epic["id"])]
-    assert any("эпик собран" in c for c in epic_comments)
+    assert any("[epic-ready]" in c for c in epic_comments)
 
     # the agent NEVER moved the epic — it stays where the human left it (Backlog), only marked
     # (Part 1 skip + "only a human moves to Done" both intact).

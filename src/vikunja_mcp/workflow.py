@@ -363,12 +363,16 @@ def _write_attachment_to_temp(name: str, data: bytes, fallback: str) -> str:
 
 def _human_size(n: int) -> str:
     """Человекочитаемый размер для журнального коммента [attach] (#184): человек в ленте читает
-    «1.4 МБ», а не 1468006. Кап вложений — 25 МБ, поэтому МБ — верхняя единица."""
+    «1.4 MB», а не 1468006. Кап вложений — 25 MB, поэтому MB — верхняя единица. THE UNITS ARE
+    ASCII AND MUST STAY ASCII (#1164): this string is interpolated into the [attach] card
+    comment, and every string the tool ITSELF authors onto a card is ASCII. The gate is
+    tests/unit/test_card_text_is_ascii.py, and specifically its RUNTIME assert — its source
+    scan cannot follow a value across a function boundary, so it does not see this one."""
     if n < 1024:
-        return f"{n} Б"
+        return f"{n} B"
     if n < 1024 * 1024:
-        return f"{n / 1024:.1f} КБ"
-    return f"{n / (1024 * 1024):.1f} МБ"
+        return f"{n / 1024:.1f} KB"
+    return f"{n / (1024 * 1024):.1f} MB"
 
 
 def _stderr_note_best_effort(prefix: str, exc: Exception) -> None:
@@ -1612,7 +1616,7 @@ class Workflow:
         self._clear_verdict_labels(fresh)
         view = self._view()
         self.api.move_task(self.project_id, view["id"], self._bucket("Design")["id"], task_id)
-        self.api.add_comment(task_id, f"[claim] {me['username']} взял задачу в работу")
+        self.api.add_comment(task_id, f"[claim] {me['username']} claimed this task")
         result = {
             "claimed": True, "task": self._summary(fresh),
             "next": "describe your approach and call advance(to='build', spec=...)",
@@ -1762,9 +1766,10 @@ class Workflow:
             self._add_label(parent["id"], LABEL_EPIC_READY)
             self.api.add_comment(
                 parent["id"],
-                f"[эпик собран] все {len(siblings)} дет(и) эпика достигли Review-или-Done — "
-                f"контейнер собран и готов к твоему Done (в Done двигает только человек). Если "
-                f"позже отобьёшь ребёнка из Review — увидишь его в Build и придержишь закрытие."
+                f"[epic-ready] all {len(siblings)} child(ren) of this epic reached "
+                f"Review-or-Done: the container is assembled and ready for your Done (only a "
+                f"human moves a task to Done). If you later bounce a child back out of Review "
+                f"you will see it in Build again, and can hold the close until it returns."
             )
 
     def advance(
@@ -1853,8 +1858,8 @@ class Workflow:
                 )
             report = ["[worklog]"]
             if (root_cause or "").strip():
-                report.append(f"Причина: {root_cause.strip()}")
-            report.append(f"Сделано: {worklog.strip()}")
+                report.append(f"Root cause: {root_cause.strip()}")
+            report.append(f"Worklog: {worklog.strip()}")
             report.append(f"\nEvidence: {evidence.strip()}")
             self.api.add_comment(task_id, "\n".join(report))
             # resubmit-reset: ресабмит инвалидирует ЛЮБОЙ прошлый вердикт — снимаем ОБЕ
@@ -2044,7 +2049,7 @@ class Workflow:
                 )
             raise WorkflowError(msg)
         self._require_mine(task, stage)
-        self.api.add_comment(task_id, f"[нужен человек] {question.strip()}")
+        self.api.add_comment(task_id, f"[needs-human] {question.strip()}")
         self._move(task_id, "Your Call")
         result = {
             "moved_to": "Your Call", "task_id": task_id,
@@ -2084,7 +2089,7 @@ class Workflow:
         # purpose — Backlog/Queue/Design/Build/Your Call: returning a half-claimed or in-flight
         # card is a defensible "externally blocked", which is what this tool is for. Your Call is
         # deliberately among them: that card is still the agent's OWN work in flight (call_human
-        # keeps the assignee), the [нужен человек] question survives in the append-only journal,
+        # keeps the assignee), the [needs-human] question survives in the append-only journal,
         # and a block that appears while waiting for an answer is the same defensible case as from
         # Design/Build. That choice is not free, and the price is named rather than hidden: the
         # webhook ping (if configured) has already gone out and points at a card no longer in the
@@ -2234,9 +2239,9 @@ class Workflow:
             ) from exc
 
         listing = ", ".join(f"#{c['id']} {c['title']}" for c in created)
-        comment = f"[decompose] создано: {listing}"
+        comment = f"[decompose] created: {listing}"
         if ordered:
-            comment += " (упорядочено: цепочка precedes — клеймабельна только голова)"
+            comment += " (ordered: a precedes chain, only the head is claimable)"
         self.api.add_comment(task_id, comment)
         # #673: a card that BECOMES A CONTAINER carries no verdict. `advance` already clears both
         # mutually-exclusive verdict labels on both of its forms — #119's ruling, in ITS OWN
@@ -2338,16 +2343,19 @@ class Workflow:
         if cross:
             # provenance: люди ЦЕЛЕВОГО проекта должны видеть, откуда пришла карточка
             marker = (
-                f"[filed-by-agent] заведено агентом из проекта id={self.project_id} "
-                f"для триажа человеком"
+                f"[filed-by-agent] filed by an agent from project id={self.project_id} "
+                f"for human triage"
             )
         elif queue:
             # честный провенанс: триаж Backlog пропущен — по явной просьбе человека
-            marker = "[filed-by-agent] заведено агентом сразу в Queue (минуя триаж в Backlog)"
+            marker = (
+                "[filed-by-agent] filed by an agent straight into Queue "
+                "(Backlog triage skipped)"
+            )
         else:
-            marker = "[filed-by-agent] заведено агентом для триажа человеком"
+            marker = "[filed-by-agent] filed by an agent for human triage"
         if related_task_id is not None:
-            marker += f" (по ходу работы над #{related_task_id})"
+            marker += f" (found while working on #{related_task_id})"
         self.api.add_comment(new_id, marker)
         # `ref` (#735): the readable name of the card THIS tool just created. The tools
         # that HAND BACK a task already carry one (_summary for next_task/claim, get_task), so an
@@ -2601,7 +2609,7 @@ class Workflow:
         meta = f"{mime}, {_human_size(len(data))}" if mime else _human_size(len(data))
         journal = f"[attach] {name} ({meta})"
         if (note or "").strip():
-            journal += f" — {note.strip()}"
+            journal += f" - {note.strip()}"
         journal_failure: str | None = None
         try:
             self.api.add_comment(task_id, journal)
