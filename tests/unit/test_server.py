@@ -10,7 +10,7 @@ import pytest
 from tests.unit.fakes import FakeAPI
 from vikunja_mcp import server
 from vikunja_mcp.api import VikunjaError
-from vikunja_mcp.config import Config, ConfigError
+from vikunja_mcp.config import DEFAULT_LANGUAGE, Config, ConfigError
 from vikunja_mcp.workflow import STAGES, Workflow
 
 
@@ -186,7 +186,7 @@ def test_reload_rebuilds_workflow_with_the_fresh_on_disk_token(monkeypatch):
         # mirrors the real Workflow signature — a kwarg missing here makes _build_workflow
         # raise TypeError, which _reload_workflow_from_disk swallows into a silent False
         lambda api, pid, enforce_single_wip=False, notifier=None, wip_limit=None,
-        require_review_independence=False: ("wf", api, pid),
+        require_review_independence=False, language=DEFAULT_LANGUAGE: ("wf", api, pid),
     )
     server._reset_workflow_cache()
     try:

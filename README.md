@@ -107,6 +107,7 @@ VIKUNJA_TOKEN=<admin token> uvx --from git+https://github.com/ufna/vikunja-mcp@s
 url = "https://vikunja.example.com"
 project_id = 12
 wip_limit = 3          # how many Design/Build tasks one token may claim into at once
+language = "en"        # "en" | "ru" — what language cards are written in
 ```
 
 ```bash
@@ -198,12 +199,20 @@ Two rules make that split matter, and they run in opposite directions:
 
 - **A secret is never read from the toml.** Not the token, not the webhook URL. So the
   committed file cannot leak one even by accident.
-- **Team policy is never read from the environment.** `wip_limit` and
-  `require_review_independence` are toml-only, because they describe how *the project* works,
-  not which machine you're on. Unset, `wip_limit` is **3** — not "unlimited"; `wip_limit = 0`
-  is a config error, because "no limit" is deliberately not expressible.
+- **Team policy is never read from the environment.** `wip_limit`,
+  `require_review_independence` and `language` are toml-only, because they describe how *the
+  project* works, not which machine you're on. Unset, `wip_limit` is **3** — not "unlimited";
+  `wip_limit = 0` is a config error, because "no limit" is deliberately not expressible. Unset,
+  `language` is `"en"`, and an unrecognised value is a config error for the same reason.
 
 `worktree_root` sits on the machine side of that line, so there the environment does win.
+
+`language` governs more than the tool's own output. The spec, the worklog and the review report
+are the bulk of a card's text and the tool does not write them — the agent does — so the value
+also rides in every `next_task` response, and the packaged rulebook tells the agent to write in
+it. What it never touches is the comment markers (`[worklog]`, `[review]`, …): two of them are
+matched with `startswith` to decide whether a card is offered for review, so they are frozen in
+every language.
 
 Full reasoning, including why the WIP limit gates one transition rather than policing a count:
 [docs/dossier/config.md](docs/dossier/config.md).

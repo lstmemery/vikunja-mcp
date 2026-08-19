@@ -287,6 +287,42 @@ def test_the_parallel_drain_rules_cite_real_signals():
         "SKILL.md names wip_limit as the repo-config key but config.py no longer reads that key"
 
 
+def test_the_language_rule_names_a_key_the_code_actually_emits_and_reads():
+    """The `language` rule is the half of #1165 that no unit test can enforce, so pin its WIRING.
+
+    The tool translates its own boilerplate; the spec, the worklog and the review report are the
+    bulk of a card and only the RULE makes those follow the key. The rule reaches every consumer
+    by itself over `stable`, with no per-consumer pin — so if the payload key were renamed, every
+    agent everywhere would keep being told to read a key that is no longer sent, and nothing else
+    would notice.
+
+    Anchored RENAME-SENSITIVELY on both sides, following the drain pin above rather than grepping
+    for the bare word: `language` is ordinary English and occurs all over SKILL.md's prose, so a
+    bare containment check would be satisfied by a sentence about natural language. The code-side
+    anchors are the assignment that puts the key in the payload and config.py's lookup of the
+    repo-toml key — the two constructs the rule's two claims depend on.
+    """
+    text = _skill_text()
+    assert 'result["language"] = self.language' in _workflow_src(), (
+        "SKILL.md tells the agent to read `language` off the next_task response, but "
+        "workflow.py no longer puts that key in the payload"
+    )
+    assert 'repo.get("language"' in inspect.getsource(config), (
+        "SKILL.md says the human sets `language` in .vikunja-mcp.toml, but config.py no longer "
+        "reads that key out of the toml"
+    )
+    assert "Write your card text in the language `next_task` names" in text, (
+        "the rulebook no longer states the language rule. The tool translates its own "
+        "boilerplate and nothing else; without this rule a card gets English boilerplate around "
+        "a Russian spec, or the reverse"
+    )
+    assert "Nothing in brackets translates" in text, (
+        "the rulebook no longer tells the agent to leave the markers alone. Two of them are "
+        "matched with startswith() in next_task's review offering, so a translated bracket "
+        "drops a card out of review silently"
+    )
+
+
 def _exclude_completeness_bullet(text: str) -> str:
     """The bullet that tells the pump what an INCOMPLETE `exclude` costs it (#527).
 

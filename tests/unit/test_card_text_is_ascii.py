@@ -1,4 +1,13 @@
-"""EVERY STRING THIS TOOL AUTHORS ONTO A CARD IS ASCII, AND THE MARKER VOCABULARY IS FROZEN THERE.
+"""THE TOOL'S OWN CARD TEXT IS ASCII IN THE DEFAULT LANGUAGE, AND THE MARKER VOCABULARY IS ASCII
+IN ALL OF THEM.
+
+THE TITLE WAS REWRITTEN IN #1165, and what it used to claim is worth stating because it was
+TRUE: that every string this tool authors onto a card is ASCII, full stop. That held while
+English was the only language a card could be written in. `language = "ru"` makes it false —
+`cardtext.py` holds a Russian column on purpose — so the claim split in two. The BODIES are ASCII
+in the DEFAULT language and deliberately not in `ru`. The MARKERS are ASCII in every language,
+because two of them are matched with `startswith` and the other eight are frozen alongside those
+two. This is the re-derivation the bullet below asked for by name before the key existed.
 
 READ THE TITLE'S VERB. It is what the TOOL authors, not everything a card ends up carrying: an
 agent's own `spec`, `worklog`, `question` or `attach_file` note travels through these same calls
@@ -25,10 +34,11 @@ TWO DIFFERENT THINGS ARE PINNED, and confusing them is how the weaker half gets 
   branch. A marker is therefore not prose and does not get translated, ever, in any language
   the cards are later written in. ASCII is the floor under that: a marker that is ASCII cannot
   acquire a per-language spelling by accident.
-* THE BODY IS PROSE. It is translated here and may be translated again by the `language` key
-  this card precedes. ASCII is not a claim that English is the only language a card may ever be
-  written in — it is what makes the CURRENT text mechanically checkable, and the pin is expected
-  to be re-derived (not deleted) if a language key ever lands.
+* THE BODY IS PROSE, AND SINCE #1165 IT LIVES IN `cardtext.py`, keyed by language. The `en`
+  column is what `test_the_default_language_card_text_is_ascii` reads; the `ru` column is
+  exempt by construction, and asserting the exemption is not vacuous — a `ru` column that came
+  out ASCII would mean the translation never happened, which is what
+  `test_card_language.py` measures from the other side by building both boards.
 
 `WorkflowError` text is out of scope by the card's own rule, and the two tests read it
 differently rather than not at all. The `add_comment` scan never reaches it — nothing raises
@@ -37,6 +47,18 @@ the file wherever it sits: constructed, a `WorkflowError` whose message begins `
 `test_every_comment_marker_is_ascii` red (control 0 failed; that mutation 1 failed). No
 `WorkflowError` begins with a bracket today, so the rule and the gate do not collide — but they
 would, and a future card localising error text should know it is this test that will say so.
+
+WHAT THE SOURCE SCAN OVER `workflow.py` STILL MEASURES AFTER #1165, because the honest answer is
+"less than it did". The bodies moved to `cardtext.py`, and NOT ONE of the 52 literals the
+resolver now finds is prose. Enumerated rather than characterised, because an earlier draft of
+this paragraph listed three kinds and the fourth is the largest: markers; layout (`"\n"`, `" ("`,
+`", "`, `"#"`); the `card_text` key and field names; and SIXTEEN dict-key strings the transitive
+chase drags in from the same expressions (`"title"` five times, `"id"` four, plus `"priority"`,
+`"description"`, `"ref"`, `"subtask"`, `"related_tasks"`, `"username"`, `"attachment-"`). It was
+51 before the move and is 52 after — the count held steady only because each key name replaced
+roughly the phrase it now fetches, so the COUNT stopped being evidence that the prose is covered.
+The table test below is what covers it. What this scan still catches, and nothing else does, is
+non-ASCII typed DIRECTLY at a call site, which is exactly how a future card line gets written.
 
 WHAT THE STATIC HALF CANNOT SEE, stated as narrowly as it was measured. The resolver chases
 local names TRANSITIVELY inside the enclosing function — an f-string, implicitly concatenated
@@ -47,8 +69,10 @@ card's independent second pass constructed the counter-example that broke the on
 carrying its own `", "` separator, so an em dash put there was invisible to the pin while
 shipping inside a real `[attach]` line. What the resolver still does not do is cross a FUNCTION
 boundary, and `_human_size` is exactly that: it renders the size inside the same `[attach]`
-line from another function, and its units were `Б`/`КБ`/`МБ` at HEAD. So it gets its own runtime
-assert below, and a new cross-function flow needs the same treatment.
+line from another function, and its units were `Б`/`КБ`/`МБ` before #1164. So it gets its own
+runtime assert below, and a new cross-function flow needs the same treatment. That assert is no
+longer the ONLY thing catching a Cyrillic unit — #1165 moved the units into `cardtext._TABLE`,
+where the table pin sees them too — and its docstring carries the re-measurement.
 
 MUTATION SWEEP. Selection is this file alone (`tests/unit/test_card_text_is_ascii.py`) so no
 collateral test can stand in for the pin. Run in a CLONE of the worktree — never in the tree the
@@ -90,6 +114,15 @@ cross-check. Six rounds, each stated beside its own control:
 * closing control 0 failed, 0 errors, 3 collected, source byte-identical to the baseline
   (`cmp`) after every restore.
 
+TWO OF THOSE SIX ROUNDS NO LONGER REPRODUCE AS WRITTEN, and they are left standing rather than
+rewritten, because each was honest about the tree it was run on. #1165 moved the BODIES out of
+`workflow.py` into `cardtext._TABLE`, and both affected rounds mutate a body: the `Worklog:`
+prefix is no longer a literal at the `add_comment` site at all, so reverting it there is not a
+possible mutation any more; and the `_human_size` unit round, re-run for #1165, now fails TWO
+tests rather than one — the re-measurement is in `test_human_size_units_are_ascii`'s own
+docstring. The four MARKER rounds are unaffected: those literals are still exactly where they
+were, which is the point of keeping the bracket at the call site.
+
 TWO ROUNDS WERE DISCARDED, AND THEY ARE RECORDED BECAUSE OF HOW THEY LOOKED. Twice a patcher
 matched nothing — once because a shell-quoted argument was mangled, once because the string
 being mutated had by then become non-unique in the file — and both times the round that followed
@@ -101,6 +134,7 @@ worth more than a cleverer mutation.
 import ast
 import pathlib
 
+from vikunja_mcp import cardtext
 from vikunja_mcp.workflow import _human_size
 
 _WORKFLOW = pathlib.Path(__file__).resolve().parents[2] / "src/vikunja_mcp/workflow.py"
@@ -258,13 +292,21 @@ def test_no_non_ascii_in_the_text_workflow_comments():
     this pin is about what the PRODUCT writes, not about what an agent may write through it.
     Its reach stops at the function boundary — see the module docstring, and the runtime assert
     below that covers the one flow crossing it.
+
+    SINCE #1165 IT NO LONGER SEES THE PROSE, and the neighbouring test is what does. A body is
+    now `card_text(self.language, "epic_ready", ...)`, so the literal reaching this scan is the
+    KEY `"epic_ready"`, not the sentence. That is not a weakening to repair: keys are ASCII by
+    construction and the sentences have a stricter home. What stays exclusively here is text
+    typed straight into an `add_comment` argument, which is the shape a NEW card line takes
+    before anyone thinks about the table.
     """
     literals = _comment_text_literals()
     assert len(literals) >= 35, (
         f"the resolver found only {len(literals)} literal(s) across the add_comment call sites, "
-        f"which is far below the 51 it saw when this pin was written. A test that resolves "
-        f"nothing passes vacuously — so this is a tripwire for the resolver having been broken "
-        f"by a refactor (a call renamed, a text argument moved to a keyword), not a size limit"
+        f"which is far below the 52 it saw when this pin was last re-derived (#1165; it was 51 "
+        f"before the bodies moved to cardtext.py). A test that resolves nothing passes vacuously "
+        f"— so this is a tripwire for the resolver having been broken by a refactor (a call "
+        f"renamed, a text argument moved to a keyword), not a size limit"
     )
     for line, literal in literals:
         assert literal.isascii(), (
@@ -280,9 +322,22 @@ def test_human_size_units_are_ascii():
     """The one CROSS-FUNCTION flow the static resolver above cannot follow, closed by running it.
 
     `_human_size` is called INSIDE the f-string that becomes the `[attach]` journal comment, so
-    its units are card text while living in another function. They were Cyrillic (`Б`/`КБ`/`МБ`)
-    at HEAD, and the source scan does not see them: swept, reverting them fails THIS test alone
-    while the scan next door stays green (control 0 failed; that mutation 1 failed).
+    its units are card text while living in another function, and the source scan does not see
+    them. They were Cyrillic (`Б`/`КБ`/`МБ`) before #1164 translated them.
+
+    WHAT THIS TEST IS NO LONGER ALONE IN CATCHING, re-measured for #1165 rather than left
+    standing. When the units were literals in `_human_size`, reverting one failed this test and
+    only this test — that was the measurement behind the cross-function paragraph in the module
+    docstring. Since #1165 they come from `cardtext._TABLE`, so the same revert now fails TWO:
+    selection `tests/unit/test_card_text_is_ascii.py`, control 0 failed / 0 errors / 4 collected,
+    the `en` KB unit reverted to its pre-#1164 Cyrillic spelling -> 2 failed
+    (`test_human_size_units_are_ascii` and `test_the_default_language_card_text_is_ascii`),
+    closing control 0 failed / 0 errors / 4 collected, source byte-identical after the restore.
+
+    It is kept rather than folded into the table pin because the two ask different questions: the
+    table pin reads a TEMPLATE, this one reads what `attach_file` would actually render, across
+    the function boundary and through the branch that picks the unit. A refactor that stopped
+    `_human_size` consulting the table at all would leave the table pin green.
     """
     for size in (0, 512, 1023, 2048, 1_468_006, 25 * 1024 * 1024):
         rendered = _human_size(size)
@@ -291,3 +346,27 @@ def test_human_size_units_are_ascii():
             f"into the [attach] comment, so its units are card text — and they are invisible to "
             f"the add_comment source scan next door, which is why this runtime check exists"
         )
+
+
+def test_the_default_language_card_text_is_ascii():
+    """The prose half of the old whole-file claim, moved to where the prose now lives (#1165).
+
+    Reads the RAW templates rather than rendered strings: a rendered one mixes in whatever field
+    values a test chose, so a pin over it would partly be asserting a property of its own
+    fixtures. The `ru` column is asserted to be the OPPOSITE — not for symmetry, but because a
+    `ru` column that came out ASCII would mean nothing was translated, and that failure is
+    invisible to every other assert in this file.
+    """
+    for key, row in cardtext._TABLE.items():
+        assert row["en"].isascii(), (
+            f"cardtext._TABLE[{key!r}]['en'] is not ASCII: {row['en']!r}. The DEFAULT language is "
+            f"the one this repo's README, rulebooks and markers are written in, and a consumer "
+            f"who set no `language` key should not find their board is the one surface that is "
+            f"not. Note the unit: ASCII, not 'no Cyrillic' — an em dash fails it too, and two did"
+        )
+
+    assert any(not row["ru"].isascii() for row in cardtext._TABLE.values()), (
+        "not one `ru` row is non-ASCII, so either the Russian column was never filled in or it "
+        "was overwritten with the English one. The language key would then be inert while every "
+        "other assert in this file stayed green"
+    )

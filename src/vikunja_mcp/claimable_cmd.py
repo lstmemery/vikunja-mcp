@@ -460,6 +460,20 @@ def run_claimable() -> int:
             VikunjaAPI(cfg.url, cfg.token, event_hooks={"request": [trail]}), cfg.project_id,
             enforce_single_wip=cfg.enforce_single_wip,
             wip_limit=cfg.wip_limit,
+            # `language` is emitted by next_task itself — the one call this command makes — so
+            # without this line the payload would report a `ru` project as `en`. classify_next
+            # reduces it to the three-key hub contract and never reads it, so the VERDICT cannot
+            # change either way; this is about the payload not lying.
+            #
+            # Deliberately NOT justified as "unlike require_review_independence, which is dead
+            # here". That contrast was written, and measuring it refuted it: since #991 the flag
+            # is read INSIDE next_task's review-offering branch, so on an identical board
+            # `classify_next` answers {"claimable": true, "kind": "review"} with the flag false
+            # and {"claimable": false, "kind": "empty"} with it true. Its absence here is a real
+            # divergence from the MCP server for any repo that sets it — filed as VMCP-295 (1169),
+            # not fixed in this card, because changing what `claimable` answers is a change to a
+            # cross-repo contract and belongs in a card of its own.
+            language=cfg.language,
         )
         verdict = classify_next(wf.next_task())
     except Exception as e:  # noqa: BLE001 — a CLI check: ANY failure is exit 1, never a crash

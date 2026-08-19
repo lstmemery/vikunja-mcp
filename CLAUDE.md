@@ -101,7 +101,16 @@ measured shape of both exemptions.
   In a SOLO setup one scoped token is the whole fleet, so the ABSENCE of an authorship
   check is the CONDITION OF OPERATION; independence is carried by the agents' separated
   CONTEXTS, which nothing server-side can observe. Turn it on without a second identity
-  and NOBODY can review anything.
+  and NOBODY can review anything. **`language = "en" | "ru"` is a FOURTH toml-only key,
+  default `en`** (tracker #1165) — an unknown value is a `ConfigError`, on the `wip_limit = 0`
+  precedent. It governs the prose the tool authors onto a card (the two-COLUMN table in
+  `cardtext.py`, ONE module by rule) and — the larger half — rides in every `next_task` payload
+  so the AGENT writes its spec/worklog/review report in the same language. **It NEVER governs a
+  marker.** Two of the ten are literally PARSED — the review offering compares the last
+  `startswith("[worklog]")` comment against the last `startswith("[review]")` one — so a
+  per-language spelling THERE drops every card written under the other setting out of the
+  offering, silently; the other eight are frozen with them so the vocabulary is not
+  half-translated.
   → **Dossier: `docs/dossier/config.md`**
 - `src/vikunja_mcp/api.py` — REST client. **Vikunja gotchas are codified here: PUT =
   create, POST = FULL-REPLACE update** → every update is read-modify-write; kanban view

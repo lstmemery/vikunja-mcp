@@ -4,6 +4,7 @@ import os
 import sys
 
 from vikunja_mcp.api import VikunjaAPI
+from vikunja_mcp.config import DEFAULT_LANGUAGE, LANGUAGES
 from vikunja_mcp.workflow import STAGES
 
 MIGRATION = {"Todo": "Queue", "To-Do": "Queue", "To-do": "Queue", "Doing": "Build"}
@@ -102,9 +103,18 @@ def reconcile(api, project_title: str, shares: list[tuple[str, int]]) -> int:
     return pid
 
 
-def _print_snippets(pid: int, project_title: str, url: str) -> None:
+def _print_snippets(
+    pid: int, project_title: str, url: str, language: str = DEFAULT_LANGUAGE
+) -> None:
     print("\n--- .vikunja-mcp.toml (commit this at the root of the working repo) ---")
-    print(f'[tracker]\nurl = "{url}"\nproject_id = {pid}\nproject = "{project_title}"')
+    # `language` is printed ALWAYS, including at its default (#1165): the snippet is the one place
+    # a team sees the key exists, and an option nobody knows about is an option nobody sets. It is
+    # in the committed toml rather than beside the token because it is team policy, like wip_limit
+    # — which language a project's cards are written in is not a property of one machine.
+    print(
+        f'[tracker]\nurl = "{url}"\nproject_id = {pid}\nproject = "{project_title}"\n'
+        f'language = "{language}"'
+    )
     print(
         "\nThe token does NOT go in there: create .vikunja-mcp.env beside it with\n"
         "VIKUNJA_TOKEN=..., and add .vikunja-mcp.env to the working repo's .gitignore —\n"
@@ -140,6 +150,11 @@ def run_setup(argv: list[str]) -> int:
     parser.add_argument("--project", required=True)
     parser.add_argument("--share", action="append", default=[], metavar="USER:read|write|admin")
     parser.add_argument("--url", default=os.environ.get("VIKUNJA_URL"))
+    # the choice is made where the board is made: setup is the one moment a team already has the
+    # toml open, so the key lands in the snippet instead of being discovered later in a rulebook.
+    # `choices` is argparse's own refusal (exit 2, the accepted set named) and mirrors the
+    # ConfigError load_config raises on the same bad value read out of the file.
+    parser.add_argument("--language", default=DEFAULT_LANGUAGE, choices=LANGUAGES)
     args = parser.parse_args(argv)
 
     token = os.environ.get("VIKUNJA_TOKEN")
@@ -158,7 +173,7 @@ def run_setup(argv: list[str]) -> int:
 
     api = VikunjaAPI(args.url, token)
     pid = reconcile(api, args.project, shares)
-    _print_snippets(pid, args.project, args.url)
+    _print_snippets(pid, args.project, args.url, args.language)
     return 0
 
 

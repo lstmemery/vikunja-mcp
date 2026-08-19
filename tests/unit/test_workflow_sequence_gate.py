@@ -1,7 +1,7 @@
 import pytest
 
 from tests.unit.fakes import FakeAPI
-from vikunja_mcp.config import DEFAULT_WIP_LIMIT
+from vikunja_mcp.config import DEFAULT_LANGUAGE, DEFAULT_WIP_LIMIT
 from vikunja_mcp.workflow import STAGES, Workflow, WorkflowError
 
 
@@ -168,9 +168,13 @@ def test_unfinished_predecessor_deduped_across_kinds(env):
 # `env` fixture builds an unconfigured Workflow (no wip_limit), which since tracker #524 means
 # the DEFAULT limit rather than no limit at all — so it's always this shape here, and with zero
 # active tasks every slot is free.
+# `language` rides beside `wip` on every next_task result since tracker #1165 — same wrapper,
+# same reason (project policy the agent cannot read off the board), and the `env` fixture builds
+# an unconfigured Workflow, so it is the default.
 EMPTY = {
     "task": None, "message": "the queue is empty — no work for the agent",
     "wip": {"active": 0, "limit": DEFAULT_WIP_LIMIT, "free": DEFAULT_WIP_LIMIT},
+    "language": DEFAULT_LANGUAGE,
 }
 
 

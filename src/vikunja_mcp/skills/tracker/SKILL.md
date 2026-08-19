@@ -514,6 +514,25 @@ where. Here — what must not be broken:
   wrote the code.
 ## Traces of the work (comments are the journal)
 
+- **Write your card text in the language `next_task` names.** Every `next_task` response carries
+  `language` beside `wip` (`"en"` by default, `"ru"` the other value; the project's human sets it
+  in `.vikunja-mcp.toml`, where it is committed team policy like `wip_limit` — you cannot change
+  it and there is no env override). It governs the text YOU author: the `spec`, the `worklog` and
+  `root_cause`, a `call_human` question, a `[review]` report, and any `comment` meant for a human.
+  That is the BULK of a card and the tool writes none of it: what it translates is its own
+  boilerplate, a short table of fixed strings. So if you ignore this the board ends up with the
+  boilerplate in one language and everything that matters in the other, which is worse than
+  either language on its own.
+  **Nothing in brackets translates, in either direction.** Write every marker exactly as this file
+  spells it — `[spec]` `[worklog]` `[review]` `[blocked]` `[needs-human]` `[decompose]`
+  `[filed-by-agent]` `[attach]` `[claim]` `[epic-ready]` — and the same for the `APPROVE` /
+  `NEEDS WORK` that follows `[review]`. Two of them are literally PARSED: `next_task` decides
+  whether a Review card is offered to a reviewer by matching rendered comment text with
+  `startswith("[worklog]")` and `startswith("[review]")`, so a translated bracket on those two
+  drops the card out of the review offering silently. The rest are frozen with them because the
+  set is read by eye and by grep, and a vocabulary that is half-translated is worse than either.
+  Nothing OUTSIDE the tracker is governed at all: commit messages, code, code comments and repo
+  docs follow the repository's own convention, not this key.
 - **Refer to a task in a human-readable way.** In comments, reports (worklog) and any text
   meant for a human, name the task by the `ref` the tools hand you
   (`next_task`/`claim`/`get_task`, and `file_task` for a card you filed yourself)

@@ -33,6 +33,18 @@ USER_ENV_FILE = Path("~/.config/vikunja-mcp/env").expanduser()
 # unbounded spelling), and claim starts refusing a 4th active task in projects that set nothing.
 DEFAULT_WIP_LIMIT = 3
 
+# What language the PRODUCT writes a card in, and what language it tells the agent to write its
+# own spec/worklog/review report in (tracker #1165). Committed TEAM POLICY of exactly the class
+# `wip_limit` and `require_review_independence` occupy — "how this project's cards read" is a
+# property of the project, not of the machine reading it — so it is repo-toml ONLY, never env.
+#
+# The set is CLOSED and an unknown value is a ConfigError, on the `wip_limit = 0` precedent above:
+# an option that cannot be honoured should be un-expressible LOUDLY. Falling back to `en` on a
+# typo would be the worst of both, since the whole point of the key is that the agent is TOLD what
+# to write in — a silent fallback hands it the wrong instruction with no signal anywhere.
+LANGUAGES = ("en", "ru")
+DEFAULT_LANGUAGE = "en"
+
 
 class ConfigError(Exception):
     pass
@@ -87,6 +99,17 @@ class Config:
     # wip_limit — so unlike it, the env layers DO win over the committed toml.
     # None -> workspace_cmd's default, a `<repo>.worktrees` sibling of the repo.
     worktree_root: str | None = None
+    # what language cards are written in (#1165). Committed TEAM POLICY, repo toml ONLY, never
+    # env — see LANGUAGES above. Unlike wip_limit this dataclass DOES resolve the default: there
+    # is no second key whose precedence depends on seeing the absence, so keeping `None` around
+    # would only push a `or DEFAULT_LANGUAGE` into every reader.
+    #
+    # It governs TWO populations of string and the second is the larger one. Ours: the prose the
+    # tool authors onto a card (cardtext.py). The agent's: its spec, worklog and review report,
+    # which this tool does not write at all — so the value also rides in every next_task response
+    # and is stated as a rule in SKILL.md. A key that localized only our own boilerplate would
+    # leave a card with Russian boilerplate around an English spec, which is worse than neither.
+    language: str = DEFAULT_LANGUAGE
 
 
 def _parse_env_file(path: Path) -> dict[str, str]:
@@ -250,6 +273,18 @@ def load_config(cwd: Path | None = None, environ: Mapping[str, str] | None = Non
                 f"default of {DEFAULT_WIP_LIMIT}; there is no spelling for 'no limit'"
             )
 
+    # `repo` ONLY, like enforce_single_wip/require_review_independence below and unlike the
+    # machine-local worktree_root: committed team policy is stated in a file the whole team
+    # reviews. Absent -> the default; present and unknown -> refused by name.
+    language = repo.get("language", DEFAULT_LANGUAGE)
+    if language not in LANGUAGES:
+        raise ConfigError(
+            f"language must be one of {', '.join(LANGUAGES)} (got {language!r}) — omit the "
+            f"key for the default of {DEFAULT_LANGUAGE!r}. It is read from the repo "
+            f"{REPO_FILE} only, never from the environment: which language a project's cards "
+            f"are written in is committed team policy, like wip_limit"
+        )
+
     worktree_root = (
         env.get(ENV_WORKTREE_ROOT)
         or repo_env.get(ENV_WORKTREE_ROOT)
@@ -270,4 +305,5 @@ def load_config(cwd: Path | None = None, environ: Mapping[str, str] | None = Non
         notify_webhook=notify_webhook,
         wip_limit=wip_limit,
         worktree_root=worktree_root,
+        language=language,
     )

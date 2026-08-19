@@ -61,3 +61,94 @@
   NOT in `claimable_cmd`'s Workflow: that one runs `next_task` and nothing else, so the flag
   could never be consulted there and passing it would be dead wiring on the one path that must
   stay read-only and cheap.
+
+## `language` (tracker #1165) — a FOURTH key on `wip_limit`'s side of the split
+
+`language = "en" | "ru"` in the repo toml, default `en`, repo toml ONLY. It sits with `wip_limit`
+and `require_review_independence` rather than with `worktree_root` for the reason that separates
+those two groups: which language a project's cards are written in is a property of the PROJECT,
+reviewed by whoever reviews the committed file, not of the machine an agent happens to run on.
+Pinned by `tests/unit/test_card_language.py::test_language_is_toml_only_and_never_read_from_the_environment`,
+which sets the value in both env layers a test can reach — the process environment and the
+repo-local `.vikunja-mcp.env` beside the toml — under a `VIKUNJA_`-prefixed and a bare spelling
+each, and asserts the toml still wins. The third env layer, `~/.config/vikunja-mcp/env`, is a
+real machine path and is left alone rather than pretended at.
+
+An unknown value is a `ConfigError` naming the accepted set, on the `wip_limit = 0` precedent.
+The reason is sharper here than there, and it is worth stating rather than inheriting: this key's
+LARGER half is an INSTRUCTION to the agent, so a silent fallback to `en` would not merely pick a
+default — it would tell the agent to write in a language its human did not choose, with no signal
+on any surface. An option that cannot be honoured is made un-expressible loudly.
+
+**THE FINDING THAT SHAPES THE DESIGN: "the language of a card" is three populations of string
+with different audiences, and a key that localises only OUR strings half-delivers.** The spec,
+the worklog and the review report are the bulk of a card's text, and this tool does not write a
+character of them — the AGENT does. Measured on VMCP-290 (1164) by this card's independent second
+pass: three short product-authored body lines there, against roughly 30 KB of agent-authored
+spec, worklog and review report. So the key is FIRST an instruction (it rides
+in every `next_task` payload beside `wip`, and SKILL.md's "Traces of the work" section states the
+rule) and only SECOND a translation table for the dozen lines the product authors. A key that
+skipped the first half would produce cards with Russian boilerplate around an English spec, which
+is worse than no key at all.
+
+The three populations, and where each one is decided:
+
+| population | who writes it | what `language` does |
+| --- | --- | --- |
+| the product's own prose — the `[claim]` line, the `[worklog]` prefixes, `[decompose] created:`, the three `[filed-by-agent]` variants, the `[epic-ready]` body, `_human_size`'s units | `workflow.py`, via `cardtext.py` | translates it |
+| the agent's own text — `spec`, `worklog`, `root_cause`, a `call_human` question, a `[review]` report, an `attach_file` note | the agent | instructs it, and nothing more |
+| the wire format — the ten markers, and the `APPROVE`/`NEEDS WORK` verdict tokens | `workflow.py` | nothing, in either direction |
+
+**The third row is the one that breaks things, and it breaks silently.** `workflow.py` decides
+whether a Review card is offered to a reviewer by comparing the timestamp of the last comment
+whose rendered text starts `[worklog]` against the last starting `[review]`. A localised marker
+therefore does not fail loudly on the card being written — it fails later, on every card written
+under the OTHER setting, by dropping out of the offering. That is why the table holds BODIES only
+and the bracket stays a literal at its `add_comment` call site, and why the invariance is measured
+from two directions rather than reviewed: byte-for-byte over two fully driven boards, and again
+through `next_task`'s real offering branch with the setting flipped between writing and reading.
+The verdict tokens stay English for a smaller but real reason: SKILL.md quotes both spellings to
+the reviewer, so localising them would make the rulebook false in one of the two languages.
+
+**Wired in `claimable_cmd` as well as in `server._build_workflow`**, because `language` is
+emitted by `next_task` itself — the one call that path makes — so omitting it would make the
+payload report a `ru` project as `en`. The hub's three-key contract (`claimable`/`kind`/`task_id`)
+never reads it, so the verdict cannot change either way.
+
+**AND A REFUTATION FOUND WHILE JUSTIFYING THAT.** The obvious justification is "unlike
+`require_review_independence`, which is deliberately dead here". It was written, and measuring it
+refuted it. That flag is NOT consulted only by `review_task`: since #991 it is read inside
+`next_task`'s own review-offering branch (`workflow.py`, the `continue` guarded by
+`self.require_review_independence and my_id in self._assignee_ids(t)`). Measured on an identical
+`FakeAPI` board, claim -> build -> review, `classify_next(wf.next_task())` answers
+`{"claimable": true, "kind": "review"}` with the flag false and
+`{"claimable": false, "kind": "empty"}` with it true. So its absence from `claimable_cmd` is a
+real divergence from the MCP server for any repo that sets it, and the sentence justifying the
+omission — in `server._build_workflow`'s comment and in the `require_review_independence` bullet
+above — has been stale since #991. Filed as VMCP-295 (1169); NOT fixed here, because changing what
+`claimable` answers changes a cross-repo contract. It is inert in this repo, which sets no flag.
+
+**What the `en` column is, exactly:** #1164's text unchanged, and checked at the only level that
+settles it — the CARDS, not the source. One driver script exercising all six product-prose
+transitions runs unmodified against a `62af682` checkout and against this tree with
+`language="en"`; the two 16-comment boards come out BYTE-IDENTICAL (`diff` empty). Measured twice
+independently, by the author and by this card's second pass, each in its own clone. So the table
+is a MOVE plus a second column and not a re-translation, and the interpolation rename
+(`{me['username']}` became the `str.format` field `{username}`) changes nothing that reaches a
+card. A reader who wants to compare by eye should open `git show
+62af682:src/vikunja_mcp/workflow.py` rather than the commit's diff, where two of the strings are
+split across literal continuations.
+
+**What #1164's ASCII pin became.** Its title claimed every string the tool authors onto a card is
+ASCII; with a `ru` column that sentence is false, and the file says so now. The claim split in
+two: bodies are ASCII in the DEFAULT language (asserted over `cardtext._TABLE`'s `en` column, and
+the `ru` column is asserted to be non-ASCII somewhere — a `ru` column that came out ASCII would
+mean nothing was translated, which no other assert in that file can see); markers are ASCII in
+every language, unchanged, because two of them are parsed and the rest are frozen alongside those
+two. The source scan over `workflow.py`'s
+`add_comment` sites survived the move but now resolves 52 literals (against 51 at `62af682`) that
+are markers, layout and
+`card_text` KEY names rather than prose — the count held steady only because each key name
+replaced roughly the phrase it fetches, so the count stopped being evidence about the prose. What
+that scan still catches alone is non-ASCII typed straight into an `add_comment` argument, which
+is the shape a new card line takes before anyone thinks about the table.

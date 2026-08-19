@@ -1,6 +1,7 @@
 """Tests for setup_cmd: project onboarding and reconciliation."""
 from tests.unit.fakes import FakeAPI
-from vikunja_mcp.setup_cmd import _print_snippets, reconcile
+from vikunja_mcp.config import DEFAULT_LANGUAGE, LANGUAGES, load_config
+from vikunja_mcp.setup_cmd import _print_snippets, reconcile, run_setup
 from vikunja_mcp.workflow import STAGES
 
 
@@ -79,3 +80,49 @@ def test_print_snippets_includes_opencode_block_without_token(capsys):
     assert '"$schema": "https://opencode.ai/config.json"' in out
     assert "vikunja-mcp@stable" in out                           # stable-канал в обоих блоках
     assert "tk_" not in out                                      # никакого токена в сниппетах
+
+
+def test_snippet_carries_the_language_key_and_load_config_reads_it_back(capsys, tmp_path):
+    """`setup --language` puts the choice where the board is made (#1165), and the snippet it
+    prints is a toml `load_config` actually accepts.
+
+    Round-tripped rather than string-matched: an assert on the literal line would pass on a
+    snippet that is valid-looking and unparseable, and the snippet's whole job is to be pasted
+    into a file this package then reads. Every accepted value is exercised, so the set here and
+    the set in `config.LANGUAGES` cannot drift apart silently.
+    """
+    for language in LANGUAGES:
+        _print_snippets(pid=42, project_title="voice", url="https://vikunja.example.com",
+                        language=language)
+        out = capsys.readouterr().out
+        # the toml is the block between the header line and the blank line that ends it
+        after_header = out.split("--- .vikunja-mcp.toml", 1)[1].split("\n", 1)[1]
+        body = after_header.split("\n\n", 1)[0]
+        (tmp_path / ".vikunja-mcp.toml").write_text(body + "\n", encoding="utf-8")
+        cfg = load_config(cwd=tmp_path, environ={"VIKUNJA_TOKEN": "t"})
+        assert cfg.language == language
+        assert cfg.project_id == 42
+
+
+def test_the_language_key_is_printed_even_at_its_default(capsys):
+    """The snippet is the one place a team SEES the option exists, so it is printed always.
+
+    Omitting it at the default would be tidier output and a worse feature: nobody edits a key
+    they have never seen, and the alternative discovery path is reading a rulebook.
+    """
+    _print_snippets(pid=42, project_title="voice", url="https://vikunja.example.com")
+    assert f'language = "{DEFAULT_LANGUAGE}"' in capsys.readouterr().out
+
+
+def test_setup_refuses_an_unknown_language_before_touching_the_board(capsys):
+    """argparse's own refusal (exit 2, the accepted set named), mirroring the ConfigError
+    `load_config` raises on the same bad value read out of the file. It fires during parsing, so
+    no API client is built and nothing on the board is reconciled — asserted by passing a url
+    that would fail loudly if a request were ever attempted."""
+    try:
+        run_setup(["--project", "x", "--url", "http://127.0.0.1:1", "--language", "de"])
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("setup accepted --language de")
+    assert "invalid choice: 'de'" in capsys.readouterr().err

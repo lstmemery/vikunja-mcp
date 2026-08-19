@@ -16,7 +16,8 @@ from typing import Any
 import httpx
 
 from .api import VikunjaError
-from .config import DEFAULT_WIP_LIMIT
+from .cardtext import card_text
+from .config import DEFAULT_LANGUAGE, DEFAULT_WIP_LIMIT
 from .formatting import html_to_text
 from .notify import WebhookNotifier
 
@@ -361,18 +362,22 @@ def _write_attachment_to_temp(name: str, data: bytes, fallback: str) -> str:
     return path
 
 
-def _human_size(n: int) -> str:
+def _human_size(n: int, language: str = DEFAULT_LANGUAGE) -> str:
     """Человекочитаемый размер для журнального коммента [attach] (#184): человек в ленте читает
-    «1.4 MB», а не 1468006. Кап вложений — 25 MB, поэтому MB — верхняя единица. THE UNITS ARE
-    ASCII AND MUST STAY ASCII (#1164): this string is interpolated into the [attach] card
-    comment, and every string the tool ITSELF authors onto a card is ASCII. The gate is
-    tests/unit/test_card_text_is_ascii.py, and specifically its RUNTIME assert — its source
-    scan cannot follow a value across a function boundary, so it does not see this one."""
+    «1.4 MB», а не 1468006. Кап вложений — 25 MB, поэтому MB — верхняя единица.
+
+    THE UNITS ARE CARD TEXT, so since #1165 they come from `cardtext` like every other body the
+    product authors, and they follow the project's `language`. In the DEFAULT language they are
+    ASCII and must stay so (#1164) — gated by tests/unit/test_card_text_is_ascii.py, and
+    specifically by its RUNTIME assert, since that file's source scan cannot follow a value
+    across a function boundary and so does not see this one. `language` defaults rather than
+    being required because this is a module-level helper with one caller: the default keeps a
+    hand-written call honest instead of making it a TypeError mid-transition."""
     if n < 1024:
-        return f"{n} B"
+        return card_text(language, "size_bytes", size=n)
     if n < 1024 * 1024:
-        return f"{n / 1024:.1f} KB"
-    return f"{n / (1024 * 1024):.1f} MB"
+        return card_text(language, "size_kilobytes", size=f"{n / 1024:.1f}")
+    return card_text(language, "size_megabytes", size=f"{n / (1024 * 1024):.1f}")
 
 
 def _stderr_note_best_effort(prefix: str, exc: Exception) -> None:
@@ -400,7 +405,7 @@ class Workflow:
     def __init__(
         self, api: Any, project_id: int, enforce_single_wip: bool = False,
         notifier: WebhookNotifier | None = None, wip_limit: int | None = None,
-        require_review_independence: bool = False,
+        require_review_independence: bool = False, language: str = DEFAULT_LANGUAGE,
     ):
         # #992: refuse a non-int HERE. Passed a Config (the measured mistake — `Workflow(api,
         # cfg)` instead of `Workflow(api, cfg.project_id)`), the object used to be stored
@@ -444,6 +449,16 @@ class Workflow:
         # and config.Config for why "no authorship check" is the CONDITION OF OPERATION in a
         # solo setup rather than a hole in one. Off, review_task does not even resolve `me()`.
         self.require_review_independence = require_review_independence
+        # committed team policy (#1165), repo toml ONLY like the two flags above: which language
+        # this project's cards are written in. It governs the prose THIS tool authors (every
+        # `card_text` call below) and, through next_task's payload plus a SKILL.md rule, the
+        # spec/worklog/review report the AGENT authors — which is the bulk of a card's text and
+        # is the half no code here can reach. It NEVER governs a marker — and for TWO of the ten
+        # that is not style but mechanism: next_task's offering branch is the only place in this
+        # package that reads comment text, and it does so with startswith("[worklog]") and
+        # startswith("[review]"), so a per-language spelling on either drops every card written
+        # under the other setting out of the review offering, silently. See cardtext.py.
+        self.language = language
         self._me_cache: dict | None = None
         self._view_cache: dict | None = None
         self._buckets_cache: dict[str, dict] | None = None
@@ -1028,6 +1043,13 @@ class Workflow:
 
         def with_wip(result: dict) -> dict:
             result["wip"] = wip
+            # `language` rides beside `wip` (#1165) and for the same reason: both are project
+            # policy the agent cannot read off the board. This one is the LARGER half of the
+            # feature — the spec, worklog and review report are the bulk of a card's text and
+            # this tool does not write them, so the key has to reach the agent as an instruction.
+            # Here rather than at each return for the same reason `wip` is here: every
+            # task-bearing branch and every empty/starving/cycle signal goes through this wrapper.
+            result["language"] = self.language
             return result
 
         offerable = [st for st in mine if st[1]["id"] not in excluded]
@@ -1616,7 +1638,9 @@ class Workflow:
         self._clear_verdict_labels(fresh)
         view = self._view()
         self.api.move_task(self.project_id, view["id"], self._bucket("Design")["id"], task_id)
-        self.api.add_comment(task_id, f"[claim] {me['username']} claimed this task")
+        self.api.add_comment(
+            task_id, f"[claim] {card_text(self.language, 'claim', username=me['username'])}"
+        )
         result = {
             "claimed": True, "task": self._summary(fresh),
             "next": "describe your approach and call advance(to='build', spec=...)",
@@ -1766,10 +1790,7 @@ class Workflow:
             self._add_label(parent["id"], LABEL_EPIC_READY)
             self.api.add_comment(
                 parent["id"],
-                f"[epic-ready] all {len(siblings)} child(ren) of this epic reached "
-                f"Review-or-Done: the container is assembled and ready for your Done (only a "
-                f"human moves a task to Done). If you later bounce a child back out of Review "
-                f"you will see it in Build again, and can hold the close until it returns."
+                f"[epic-ready] {card_text(self.language, 'epic_ready', children=len(siblings))}"
             )
 
     def advance(
@@ -1858,9 +1879,15 @@ class Workflow:
                 )
             report = ["[worklog]"]
             if (root_cause or "").strip():
-                report.append(f"Root cause: {root_cause.strip()}")
-            report.append(f"Worklog: {worklog.strip()}")
-            report.append(f"\nEvidence: {evidence.strip()}")
+                report.append(
+                    card_text(self.language, "worklog_root_cause", root_cause=root_cause.strip())
+                )
+            report.append(card_text(self.language, "worklog_worklog", worklog=worklog.strip()))
+            # the leading newline is LAYOUT, not prose: it keeps the blank line that separates the
+            # evidence from the body, and formatting.text_to_html turns it into a paragraph break.
+            report.append(
+                "\n" + card_text(self.language, "worklog_evidence", evidence=evidence.strip())
+            )
             self.api.add_comment(task_id, "\n".join(report))
             # resubmit-reset: ресабмит инвалидирует ЛЮБОЙ прошлый вердикт — снимаем ОБЕ
             # вердикт-метки, и review-failed, и reviewed (#119: человек мог руками вытащить
@@ -2239,9 +2266,9 @@ class Workflow:
             ) from exc
 
         listing = ", ".join(f"#{c['id']} {c['title']}" for c in created)
-        comment = f"[decompose] created: {listing}"
+        comment = f"[decompose] {card_text(self.language, 'decompose_created', listing=listing)}"
         if ordered:
-            comment += " (ordered: a precedes chain, only the head is claimable)"
+            comment += card_text(self.language, "decompose_ordered")
         self.api.add_comment(task_id, comment)
         # #673: a card that BECOMES A CONTAINER carries no verdict. `advance` already clears both
         # mutually-exclusive verdict labels on both of its forms — #119's ruling, in ITS OWN
@@ -2342,20 +2369,15 @@ class Workflow:
             self.api.add_relation(new_id, related_task_id, "related")
         if cross:
             # provenance: люди ЦЕЛЕВОГО проекта должны видеть, откуда пришла карточка
-            marker = (
-                f"[filed-by-agent] filed by an agent from project id={self.project_id} "
-                f"for human triage"
-            )
+            body = card_text(self.language, "filed_cross_project", project_id=self.project_id)
         elif queue:
             # честный провенанс: триаж Backlog пропущен — по явной просьбе человека
-            marker = (
-                "[filed-by-agent] filed by an agent straight into Queue "
-                "(Backlog triage skipped)"
-            )
+            body = card_text(self.language, "filed_queue")
         else:
-            marker = "[filed-by-agent] filed by an agent for human triage"
+            body = card_text(self.language, "filed_backlog")
+        marker = f"[filed-by-agent] {body}"
         if related_task_id is not None:
-            marker += f" (found while working on #{related_task_id})"
+            marker += card_text(self.language, "filed_related", related_task_id=related_task_id)
         self.api.add_comment(new_id, marker)
         # `ref` (#735): the readable name of the card THIS tool just created. The tools
         # that HAND BACK a task already carry one (_summary for next_task/claim, get_task), so an
@@ -2606,7 +2628,8 @@ class Workflow:
         # журнальный след аплоада (#184): человек листает ЛЕНТУ КОММЕНТОВ, а не виджет файлов —
         # без следа «бот приложил скрин» в истории задачи невидимо. mime может быть None
         # (неизвестное расширение) — тогда в скобках только размер.
-        meta = f"{mime}, {_human_size(len(data))}" if mime else _human_size(len(data))
+        size = _human_size(len(data), self.language)
+        meta = f"{mime}, {size}" if mime else size
         journal = f"[attach] {name} ({meta})"
         if (note or "").strip():
             journal += f" - {note.strip()}"
