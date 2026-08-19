@@ -84,102 +84,38 @@ round is stated beside its own control:
 
 * closing control 0 failed, 0 errors, 12 collected, every mutated source byte-identical to the
   baseline afterwards (compared as bytes, per round-trip).
+
+THE `12 collected` ABOVE NAMES THE PRE-#1168 TREE and is left standing rather than restated: each
+round was honest about the selection it ran on. #1168 added
+`test_no_translated_row_leaves_an_english_word_behind` to this file and moved the driver out to
+`tests/unit/cardsites.py`, so the selection is larger now. Its own rounds are recorded in that
+test's docstring with their own controls. None of the round COUNTS above moves — re-run on the
+larger selection rather than assumed: control 0 failed / 0 errors, 13 collected; the `[claim]`
+round -> 2 failed, exactly as recorded. But do not read that as "the new test cannot see them":
+that round moves `[claim]` INTO `cardtext._TABLE`, which is precisely what the new test reads, and
+it holds at 2 only because the round localises the bracket in the `ru` column too and so leaves no
+Latin run behind. Keeping `[claim]` in the `ru` cell would redden the new test as well — that
+variant was not run, and is written here as a prediction, not a round.
 """
+import re
+
 import pytest
 
+# The one run of every comment-writing path in workflow.py. It lived in this file until #1168
+# needed it in `test_card_text_is_ascii.py` too, and that file cannot import it from here — the
+# `_MARKERS` import just below already points the other way, so the cycle would close. It MOVED
+# rather than being copied: two drifting copies of "every comment site" would leave both pins
+# claiming a completeness neither of them has.
+from tests.unit.cardsites import attach_line, drive_every_comment_site, marker, wf_for
 from tests.unit.fakes import FakeAPI
 # The marker vocabulary, imported from the pin that OWNS it rather than restated here. The
 # coupling is the feature: add a marker there and this file's completeness check fails until the
-# driver below reaches it, which is what keeps "every marker survives the flip" from quietly
-# meaning "every marker this driver happened to write".
+# driver reaches it, which is what keeps "every marker survives the flip" from quietly meaning
+# "every marker this driver happened to write".
 from tests.unit.test_card_text_is_ascii import _MARKERS
 from vikunja_mcp import cardtext
 from vikunja_mcp.config import DEFAULT_LANGUAGE, LANGUAGES, ConfigError, load_config
 from vikunja_mcp.workflow import STAGES, Workflow
-
-
-def _wf(language):
-    api = FakeAPI(buckets=STAGES)
-    return api, Workflow(api, project_id=3, language=language)
-
-
-def _drive_every_comment_site(api, wf, tmp_path):
-    """Every path in `workflow.py` that writes a comment, run once, on one board.
-
-    Returns the comment stream of the whole board — GROUPED BY TASK ID, in creation order within
-    each task, which is not the same as board-wide creation order (the epic parent has a lower id
-    than its child, so its `[epic-ready]` line precedes a `[worklog]` written before it). Any
-    stable order does for the pins, which compare two runs of this same function; the ordering is
-    named because a later reader would otherwise assume the wrong one. The neighbouring project a
-    cross-project `file_task` writes to is included. It is one function rather than a test per site
-    because the pins below compare two RUNS of it: what matters is that the two streams line up
-    position for position, which only holds if both runs took the same path. Completeness is
-    asserted rather than trusted — `test_the_driver_reaches_every_marker` walks the result against
-    `_MARKERS`, which `test_card_text_is_ascii.py` in turn holds equal to the set actually written
-    in `workflow.py`, so the chain reaches the source without this file re-deriving it.
-    """
-    tmp_path.mkdir(parents=True, exist_ok=True)
-    queued = api.add_task("queued", "Queue")
-    wf.claim(queued["id"])                                        # [claim]
-    wf.advance(queued["id"], to="build", spec="the approach")     # [spec]
-    wf.advance(                                                   # [worklog]
-        queued["id"], to="review", worklog="what was done",
-        evidence="deadbeef", root_cause="why it happened",
-    )
-    wf.review_task(queued["id"], verdict="needs_work", report="not yet")   # [review] NEEDS WORK
-    # needs_work sends the card back to Build, so the rework has to be re-submitted before the
-    # second verdict can be cast — that is the real cycle, and it puts a SECOND [worklog] on the
-    # card, which is what the offering branch next door compares timestamps against.
-    wf.advance(queued["id"], to="review", worklog="reworked", evidence="c0ffee")
-    wf.review_task(queued["id"], verdict="approve", report="good now")     # [review] APPROVE
-
-    parked = api.add_task("parked", "Build", assignee=api.me_user)
-    wf.call_human(parked["id"], question="which option?")         # [needs-human]
-
-    blocked = api.add_task("blocked", "Build", assignee=api.me_user)
-    wf.return_task(blocked["id"], reason="waiting on infra")      # [blocked]
-
-    big = api.add_task("big", "Build", assignee=api.me_user)
-    wf.decompose(big["id"], [{"title": "part one"}, {"title": "part two"}], ordered=True)
-
-    wf.file_task("a finding", description="found it", related_task_id=big["id"])
-    wf.file_task("a queued finding", queue=True)
-    wf.file_task("a plain finding")
-    neighbour = api.add_project("neighbour", buckets=STAGES)
-    wf.file_task("a cross-project finding", project_id=neighbour["id"])
-
-    with_attachment = api.add_task("with an attachment", "Build", assignee=api.me_user)
-    blob = tmp_path / "blob.bin"
-    blob.write_bytes(b"x" * 2048)
-    wf.attach_file(with_attachment["id"], str(blob), note="a screenshot")   # [attach]
-
-    # the epic container's assembled notice: one child, taken to Review by the same agent
-    epic = api.add_task("epic parent", "Backlog", labels=("epic",))
-    child = api.add_task("only child", "Build", assignee=api.me_user)
-    api.add_relation(child["id"], epic["id"], "parenttask")
-    wf.advance(child["id"], to="review", worklog="child done", evidence="cafe")
-
-    return [
-        text
-        for task_id in sorted(api.tasks)
-        for text in api.comments_text(task_id)
-    ]
-
-
-def _attach_line(wf, api, tmp_path, size):
-    """The one comment whose body crosses a function boundary: `_human_size`'s units render
-    inside the `[attach]` line from another function, so it needs its own driver."""
-    target = api.add_task("with an attachment", "Build", assignee=api.me_user)
-    blob = tmp_path / f"blob-{size}.bin"
-    blob.write_bytes(b"x" * size)
-    wf.attach_file(target["id"], str(blob), note="a screenshot")
-    return [c for c in api.comments_text(target["id"]) if c.startswith("[attach]")][0]
-
-
-def _marker(comment):
-    """The bracket at the head of a comment, `[` through `]` inclusive."""
-    assert comment.startswith("["), f"comment does not open with a marker: {comment!r}"
-    return comment[: comment.index("]") + 1]
 
 
 # --- the acceptance pins -------------------------------------------------------------------
@@ -187,11 +123,11 @@ def _marker(comment):
 def test_the_driver_reaches_every_marker(tmp_path):
     """The completeness check under the flip pin: a marker the driver never writes is a marker
     the flip pin never compares, and it would go untested while looking covered."""
-    api, wf = _wf("en")
-    written = {_marker(c) for c in _drive_every_comment_site(api, wf, tmp_path)}
+    api, wf = wf_for("en")
+    written = {marker(c) for c in drive_every_comment_site(api, wf, tmp_path)}
     missing = sorted(set(_MARKERS) - written)
     assert not missing, (
-        f"_drive_every_comment_site never writes {missing}, so the invariance pin below silently "
+        f"drive_every_comment_site never writes {missing}, so the invariance pin below silently "
         f"stops covering it. Add the transition that emits it, or — if the marker was genuinely "
         f"retired — drop it from _MARKERS in test_card_text_is_ascii.py, which owns that list"
     )
@@ -208,10 +144,10 @@ def test_flipping_the_language_moves_the_body_and_never_the_marker(tmp_path):
     little. The unchanged SET is asserted rather than a count of changed ones, because it is the
     sharper statement: it says which comments are the tool's own prose and which are not.
     """
-    en_api, en_wf = _wf("en")
-    ru_api, ru_wf = _wf("ru")
-    en = _drive_every_comment_site(en_api, en_wf, tmp_path / "en")
-    ru = _drive_every_comment_site(ru_api, ru_wf, tmp_path / "ru")
+    en_api, en_wf = wf_for("en")
+    ru_api, ru_wf = wf_for("ru")
+    en = drive_every_comment_site(en_api, en_wf, tmp_path / "en")
+    ru = drive_every_comment_site(ru_api, ru_wf, tmp_path / "ru")
 
     assert len(en) == len(ru) > 10, (
         f"the two runs produced {len(en)} and {len(ru)} comments; they must take the same path "
@@ -219,9 +155,9 @@ def test_flipping_the_language_moves_the_body_and_never_the_marker(tmp_path):
         f"worth comparing"
     )
     for en_comment, ru_comment in zip(en, ru):
-        assert _marker(en_comment) == _marker(ru_comment), (
-            f"the marker moved with the language: {_marker(en_comment)!r} under en against "
-            f"{_marker(ru_comment)!r} under ru. Markers are a WIRE FORMAT — workflow.py matches "
+        assert marker(en_comment) == marker(ru_comment), (
+            f"the marker moved with the language: {marker(en_comment)!r} under en against "
+            f"{marker(ru_comment)!r} under ru. Markers are a WIRE FORMAT — workflow.py matches "
             f"rendered comment text with startswith() — so a per-language spelling silently "
             f"re-routes the review offering on every card written under the other setting. "
             f"Translate the BODY; never the bracket"
@@ -232,7 +168,7 @@ def test_flipping_the_language_moves_the_body_and_never_the_marker(tmp_path):
     # the agent's own text, which this tool never rewrites in any language. `[worklog]` is on the
     # changed side because the tool contributes the `Root cause:`/`Worklog:` prefixes around the
     # agent's words; `[review]` is on the unchanged side because the verdict token is not prose.
-    unchanged = sorted({_marker(a) for a, b in zip(en, ru) if a == b})
+    unchanged = sorted({marker(a) for a, b in zip(en, ru) if a == b})
     assert unchanged == ["[blocked]", "[needs-human]", "[review]", "[spec]"], (
         f"the flip left {unchanged} unchanged. The tool translates the prose IT authors and "
         f"nothing else, so the unchanged set is exactly the markers whose whole body is the "
@@ -301,7 +237,7 @@ def test_the_default_is_en_with_no_toml_key(tmp_path):
     assert cfg.language == "en" == DEFAULT_LANGUAGE
 
     # and it reaches a card: an unconfigured Workflow writes the English body
-    api, wf = _wf(cfg.language)
+    api, wf = wf_for(cfg.language)
     task = api.add_task("a card", "Queue")
     wf.claim(task["id"])
     assert api.comments_text(task["id"])[0].startswith("[claim] agent-infra claimed this task")
@@ -368,7 +304,7 @@ def test_next_task_carries_the_language_beside_wip():
     agent reads only when there is work would miss the tick where it reads the rules.
     """
     for language in LANGUAGES:
-        api, wf = _wf(language)
+        api, wf = wf_for(language)
         assert wf.next_task()["language"] == language          # empty queue
         api.add_task("free work", "Queue")
         offered = wf.next_task()
@@ -392,7 +328,7 @@ def test_the_verdict_tokens_do_not_translate():
     are narrative about past cards. So a `ru` board still carries the English tokens — verified by
     building one, since the table is where a body would otherwise be tempted to absorb them.
     """
-    api, wf = _wf("ru")
+    api, wf = wf_for("ru")
     task = api.add_task("a card", "Queue")
     wf.claim(task["id"])
     wf.advance(task["id"], to="build", spec="подход")
@@ -416,6 +352,75 @@ def test_every_key_carries_every_language():
             f"card text {key!r} carries {sorted(row)} but the accepted set is {list(LANGUAGES)}. "
             f"card_text falls back to {DEFAULT_LANGUAGE!r} on a missing row, so a gap here ships "
             f"as one untranslated line on an otherwise translated board rather than as an error"
+        )
+
+
+# Latin word runs the `ru` column carries ON PURPOSE, with the reason each one is there. This is
+# a RATCHET, not a description: the pin below rejects any Latin run that is not on it, so adding a
+# Russian row that leaves an English clause behind fails until somebody either translates the
+# clause or writes it here with a reason. Five of the eight are board columns and stages, which
+# the Vikunja UI itself shows untranslated, so a Russian card line naming them in Russian would
+# point at something the human cannot find on their own board.
+_LATIN_KEPT_IN_RU = {
+    "Backlog", "Build", "Done", "Queue", "Review",   # board columns / stages, shown as-is by the UI
+    "Evidence",   # pre-#1164 text: this label was already English while the block around it was not
+    "id",         # a field name, rendered as `id={project_id}`
+    "precedes",   # the relation kind, a wire term rather than a word
+}
+
+
+def test_no_translated_row_leaves_an_english_word_behind():
+    """A HALF-translated `ru` row is the failure that actually happens, and #1168 measured that
+    nothing saw it.
+
+    Nobody adds a key and forgets the whole Russian body — an empty column is obvious by eye, and
+    the neighbouring `test_the_default_language_card_text_is_ascii` asserts the column is
+    non-ASCII SOMEWHERE. What happens is a row translated except for a clause, a unit or an
+    interpolated fragment, and the card then reads half-English to its human with every gate
+    green.
+
+    THE PREDICATE THE FLIP PIN ACTUALLY HAS, which is not the one it looks like it has. That pin
+    compares two rendered boards, so it fires only when an untranslated row makes some whole
+    comment BYTE-IDENTICAL across the flip. Measured, selection `test_card_language.py` +
+    `test_card_text_is_ascii.py`, control 0 failed / 0 errors, 16 collected each round, before
+    this test existed: `claim` left in English -> 1 failed, caught, because that row IS the whole
+    body of its comment; `worklog_worklog` left in English -> 1 failed, caught, via the rework
+    `[worklog]`, which carries no root-cause line and so becomes identical; `decompose_ordered`
+    left in English ENTIRELY -> 0 failed, blind, because it is a suffix on a comment whose main
+    body is still translated; `claim` left HALF translated -> 0 failed, blind. So "whole rows are
+    caught, partial ones are not" is the wrong summary — a fragment row is blind either way, and
+    that is what this test replaces with a per-ROW question.
+
+    WHAT IT CATCHES NOW, same selection (`test_card_language.py` alone, which is this file's own
+    sweep rule), control 0 failed / 0 errors, 13 collected each round: `claim` half-translated ->
+    1 failed, this test alone; `decompose_ordered` left in English entirely -> 1 failed, this test
+    alone; `claim` left in English entirely -> 2 failed, this test and the flip pin, which is the
+    one shape both see. The two rounds that were blind before are the two this test is now the
+    only thing catching.
+
+    HOW, and what it costs. Strip the `{fields}`, find maximal runs of Latin letters, and require
+    each to be allowlisted. It is a script check, so it says nothing about a row translated into
+    fluent nonsense — it catches text LEFT BEHIND, which is the measured failure. It also assumes
+    the non-default language is written in a non-Latin script; that holds for `ru` and for nothing
+    else, which is why `LANGUAGES` is asserted below rather than iterated. A future Latin-script
+    language needs a different pin, and should fail here first so that someone decides what.
+    """
+    assert set(LANGUAGES) == {"en", "ru"}, (
+        f"LANGUAGES is now {list(LANGUAGES)}. This pin reads Latin letters in a translated row as "
+        f"text left untranslated, which is only meaningful for a NON-LATIN-script language. A "
+        f"Latin-script language needs its own completeness check — decide what it is rather than "
+        f"widening the loop below, which would pass vacuously for it"
+    )
+    for key, row in cardtext._TABLE.items():
+        body = re.sub(r"\{[^}]*\}", " ", row["ru"])
+        leftover = sorted({w for w in re.findall(r"[A-Za-z]+", body)} - _LATIN_KEPT_IN_RU)
+        assert not leftover, (
+            f"cardtext._TABLE[{key!r}]['ru'] still carries the Latin word(s) {leftover}: "
+            f"{row['ru']!r}. A row translated except for a clause ships a half-English line to a "
+            f"human who set `language = \"ru\"`. The flip pin next door fires only when an "
+            f"untranslated row makes a whole comment come out byte-identical across the flip, so "
+            f"on a row that is one FRAGMENT of its comment this assert is the only one that "
+            f"looks. Translate it, or add the word to _LATIN_KEPT_IN_RU with the reason it stays"
         )
 
 
@@ -456,12 +461,12 @@ def test_human_size_units_follow_the_language(tmp_path):
     card text and follow the key like every other body. Driven through `attach_file` rather than
     called directly: what makes the units card text is that they reach a comment, and a direct
     call would not measure that."""
-    en_api, en_wf = _wf("en")
-    ru_api, ru_wf = _wf("ru")
+    en_api, en_wf = wf_for("en")
+    ru_api, ru_wf = wf_for("ru")
     for size in (512, 2048, 5 * 1024 * 1024):
-        en_line = _attach_line(en_wf, en_api, tmp_path, size)
-        ru_line = _attach_line(ru_wf, ru_api, tmp_path, size)
-        assert _marker(en_line) == _marker(ru_line) == "[attach]"
+        en_line = attach_line(en_wf, en_api, tmp_path, size)
+        ru_line = attach_line(ru_wf, ru_api, tmp_path, size)
+        assert marker(en_line) == marker(ru_line) == "[attach]"
         assert en_line.isascii() and not ru_line.isascii(), (
             f"the [attach] size units did not follow the language at {size} bytes: "
             f"{en_line!r} against {ru_line!r}"

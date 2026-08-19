@@ -158,6 +158,23 @@ measured here rather than assumed: `-q` prints NO `collected` line, so a script 
 under `-q` gets nothing back and the cross-check quietly never runs — the same shape as the naive
 parser it is meant to catch. Drop `-q` in a scripted sweep and read the summary yourself.
 
+**And that cross-check has now caught something a control could not, in a shape worth naming: a
+RESTORE step that reverted the FIX along with the mutation** (tracker #1168). The sweep ran in a
+`git clone --no-hardlinks` of the worktree with the author's uncommitted work applied on top by
+`git diff HEAD --binary` / `git apply` — the arrangement SKILL.md prescribes — and the per-round
+restore was `git checkout -- src tests`. That clone's HEAD predates the fix, so the first restore
+put the tree back to `origin/main` and the three rounds after it measured a tree with NO fix in it
+while looking like ordinary rounds. Nothing in their `FAILED` counts said so, and neither did any
+of the usual detectors: `vikunja_mcp.__file__` resolved inside the clone every round (it is the
+right clone — just the wrong CONTENT), `git status` was clean, and the reverted tree has a
+perfectly clean control OF ITS OWN, so a control could not fire either. What fired was `collected`:
+5 on the opening control and 4 on every round after the first, because the fix adds a test. The
+remedy is one line — commit the working tree INSIDE the clone before sweeping, so `git checkout --`
+restores to the state under test. Read as a general lesson: `__file__` answers "which tree", the
+control answers "was this tree already red", and only the selection size answers "is this the SAME
+tree the control ran on". A sweep whose subject is a NEW test is exactly where the third question
+has a different answer from the first two.
+
 **That `collected` cross-check survives the sweep and dies on the way to `main` — and what kills
 it is the workflow this file mandates** (tracker #888). The record is written on the tree the sweep
 ran on; the push then goes through `git fetch origin && git rebase origin/main && <re-run the
