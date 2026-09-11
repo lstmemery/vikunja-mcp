@@ -1444,3 +1444,43 @@ neighbour's, and no new key has to be threaded through `_offboard_predecessor`»
   при этом слегка кривая (из Icebox карточка МОЖЕТ вернуться в Backlog, из Done — нет), и
   это принято сознательно в обмен на то, что мёртвая колонка не встречает человека первой
   каждый раз.
+
+## `_OWNERLESS_EXITS` now guards itself, and the card's own premise was half wrong (#1646)
+
+**What was filed, and what re-measuring it changed.** VMCP-322 (1646) came out of #1640's
+review as finding L2: deleting `_OWNERLESS_EXITS["Your Call"]` reddens exactly ONE test in the
+unit suite, and that one is `test_mutation_sweep_contract.py`, a scanner over PROSE — so the
+rows of the table have no behavioural pin at all. Re-run on the tip this work forked from,
+whole suite, control 0 failed / 0 errors / 1434 collected at `d13bc37`, 0 skipped, then the
+same deletion: **1 failed — and the one is
+`test_workflow_gates.py::test_ownerless_card_gets_a_TRUE_exit_in_every_stage_claim_refuses_from`,
+a behavioural pin. The prose scanner stayed green.** The count in the finding is right and the
+NAME is not. Why the two measurements disagree is not established and was not guessed at. The
+card narrows accordingly: the five rows that exist were already pinned, so what shipped is not
+the safety net they were missing.
+
+**What was genuinely missing is the half #662 and #1640 each had to answer BY HAND** — both
+established that their stage's row had become dead data without a test going red — #1640 by
+INSTRUMENTING `_require_mine` and driving 13 tools at an ownerless Icebox card for zero calls,
+#662 by reading the CALL SITES ("every one of `_require_mine`'s four callers takes the default
+`allow_done=False`"). Measured on the same whole-suite stand and against the same control: add
+a `"Done"` row back and the suite is 0 failed / 0 errors / 1434 collected — nothing in the tree
+sees it. The pin that existed is a HAND-WRITTEN map of stage -> phrases driven only through
+`advance`, so it cannot
+ask whether a row is still REACHABLE, whether a key still names a stage, whether a stage that
+OWES a row has one, or whether a tool other than `advance` delivers it.
+
+**The design point worth carrying forward: a table-driven sweep CANNOT see a row that was
+deleted** — it reads the table, so it sweeps a shrunken table happily. Measured: every
+drop-a-row round lands on the DERIVED membership assert and never on the delivery loop. So
+membership is decided by driving `claim` on that very ownerless card rather than by a list —
+a stage owes a row exactly when ownership is consulted there and `claim` refuses, which is
+precisely what #705's "claim it first" begs. The round that shows the derivation buys something
+a list cannot is a ninth stage added to `STAGES` between Build and Review: 1 failed, and only
+in the new test, while the hand-written map never lists the new stage and stays green.
+
+**What it deliberately does not read is a row's PROSE.** The text comes out of the table, so a
+row rewritten into a lie about the board passes; that question stays with
+`test_the_per_stage_ownerless_exits_state_only_what_the_board_really_does`. The full sweep
+record — eighteen mutation rounds against four controls, plus two whole-suite rounds — is in
+the new test's own docstring.
