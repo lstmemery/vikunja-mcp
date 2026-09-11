@@ -1,4 +1,7 @@
+import ast
+import inspect
 import os
+import textwrap
 import time
 
 import pytest
@@ -9,6 +12,7 @@ from vikunja_mcp.formatting import html_to_text
 from vikunja_mcp.workflow import (
     _ATTACHMENT_TTL,
     _MAX_ATTACHMENT_NAME_BYTES,
+    _OWNERLESS_EXITS,
     STAGES,
     Workflow,
     WorkflowError,
@@ -2711,6 +2715,229 @@ def test_the_per_stage_ownerless_exits_state_only_what_the_board_really_does():
     assert moved_from == {"Review": ["review_task(needs_work)->Queue"]}, \
         ("exactly one agent call moves an ownerless card out of a non-Queue stage, and the "
          f"per-stage exits are written around that: {moved_from}")
+
+
+# --- #1646: the TABLE itself, swept — a row that has gone DEAD must go RED -------------------
+# The two tests above pin what the rows SAY. Neither pins that a row is still REACHABLE, and
+# that is the half the table was created for: #662 and #1640 each had to establish by hand that
+# their stage's row had become data no agent could ever read — #1640 by instrumenting
+# `_require_mine` and driving 13 tools at it, #662 by reading `_require_mine`'s callers. Both
+# answers came from a measurement somebody chose to take, not from a test going red.
+
+# Every TOOL that can reach `_require_mine`, one form each — five methods holding one call site
+# apiece. The roster is checked against the module below rather than trusted, because a MISSING
+# entry is this kind of sweep's failure mode. It is ONE form per tool and not one per argument
+# shape, deliberately and measured: `advance` consults ownership BEFORE it consults `to`, so
+# `to='review'` refuses byte-identically to `to='build'` in all eight stages. The whole battery
+# recorded below was run TWICE, once with a sixth `advance(to='review')` form and once without,
+# control 0 failed on both: every round returned the same FAILED count either way, so the second
+# form inflates the cell count from 40 to 48 and holds nothing. `decompose(ordered=True)` and
+# other `handoff` targets are the same kind of no-op, unmeasured and not claimed otherwise.
+_OWNERSHIP_GATED_FORMS = (
+    ("advance", lambda w, t: w.advance(t, to="build", spec="s")),
+    ("call_human", lambda w, t: w.call_human(t, "q")),
+    ("return_task", lambda w, t: w.return_task(t, reason="r")),
+    ("decompose", lambda w, t: w.decompose(t, [{"title": "a"}, {"title": "b"}])),
+    ("handoff", lambda w, t: w.handoff(t, to="backend", title="build the thing")),
+)
+# `_require_mine`'s own opening words — the marker that says the refusal came from THERE and not
+# from a tool's own stage gate or from `_find_task`'s Done/Icebox chokepoint. Measured to be the
+# only MESSAGE in workflow.py carrying it (three other occurrences are prose in comments).
+_OWNERSHIP_REFUSAL = "not assigned to you"
+
+
+def _methods_that_ask_who_owns_the_card() -> set[str]:
+    """Every `Workflow` method whose body calls `_require_mine`, read off the AST.
+
+    A hand-written roster cannot see the tool it does not list, and that is exactly the
+    failure this sweep has to survive: the sixth ownership-gated tool arrives, nobody adds it
+    here, and the table keeps being swept through the five that were already fine. The bound
+    is NAME-level — a second `_require_mine` call site inside a tool already on the list is
+    invisible to it, and today there is exactly one per method."""
+    tree = ast.parse(textwrap.dedent(inspect.getsource(Workflow)))
+    return {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and any(
+            isinstance(inner, ast.Attribute) and inner.attr == "_require_mine"
+            for inner in ast.walk(node)
+        )
+    }
+
+
+def test_every_live_row_of_the_ownerless_exits_table_is_reachable_and_delivered_whole():
+    """#1646. The table is asked about ITSELF, so a row that goes dead or goes missing goes RED.
+
+    THE CARD'S PREMISE, RE-MEASURED FIRST, because it was inherited and half of it is wrong.
+    VMCP-322 (1646) was filed on a finding that deleting `_OWNERLESS_EXITS["Your Call"]` reddens
+    EXACTLY ONE test in the unit suite, and that the one is a scanner over PROSE
+    (`test_mutation_sweep_contract.py`), not a test about behaviour. Re-run on the tip this work
+    forked from, before a line of it was written, whole suite, control 0 failed / 0 errors /
+    1434 collected at `d13bc37`, 0 skipped: the count is right and the NAME is not — 1 failed,
+    and it is
+    `test_ownerless_card_gets_a_TRUE_exit_in_every_stage_claim_refuses_from` above, a behavioural
+    pin; the prose scanner stayed green. Why the two measurements disagree is not established
+    here and is not guessed at — but the one hard difference in the numbers is named rather than
+    left implicit: the card reports a suite of 1433 and this one is 1434, so the two rounds ran
+    on DIFFERENT TREES and neither observed the other's. What follows is that the card is
+    NARROWER than it was filed, and the ground for that is not this one round — it is the five
+    drop-a-row rounds recorded below, every one of which reddens the map test. The rows that
+    EXIST are pinned, so this test is not the safety net they were missing. The same stand
+    answered the OTHER direction against that same control, and there the card is right to the
+    letter: ADD a `"Done"` row, the dead data #662 removed by hand, and the whole suite is
+    0 failed / 0 errors / 1434 collected. Nothing in the tree saw it.
+
+    WHAT IS ACTUALLY MISSING, and it is the half #662 and #1640 each had to answer BY HAND, by
+    two different hand methods and neither of them a test going red: #1640 INSTRUMENTED
+    `_require_mine` and drove 13 tools at an ownerless Icebox card for zero calls, while #662
+    read the CALL SITES and reasoned from them ("every one of `_require_mine`'s four callers
+    takes the default `allow_done=False`"). Both were establishing the same thing — that their
+    stage's row had become data no agent could ever be shown. The pin above is a
+    HAND-WRITTEN map of stage -> phrases, so it can only ask about the rows somebody remembered
+    to list, and only through `advance`. Four questions it therefore cannot ask; the rounds
+    below say for each one whether anything else in this file sees it, and for two of the four
+    the answer is nothing at all:
+      * is every row still REACHABLE (a row for Done or Icebox is dead on arrival — `_find_task`
+        refuses both before ownership is consulted);
+      * does every key still NAME a stage (a key that addresses no bucket is silently inert);
+      * does a stage that OWES a row have one, decided by driving `claim` rather than by a list,
+        so a stage added to `STAGES` later cannot quietly go without;
+      * does every tool that asks who owns the card deliver the row, not just `advance`.
+
+    WHAT IT DOES NOT ASK, and the bound is deliberately narrow, because this is the sentence a
+    reader consults before deleting something. It never reads a row's PROSE: the text comes out
+    of the table, so rewriting a row into a lie about the board passes here. That question
+    belongs to the sibling `test_the_per_stage_ownerless_exits_state_only_what_the_board_really_
+    does`, which drives the board facts each wording asserts; the two are complementary, not
+    overlapping. Nor is the `claim` probe a claim about the ordinary queue: it asks only whether
+    THAT ownerless card could be claimed from THAT stage, which is exactly the question "claim it
+    first" begs, and nothing about what happens to a card after a human triages it. And the
+    coverage it does buy is UNEVEN, which the bare "not just `advance`" hides: measured, the row
+    is `endswith`-checked through `advance` in 5 stages, `return_task` and `decompose` in 4 each,
+    and `call_human` and `handoff` in only 2 — Design and Build — because everywhere else their
+    own stage gate fires before ownership is consulted. Review's row is therefore delivery-
+    checked through `advance` alone. That is a property of the gates, not a gap to close here.
+
+    MUTATION-CHECKED. Stand: a `git clone --no-hardlinks` of the work tree with its own
+    `uv sync`, `vikunja_mcp.__file__` printed every round and verified to point inside the clone,
+    `__pycache__` deleted per round AND `PYTHONDONTWRITEBYTECODE=1`, sources restored from a
+    pristine copy with sha256 and `git status` checked after every round. Rounds are read by
+    COUNTING lines beginning `FAILED `, with lines beginning `ERROR ` counted separately (0 in
+    every round) — never off pytest's own `N failed`, which in this file is a docstring quoted
+    back by a traceback. Selection: this file, `--tb=line`, reporting `collected 103 items` and
+    0 skipped in EVERY round, controls included. Eighteen mutation rounds against FOUR controls:
+    one FIRST, one after sixteen of the eighteen, and two closing (the second because the no-op
+    round's mutator had to be repaired and re-run) — so only two rounds sit inside the closing
+    bracket, and saying so is more useful than calling a single one "mid-way":
+    `control 0 failed` all four times, and every row below is a delta against it, naming
+    the assertion actually read out of `--tb=line` rather than the one it seemed obvious would
+    fire:
+      * delete the `"Your Call"` row -> 2 failed; `"Backlog"` -> 2; `"Review"` -> 2; `"Design"`
+        -> 3; `"Build"` -> 3. Here it is always the DERIVED membership assert ("no row says what
+        to do instead"), never the delivery loop — a table-driven sweep reads the table, so on
+        its own it would sweep a shrunken table happily. This half is OVERLAP with the map above
+        and is not sold as more: the map reddens on all five too.
+      * so the derived rule was attacked where a list cannot follow: add a ninth stage to
+        `STAGES`, between Build and Review, which `claim` refuses and `_require_mine` is reached
+        in -> 1 failed, ONLY here, on that same assert. That is what the derivation buys over
+        the map, which never lists the new stage and stays green.
+      * add a `"Done"` row, the dead-data mutant #662 removed by hand -> 1 failed, ONLY here:
+        the reachability assert, naming Done. Add an `"Icebox"` row (#1640's) -> 1 failed, the
+        same assert. Nothing else in this file sees either.
+      * add a `"Queue"` row, the other direction -> 3 failed, and the one here is a third assert
+        ("a row here overrides advice that WORKS"), reached because `claim` succeeded on that
+        very card.
+      * misspell a key, `"Your Call"` -> `"Your call"` -> 2 failed: the coverage assert naming
+        the stray key, and the map above. The stray key is what reachability could not have
+        caught — it is not a stage, so nothing ever probes it.
+      * drop the `stage` argument at `return_task`'s `_require_mine` call site, leaving the other
+        four correct -> 2 failed: the delivery assert, naming `('Backlog', 'return_task')`, and
+        `test_ownerless_card_in_an_active_stage_gets_a_refusal_it_can_act_on`. So this mutant was
+        NOT invisible before, which the first draft of this docstring claimed; what is new is
+        that the refusal is now read per FORM as well as per stage.
+      * delete the `msg += ...` append outright, the guard itself rather than any row -> 3
+        failed. Truncate it, `exit_advice` -> `exit_advice[:40]` -> 3 failed. Replace
+        `_OWNERLESS_EXITS.get(stage or "")` with a constant `_ACTIVE_OWNERLESS_EXIT`, the "let us
+        unify the wording" mutant -> 3 failed. All three land on `endswith` here.
+      * append a full stop AFTER the row -> 1 failed, ONLY here, because `endswith` is the only
+        assert in this file that says the row arrives last and whole.
+      * let `advance` opt into `allow_done=True, allow_icebox=True` -> 2 failed, and the one here
+        is the reach-set assert, which nothing else would have made fire. Without that round it
+        would have been an assert no mutation reaches.
+      * add a SIXTH `Workflow` method that calls `_require_mine` -> 1 failed, ONLY here, on the
+        AST-derived roster naming it. A hand-written roster is 0 failed on this by construction,
+        which is the whole reason the roster is read off the module.
+      * one NO-OP round, recorded because it is NOT a fake pin: swap `pytest.raises` for a
+        try/except in the sweep -> 0 failed. All 40 cells refuse on the tree as it ships, so the
+        `raises` buys nothing today; it is there so a tool that starts SUCCEEDING on an ownerless
+        card is caught rather than silently dropped out of the sweep.
+    """
+    assert set(_OWNERLESS_EXITS) <= set(STAGES), \
+        ("a key that names no bucket is data no agent can ever be shown: "
+         f"{sorted(set(_OWNERLESS_EXITS) - set(STAGES))}")
+    asking = _methods_that_ask_who_owns_the_card()
+    assert asking == {label for label, _ in _OWNERSHIP_GATED_FORMS}, \
+        ("a tool asks who owns the card but is not driven here, so the table is swept through "
+         f"the tools that were already fine: {asking}")
+
+    refusals: dict[tuple[str, str], str] = {}
+    for stage in STAGES:
+        for label, call in _OWNERSHIP_GATED_FORMS:
+            api = FakeAPI(buckets=STAGES)
+            wf = Workflow(api, project_id=3, siblings={"backend": 17})
+            card = api.add_task(f"ownerless in {stage}", stage)
+            with pytest.raises((WorkflowError, VikunjaError)) as exc:
+                call(wf, card["id"])
+            refusals[(stage, label)] = str(exc.value)
+
+    reached = {cell for cell, msg in refusals.items() if _OWNERSHIP_REFUSAL in msg}
+    consulted = {stage for stage, _ in reached}
+    # the absences, by MECHANISM: Queue reaches the method and is bare there BY DECISION, while
+    # Done and Icebox never reach it at all — `_find_task` refuses both first (#662, #1640)
+    assert consulted == set(STAGES) - {"Done", "Icebox"}, \
+        f"ownership is consulted in a different set of stages now: {sorted(consulted)}"
+
+    # WHERE a row belongs, DERIVED. The table exists because "claim it first" is unfollowable
+    # outside Queue (#705), so the rule is not a list: a stage owes a row exactly when ownership
+    # is consulted there AND driving `claim` on that very card refuses. Asking it by driving the
+    # tool is what lets this test see a row DELETED — the sweep above reads the table, so on its
+    # own it would sweep a shrunken table happily — and a row added where the advice still works.
+    claimable = set()
+    for stage in sorted(consulted):
+        api = FakeAPI(buckets=STAGES)
+        wf = Workflow(api, project_id=3)
+        card = api.add_task(f"ownerless in {stage}", stage)
+        try:
+            wf.claim(card["id"])
+        except (WorkflowError, VikunjaError):
+            continue
+        claimable.add(stage)
+
+    dead = sorted(set(_OWNERLESS_EXITS) - consulted)
+    assert not dead, \
+        ("these rows can no longer be delivered to anybody — nothing reaches `_require_mine` in "
+         f"that stage, so they are the dead data #662 and #1640 each deleted by hand: {dead}")
+    missing = sorted(consulted - claimable - set(_OWNERLESS_EXITS))
+    assert not missing, \
+        ("here an agent is told to claim a card that claim() refuses, and no row says what to do "
+         f"instead — the #705 dead end, reopened: {missing}")
+    superfluous = sorted(set(_OWNERLESS_EXITS) & claimable)
+    assert not superfluous, \
+        ("a row here overrides advice that WORKS: claim() succeeded on that very ownerless card, "
+         f"so the exit sentence would talk an agent out of the one call that helps: {superfluous}")
+
+    for stage, form in sorted(reached):
+        msg, row = refusals[(stage, form)], _OWNERLESS_EXITS.get(stage)
+        if row is None:
+            for other, text in _OWNERLESS_EXITS.items():
+                assert text not in msg, \
+                    f"({stage}, {form}) has no row, yet it is handed {other}'s: {msg}"
+            continue
+        assert msg.endswith(row), \
+            f"({stage}, {form}) does not end with its own row, whole and last: {msg}"
+        for mark in _PREFIX_MARKS:
+            assert mark in msg, f"({stage}, {form}): the refusal no longer says why: {msg}"
 
 
 # --- #693: who clears a stale verdict, expressed as a GRID rather than as four call sites ------
