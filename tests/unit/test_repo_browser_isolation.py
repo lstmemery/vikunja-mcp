@@ -2957,8 +2957,10 @@ def test_the_checkout_probe_is_not_an_off_switch_for_a_broken_git():
     """#622: the skip must say "not applicable" WITHOUT ever being able to say it about a failure.
 
     A skip is the one repair that can do more damage than the bug it fixes: 30 red tests are at
-    least visible, whereas 30 silently skipped ones look exactly like 30 passing ones in the
-    `-q` summary line this repo reads its verdicts from. So the two claims `requires_git_checkout`
+    least visible, whereas 30 skipped ones move neither the FAILED count nor `collected` — the two
+    numbers a round's verdict is read from here — so the pins go offline while the round reads
+    clean. `-q` does print `30 skipped` beside them (#1462), which is why CLAUDE.md now asks for
+    that count to be RECORDED and not merely printed. So the two claims `requires_git_checkout`
     makes are asserted here, one per branch, and this test carries no marker — it is the one that
     has to run on BOTH sides of the very condition it is checking.
 
