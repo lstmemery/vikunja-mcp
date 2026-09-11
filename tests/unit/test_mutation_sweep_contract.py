@@ -1432,9 +1432,11 @@ def test_claude_md_states_the_control_round_rule_and_its_limit():
     assert "Record SKIPPED beside FAILED" in section, \
         "CLAUDE.md no longer asks a round to record its SKIP count. `collected` counts SKIPPED " \
         "items, so it reads the same on a sound stand and on one where the tests never ran — " \
-        "measured at 1401 on both a clone and a `git archive` extraction of one tree, the " \
-        "extraction silently skipping 61 of them (#1462). Without this the cross-check asserted " \
-        "just above certifies a blind round as a clean one"
+        "1401 at `c0abe16` on both a clone and a `git archive` extraction of that one tree, the " \
+        "extraction skipping 61 of them (#1462). pytest PRINTS those skips, `-q` included; what " \
+        "no round shows is the LOSS, because the skips are the STAND's and not the mutation's — " \
+        "the count is CONSTANT across control and round, so it cancels out of the delta. " \
+        "Without this the cross-check asserted just above certifies a blind round as a clean one"
 
     # ...and the step BEFORE the arithmetic: how a round is READ. VMCP-205 (748) and VMCP-224
     # (767). A control cannot rescue a mis-read round, and this repo's own docstrings are what
