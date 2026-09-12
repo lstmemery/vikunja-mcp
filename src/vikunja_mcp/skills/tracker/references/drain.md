@@ -182,6 +182,32 @@
       one thing that does fire is the ordinary `dirty` refusal, if your subagent happened to leave
       a non-ignored file behind, and a running suite leaves only ignored ones. **The ordering is
       the protection.**
+    - **`--release` is NOT the only caller — `--gc` opens the same door, and the ordering rule
+      above does not reach it (VMCP-325, #1700).** The rule you have just read is something YOU
+      execute: let your agents return, THEN release. A reviewer can obey it perfectly — never call
+      `--release` at all — and still lose its auditor, because the removal is somebody else's
+      call. Compose three rules that are all in force and none of which is being broken: your
+      `needs_work` verdict moves the card Review -> Build, so your tree is DEAD to the reaper from
+      that second (the bullet above); SKILL.md's second-pass rule tells you to record that verdict
+      IMMEDIATELY and append the auditor's findings afterwards as a `comment`, i.e. deliberately
+      with the auditor still running; and the orchestrator runs `--gc` FIRST on every tick. Nobody
+      deviated, and a tick can sweep the tree out from under a live auditor. Same shape as the
+      1685 incident, different caller — and a lost measurement again, never lost code.
+      **What bounds it is the grace window, not a rule, and it is worth knowing exactly what that
+      buys.** `_REAP_GRACE_SECONDS` is 30 minutes in `workspace_cmd.py` (read there, not quoted
+      from a card), counted from the newest mtime of two markers — the worktree DIRECTORY and its
+      INDEX — so the sweep has to land after the window while the auditor is still running. That
+      is narrow, and it is NOT nothing: a purely reading review moves neither marker, so for it
+      the window ticks from the tree's BIRTH and can be long gone before you even cast the
+      verdict; and an auditor's `pytest` bumps the directory mtime only when it CREATES a
+      top-level entry, so a second round over an existing `.pytest_cache` need not refresh
+      anything.
+      **The remedy is the clone, and this is its SECOND independent reason.** SKILL.md already
+      says to give an auditor that RUNS anything its own clone — argued there from two writers in
+      one directory, and extended by VMCP-324 to your own `--release`. A clone lives OUTSIDE the
+      worktree, so the reaper cannot reach it either; a reading auditor in your tree, which both
+      of those rules still permit, is exposed here with nothing of yours to reorder. Holding the
+      verdict back is NOT the fix: "record the verdict at once" is the stronger rule.
     - **What a round actually looks like when its tree vanishes — three measured shapes that do
       NOT share a failure mode.** (a) A shell reader looping over the tree ran to COMPLETION, exit
       0, reporting zero files and zero bytes — not because the calls succeeded (`ls` from an

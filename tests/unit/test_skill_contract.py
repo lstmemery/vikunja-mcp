@@ -3131,6 +3131,81 @@ def test_release_is_the_last_action_for_DISPATCHED_agents_too_in_both_roles():
         "\"a successful release proves it is committed and pushed\" has become false"
 
 
+def test_the_verdict_then_append_rule_carries_its_gc_consequence_in_both_layers():
+    """VMCP-325 (1700): VMCP-324 closed the `--release` door and left the adjacent one open.
+
+    THE COMPOSITION, out of three rules all in force and none of them broken. A `needs_work`
+    verdict moves the card Review -> Build, so the reviewer's tree is DEAD to the reaper from that
+    second (pinned next door, on `review_task`'s own source). The second-pass section tells the
+    reviewer to record that verdict IMMEDIATELY and append a late auditor's findings afterwards as
+    a `comment` — i.e. deliberately with the auditor still running. The orchestrator runs `--gc`
+    FIRST on every tick. Nobody deviates and the tree is swept out from under a live auditor.
+
+    WHY VMCP-324's RULE DOES NOT COVER IT, which is the whole reason this is a second pin rather
+    than a sentence appended to that one: `--release` is something YOU call, so "let them return
+    first" is an ordering you can execute. `--gc` is somebody ELSE's call, on somebody else's
+    tick, and no ordering of yours reaches it. The remedy is therefore the CLONE and not an
+    ordering — a clone lives outside the worktree, where the reaper cannot follow — and this is
+    its second independent reason, the first being two writers in one directory.
+
+    PINNED IN TWO LAYERS, because the card's ask was a CROSS-REFERENCE and a cross-reference is
+    only a cross-reference if both ends exist:
+      * the core's second-pass section, at the verdict-then-append rule — the place whoever next
+        edits that rule will be standing;
+      * `references/drain.md`'s reviewer bullet, which carries the substance.
+    Plus TWO code anchors, because the drain.md paragraph makes two claims about this code rather
+    than about prose: the window's LENGTH (derived here, never quoted) and the fact that its
+    freshness is read off the INDEX as well as the directory — drop the index marker and a tree
+    whose only recent footprint is a commit stops being young, which is a different exposure from
+    the one the paragraph describes.
+
+    SCOPE, since this lineage keeps widening its own incidents: a review tree is detached and
+    clean, so what is lost is a MEASUREMENT and a dispatch, never code, and never an entry in the
+    `removed_ignored` family — a tree destroyed under a live reader leaves none.
+
+    MUTATION-CHECKED, control on the same selection first, `__pycache__` cleared between rounds
+    and each edited file restored from a COPY (never `git checkout --`: the edits were
+    uncommitted), the restore verified by `diff`. The rounds are recorded in the card's
+    `[worklog]` and in the commit message."""
+    text = _skill_text()
+
+    second_pass = _flat(_second_pass_section(text))
+    assert "The verdict kills YOUR tree too" in second_pass, \
+        "the verdict-then-append rule no longer says that recording the verdict kills the " \
+        "reviewer's own tree — that rule is what routes a reviewer into the --gc door with a " \
+        "live auditor still in there, so this is the one place the warning has to be"
+    assert "no ordering of yours reaches" in second_pass, \
+        "the second-pass rule no longer says the sweep is beyond YOUR ordering — without that " \
+        "it reads as covered by VMCP-324's `--release`-is-last rule, which it is not"
+    assert "reading or not" in second_pass, \
+        "the second-pass rule no longer says a READING auditor is swept too. That is exactly " \
+        "the auditor its own exemption blesses in your tree, and --gc does not care that it " \
+        "only reads"
+
+    reviewer = _flat(_reviewer_tree_rule(text))
+    assert "`--release` is NOT the only caller" in reviewer, \
+        "drain.md no longer tells the reviewer that the sweep opens the same door --release " \
+        "does; the core only points HERE, so deleting this leaves a cross-reference to nothing"
+    assert "runs `--gc` FIRST on every tick" in reviewer, \
+        "drain.md no longer names the caller that does the removal, which is the half a " \
+        "reviewer cannot deduce from its own actions"
+    assert "own clone" in reviewer, \
+        "drain.md no longer names the clone as the remedy — and an ordering is not available " \
+        "here, so a rule without this remedy has none at all"
+
+    minutes = workspace_cmd._REAP_GRACE_SECONDS // 60
+    assert f"is {minutes} minutes in `workspace_cmd.py`" in reviewer, \
+        f"drain.md no longer names the grace window, or names a length the code disagrees with " \
+        f"(it is {minutes} min). That window is the ONLY thing bounding this exposure, so a " \
+        f"stale figure here understates or overstates the whole hazard"
+
+    activity_src = inspect.getsource(workspace_cmd._last_activity)
+    assert '"--git-path", "index"' in activity_src, \
+        "the grace window no longer reads the INDEX mtime, so drain.md's \"two markers — the " \
+        "worktree DIRECTORY and its INDEX\" is false and a tree whose only fresh footprint is " \
+        "a commit now reads as quiesced"
+
+
 def _degraded_workspace_bullet(text: str) -> str:
     """The «Не завелось — цикл НЕ роняем» bullet — where the pump learns to tell a `workspace`
     FAILURE (exit 1, `error`) from a `--release` that simply declined (exit 0, `released: false`).
