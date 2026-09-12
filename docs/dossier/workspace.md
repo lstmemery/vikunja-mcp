@@ -700,16 +700,24 @@ probe (`-a -d cwd -- <tree>`) 0.216–0.220 s, the deep cwd probe (`-a -d cwd +D
 0.248–0.261 s, the descriptor probe (`+D <tree>`) 0.246–0.259 s; with eight busy processes
 alongside, the same three run 0.267–0.410, 0.308–0.476 and 0.348–0.422 s.
 
-**Read the MECHANISM instead, because it is what the spread is evidence of.** `lsof`'s cost here
-is dominated by its scan of the PROCESS TABLE, which is a property of the box at that minute and
-not of the probe; the `+D` tree walk is the small remainder. Measured back to back on one box,
-three rounds each: the descriptor probe over an EMPTY directory costs 0.215–0.220 s, the same as
-the root-scoped probe that walks nothing, and over this 2 009-file worktree 0.248–0.259 s — so the
-walk is worth ~0.03 s and the other ~0.22 s is the floor every shape pays. **The ordering claim is
-therefore WITHDRAWN rather than re-measured, and NOT because a different order replaced it.** The
-descriptor probe is not "more than double" the cwd probe here. Idle, the root-scoped probe is the
-cheapest of the three by that ~0.03 s and the two DEEP shapes overlap each other; under load even
-that much goes, and this is the measurement that settles it — read PER ROUND, the root-scoped
+**Read the FLOOR instead, because it is what the spread is evidence of.** `lsof`'s cost here is
+dominated by something that does NOT scale with the tree; the `+D` tree walk is the small
+remainder. Measured back to back on one box, three rounds each: the descriptor probe over an EMPTY
+directory costs 0.215–0.220 s, the same as the root-scoped probe that walks nothing, and over this
+2 009-file worktree 0.248–0.259 s — so the walk is worth ~0.03 s and the other ~0.22 s is the floor
+every shape pays. **WHAT that floor IS, no round here settles — and this paragraph, as #1701 landed
+it, said anyway that it was `lsof`'s scan of the PROCESS TABLE (withdrawn by VMCP-327, #1705).**
+That remains the obvious candidate and it is consistent with the ~560 processes recorded above — but
+the process count was RECORDED and never VARIED, so nothing measured separates it from any other
+explanation, and the mechanism is left unclaimed. What the rounds DO establish is the part the argument needs:
+a floor independent of TREE SIZE, and a total that moves with the box's load (compare the idle and
+loaded figures above), i.e. a property of the box at that minute and not of the probe. **The
+ordering claim is therefore WITHDRAWN rather than re-measured, and NOT because a different order
+replaced it.** The descriptor probe is not "more than double" the cwd probe here — and that phrase
+is #1701's DESCRIPTION characterising the two retracted ranges, not a former wording of this
+paragraph, which quoted the ranges and nothing else (VMCP-327, #1705). Idle, the root-scoped probe
+is the cheapest of the three by that ~0.03 s and the two DEEP shapes overlap each other; under load
+even that much goes, and this is the measurement that settles it — read PER ROUND, the root-scoped
 probe was cheapest in only 3 of 5 loaded rounds and the DEAREST of the three in the other 2, while
 the deep/descriptor pair inverted once as well. An ordering that is unstable between five
 consecutive rounds on ONE box was never going to be a property of the probes. And the cheap shape
