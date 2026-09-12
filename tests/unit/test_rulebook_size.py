@@ -119,7 +119,12 @@ _CEILINGS = {
         "the repo rulebook — read by every session in this checkout",
     ),
     "src/vikunja_mcp/skills/tracker/SKILL.md": (
-        126_000, "latin",
+        # LOWERED 126 000 -> 125 998 by #1705, which is the ratchet step this gate's own header
+        # prescribes: that card's referent fix left the file 2 characters SHORTER (125 936 ->
+        # 125 934), so the ceiling moves by the same 2 rather than banking the slack. Headroom
+        # is 64 characters before and after — the same arithmetic the CLAUDE.md entry above
+        # states, run in the shrinking direction.
+        125_998, "latin",
         "the agent rulebook — ships in the wheel, so every consumer pays for it too",
     ),
 }

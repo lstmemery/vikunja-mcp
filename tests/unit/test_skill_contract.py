@@ -3139,7 +3139,11 @@ def test_the_verdict_then_append_rule_carries_its_gc_consequence_in_both_layers(
     second (pinned next door, on `review_task`'s own source). The second-pass section tells the
     reviewer to record that verdict IMMEDIATELY and append a late auditor's findings afterwards as
     a `comment` — i.e. deliberately with the auditor still running. The orchestrator runs `--gc`
-    FIRST on every tick. Nobody deviates and the tree is swept out from under a live auditor.
+    FIRST on every tick. Nobody deviates and a tick CAN sweep the tree out from under a live
+    auditor. CAN, not DOES, and this line landed the other way round (softened by VMCP-327,
+    #1705): what bounds it is the grace window below, and both rule texts pinned here were
+    deliberately written `may be swept` and `can sweep`. The asserts are unaffected — they pin
+    that the WARNING is present in each layer, never that a sweep is certain.
 
     WHY VMCP-324's RULE DOES NOT COVER IT, which is the whole reason this is a second pin rather
     than a sentence appended to that one: `--release` is something YOU call, so "let them return
