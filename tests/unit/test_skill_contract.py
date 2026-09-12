@@ -3039,6 +3039,98 @@ def test_the_reviewers_tree_rule_says_its_own_verdict_can_take_the_directory_awa
         "it may be gone"
 
 
+def _own_worktree_release_bullet(text: str) -> str:
+    """The «Worked in your own worktree — release it after `advance(to='review')`» bullet — where
+    the BUILD agent reads what `--release` does to the directory it is standing in.
+
+    Sliced rather than matched over the bundle, for `_reviewer_tree_rule`'s measured reason: the
+    dispatched-agent rule pinned below is deliberately stated TWICE in different words — here for
+    the build agent and in `references/drain.md` for the reviewer — so a bundle-wide substring
+    could not tell "both halves carry it" from "one of them does". One of them carrying it alone
+    is exactly the state VMCP-324 (1689) found: every sentence in this bullet was addressed to YOU
+    singular and blind to a subagent still standing in the tree."""
+    heading = "- **Worked in your own worktree — release it after `advance(to='review')`:**"
+    start = text.find(heading)
+    assert start != -1, "the rulebook no longer has the build agent's own-worktree release bullet"
+    end = text.find("\n  - ", start + 1)
+    assert end != -1, "the own-worktree release bullet no longer ends where the next bullet does"
+    bullet = text[start:end]
+    assert 0 < len(bullet) < len(text), "the release-bullet slice is not a subset of the rulebook"
+    assert "Having cast a verdict" not in bullet, "the slice swallowed the reviewer's own bullet"
+    return bullet
+
+
+def test_release_is_the_last_action_for_DISPATCHED_agents_too_in_both_roles():
+    """VMCP-324 (1689): a reviewer dispatched a second-pass auditor, then released the review tree
+    while that auditor's `pytest` was still running inside it. The tree went, the auditor's round
+    became a broken stand, and nothing in the rulebook had told anyone not to do that — a grep over
+    the core and every reference for a warning of that shape returned NOTHING. No code was lost;
+    what was lost is a measurement and a dispatch, and this pin must not be read as protecting
+    data.
+
+    WHY PROSE AND NOT A GUARD, since the card asked for the alternative to be measured: the
+    predicate a guard would need is "some process has its cwd in this tree", and it is blind in the
+    ordinary case. The load-bearing round is the DEEP probe, run from OUTSIDE the tree so its own
+    shell is not what it finds: `lsof -a -d cwd +D <tree>` over a live agent's worktree at a moment
+    when that agent had nothing executing returned 0, twice, against a positive control of 1 for a
+    sleeper planted in a SUBDIRECTORY of the same live tree. (A continuous sample with the CHEAP
+    root-scoped probe gave 5 of 120 over 161 s, but that probe cannot see a subdirectory cwd at all
+    — measured — so it is a floor, not a rate.) An agent is not a process in its tree, it is a
+    sequence of short-lived ones. 1685 is the case such a guard WOULD have caught, a 13-minute
+    `pytest` being one long-lived process, and that is the trap rather than the reassurance. The
+    costs and limits are in `docs/dossier/workspace.md`; `workspace_cmd.py` is unchanged.
+
+    PINNED IN THREE PLACES because the rule is only useful if BOTH roles and the second-pass
+    exemption carry it, and each states it in its own words:
+      * the build agent's `--release` bullet — the sentence that used to say only "your directory
+        IS GONE: do everything remaining from the main checkout";
+      * the reviewer's bullet in `references/drain.md`, where the incident actually happened;
+      * the second-pass section's reading-auditor exemption, which blesses a READING auditor in
+        your tree and argued that entirely from two-writers-in-one-directory — safe against
+        MUTATION, and never about your own release.
+    Plus ONE code anchor, because one sentence of the new prose is a claim about this code rather
+    than about POSIX: "never TRACKED work, which a successful release proves is committed and
+    pushed" is false the moment `--release` stops refusing a dirty or unpushed tree.
+
+    MUTATION-CHECKED, every round confirmed to select exactly 1 test, `__pycache__` cleared
+    between rounds and each edited file restored from a COPY (never `git checkout --`: the edits
+    were uncommitted), the restore verified by `diff` at the end. Control 0 failed / 0 errors /
+    0 skipped; delete the dispatched-agent sentence from the build bullet while leaving the
+    reviewer's half intact -> 1 failed; delete the reviewer sub-bullet from drain.md while leaving
+    the build half intact -> 1 failed; delete the release clause from the second-pass exemption ->
+    1 failed; rename the `CODE_DIRTY` branch in `_release_locked` -> 1 failed; re-wrap the whole
+    new paragraph at a different width, breaking every pinned phrase across new line breaks ->
+    0 failed, by design (`_flat`)."""
+    text = _skill_text()
+
+    build = _flat(_own_worktree_release_bullet(text))
+    assert "includes every agent YOU DISPATCHED" in build, \
+        "the build agent's release bullet no longer says that what is left to do includes the " \
+        "agents it dispatched — the singular-addressed blindness VMCP-324 (1689) was filed over"
+    assert "the last action" in build and "not only to you" in build, \
+        "the release bullet no longer says --release is LAST with respect to dispatched agents " \
+        "as well as to you, which is the whole rule"
+    assert "its own clone rather than your tree" in build, \
+        "the release bullet no longer names the remedy for an auditor that RUNS anything"
+
+    reviewer = _flat(_reviewer_tree_rule(text))
+    assert "you can also kill it under an agent YOU DISPATCHED" in reviewer, \
+        "the reviewer is no longer told it can destroy its own subagent's tree — and the " \
+        "reviewer is the role the live incident happened to; the build half is pinned separately"
+    assert "Let them return first" in reviewer, \
+        "the reviewer's half no longer states the ordering the rule consists of"
+
+    second_pass = _flat(_second_pass_section(text))
+    assert "NOT against your own" in second_pass and "--release" in second_pass, \
+        "the reading-auditor exemption no longer says it is safe against MUTATION only — a " \
+        "reading auditor in your tree is still destroyed by your own release"
+
+    release_src = inspect.getsource(workspace_cmd._release_locked)
+    assert "CODE_DIRTY" in release_src and "CODE_UNPUSHED" in release_src, \
+        "--release no longer refuses a dirty or unpushed tree, so the rulebook's "\
+        "\"a successful release proves it is committed and pushed\" has become false"
+
+
 def _degraded_workspace_bullet(text: str) -> str:
     """The «Не завелось — цикл НЕ роняем» bullet — where the pump learns to tell a `workspace`
     FAILURE (exit 1, `error`) from a `--release` that simply declined (exit 0, `released: false`).

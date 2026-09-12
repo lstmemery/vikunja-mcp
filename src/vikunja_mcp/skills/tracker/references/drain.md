@@ -144,6 +144,58 @@
     at once" is the stronger rule (a lost verdict is a whole review again from scratch, a
     vanished directory is one `workspace` call); simply do whatever needs THIS directory BEFORE
     the verdict.
+  - **And the tree does not die only under YOU — you can also kill it under an agent YOU
+    DISPATCHED.** The bullet above, and the build side's "Worked in your own worktree", are both
+    addressed to YOU, singular: they teach you not to assume YOU are still standing in your own
+    tree. Neither is about the second-pass auditor, the nested implementer or any other
+    subagent of yours that is still working in there when you call `--release`. That is not an
+    exotic state — SKILL.md's second-pass rule (NOT this file: both phrases are its, at "Launch it
+    EARLY and IN PARALLEL" and "WHERE it works") orders the auditor launched early and in parallel,
+    i.e. deliberately still running while you finish, and tells you a READING auditor is fine in
+    your tree. So the rule is: **`--release` is the LAST action with respect to every
+    agent you dispatched, not only to you.** Let them return first, or give any auditor that RUNS
+    anything its own clone.
+    - **The incident, live and not constructed.** On VMCP-323 (1685) the reviewer dispatched a
+      second-pass auditor, then called `workspace --release 1685 --role review` after recording
+      its verdict, while the auditor's `pytest` was still running inside that review worktree.
+      As the reviewer recorded it, quoting its auditor: `collected 1435`, then a run of `F`s in
+      `test_workspace_cmd.py`. It correctly reported nothing from that run, and the reviewer
+      correctly reported nothing from it either. **Nothing was lost from the repository** — the
+      work was already on `main`, the review tree is detached and clean. What was lost is a
+      MEASUREMENT and a dispatch. Do not let that drift into "work was destroyed": this is not
+      the `removed_ignored` family at all, and a tree destroyed under a live reader leaves no
+      entry in that list.
+    - **Why `--release` cannot notice, and why no guard is coming.** Constructed stand (a throwaway
+      repo, a worktree, a `sleep` with its cwd inside): `git worktree remove` returns 0, the
+      directory is GONE, and the process keeps running — `ps` still lists it, `lsof` still reports
+      the same unlinked cwd. POSIX lets a directory be unlinked out from under a process; nothing
+      fails, on either side. No guard is being added: the PREDICATE one would need — "is a process
+      cwd'd in this tree" — was measured and found blind, and the guard rejected on that. The
+      arithmetic is in `docs/dossier/workspace.md`, and the one number an agent
+      needs is that a probe deep enough to see a cwd anywhere under a live agent's own worktree
+      returned ZERO over that tree at a moment when the agent had nothing executing — against a
+      positive control of 1 for a planted process. An agent is not a process in its tree, it is a
+      sequence of short-lived ones, and between two tool calls there is nothing there to find.
+      1685 is the case such a guard WOULD have caught (a 13-minute `pytest` is one long-lived
+      process), which is exactly the trap: it would be trusted, and then silent for the auditor
+      sitting between two of its own rounds. **Nothing in the code will catch THIS for you** — the
+      one thing that does fire is the ordinary `dirty` refusal, if your subagent happened to leave
+      a non-ignored file behind, and a running suite leaves only ignored ones. **The ordering is
+      the protection.**
+    - **What a round actually looks like when its tree vanishes — three measured shapes that do
+      NOT share a failure mode.** (a) A shell reader looping over the tree ran to COMPLETION, exit
+      0, reporting zero files and zero bytes — not because the calls succeeded (`ls` from an
+      unlinked cwd exits 1 with "No such file or directory") but because that stand discarded
+      stderr and counted empty output. That is the dangerous one, and the danger is the REPORTING:
+      a round that drops stderr or ignores exit codes turns this into a clean-looking all-zero
+      round. (b) A real `pytest` whose tree was
+      removed two seconds in printed its dots to `[100%]` and then died at session teardown with
+      `FileNotFoundError` on the tree path, exit 1 — and NEVER printed its summary line, so the
+      `N passed` a sweep greps for simply is not there (control, same suite, tree intact:
+      `6 passed in 6.08s`). (c) The live 1685 case above: `collected`, then `F`s — loud. So "we
+      would notice" is NOT available as a reason to skip the ordering: only (c) announces itself.
+      What all three share is that the RESULT is gone. Read a round only from output you PROVED
+      exists.
   - **`released: false` has FOUR readings, and your ordinary one is the last.**
     `--release --role review` over an already-removed tree returns exit code 0 and
     `code: "no-worktree"`: that is not a refusal of the PROTECTION ("unsaved work is left"), not
