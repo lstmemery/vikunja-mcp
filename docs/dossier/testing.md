@@ -112,6 +112,50 @@ against. Coda, because it cuts the other way — 668's implementer and its
 reviewer both re-measured that figure RIGHT, so what the sweep could not see
 there was a missing ATTRIBUTION, not a stale total.
 
+**And that blind spot is not a property of FIGURE sweeps — it was re-measured on a WORD
+sweep, where it reported the DEFINING FILE clean (tracker #1685).** Flattening before
+matching is not a new idea here: six test modules already do it rather than read line by
+line — `test_repo_quotation_claims.py`, `test_skill_contract.py` and
+`test_advance_report_arguments.py` over a whole file, `test_repo_browser_isolation.py`
+over a CLAUDE.md slice, `test_rulebook_cross_references.py` over a pointer, and this
+section's own scanner over a paragraph. What stayed scoped to stale figures is the HEADER
+of the rule above — its remedy sentence was already general — and no HAND sweep had
+carried it across. `699d402` (VMCP-318 (1462)) landed the retraction below and, in the
+SAME commit, the copy at :318; VMCP-320 (1486) later cleared a surviving copy in a test
+file and told its taker to sweep the tree for the rest. That sweep was a line-scoped
+intersection — `git grep -niE 'silent[a-z]*'` piped through `grep -i skip` — every hit was
+read, and it reported no further site. Re-run at `45843e3`, a `':!uv.lock'` pathspec
+changing none of the arithmetic: 33 lines, and NOT ONE of them in this file, the one
+carrying the retraction. THREE of its seven `silent*` occurrences sit in that retraction's
+orbit and not one shares a line with a `skip` — `:283`, its own topic sentence; `:286`,
+whose preceding line ends "the skips are"; and `:318`, the copy VMCP-323 (1685) cleared
+below. Those three line numbers are `45843e3`'s, and this insertion has already moved
+them — locate them by text. Read the 33 as a negative answer that was never about this
+file, not as one site slipping through it.
+
+Priced as a DIFF against those 33, the way this section prices the other one: read each
+file whole, collapse every whitespace run to one space, then pair the two words within a
+window. ±120 characters adds TEN sites, ±60 adds four, ±400 adds 31, all at `45843e3`.
+None of the ten is a collision of unrelated topics — but "genuine" is the wrong bar,
+because the window cannot enforce it and the cost does not arrive where you expect. TWO of
+the ten pair the word with a marker literal or a retired test NAME rather than with the
+event, and the nearer of those — `docs/dossier/releases.md:479`, a `silently` 61
+characters from a ci-skip marker literal in the NEXT sentence — is admitted at ±120, not
+at ±400. Nor is there a clean setting to retreat to: ±60 already misses `:318` (about 85
+flattened characters back to `skips`, 66 forward to the next one), while the occurrence
+±120 still cannot reach is `:283`, 174 characters from any `skip` — so the width that
+would catch the retraction's own topic sentence is well past the width that admits the
+marker literals.
+
+And an exact-phrase grep is no refuge, which is the half that transfers. `silent skip`
+occurs 11 times at that tree read whole and case-insensitively; `git grep -F 'silent skip'`,
+the instrument 1486's own text prescribes, returns NINE. It loses one to a line wrap —
+`test_repo_browser_isolation.py:710`, where the phrase itself straddles the break — and one
+to case, `SILENT skip` in `skills/tracker/references/gc-report.md`. Two misses in eleven, on
+a phrase short enough to look unmissable. Hence the form 1486's own reviewer reached in a
+post-verdict note, sharper than that card's "the copy that gets missed is the one nobody
+thought to grep": THE COPY THAT GETS MISSED IS THE ONE THE GREP SHAPE CANNOT EXPRESS.
+
 **A mutation sweep opens with an UNMUTATED CONTROL round on the SAME selection,
 and every round count is a DELTA against it.** Sweeps here are hand-run — edit
 the source, `pytest`, read the summary line, restore — and that summary line is
@@ -315,14 +359,15 @@ rather than softening it. `test_repo_quotation_claims.py` ALREADY declares
 `requires_git_checkout` — its own comment calls a missing `.git` "NOT APPLICABLE,
 not broken" — and already applies it to three of its six tests, and those three ARE
 three of the 61 skips. So the prescribed stand today is the worst of both: eleven
-loud failures and three silent holes in one module. Completing the marker moves the
-11 into the skip column, the archive stand then reads `control 0 failed` with
-`collected` still 1401, and the sweep this section governs proceeds blind — which
-this file rates as the worse error, since a table that lies in MINUS reads a live
-pin as blind and invites deleting it. The narrow measurement that settles it, the
-module alone: in a clone `collected 15 items` / 15 passed / 0 failed / 0 skipped,
-in the extraction `collected 15 items` / 11 failed / 1 passed / 3 skipped. Same
-`collected`, different stand, and only the skip count separates them.
+loud failures and three holes in one module that already read as ordinary skips.
+Completing the marker moves the 11 into the skip column, the archive stand then reads
+`control 0 failed` with `collected` still 1401, and the sweep this section governs
+proceeds blind — which this file rates as the worse error, since a table that lies in
+MINUS reads a live pin as blind and invites deleting it. The narrow measurement that
+settles it, the module alone: in a clone
+`collected 15 items` / 15 passed / 0 failed / 0 skipped, in the extraction
+`collected 15 items` / 11 failed / 1 passed / 3 skipped. Same `collected`, different
+stand, and only the skip count separates them.
 
 **`rsync -a --exclude .venv` is withdrawn on a DIFFERENT finding, and it is TWO
 instruments, not one — which is where this card's own first wording was too wide.**
