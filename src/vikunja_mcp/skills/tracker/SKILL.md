@@ -1412,7 +1412,10 @@ unchanged or was found correct on the first try, and what spun was the wordings 
   that does NOT cancel "record the verdict IMMEDIATELY":** if it has not come back by the moment
   you are sure, set the verdict and append the findings as a separate `comment`, putting the marker
   (`[review]`/`[worklog]`) in the text itself: it has no stage or ownership gates, it works from
-  Review and after the verdict alike, and a second `review_task` is not needed for that. That is
+  Review and after the verdict alike, and a second `review_task` is not needed for that.
+  **The verdict kills YOUR tree too — for `--gc`, which no ordering of yours reaches**: ANY
+  auditor still there, reading or not, may be swept, so give it its own clone
+  (`references/drain.md`). That is
   how the post-verdict notes on 582, 594 and 603 are written: the tool's verdict ALWAYS comes on
   the first line — `[review] APPROVE` or `[review] NEEDS WORK` — and these do not have it, so they
   were appended with `comment`. The converse does not hold: a `[review]` comment without that line
