@@ -632,3 +632,108 @@ anchor is live in each); rename `kept` -> `held` and `expected` -> `routine` in 
 statement
 -> 3 failed (the new pin, the `CODE_*` pin, the standing-record pin) where the pre-fix bare-key
 anchors left the new pin green; control after the last restore 0 failed / 0 errors.
+
+## VMCP-324 (#1689) — a live-process guard on `--release`: its PREDICATE measured, the guard rejected
+
+**The ask.** `--release` destroyed a review worktree while a second-pass auditor's `pytest` was
+still running inside it (live, on VMCP-323 (1685)). The card asked whether `--release` should
+REFUSE a tree with a live process in it, on the `dirty`/`unpushed` precedent — exit 0 +
+`released: false` + a `code` — and said outright: this is the expensive option and probably the
+wrong one, MEASURE before building. This section is that measurement. **Nothing in
+`workspace_cmd.py` changed on this card**; what landed is a rule in `SKILL.md`'s release bullet, an
+annotation on the second-pass reading-auditor exemption, and the evidence in
+`skills/tracker/references/drain.md`.
+
+**First, the mechanism, reproduced rather than assumed.** A throwaway repo, a worktree, and a
+`sleep` started with its cwd inside it: `git worktree remove` returns **0**, the directory is GONE,
+and the sleeper keeps running — `ps` still lists it, and `lsof -a -d cwd -p <pid>` still reports
+the same now-unlinked path. POSIX lets a directory be unlinked out from under a process; neither
+side fails, and there is nothing for a caller to notice after the fact. So the incident is not a
+bug in the release path: it is the release path working exactly as specified, against a state
+nobody told it about.
+
+**The detector is blind in precisely the ordinary case, and that is what kills the guard.** The
+predicate a guard would need is "some process has its cwd in this tree". Two probes were measured,
+and the difference between them is itself a finding.
+
+**The cheap probe is ROOT-SCOPED, and that was nearly written up as if it were not.** A `sleep`
+planted with cwd at a live agent's worktree ROOT is seen by `lsof -a -d cwd -- <tree>` (count
+**1**), and the count is **0** again once it is killed — so the probe works. But a `sleep` whose cwd
+is a SUBDIRECTORY of that same tree is INVISIBLE to it: `-d cwd -- <tree>` returns **0** while
+`-d cwd +D <tree>` returns **1** on that very process, and `-d cwd -p <pid>` prints its cwd under
+the tree, so the process is certainly there. Controls either side of that round were 0. This is
+recorded because a continuous sample was then taken with the cheap probe — every ~1.3 s for 161 s
+across a live agent's real working period, **5 of 120** samples saw any process at all (peak 3 in
+one sample) — and that figure is therefore a FLOOR, not a rate. An agent whose commands `cd` deeper
+than the tree root would not have been counted at all.
+
+**So the conclusion is carried by the DEEP probe, not by the floor.** Run from OUTSIDE the tree, so
+that the probe's own shell is not what it finds, `lsof -a -d cwd +D <tree>` over a live agent's
+worktree at a moment when that agent had nothing executing returned **0**, twice — against a
+positive control of **1** for a sleeper planted in a SUBDIRECTORY of the same live tree. That is
+the measurement that matters, and the percentage only illustrates it: **an agent is not a process
+in its tree; it is a sequence of short-lived ones**, and between two tool calls there is nothing
+anywhere under the tree to detect, at any probe depth.
+
+**And read the 1685 case exactly, because it is the guard's best case rather than its typical
+one.** That auditor was mid-`pytest` over the full unit suite — one long-lived process, and the
+comparable run on that card took 789 s — so a live-process guard WOULD have refused that release,
+and would have kept refusing for as long as the run lasted. That is precisely the trap: a guard
+that catches the one incident anybody can point at earns trust it cannot honour in the case the
+prose is actually written for, which is the auditor BETWEEN two of its own rounds — no process, no
+refusal, same destroyed tree. A guard whose silence is its answer during every idle moment is worse
+than prose rather than better: prose is something you must follow, a guard is something you stop
+thinking about. That is the same verdict this file already records for ignored files — what
+protects an agent is `SKILL.md`'s rule and not this code.
+
+**Two further costs, measured, neither of them the deciding one.** Cost on the hot path: a cwd
+probe takes **0.79–1.03 s** and an open-descriptor probe (`lsof +D`) **1.85–2.62 s**, three runs
+each — paid on every `--release` and, worse, once per tree on every `--gc` sweep. Portability: the
+means are not there. `/proc` is ABSENT on darwin (checked on the box this was measured on), so the
+dependency-free Linux route does not exist here, and `lsof` would be a second external binary in
+`workspace_cmd.py`. Be exact about what that costs: `CLAUDE.md` names this module the ONLY one in
+the package that runs git, and gives as the reason that a subprocess in the stdio server's path is
+a new class of crash. That rule is about which MODULE may shell out, not about which binaries THIS
+one may call — so a second binary here is a cost paid against the rule's stated reason, not a
+breach of its letter. `psutil` is not a dependency and adding one for this would be worse still.
+
+**The false-POSITIVE side was not measured and does not need to be.** A human's terminal left
+sitting in a worktree would hold it against every sweep forever, landing it in `kept` on each tick
+with no way for the agent to clear it. Noted as a further cost of the rejected design, not as
+evidence — the false-negative rate already settles it.
+
+**What a round actually looks like when its tree vanishes — three shapes that do NOT share a
+failure mode, and the spread is the point.** (a) A shell reader looping over the tree ran to
+COMPLETION, exit 0, reporting zero files and zero bytes. **The first write-up of this gave the
+wrong mechanism, and the correction is the useful part.** It said `ls` on an unlinked directory
+"returns EMPTY rather than failing". It does not: re-measured, `ls pkg` from an unlinked cwd exits
+**1** with `ls: pkg: No such file or directory` on stderr, every iteration. The zeroes came from
+the STAND — its `2>/dev/null` plus a `wc -l` over empty stdout. So the loss is loud at the source
+and is silenced by the reporting, which is a sharper lesson than "it fails quietly" and one this
+repo already half-carries: `CLAUDE.md` warns in the same terms that `grep -c` over a deleted path
+prints nothing and exits 2, `2>/dev/null` hides why, and an empty count reads as a zero. A scripted
+round that discards stderr or ignores exit codes converts this loud failure into a clean-looking
+all-zero round. (b) A real `pytest` whose tree was
+removed two seconds in printed its progress dots to `[100%]` and then died at session teardown with
+`FileNotFoundError` on the tree path, exit 1 — and never printed its summary line at all, so the
+`N passed` a sweep greps for is simply absent (control, same suite, tree intact:
+`6 passed in 6.08s`). (c) The live 1685 case: `collected 1435`, then a run of `F`s in
+`test_workspace_cmd.py` — loud. Only (c) announces itself, so "we would notice" is not available as
+a reason to skip the ordering rule. What all three share is that the RESULT is gone.
+
+**Scope, stated because this lineage keeps widening its own incidents.** Nothing was lost from the
+repository on 1685: the work was already on `main` and a review tree is detached and clean. A lost
+measurement and a wasted dispatch, never lost code. This is also NOT the `removed_ignored` family —
+that channel reports files destroyed WITH a tree, whereas a tree destroyed under a live reader
+leaves no entry in that list at all.
+
+**Honest limits of this measurement.** The occupancy sample is ONE agent over ONE 161-second window
+on darwin, taken with the ROOT-scoped probe, so it is a floor and not a rate — see above. An agent
+running long foreground commands back to back would occupy its tree a far larger fraction of the
+time, and really would be caught. What that does NOT buy back is the conclusion, because the
+conclusion rests on the deep-probe zeroes and on the mechanism rather than on the percentage: the
+guard's answer during an idle moment is "nobody is there", and an idle moment is exactly when a
+release tends to be called — after your own last command, with the auditor between two of its own.
+The three round-shapes above are each a single observation; (c) is quoted from 1685's own report
+rather than re-run, and it reaches this file through that card's REVIEWER quoting its auditor,
+which is one degree of hearsay and is worth saying so. Nothing here was measured on Linux.

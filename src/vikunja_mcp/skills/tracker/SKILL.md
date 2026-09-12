@@ -1122,6 +1122,13 @@ where. Here — what must not be broken:
     `vikunja-mcp workspace --release <id>` (fine from inside that worktree — the CLI works from
     the main checkout itself). Success is `{"released": true, ...}`, and from that moment your
     directory IS GONE: do everything remaining (the report, any commands) from the main checkout.
+    **"Everything remaining" includes every agent YOU DISPATCHED: `--release` is the last action
+    with respect to THEM too, not only to you.** One still standing in that tree is not a state
+    `--release` can see — the removal succeeds, the directory goes, and it runs on against an
+    unlinked cwd. What dies is its RESULT, never TRACKED work, which a successful release proves
+    is committed and pushed (ignored files are the separate subtlety below). So let every agent of
+    yours return BEFORE you release, and give any auditor that RUNS anything its own clone rather
+    than your tree. Measured live on VMCP-323 (1685); the evidence is in `references/drain.md`.
     **TWO subtleties of SUCCESS, and they are the same two fields read in `--gc`'s `released`
     list.** (1) `branch_deleted: false` — the directory is gone but the `task/<id>` branch remains
     (`git branch -D` failed; the `warning` carries the reason and the command that cleans it up).
@@ -1207,12 +1214,15 @@ unchanged or was found correct on the first try, and what spun was the wordings 
   measured this myself" is precisely what it must not have. It works exactly because it opens
   the file and the history instead of remembering.
 - **WHERE it works — in its OWN clone, not in your tree.** A READING auditor (open the file, the
-  history, `git log -S`) is fine with your tree — the bullet above describes exactly that one. But
-  the moment you ask it to RE-MEASURE, the assignment becomes a WRITING one: a claim of the form "X
-  is what catches Y" is re-measured, by this repo's rules, by deleting X and requiring the test to
-  go RED — that is, the auditor mutates exactly the sources you are running your own rounds over in
-  that same minute. And the path you have to hand is exactly one — your working tree; hand it over
-  in the brief and there are TWO WRITERS in one directory. The collision was caught live on
+  history, `git log -S`) is fine with your tree — the bullet above describes exactly that one.
+  **Fine against MUTATION — the collision this bullet is entirely about — and NOT against your own
+  `--release`, which destroys the tree under a reader just the same** (see "Worked in your own
+  worktree"). But the moment you ask it to RE-MEASURE, the assignment becomes a WRITING one: a
+  claim of the form "X is what catches Y" is re-measured, by this repo's rules, by deleting X and
+  requiring the test to go RED — that is, the auditor mutates exactly the sources you are running
+  your own rounds over in that same minute. And the path you have to hand is exactly one — your
+  working tree; hand it over in the brief and there are TWO WRITERS in one directory. The
+  collision was caught live on
   VMCP-160 (667) and reproduced on a constructed stand (two processes, one tree, both mutating
   `SKILL.md`). There are TWO axes, and they must not be confused:
   - **a foreign MUTANT under your round — LOUD**: a round that alone gave `control 0 failed` gives
