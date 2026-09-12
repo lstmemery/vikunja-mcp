@@ -686,9 +686,37 @@ than prose rather than better: prose is something you must follow, a guard is so
 thinking about. That is the same verdict this file already records for ignored files — what
 protects an agent is `SKILL.md`'s rule and not this code.
 
-**Two further costs, measured, neither of them the deciding one.** Cost on the hot path: a cwd
-probe takes **0.79–1.03 s** and an open-descriptor probe (`lsof +D`) **1.85–2.62 s**, three runs
-each — paid on every `--release` and, worse, once per tree on every `--gc` sweep. Portability: the
+**Two further costs, neither of them the deciding one — and the first is NOT a range, which is
+this paragraph's own correction (VMCP-326, #1701).** Cost on the hot path: a probe of either shape
+costs TENTHS OF A SECOND, paid on every `--release` and, worse, once per tree on every `--gc`
+sweep. That is all the measurement supports, and saying more was the defect. This paragraph first
+quoted **0.79–1.03 s** for a cwd probe against **1.85–2.62 s** for an open-descriptor one
+(`lsof +D`), three runs each, naming no box — and NEITHER the magnitude nor the ORDERING
+reproduces. 1689's reviewer got 0.38–0.54 and 0.34–0.42 and its second pass 0.03–0.04 — quoted
+from #1701's description rather than re-run, so one degree of hearsay. What was re-run for this
+card, on darwin 25.6.0 / arm64 (Apple M1 Pro, `lsof` 4.91, ~560 processes in the table),
+interleaved so a load drift hits every shape alike, five rounds each: idle, the root-scoped cwd
+probe (`-a -d cwd -- <tree>`) 0.216–0.220 s, the deep cwd probe (`-a -d cwd +D <tree>`)
+0.248–0.261 s, the descriptor probe (`+D <tree>`) 0.246–0.259 s; with eight busy processes
+alongside, the same three run 0.267–0.410, 0.308–0.476 and 0.348–0.422 s.
+
+**Read the MECHANISM instead, because it is what the spread is evidence of.** `lsof`'s cost here
+is dominated by its scan of the PROCESS TABLE, which is a property of the box at that minute and
+not of the probe; the `+D` tree walk is the small remainder. Measured back to back on one box,
+three rounds each: the descriptor probe over an EMPTY directory costs 0.215–0.220 s, the same as
+the root-scoped probe that walks nothing, and over this 2 009-file worktree 0.248–0.259 s — so the
+walk is worth ~0.03 s and the other ~0.22 s is the floor every shape pays. **The ordering claim is
+therefore WITHDRAWN rather than re-measured, and NOT because a different order replaced it.** The
+descriptor probe is not "more than double" the cwd probe here. Idle, the root-scoped probe is the
+cheapest of the three by that ~0.03 s and the two DEEP shapes overlap each other; under load even
+that much goes, and this is the measurement that settles it — read PER ROUND, the root-scoped
+probe was cheapest in only 3 of 5 loaded rounds and the DEAREST of the three in the other 2, while
+the deep/descriptor pair inverted once as well. An ordering that is unstable between five
+consecutive rounds on ONE box was never going to be a property of the probes. And the cheap shape
+is in any case the one shown BLIND above, so its idle saving buys nothing. And note
+which anchor this figure needed: a sha names a TREE, and probe cost is not a property of the tree
+at all, so what has to be named is the BOX and the load. None of this touches the rejection: the
+guard falls on the deep-probe zeroes, not on what a probe costs. Portability: the
 means are not there. `/proc` is ABSENT on darwin (checked on the box this was measured on), so the
 dependency-free Linux route does not exist here, and `lsof` would be a second external binary in
 `workspace_cmd.py`. Be exact about what that costs: `CLAUDE.md` names this module the ONLY one in
