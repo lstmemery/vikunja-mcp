@@ -1,0 +1,314 @@
+"""Scoped delegated board moves: per-card, user-instruction-gated, audited.
+
+WHAT THIS IS. The board's human-only gates (Done in both directions, Backlog triage,
+label changes) stay in force for every ordinary tool. This module adds ONE narrow,
+explicitly user-authorized exception channel — `Workflow.delegated_move` — for the
+three moves the human otherwise performs by hand in the web UI on their OWN explicit
+chat instruction for THAT SPECIFIC card:
+
+    mark-done          a card the user said to close (with verification evidence)
+    triage-to-queue    a Backlog card the user told the agent to work on
+    add-label / clear-label   a label change the user asked for by name
+
+WHAT IT IS NOT. Not a blanket "agents may self-approve" grant, and never a route for
+an agent to certify its own authored work: mark-done refuses a card the agent itself
+created unless an independent review verdict (`reviewed` label) already landed on it,
+and every fired transition posts a dated `[delegated-move]` audit comment QUOTING the
+user instruction that authorized it. Refusal is the default everywhere else: an action
+outside the allowlist, a card without a matching in-date record, an expired record, a
+missing record file, or a record that does not parse — each refuses and names why.
+
+THE THREE ARMS, all of which a HUMAN controls (removing any one of them kills the
+capability without touching the code):
+
+1. The designated identity. A second, narrower Vikunja API token (`omp-delegated`)
+   lives ONLY in `~/.config/vikunja-mcp/env-delegated` (mode 600, never committed).
+   `config.load_config` refuses to arm delegation when that file is missing and
+   refuses when its token EQUALS the shared agent token — a delegated server cannot
+   load the shared `omp-agent` identity, by construction. Revoking the token in
+   Vikunja's web UI ends delegation instantly.
+
+2. The server entry. `VIKUNJA_DELEGATION=1` in the `vikunja-delegated` registration
+   (a file the user manages). Without it the server registers the ordinary tools and
+   never registers `delegated_move`; with it the server registers ONLY this tool, so
+   the narrow scope is visible in the tool list itself.
+
+3. The per-card record. `~/.config/vikunja-mcp/delegation-authorized.toml` — one
+   `[[authorized_move]]` block per delegated transition, carrying the quoted user
+   instruction and its expiry. No entry, no move; a blanket grant is NOT expressible
+   (there is no task_id wildcard and no multi-card form).
+
+Provenance honesty, stated rather than glossed: the record file is TRANSCRIBED by the
+agent from the user's chat instruction — the chat transcript is the source of truth,
+and the audit comment on the card is what makes every delegated move human-auditable
+(the human reads the quote against their own memory and revokes via arm 1/2 on
+disagreement). This is a guardrail, not a cryptographic boundary: the security
+boundary is the scoped token, exactly as the project README says.
+"""
+
+import tomllib
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+# The arm switch for the delegated server registration AND for the token swap in
+# load_config. Truthy spellings are closed: anything else reads as "not armed".
+ENV_DELEGATION = "VIKUNJA_DELEGATION"
+# Optional override of the per-card record path (machine-local tests). Absent -> the
+# default below. Like the token files, this is an env-layer key only, never toml.
+ENV_AUTHORIZED_FILE = "VIKUNJA_DELEGATION_AUTHORIZED_FILE"
+DELEGATED_ENV_FILE = Path("~/.config/vikunja-mcp/env-delegated").expanduser()
+AUTHORIZED_FILE = Path("~/.config/vikunja-mcp/delegation-authorized.toml").expanduser()
+
+# THE ALLOWLIST, closed by construction — the same closed-set discipline as
+# config.LANGUAGES: a value outside the set is refused by name, never silently
+# narrowed. Exactly the three transitions the human asked to delegate, plus the
+# label half split by direction (add vs clear) because the record must say which.
+ACTIONS = frozenset({"mark-done", "triage-to-queue", "add-label", "clear-label"})
+
+# Labels no delegated call may touch. The two VERDICT labels are the review
+# independence surface (`review_task` writes them; an agent setting `reviewed`
+# by hand would make a self-certified card indistinguishable from an accepted
+# one). `epic` is a structural container marker (decompose's).
+PROTECTED_LABELS = frozenset({"reviewed", "review-failed", "epic"})
+
+# How old a record may be at fire time. Bounds the window a stale file authorizes:
+# without it, a months-old file (or one transcribed from a conversation the user no
+# longer endorses) keeps delegating forever. Chosen over "no limit" for the same
+# reason DEFAULT_WIP_LIMIT chose a number over absence: "no bound" is not a spelling
+# a gate should have.
+MAX_RECORD_AGE = timedelta(days=7)
+
+# The audit marker, shared with every delegated transition. Startswith-pinned by
+# tests; the text names the date, the action, the card, the quoted instruction and
+# the record, in that order — a human scanning the card reads the authorization
+# without opening the record file.
+DELEGATED_MARKER = "[delegated-move]"
+
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+@dataclass(frozen=True)
+class DelegationPolicy:
+    """What this server instance may delegate. None-armed -> every ordinary gate
+    holds and `delegated_move` refuses before it reads anything."""
+
+    armed: bool
+    authorized_file: Path
+
+
+@dataclass(frozen=True)
+class AuthorizedMove:
+    """One per-card record: exactly what the user's instruction authorized, no more."""
+
+    task_id: int
+    action: str
+    label: str | None
+    instruction: str
+    evidence: str | None
+    authorized_at: datetime
+    expires: datetime
+
+
+def is_armed(environ: dict[str, str]) -> bool:
+    return (environ.get(ENV_DELEGATION) or "").strip().lower() in _TRUTHY
+
+
+def load_delegation(environ: dict[str, str]) -> DelegationPolicy:
+    """The mechanism arm: is this server instance a delegated one, and where does its
+    per-card record live. Reads NO secret — the token swap lives in config.load_config,
+    so the delegated identity stays a config-layer fact like every other credential."""
+    armed = (environ.get(ENV_DELEGATION) or "").strip().lower() in _TRUTHY
+    raw = (environ.get(ENV_AUTHORIZED_FILE) or "").strip()
+    authorized_file = Path(raw).expanduser() if raw else AUTHORIZED_FILE
+    return DelegationPolicy(armed=armed, authorized_file=authorized_file)
+
+
+def _aware(dt: datetime, field: str, line: str) -> datetime:
+    """Every recorded instant must carry an offset. A naive datetime would compare
+    against a clock the record's author did not name — refuse rather than guess UTC."""
+    if dt.tzinfo is None:
+        raise ValueError(
+            f"{line}: {field} must carry a timezone offset (e.g. 2026-09-17T00:00:00Z), "
+            f"got a bare datetime — the record's window would otherwise be read in an "
+            f"unnamed zone"
+        )
+    return dt
+
+
+def parse_authorized_file(path: Path) -> list[AuthorizedMove]:
+    """Strict parse of the per-card record. STRICT means: a file that exists but does
+    not parse is a REFUSAL, never a silent empty list — an unreadable record must look
+    the same from the outside as a missing one looks from the inside (loud), because
+    the two demand different fixes (fix the file vs record the instruction)."""
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    with open(path, "rb") as fh:
+        raw = tomllib.load(fh)
+    entries_raw = raw.get("authorized_move")
+    if entries_raw is None:
+        raise ValueError(
+            f"{path}: no [[authorized_move]] blocks — an empty file delegates nothing; "
+            f"if a move was authorized, record it as one block per transition"
+        )
+    if not isinstance(entries_raw, list):
+        raise ValueError(f"{path}: authorized_move must be an array of tables")
+    entries: list[AuthorizedMove] = []
+    for i, raw_entry in enumerate(entries_raw, start=1):
+        line = f"{path} authorized_move #{i}"
+        unknown = set(raw_entry) - {
+            "task_id",
+            "action",
+            "label",
+            "instruction",
+            "evidence",
+            "authorized_at",
+            "expires",
+        }
+        if unknown:
+            raise ValueError(
+                f"{line}: unknown key(s) {', '.join(sorted(unknown))} — a record says "
+                f"exactly what it authorizes; an unrecognized key is a typo or a "
+                f"future format this parse must not silently accept"
+            )
+        action = str(raw_entry.get("action") or "").strip()
+        if action not in ACTIONS:
+            raise ValueError(
+                f"{line}: action must be one of {', '.join(sorted(ACTIONS))}, got {action!r}"
+            )
+        task_id = raw_entry.get("task_id")
+        if isinstance(task_id, bool) or not isinstance(task_id, int) or task_id < 1:
+            raise ValueError(f"{line}: task_id must be a positive Vikunja task id, got {task_id!r}")
+        label = raw_entry.get("label")
+        if action in ("add-label", "clear-label"):
+            if not (label or "").strip():
+                raise ValueError(f"{line}: {action} requires label = the label title, verbatim")
+            label = str(label).strip()
+        elif label is not None:
+            raise ValueError(
+                f"{line}: label is only meaningful for add-label/clear-label — "
+                f"remove it so the record cannot read as authorizing more than it does"
+            )
+        instruction = str(raw_entry.get("instruction") or "").strip()
+        if not instruction:
+            raise ValueError(
+                f"{line}: instruction is required — quote the user's own words; an "
+                f"empty instruction would make the audit comment name nobody"
+            )
+        evidence = raw_entry.get("evidence")
+        if action == "mark-done":
+            if not (evidence or "").strip():
+                raise ValueError(
+                    f"{line}: mark-done requires evidence — what was verified and how, "
+                    f"the content the Done verdict rests on"
+                )
+            evidence = str(evidence).strip()
+        elif evidence is not None:
+            evidence = str(evidence).strip() or None
+        authorized_at = raw_entry.get("authorized_at")
+        expires = raw_entry.get("expires")
+        if not isinstance(authorized_at, datetime) or not isinstance(expires, datetime):
+            raise ValueError(
+                f"{line}: authorized_at and expires must both be datetimes "
+                f"(TOML 2026-09-16T15:40:00Z form)"
+            )
+        authorized_at = _aware(authorized_at, "authorized_at", line)
+        expires = _aware(expires, "expires", line)
+        if expires <= authorized_at:
+            raise ValueError(
+                f"{line}: expires ({expires.isoformat()}) is not after authorized_at "
+                f"({authorized_at.isoformat()}) — a record with no live window "
+                f"authorizes nothing and must be corrected, not silently skipped"
+            )
+        entries.append(
+            AuthorizedMove(
+                task_id=task_id,
+                action=action,
+                label=label,
+                instruction=instruction,
+                evidence=evidence,
+                authorized_at=authorized_at,
+                expires=expires,
+            )
+        )
+    return entries
+
+
+def find_authorized(
+    entries: list[AuthorizedMove],
+    task_id: int,
+    action: str,
+    label: str | None,
+    now: datetime,
+) -> tuple[AuthorizedMove | None, str | None]:
+    """The FIRST record matching (task_id, action, label) that is inside its window,
+    or the refusal reason. Label match is case- and whitespace-insensitive (`label_key`
+    semantics, same tolerance the board's own label writes apply); task_id and action
+    are exact — an authorization names ONE card and ONE action."""
+
+    def norm(value: str | None) -> str:
+        return (value or "").strip().casefold()
+
+    matching = [
+        e
+        for e in entries
+        if e.task_id == task_id and e.action == action and norm(e.label) == norm(label)
+    ]
+    if not matching:
+        return None, (
+            f"no [[authorized_move]] record matches task {task_id} action '{action}'"
+            + (f" label '{label}'" if label is not None else "")
+            + " — a delegated move fires ONLY on the user's explicit instruction for "
+            "THIS card; record that instruction in a new block in the record file "
+            "(quoted verbatim, with authorized_at and a near-future expires) and "
+            "retry"
+        )
+    live = [e for e in matching if e.authorized_at <= now and now < e.expires]
+    if len(live) == 1:
+        return live[0], None
+    if len(live) > 1:
+        return None, (
+            f"{len(live)} records match task {task_id} action '{action}' and are all "
+            f"live — remove the duplicates so one instruction maps to one move"
+        )
+    # Zero live among >= 1 matching: every one is expired or not-yet-valid. Say which.
+    stale = matching[0]
+    if now < stale.authorized_at:
+        return None, (
+            f"the record for task {task_id} action '{action}' is not valid yet "
+            f"(authorized_at {stale.authorized_at.isoformat()}) — correct the record "
+            f"rather than firing early"
+        )
+    return None, (
+        f"the record for task {task_id} action '{action}' expired at "
+        f"{stale.expires.isoformat()} — delegated instructions are short-lived; "
+        f"record the user's fresh instruction in a new block with a new expiry"
+    )
+
+
+def audit_text(
+    action: str,
+    task_id: int,
+    instruction: str,
+    record: AuthorizedMove,
+    me_username: str,
+    evidence: str | None = None,
+) -> str:
+    """The dated audit comment body for one delegated transition. The user
+    instruction is QUOTED verbatim — the human reads it against their own chat and
+    revokes (token / server entry / record file) on disagreement."""
+    now = datetime.now(timezone.utc)
+    lines = [
+        f"{DELEGATED_MARKER} {now.strftime('%Y-%m-%dT%H:%MZ')} — {action} on task "
+        f"{task_id}, performed by the delegated '{me_username}' token on the user's "
+        f"explicit instruction:",
+        f"> {instruction}",
+    ]
+    if evidence:
+        lines.append(f"evidence: {evidence}")
+    lines.append(
+        f"authorization: {record.authorized_at.isoformat()} -> "
+        f"{record.expires.isoformat()} in the delegation record file; every other "
+        f"transition stays human-only"
+    )
+    return "\n".join(lines)

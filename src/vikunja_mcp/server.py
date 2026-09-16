@@ -1,4 +1,5 @@
 """stdio MCP server. Gates live in Workflow; this is thin wiring and clear errors."""
+import os
 import sys
 from functools import wraps
 
@@ -7,6 +8,7 @@ import httpx
 from vikunja_mcp import __version__
 from vikunja_mcp.api import VikunjaAPI, VikunjaError, canonical_base_url
 from vikunja_mcp.config import ConfigError, load_config
+from vikunja_mcp.delegation import is_armed as _delegation_armed
 from vikunja_mcp.notify import WebhookNotifier
 from vikunja_mcp.workflow import Workflow, WorkflowError
 
@@ -57,8 +59,20 @@ def _server():
         # the SDK's own version — so a client's server list would show a blank. Report OURS,
         # what a human debugging a rollout of the moving `stable` channel needs to see.
         _mcp_server = MCPServer("vikunja-tracker", version=__version__)
+        # DELEGATED MODE (delegation.py): when VIKUNJA_DELEGATION is armed this process
+        # is the `vikunja-delegated` registration and registers ONLY delegated_move —
+        # the narrow-scope identity is visible in the tool list itself. Un-armed (the
+        # ordinary registration), delegated_move is NOT registered and the ordinary
+        # tools are, byte-for-byte the pre-delegation set — so the default behavior of
+        # every consumer is unchanged by the feature's existence.
+        armed = _delegation_armed(dict(os.environ))
         for fn in _DEFERRED_TOOLS:
-            _mcp_server.tool()(fn)
+            name = getattr(fn, "__name__", "")
+            if name == "delegated_move":
+                if armed:
+                    _mcp_server.tool()(fn)
+            elif not armed:
+                _mcp_server.tool()(fn)
         _forbid_unknown_tool_arguments(_mcp_server)
         _refuse_boolean_targets(_mcp_server)
     return _mcp_server
@@ -238,7 +252,13 @@ def _refuse_boolean_targets(server) -> None:
         tools = getattr(server._tool_manager, "_tools", None)
         if not tools:
             raise RuntimeError("no tool registry on the tool manager")
-        for name, argument in _TARGET_PROJECT_ARGUMENTS.items():
+        # DELEGATED MODE: the armed instance registers ONLY delegated_move, so the three
+        # cross-project doors are absent from its registry by design. Skipping an absent
+        # door is not a degraded guard — that door does not exist to guard — so only a
+        # PRESENT tool that could not be reached counts as a failure worth its stderr line.
+        reachable = {name: argument for name, argument in _TARGET_PROJECT_ARGUMENTS.items()
+                     if name in tools}
+        for name, argument in reachable.items():
             arg_model = tools[name].fn_metadata.arg_model
             arg_model.model_fields[argument].metadata.append(BeforeValidator(_not_a_boolean))
             arg_model.model_rebuild(force=True)
@@ -366,6 +386,11 @@ def _build_workflow(cfg) -> Workflow:
         require_review_independence=cfg.require_review_independence,
         language=cfg.language,
         siblings=cfg.siblings,
+        # the delegated-moves arm (delegation.py): None on every ordinary server, the
+        # policy on the armed vikunja-delegated instance. Read by delegated_move alone;
+        # wired at BOTH construction sites for the same no-drift property as
+        # require_review_independence above.
+        delegation=cfg.delegation,
     )
 
 
@@ -952,6 +977,44 @@ def transfer_task(task_id: int, to: str | int, reason: str) -> dict:
     are kept. Refused for a card in Done (human territory) and for an epic container with
     children — its children would be left pointing at a parent nobody there can open."""
     return _wf().transfer_task(task_id, to=to, reason=reason)
+
+
+@_mcp_tool
+@_tool
+def delegated_move(
+    task_id: int, action: str, instruction: str,
+    label: str | None = None, evidence: str | None = None,
+) -> dict:
+    """Perform ONE delegated board transition the USER explicitly authorized for THIS
+    card by instruction in chat. REGISTERED ONLY on the armed `vikunja-delegated`
+    server; on every ordinary server the human-only gates stand unchanged.
+
+    Actions (closed allowlist — everything else refuses):
+      mark-done: move the card to Done ON the user's explicit close instruction.
+        Requires evidence (what was verified and how). REFUSED for a card the agent's
+        own account created unless the independent `reviewed` label is already on it —
+        an agent never certifies its own work. Audit comment posted BEFORE the move.
+      triage-to-queue: move a Backlog card to Queue on the user's explicit "work on
+        this" instruction (the human hand-bounce this replaces). The card stays
+        UNASSIGNED and claimable like any human-triaged card.
+      add-label / clear-label: the label change the user asked for by name. The
+        verdict labels (reviewed / review-failed) and `epic` are REFUSED — they belong
+        to the independent review flow and to decompose.
+
+    BEFORE CALLING: record the user's instruction verbatim in the delegation record
+    file (~/.config/vikunja-mcp/delegation-authorized.toml), one [[authorized_move]]
+    block per transition: task_id, action, label (label actions only), instruction
+    (the user's own words, quoted), evidence (mark-done only), authorized_at, expires
+    (TOML datetimes with timezone). A delegated move fires ONLY on that record; no
+    entry, no move; expired entries refuse; blanket grants are not expressible.
+
+    The move lands with a dated [delegated-move] audit comment quoting the
+    instruction — the human audits it on the card and revokes (token, server entry,
+    record file) on disagreement. claim stays Queue-only and WIP-gated, review
+    independence is untouched, and no delegated call ever changes assignees."""
+    return _wf().delegated_move(
+        task_id, action, instruction, label=label, evidence=evidence
+    )
 
 
 def main(argv: list[str] | None = None) -> None:

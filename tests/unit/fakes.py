@@ -115,7 +115,8 @@ class FakeAPI:
             raise VikunjaError(404, "The project does not exist.")
         return entry
 
-    def add_task(self, title, bucket_title, priority=0, assignee=None, labels=()):
+    def add_task(self, title, bucket_title, priority=0, assignee=None, labels=(),
+                 created_by=None):
         idx, identifier = self._task_identity()
         t = {
             "id": next(self._ids), "title": title, "description": "", "priority": priority,
@@ -126,6 +127,13 @@ class FakeAPI:
             "project_id": self.project["id"],
             "done": False, "assignees": [assignee] if assignee else [],
             "labels": [{"id": next(self._ids), "title": lb} for lb in labels],
+            # every real task read carries its CREATOR (Vikunja `created_by`): a card
+            # typed in the web UI carries the human's user, one filed via the token
+            # carries the token's user. Default here is a HAND author because add_task
+            # models pre-existing board state; `created_by="me"` models an agent-filed
+            # card. delegation's self-certification gate reads it (workflow tests).
+            "created_by": self.me_user if created_by == "me"
+            else (created_by or {"id": 1, "username": "human"}),
         }
         self.tasks[t["id"]] = t
         self.task_bucket[t["id"]] = self.bucket_id(bucket_title)
@@ -459,6 +467,10 @@ class FakeAPI:
             "priority": priority, "index": idx, "identifier": identifier,
             "project_id": state["project"]["id"],
             "done": False, "assignees": [], "labels": [],
+            # 1:1: the real server records the CREATOR of a created task as the
+            # token's user — a card the agent files via create_task carries
+            # created_by = me. delegation's self-certification gate reads it.
+            "created_by": self.me_user,
         }
         self.tasks[t["id"]] = t
         self.task_bucket[t["id"]] = state["buckets"][0]["id"]  # default = первый бакет ЦЕЛИ
