@@ -84,6 +84,14 @@ _OTHER_ARGS = {
     # ever touched. Both are mutating, so neither belongs in _READING_TOOLS.
     "handoff": {"to": 999, "title": "the other half"},
     "transfer_task": {"to": 999, "reason": "filed on the wrong board"},
+    # the delegated move: aimed at an accepted card it refuses on an ordinary (un-armed)
+    # Workflow BEFORE any stage read — the not-armed refusal is the whole row. The record
+    # file an armed call would need is deliberately absent here: a Done card must not be
+    # reachable by a delegated close that no instruction recorded, and this sweep's
+    # Workflow carries no arm flag, so the row measures the not-armed gate. The armed
+    # Done refusals and the audit-first happy path are pinned in test_delegated_move.py.
+    "delegated_move": {"action": "mark-done", "instruction": "close it",
+                       "evidence": "verification output"},
 }
 
 

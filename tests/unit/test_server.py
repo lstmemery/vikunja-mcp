@@ -188,7 +188,7 @@ def test_reload_rebuilds_workflow_with_the_fresh_on_disk_token(monkeypatch):
         # raise TypeError, which _reload_workflow_from_disk swallows into a silent False
         lambda api, pid, enforce_single_wip=False, notifier=None, wip_limit=None,
         require_review_independence=False, language=DEFAULT_LANGUAGE,
-        siblings=None: ("wf", api, pid),
+        siblings=None, delegation=None: ("wf", api, pid),
     )
     server._reset_workflow_cache()
     try:
