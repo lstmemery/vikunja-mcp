@@ -532,6 +532,12 @@ def run_claimable() -> int:
             # the cross-project predecessor gate resolves a blocker off THAT task's own
             # `project_id`, never off the registry, so the gate reads the same either way.
             siblings=cfg.siblings,
+            # the delegated-moves arm, wired for the construction-site rule above: None on
+            # an ordinary run, the policy when VIKUNJA_DELEGATION is armed. Nothing on
+            # THIS path can call delegated_move (next_task alone is called, read-only by
+            # contract), so the key changes no verdict here — it is wired so the parity
+            # gate sees the same keyword set at both sites.
+            delegation=cfg.delegation,
         )
         verdict = classify_next(wf.next_task())
     except Exception as e:  # noqa: BLE001 — a CLI check: ANY failure is exit 1, never a crash
