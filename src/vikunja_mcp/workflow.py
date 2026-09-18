@@ -2900,8 +2900,10 @@ class Workflow:
         label: str | None = None, evidence: str | None = None,
     ) -> dict:
         """Perform ONE delegated transition the USER explicitly authorized for THIS card
-        by instruction in chat (see delegation.py for the design). Four actions exist:
-        mark-done (requires evidence), triage-to-queue (Backlog -> Queue), add-label,
+        by instruction in chat (see delegation.py for the design). Five actions exist:
+        mark-done (requires evidence), move-stage (target stage named in the record's
+        `stage` key — ANY column-to-column move on the user's order, including out of
+        Done and into/out of Icebox), triage-to-queue (Backlog -> Queue), add-label,
         clear-label. Everything else refuses.
 
         The gates, in the order they fire:
@@ -2909,7 +2911,7 @@ class Workflow:
         1. NOT ARMED -> refuse. `self.delegation` is None on every ordinary server; the
            delegated arm comes from VIKUNJA_DELEGATION in the `vikunja-delegated`
            registration the user manages. The ordinary tools keep every gate they had.
-        2. UNKNOWN ACTION -> refuse, naming the four. The allowlist is closed; a new
+        2. UNKNOWN ACTION -> refuse, naming the five. The allowlist is closed; a new
            delegated action is a code change, not a record entry.
         3. RECORD MISSING / UNPARSABLE / NO MATCH / EXPIRED -> refuse, naming the path
            and the reason. One `[[authorized_move]]` block per transition, quoting the
@@ -2920,27 +2922,49 @@ class Workflow:
         5. PER-ACTION stage guards:
            mark-done: refuses a card already in Done (the human-only-BOTH-directions
              rule is NOT lifted by delegation) or in Icebox.
+           move-stage (2026-09-18 captain widening): the target column comes from the
+             record's `stage` key, never from the call. Refuses an unknown stage name
+             and a move whose card is ALREADY in the target stage. Done is reachable
+             in BOTH directions and Icebox in both directions ON THE USER'S RECORDED
+             INSTRUCTION — his orders unblock bookkeeping moves on his board. A move
+             whose TARGET is Done still passes the self-certification guard (6), and
+             every move touching the Done boundary posts its audit comment BEFORE
+             moving, exactly like mark-done.
            triage-to-queue: only FROM Backlog — it is the hand-bounce the user asked to
              replace; a card anywhere else keeps its human path.
            add-label / clear-label: refused on a Done card (closed work is closed); the
              VERDICT labels (`reviewed`, `review-failed`) and `epic` are refused — they
              are the review-independence and container surfaces, not provenance.
-        6. SELF-CERTIFICATION GUARD (mark-done only): a card this agent's own account
-           created (created_by == the token's user) refuses unless the independent
-           `reviewed` label is already on it. The Done rule exists to keep an agent from
-           grading its own homework; delegation does not lift THAT — it hands the
-           human's pen to an authorized move, never the grade.
+        6. SELF-CERTIFICATION GUARD (the Done target — mark-done, and move-stage with
+           stage = "Done"): a card this agent's own account created (created_by == the
+           token's user) refuses unless the independent `reviewed` label is already on
+           it — UNLESS the deployment set the deliberate opt-out
+           VIKUNJA_DELEGATION_AGENT_MARK_DONE beside the arm switch, in which case the
+           user's recorded instruction IS the certification (the record must still
+           quote it verbatim; the audit comment still lands first). The Done rule
+           exists to keep an agent from grading its own homework; delegation does not
+           lift THAT — it hands the human's pen to an authorized move, never the grade.
         7. AUDIT, mandatory: a dated `[delegated-move]` comment quoting the user
            instruction lands on the card for EVERY fired transition — before the move
-           for mark-done (an audit trail on a card that moved is the contract; a move
-           without one is the failure to report), after the move for the reversible
-           actions, with a loud refusal if the audit write fails there.
+           for mark-done AND for every move-stage that touches the Done boundary
+           (either direction; an audit trail on a card that crossed it is the
+           contract; a move without one is the failure to report), after the move for
+           the reversible actions, with a loud refusal if the audit write fails there.
 
         What is deliberately NOT touched: claim stays Queue-only and WIP-gated, review
         independence stays as configured, return_task/decompose keep their gates, and
         delegated moves NEVER change assignees — triage-to-queue lands the card
         UNASSIGNED, exactly as a human triage would, so the ordinary queue flow
-        (next_task -> claim) reads it unchanged."""
+        (next_task -> claim) reads it unchanged, and move-stage keeps whatever
+        assignee the card already had.
+
+        What needs a human REGARDLESS of this tool: agent-authored work that
+        legitimately needs independent review goes through advance(to='review') /
+        review_task (or the card carries the `reviewed` verdict), anything needing a
+        human DECISION goes to call_human — the captain's orders unblock bookkeeping
+        moves, they do not certify agent work (the
+        VIKUNJA_DELEGATION_AGENT_MARK_DONE opt-out is the deployment's one recorded
+        exception for errand cards with no review flow to pass)."""
         if self.delegation is None or not self.delegation.armed:
             raise WorkflowError(
                 "delegated moves are NOT armed on this server (VIKUNJA_DELEGATION unset "
@@ -3015,12 +3039,15 @@ class Workflow:
                 "audit": "posted before the move (mark-done order)",
                 "record": self._record_summary(record),
             }
+        if action == "move-stage":
+            return self._delegated_move_stage(task, stage, task_id, action, instruction, record)
         if stage == "Done":
             raise WorkflowError(
-                f"task {task_id} is in Done — a closed card stays closed for agents "
-                f"even with delegation armed; its labels are the human's ledger now, "
-                f"and work the card revealed is NEW work: file_task it for a human's "
-                f"triage"
+                f"task {task_id} is in Done — a closed card stays closed for label "
+                f"and triage edits even with delegation armed (its labels are the "
+                f"human's ledger now); reopening the card itself is a move-stage with "
+                f"the user's instruction in the record. Work the card revealed is NEW "
+                f"work: file_task it for a human's triage"
             )
         if action == "triage-to-queue":
             if stage != "Backlog":
@@ -3063,8 +3090,79 @@ class Workflow:
             "record": self._record_summary(record),
         }
 
+    def _delegated_move_stage(
+        self, task: dict, stage: str, task_id: int, action: str, instruction: str,
+        record: AuthorizedMove,
+    ) -> dict:
+        """The 2026-09-18 captain widening: ANY stage-to-stage move on the user's
+        recorded instruction. The target comes from the record's `stage` key (the
+        parser guarantees it is present for move-stage and absent otherwise); the tool
+        call carries no target, so the record stays the single source of what was
+        authorized.
+
+        Guards, in fire order: the stage name must be a real column of THIS board's
+        pipeline (an unknown name refuses by name — a typo must never read as a move
+        to the default bucket); the card must not already be there (a no-op move is a
+        record mistake, not a success); a TARGET of Done passes the self-certification
+        guard (and so its VIKUNJA_DELEGATION_AGENT_MARK_DONE opt-out) exactly like
+        mark-done; every move touching the Done boundary — INTO Done, or OUT of it
+        (the reopen the human-only rule used to reserve) — posts its audit comment
+        BEFORE the move, because a card that has crossed the closed boundary is the
+        thing a human audits first. Assignees are never touched; Icebox needs no
+        special case (the captain's instruction IS the human call the freezer gate
+        wanted, quoted and audited on the card)."""
+        target = record.stage or ""
+        if target not in STAGES:
+            raise WorkflowError(
+                f"the record's stage {target!r} is not a column of this board — "
+                f"valid: {', '.join(STAGES)}; correct the record rather than moving a "
+                f"card to a name the board does not have"
+            )
+        if stage == target:
+            raise WorkflowError(
+                f"task {task_id} is already in '{target}' — the record authorizes a "
+                f"move that would do nothing; correct the record (wrong target?) "
+                f"rather than firing it"
+            )
+        if "Done" in (stage, target):
+            # the closed boundary in EITHER direction: audit first, then move — the
+            # mark-done order, because an unaudited crossing of Done is exactly what
+            # this feature must not produce.
+            if target == "Done":
+                self._require_review_on_self_authored(task, task_id)
+            audit = audit_text(
+                action, task_id, instruction, record, self._me()["username"],
+                evidence=record.evidence,
+            )
+            try:
+                self.api.add_comment(task_id, audit)
+            except (VikunjaError, httpx.HTTPError) as exc:
+                _stderr_note_best_effort(
+                    f"vikunja-mcp: delegated audit comment failed for #{task_id}", exc
+                )
+                raise WorkflowError(
+                    f"the delegated move to '{target}' was REFUSED because its audit "
+                    f"comment could not be written ({exc.__class__.__name__}) — an "
+                    f"unaudited crossing of Done is what this feature must not "
+                    f"produce. The card was NOT moved. Diagnose the comment scope on "
+                    f"the delegated token and retry"
+                ) from None
+            self._move(task_id, target)
+            return {
+                "moved_to": target, "task_id": task_id, "action": action,
+                "audit": "posted before the move (Done-boundary order)",
+                "record": self._record_summary(record),
+            }
+        self._move(task_id, target)
+        self._audit_after(task_id, action, instruction, record)
+        return {
+            "moved_to": target, "task_id": task_id, "action": action,
+            "audit": "posted after the move", "record": self._record_summary(record),
+        }
+
     def _require_review_on_self_authored(self, task: dict, task_id: int) -> None:
-        """The self-certification guard for delegated mark-done: the card's CREATOR is
+        """The self-certification guard for a delegated move of an agent-authored card
+        to Done (mark-done, or move-stage with stage = "Done"): the card's CREATOR is
         the refusing identity. created_by is the account that made the card (every
         agent-token filing carries the agent user's id; a card typed by a human in the
         web UI carries theirs), so the comparison is made against THIS Workflow's own
@@ -3073,22 +3171,36 @@ class Workflow:
         human-only Done rule stands against — refused whether or not the record entry
         quotes an instruction, because the instruction cannot make the card
         independently reviewed. The `reviewed` label is the one state that unblocks
-        it: an independent reviewer already ruled."""
+        it: an independent reviewer already ruled.
+
+        THE ONE DELIBERATE OPT-OUT (delegation.ENV_AGENT_MARK_DONE, default off): a
+        deployment that sets it beside the arm switch declares that on THIS board the
+        user's explicit recorded instruction IS the certification — errand cards the
+        agent filed from chat ("toilet seat already repaired") have no review flow to
+        pass, and holding them to an independent verdict makes them unclosable forever.
+        The opt-out lifts ONLY the created_by/verdict read: the instruction stays
+        mandatory in the record, the audit comment still posts before the move, and
+        every other mark-done guard (already-Done, Icebox, expiry, failed audit write)
+        holds unchanged."""
+        if self.delegation is not None and self.delegation.agent_mark_done:
+            return
         created_by = (task.get("created_by") or {}).get("id")
         me_id = self._me()["id"]
         if created_by == me_id and not self._has_label(task, LABEL_REVIEWED):
             raise WorkflowError(
                 f"task {task_id} was created by the agent's own account (created_by "
                 f"user {me_id}) and carries no independent review verdict — a "
-                f"delegated mark-done would be the agent certifying its own work, "
+                f"delegated move to Done would be the agent certifying its own work, "
                 f"which stays refused even on the user's explicit instruction. The "
                 f"card must go through the review flow first: advance(to='review') "
                 f"and an independent review_task approve that lands the `reviewed` "
                 f"label, after which a delegated mark-done on the user's instruction "
-                f"is honored. If the card was NOT agent work, have its human author "
-                f"(or the user) confirm in the record's instruction that it is human "
-                f"work — but the code cannot take a record's word for that: the "
-                f"created_by read is the gate"
+                f"is honored. If the card is errand work that has no review flow to "
+                f"pass, the deployment can opt out of this one guard by setting "
+                f"VIKUNJA_DELEGATION_AGENT_MARK_DONE=1 in the vikunja-delegated "
+                f"server entry's env (next to VIKUNJA_DELEGATION=1) — the user's "
+                f"recorded instruction then carries the certification, with the audit "
+                f"comment unchanged; no record entry or tool call can set it"
             )
 
     def _audit_after(
