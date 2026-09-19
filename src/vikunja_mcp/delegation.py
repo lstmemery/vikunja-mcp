@@ -301,6 +301,15 @@ def parse_authorized_file(path: Path) -> list[AuthorizedMove]:
                 f"({authorized_at.isoformat()}) — a record with no live window "
                 f"authorizes nothing and must be corrected, not silently skipped"
             )
+        if expires - authorized_at > MAX_RECORD_AGE:
+            raise ValueError(
+                f"{line}: expires ({expires.isoformat()}) is more than "
+                f"{MAX_RECORD_AGE.days} days after authorized_at "
+                f"({authorized_at.isoformat()}) — a record may not outlive the week's "
+                f"ceiling on record age; a long-lived block would keep delegating long "
+                f"after the conversation it transcribed. Record the user's fresh "
+                f"instruction in a new block instead"
+            )
         entries.append(
             AuthorizedMove(
                 task_id=task_id,
@@ -368,26 +377,20 @@ def find_authorized(
     )
 
 
-def audit_text(
-    action: str,
-    task_id: int,
-    instruction: str,
-    record: AuthorizedMove,
-    me_username: str,
-    evidence: str | None = None,
-) -> str:
-    """The dated audit comment body for one delegated transition. The user
-    instruction is QUOTED verbatim — the human reads it against their own chat and
+def audit_text(record: AuthorizedMove, me_username: str) -> str:
+    """The dated audit comment body for one delegated transition. The record is the
+    single source of every field quoted: the action, the card and the user
+    instruction — QUOTED verbatim, the human reads it against their own chat and
     revokes (token / server entry / record file) on disagreement."""
     now = datetime.now(timezone.utc)
     lines = [
-        f"{DELEGATED_MARKER} {now.strftime('%Y-%m-%dT%H:%MZ')} — {action} on task "
-        f"{task_id}, performed by the delegated '{me_username}' token on the user's "
+        f"{DELEGATED_MARKER} {now.strftime('%Y-%m-%dT%H:%MZ')} — {record.action} on task "
+        f"{record.task_id}, performed by the delegated '{me_username}' token on the user's "
         f"explicit instruction:",
-        f"> {instruction}",
+        f"> {record.instruction}",
     ]
-    if evidence:
-        lines.append(f"evidence: {evidence}")
+    if record.evidence:
+        lines.append(f"evidence: {record.evidence}")
     lines.append(
         f"authorization: {record.authorized_at.isoformat()} -> "
         f"{record.expires.isoformat()} in the delegation record file; every other "

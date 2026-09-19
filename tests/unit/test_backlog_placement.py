@@ -146,8 +146,7 @@ _OTHER_ARGS = {
     # on the user's recorded per-card instruction, audit comment attached — and that happy
     # path is pinned in test_delegated_move.py, not swept here: this file's boards carry no
     # arm flag and no record file, which is what keeps the sweep measuring the ordinary world.
-    "delegated_move": {"action": "triage-to-queue",
-                       "instruction": "a user instruction"},
+    "delegated_move": {"action": "triage-to-queue"},
 }
 
 

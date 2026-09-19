@@ -25,6 +25,19 @@ def test_exposes_exactly_the_workflow_tools():
     }
 
 
+def test_armed_delegation_registers_only_delegated_move(monkeypatch):
+    """The armed delegated server registers ONLY delegated_move — the narrow scope is
+    visible in the tool list itself. Built through the REAL _server() with the arm env
+    set, so the registration filter itself is what is measured: the failure it pins is
+    an armed server silently exposing the full mutating toolset (or the unarmed one
+    registering the delegated tool). The singleton is rebuilt for this test and
+    restored by the monkeypatch afterwards."""
+    monkeypatch.setattr(server, "_mcp_server", None)
+    monkeypatch.setenv("VIKUNJA_DELEGATION", "1")
+    tools = asyncio.run(server._server().list_tools())
+    assert {t.name for t in tools} == {"delegated_move"}
+
+
 def test_tool_errors_are_returned_not_raised(monkeypatch, tmp_path):
     """Без конфига тулза должна вернуть {'error': ...}, а не уронить сервер."""
     monkeypatch.chdir(tmp_path)

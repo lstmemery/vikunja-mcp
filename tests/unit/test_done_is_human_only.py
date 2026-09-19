@@ -90,8 +90,7 @@ _OTHER_ARGS = {
     # reachable by a delegated close that no instruction recorded, and this sweep's
     # Workflow carries no arm flag, so the row measures the not-armed gate. The armed
     # Done refusals and the audit-first happy path are pinned in test_delegated_move.py.
-    "delegated_move": {"action": "mark-done", "instruction": "close it",
-                       "evidence": "verification output"},
+    "delegated_move": {"action": "mark-done"},
 }
 
 
