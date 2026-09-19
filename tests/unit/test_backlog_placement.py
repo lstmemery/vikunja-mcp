@@ -140,6 +140,13 @@ _OTHER_ARGS = {
     # transfer_task's row a fail-fast refusal at the target-board resolve — before any write.
     "handoff": {"to": 999, "title": "the other half"},
     "transfer_task": {"to": 999, "reason": "filed on the wrong board"},
+    # the delegated move: on an ordinary (un-armed) Workflow it refuses before any stage
+    # read, so the row measures the not-armed gate and the card stays in Backlog. The ARMED
+    # triage-to-queue is by design the one delegated way a Backlog card crosses into Queue —
+    # on the user's recorded per-card instruction, audit comment attached — and that happy
+    # path is pinned in test_delegated_move.py, not swept here: this file's boards carry no
+    # arm flag and no record file, which is what keeps the sweep measuring the ordinary world.
+    "delegated_move": {"action": "triage-to-queue"},
 }
 
 

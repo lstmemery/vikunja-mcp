@@ -11,6 +11,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping
 
+from vikunja_mcp.delegation import (
+    DELEGATED_ENV_FILE, ENV_DELEGATION, DelegationPolicy, load_delegation,
+)
+
 ENV_URL = "VIKUNJA_URL"
 ENV_TOKEN = "VIKUNJA_TOKEN"
 ENV_PROJECT_ID = "VIKUNJA_PROJECT_ID"
@@ -129,6 +133,16 @@ class Config:
     # A dict on a frozen dataclass: Config's generated __hash__ would raise on it, but nothing
     # hashes a Config (checked) and every reader wants a mapping.
     siblings: dict[str, int] = field(default_factory=dict)
+    # The delegated-moves arm of THIS server instance (delegation.py): None on every
+    # ordinary server — the human-only gates hold and Workflow.delegated_move refuses
+    # before it reads anything. Armed (VIKUNJA_DELEGATION truthy in the process env,
+    # i.e. the `vikunja-delegated` registration set it) this carries the policy and,
+    # in load_config below, the designated token swap: a delegated instance reads its
+    # token from the DESIGNATED delegated sources only (the registration's own env
+    # block, then ~/.config/vikunja-mcp/env-delegated — never the ordinary repo/user
+    # chain) and REFUSES the shared agent token from either, so the two identities
+    # cannot be confused by a config mistake.
+    delegation: DelegationPolicy | None = None
 
 
 def _parse_env_file(path: Path) -> dict[str, str]:
@@ -175,6 +189,53 @@ def load_config(cwd: Path | None = None, environ: Mapping[str, str] | None = Non
 
     url = env.get(ENV_URL) or repo_env.get(ENV_URL) or repo.get("url") or user.get(ENV_URL)
     token = env.get(ENV_TOKEN) or repo_env.get(ENV_TOKEN) or user.get(ENV_TOKEN)
+    # DELEGATED MODE (delegation.py): when VIKUNJA_DELEGATION is armed this instance is
+    # the `vikunja-delegated` server, and its credential is a SEPARATE, narrower token
+    # (`omp-delegated`) read from the DESIGNATED delegated sources only: the
+    # registration's own env block first (VIKUNJA_TOKEN — the env the user-managed MCP
+    # registration supplies), then ~/.config/vikunja-mcp/env-delegated. Two refusals
+    # make the identity separation load-bearing rather than aspirational:
+    #   * no token in EITHER source -> ConfigError. The ordinary chain is deliberately
+    #     NOT consulted: falling back to the shared agent token would hand the delegated
+    #     server the FULL-identity credential and silently undo the separate-identity
+    #     design (one copy-paste away, so it is refused by shape).
+    #   * delegated token EQUALS the shared token -> ConfigError, FROM EITHER SOURCE —
+    #     a shared token pasted into the registration's env block is the same
+    #     one-copy-paste mistake as one pasted into the designated file: the two
+    #     identities may disagree, but they may not agree.
+    # The swap happens HERE so every downstream consumer (server, claimable, workspace)
+    # builds its client on the designated identity without knowing delegation exists.
+    # Values are never shown — the errors name files and env var names only.
+    delegation = load_delegation(env)
+    if not delegation.armed:
+        delegation = None            # every ordinary server carries None, not an off policy
+    if delegation is not None:
+        if ENV_TOKEN in env and (env.get(ENV_TOKEN) or "").strip():
+            delegated_token = env[ENV_TOKEN].strip()
+        else:
+            delegated_user = _parse_env_file(DELEGATED_ENV_FILE)
+            delegated_token = delegated_user.get(ENV_TOKEN) or ""
+            if not delegated_token.strip():
+                raise ConfigError(
+                    f"delegation is armed ({ENV_DELEGATION}) but no token was found in "
+                    f"{DELEGATED_ENV_FILE} — a delegated server must run the DESIGNED "
+                    f"narrow token (`omp-delegated`), never the shared agent token; "
+                    f"create it in Vikunja's web UI (or via a JWT session on the agent "
+                    f"user) and put VIKUNJA_TOKEN=... in {DELEGATED_ENV_FILE} (chmod 600)"
+                )
+        # the same-token refusal guards BOTH sources: a shared token pasted into the
+        # registration's env block is the same one-copy-paste mistake as one pasted into
+        # the designated file, so both are compared against the shared agent token
+        shared_token = repo_env.get(ENV_TOKEN) or user.get(ENV_TOKEN) or ""
+        if shared_token and delegated_token == shared_token:
+            raise ConfigError(
+                f"the delegated server's token is the SAME as the shared agent "
+                f"token — the delegated identity must be a DIFFERENT, narrower "
+                f"token or the separation this feature rests on is gone. Create "
+                f"`omp-delegated` in Vikunja and put THAT token in "
+                f"{DELEGATED_ENV_FILE}"
+            )
+        token = delegated_token
     # секрет класса токена: env-слои ТОЛЬКО, коммитимый toml сознательно пропущен
     notify_webhook = (
         env.get(ENV_NOTIFY_WEBHOOK)
@@ -372,4 +433,5 @@ def load_config(cwd: Path | None = None, environ: Mapping[str, str] | None = Non
         worktree_root=worktree_root,
         language=language,
         siblings=siblings,
+        delegation=delegation,
     )

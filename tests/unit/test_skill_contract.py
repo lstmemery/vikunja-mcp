@@ -3490,6 +3490,9 @@ def _review_sweep(tmp_path, *, mine: bool = True) -> tuple[dict, dict]:
         "next_task": lambda wf, c: wf.next_task(),
         "claim": lambda wf, c: wf.claim(c["id"]),
         "get_task": lambda wf, c: wf.get_task(c["id"]),
+        # read-only like get_task: SUCCEEDS from Review and must leave the card exactly
+        # where it stands — the mover assert below counts on that staying true
+        "search": lambda wf, c: wf.search("under review"),
         "comment": lambda wf, c: wf.comment(c["id"], "заметка ревьюера"),
         "advance(to='build')": lambda wf, c: wf.advance(c["id"], to="build", spec="s"),
         "advance(to='review')": lambda wf, c: wf.advance(
@@ -3498,6 +3501,12 @@ def _review_sweep(tmp_path, *, mine: bool = True) -> tuple[dict, dict]:
         "call_human": lambda wf, c: wf.call_human(c["id"], question="какой из двух вариантов?"),
         "return_task": lambda wf, c: wf.return_task(c["id"], reason="не понимаю задачу"),
         "decompose": lambda wf, c: wf.decompose(c["id"], [{"title": "A"}, {"title": "B"}]),
+        # the delegated move: refuses on an ordinary (un-armed) Workflow before any stage
+        # read, so it joins the refusal set without moving the card. The armed
+        # mark-done-from-Review on a recorded instruction is a DELIBERATE transition (the
+        # human hand-bounce replaced) and is pinned in test_delegated_move.py, not here —
+        # this sweep measures the ordinary surface.
+        "delegated_move": lambda wf, c: wf.delegated_move(c["id"], action="mark-done"),
         "review_task(approve)": lambda wf, c: wf.review_task(
             c["id"], verdict="approve", report="ок"),
         "review_task(needs_work)": lambda wf, c: wf.review_task(
@@ -3538,7 +3547,7 @@ def test_exactly_ONE_agent_tool_walks_a_card_out_of_Review(tmp_path):
     Driven off `server._DEFERRED_TOOLS` rather than a hand-written list, so a 13th agent tool
     cannot join the surface and quietly go unswept. Said in the right ORDER, because the first
     version of this sentence had it backwards: the sweep runs FIRST (it is the opening statement
-    of the body — all 15 calls complete), and only then does the coverage block compare the
+    of the body — all 16 calls complete), and only then does the coverage block compare the
     exposed set against the swept labels. The SIZE assert is what an added tool trips; the
     `unswept` assert catches the other direction, a tool present in both places but missing a
     sweep entry. That coverage check is the half a hand-written sweep cannot have.
@@ -3566,15 +3575,19 @@ def test_exactly_ONE_agent_tool_walks_a_card_out_of_Review(tmp_path):
 
     # COVERAGE: every tool the server really exposes is in the table above
     exposed = {fn.__name__ for fn in server._DEFERRED_TOOLS}
-    assert len(exposed) == 14, f"the agent tool surface changed size: {sorted(exposed)}"
+    assert len(exposed) == 16, f"the agent tool surface changed size: {sorted(exposed)}"
     unswept = exposed - {label.split("(")[0] for label in swept}
     assert not unswept, f"agent tools added to the server but not swept from Review: {unswept}"
 
-    # THE REFUSAL SET — the number the rulebook quotes, spelled as the tools themselves
+    # THE REFUSAL SET — the number the rulebook quotes, spelled as the tools themselves.
+    # `delegated_move` is here because the sweep drives it as a Workflow method on an
+    # ordinary (un-armed) board, where it refuses before any stage read; it is NOT quoted
+    # by the SKILL.md bullet, whose subject is the ordinary agent surface — its refusal
+    # here is the not-armed gate, and its armed behavior is pinned in test_delegated_move.py.
     refused = {label.split("(")[0] for label, err in swept.items() if err is not None}
     assert refused == {
         "claim", "advance", "call_human", "return_task", "decompose",
-        "handoff", "transfer_task",
+        "handoff", "transfer_task", "delegated_move",
     }, f"SKILL.md's reviewer bullet quotes exactly these seven as refusing from Review: {refused}"
     assert all(swept[form] is not None
                for form in ("advance(to='build')", "advance(to='review')", "advance(to='done')")), \
@@ -5742,6 +5755,9 @@ def _bounced_card_tool_forms() -> dict[str, list[tuple[str, dict]]]:
         "next_task": [("next_task", {})],
         "claim": [("claim", {"task_id": None})],
         "get_task": [("get_task", {"task_id": None})],
+        # read-only like get_task: answers with hits, writes nothing, so it must show up as a
+        # non-mover in every sweep this table feeds
+        "search": [("search", {"query": "дренаж"})],
         "comment": [("comment", {"task_id": None, "text": "заметка"})],
         "advance": [
             (f"advance(to={to!r})", {"task_id": None, "to": to, **advance_extra})
@@ -5755,6 +5771,11 @@ def _bounced_card_tool_forms() -> dict[str, list[tuple[str, dict]]]:
         "return_task": [("return_task", {"task_id": None, "reason": "зависимость выпилена"})],
         "decompose": [("decompose", {"task_id": None,
                                      "subtasks": [{"title": "часть A"}, {"title": "часть B"}]})],
+        # the delegated move: on an ordinary (un-armed) Workflow it refuses before any
+        # stage read, so it shows up as a NON-mover in every sweep this table feeds. The
+        # armed close-on-recorded-instruction is pinned in test_delegated_move.py; here it
+        # measures that no ordinary board state lets the tool move anything.
+        "delegated_move": [("delegated_move", {"task_id": None, "action": "mark-done"})],
         "file_task": [("file_task", {"title": "находка", "related_task_id": None})],
         # both aim at the neighbour the sweep registers on every board (see below): with no
         # sibling to aim at they would refuse, and a refusal here reads as "does not move the
