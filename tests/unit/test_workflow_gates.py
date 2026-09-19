@@ -2966,6 +2966,11 @@ _VERDICT_POLICY = {
     "handoff":             "CLEARS",   # -> Queue, blocked on a neighbour's card (#1179)
     "transfer_task":       "CLEARS",   # -> another project's Backlog           (#1179)
     "call_human":          "KEEPS",    # -> Your Call, still in flight
+    # the delegated move: closes on the user's recorded per-card instruction and never
+    # touches a verdict label — a close must not erase the verdict it closes on
+    # (mark-done keeps `reviewed` standing; a bounced `review-failed` is left as the
+    # honest record of the last review). Nothing here calls _clear_verdict_labels.
+    "delegated_move":      "KEEPS",
     "review_task":         "SETS",
     "next_task":           "NO-MOVE",
     "get_task":            "NO-MOVE",
@@ -2973,6 +2978,7 @@ _VERDICT_POLICY = {
     "file_task":           "NO-MOVE",  # creates a NEW card; never touches this one's labels
     "attach_file":         "NO-MOVE",
     "download_attachment": "NO-MOVE",
+    "search":              "NO-MOVE",  # read-only lookup; answers with hits, writes nothing
 }
 
 

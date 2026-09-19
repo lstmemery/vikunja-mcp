@@ -18,11 +18,24 @@ def test_exposes_exactly_the_workflow_tools():
     tools = asyncio.run(server.mcp.list_tools())
     names = {t.name for t in tools}
     assert names == {
-        "next_task", "claim", "get_task", "comment",
+        "next_task", "claim", "get_task", "search", "comment",
         "advance", "call_human", "return_task", "decompose", "review_task",
         "file_task", "download_attachment", "attach_file",
         "handoff", "transfer_task",
     }
+
+
+def test_armed_delegation_registers_only_delegated_move(monkeypatch):
+    """The armed delegated server registers ONLY delegated_move — the narrow scope is
+    visible in the tool list itself. Built through the REAL _server() with the arm env
+    set, so the registration filter itself is what is measured: the failure it pins is
+    an armed server silently exposing the full mutating toolset (or the unarmed one
+    registering the delegated tool). The singleton is rebuilt for this test and
+    restored by the monkeypatch afterwards."""
+    monkeypatch.setattr(server, "_mcp_server", None)
+    monkeypatch.setenv("VIKUNJA_DELEGATION", "1")
+    tools = asyncio.run(server._server().list_tools())
+    assert {t.name for t in tools} == {"delegated_move"}
 
 
 def test_tool_errors_are_returned_not_raised(monkeypatch, tmp_path):
@@ -188,7 +201,7 @@ def test_reload_rebuilds_workflow_with_the_fresh_on_disk_token(monkeypatch):
         # raise TypeError, which _reload_workflow_from_disk swallows into a silent False
         lambda api, pid, enforce_single_wip=False, notifier=None, wip_limit=None,
         require_review_independence=False, language=DEFAULT_LANGUAGE,
-        siblings=None: ("wf", api, pid),
+        siblings=None, delegation=None: ("wf", api, pid),
     )
     server._reset_workflow_cache()
     try:
@@ -917,7 +930,7 @@ def test_no_non_mcp_cli_path_imports_the_mcp_sdk():
         assert modules == [], f"{path} imported the MCP SDK: {modules[:5]}... ({len(modules)})"
     # The negative assertions above are only meaningful if the SDK CAN be imported at all:
     assert data["seen"]["touched server.mcp"], "the lazy build imported no SDK — probe is vacuous"
-    assert len(data["tools"]) == 14, data["tools"]
+    assert len(data["tools"]) == 15, data["tools"]
 
 
 def test_the_lazy_server_is_a_single_cached_instance():

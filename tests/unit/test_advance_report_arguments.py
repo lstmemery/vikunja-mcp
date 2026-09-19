@@ -624,7 +624,7 @@ def test_every_tool_forbids_an_unknown_argument_and_publishes_that():
     from vikunja_mcp import server
 
     tools = server._server()._tool_manager._tools
-    assert len(tools) == 14, f"the tool surface moved: {sorted(tools)}"
+    assert len(tools) == 15, f"the tool surface moved: {sorted(tools)}"
     unforbidden = sorted(
         name for name, tool in tools.items()
         if tool.fn_metadata.arg_model.model_config.get("extra") != "forbid"
@@ -693,19 +693,30 @@ def _ungated_server():
     """A server registered exactly as `_server()` registers one, but WITHOUT the gate applied.
 
     `_server()` caches a module-level singleton and runs `_forbid_unknown_tool_arguments` on it,
-    so the shipped server can never show a part-way state. Registering the same `_DEFERRED_TOOLS`
-    onto a fresh `MCPServer` gives FRESH argument models rather than the singleton's, and the
-    never-reached row of the caller is what checks that: a sibling test earlier in this file
+    so the shipped server can never show a part-way state. Registering the same registration
+    POLICY onto a fresh `MCPServer` gives FRESH argument models rather than the singleton's, and
+    the never-reached row of the caller is what checks that: a sibling test earlier in this file
     gates the singleton's twelve models, so if the models were shared per function rather than
     per registration that row would read `refuses` and fail. It reads `accepts`.
-    """
+
+    The policy is mirrored, not the raw `_DEFERRED_TOOLS` list: since delegation.py the armed
+    server registers ONLY `delegated_move` and the ordinary one never registers it, so a fresh
+    server that registered everything unconditionally would measure a tool surface no shipped
+    server ever has (the 16-name mismatch this helper once reddened on). Same env, same filter,
+    same set — that is what keeps the sweep a measurement of THIS registration."""
     from mcp.server import MCPServer
 
     from vikunja_mcp import __version__, server
 
     s = MCPServer("vikunja-tracker", version=__version__)
+    armed = server._delegation_armed(dict(os.environ))
     for fn in server._DEFERRED_TOOLS:
-        s.tool()(fn)
+        name = getattr(fn, "__name__", "")
+        if name == "delegated_move":
+            if armed:
+                s.tool()(fn)
+        elif not armed:
+            s.tool()(fn)
     return s
 
 
@@ -789,7 +800,7 @@ def test_a_part_way_forbid_failure_leaves_a_REACHABLE_state(
     s = _ungated_server()
     tools = s._tool_manager._tools
     names = list(tools)
-    assert len(names) == 14, f"the tool surface moved: {sorted(names)}"
+    assert len(names) == 15, f"the tool surface moved: {sorted(names)}"
     finished, target, never_reached = names[1], names[2], names[3]
 
     captured = io.StringIO()
