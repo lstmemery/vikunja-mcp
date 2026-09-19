@@ -2924,8 +2924,9 @@ class Workflow:
         4. CARD NOT ON THE BOARD -> refuse (same `_find_task` the ordinary tools use,
            with the Done/Icebox READ opt-in so the refusal can say where the card is).
         5. PER-ACTION stage guards:
-           mark-done: refuses a card already in Done (the human-only-BOTH-directions
-             rule is NOT lifted by delegation) or in Icebox.
+           mark-done: refuses a card already in Done (nothing to move there — the
+             reopen is itself a delegated move-stage on its own recorded
+             instruction, see below) or in Icebox.
            move-stage (2026-09-18 captain widening): the target column comes from the
              record's `stage` key, never from the call. Refuses an unknown stage name
              and a move whose card is ALREADY in the target stage. Done is reachable

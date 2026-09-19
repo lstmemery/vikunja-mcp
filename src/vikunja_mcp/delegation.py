@@ -44,11 +44,13 @@ THE THREE ARMS, all of which a HUMAN controls (removing any one of them kills th
 capability without touching the code):
 
 1. The designated identity. A second, narrower Vikunja API token (`omp-delegated`)
-   lives ONLY in `~/.config/vikunja-mcp/env-delegated` (mode 600, never committed).
-   `config.load_config` refuses to arm delegation when that file is missing and
-   refuses when its token EQUALS the shared agent token — a delegated server cannot
-   load the shared `omp-agent` identity, by construction. Revoking the token in
-   Vikunja's web UI ends delegation instantly.
+   lives in the DESIGNATED delegated sources only — the `vikunja-delegated`
+   registration's own env block (VIKUNJA_TOKEN) or `~/.config/vikunja-mcp/env-delegated`
+   (mode 600, never committed) — and `config.load_config` refuses to arm delegation when
+   NEITHER supplies a token, and refuses the shared agent token from EITHER source (a
+   copy-paste of the shared token is the identity mistake in both spellings) — a
+   delegated server cannot load the shared `omp-agent` identity, by construction.
+   Revoking the token in Vikunja's web UI ends delegation instantly.
 
 2. The server entry. `VIKUNJA_DELEGATION=1` in the `vikunja-delegated` registration
    (a file the user manages). Without it the server registers the ordinary tools and
