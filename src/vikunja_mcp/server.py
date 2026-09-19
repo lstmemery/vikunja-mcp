@@ -982,16 +982,15 @@ def transfer_task(task_id: int, to: str | int, reason: str) -> dict:
 @_mcp_tool
 @_tool
 def delegated_move(
-    task_id: int, action: str, instruction: str,
-    label: str | None = None, evidence: str | None = None,
+    task_id: int, action: str, label: str | None = None,
 ) -> dict:
     """Perform ONE delegated board transition the USER explicitly authorized for THIS
     card by instruction in chat. REGISTERED ONLY on the armed `vikunja-delegated`
     server; on every ordinary server the human-only gates stand unchanged.
 
     Actions (closed allowlist — everything else refuses):
-      mark-done: move the card to Done ON the user's explicit close instruction.
-        Requires evidence (what was verified and how). REFUSED for a card the agent's
+      mark-done: move the card to Done ON the user's explicit close instruction
+        (the record carries the verification evidence). REFUSED for a card the agent's
         own account created unless the independent `reviewed` label is already on it —
         an agent never certifies its own work. Audit comment posted BEFORE the move.
       triage-to-queue: move a Backlog card to Queue on the user's explicit "work on
@@ -1005,16 +1004,15 @@ def delegated_move(
     file (~/.config/vikunja-mcp/delegation-authorized.toml), one [[authorized_move]]
     block per transition: task_id, action, label (label actions only), instruction
     (the user's own words, quoted), evidence (mark-done only), authorized_at, expires
-    (TOML datetimes with timezone). A delegated move fires ONLY on that record; no
+    (TOML datetimes with timezone). A delegated move fires ONLY on that record — the
+    record, not this call, is what authorizes and what the audit comment quotes; no
     entry, no move; expired entries refuse; blanket grants are not expressible.
 
     The move lands with a dated [delegated-move] audit comment quoting the
     instruction — the human audits it on the card and revokes (token, server entry,
     record file) on disagreement. claim stays Queue-only and WIP-gated, review
     independence is untouched, and no delegated call ever changes assignees."""
-    return _wf().delegated_move(
-        task_id, action, instruction, label=label, evidence=evidence
-    )
+    return _wf().delegated_move(task_id, action, label=label)
 
 
 def main(argv: list[str] | None = None) -> None:

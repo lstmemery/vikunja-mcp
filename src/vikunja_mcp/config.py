@@ -217,15 +217,18 @@ def load_config(cwd: Path | None = None, environ: Mapping[str, str] | None = Non
                     f"create it in Vikunja's web UI (or via a JWT session on the agent "
                     f"user) and put VIKUNJA_TOKEN=... in {DELEGATED_ENV_FILE} (chmod 600)"
                 )
-            shared_token = repo_env.get(ENV_TOKEN) or user.get(ENV_TOKEN) or ""
-            if shared_token and delegated_token == shared_token:
-                raise ConfigError(
-                    f"the token in {DELEGATED_ENV_FILE} is the SAME as the shared agent "
-                    f"token — the delegated identity must be a DIFFERENT, narrower "
-                    f"token or the separation this feature rests on is gone. Create "
-                    f"`omp-delegated` in Vikunja and put THAT token in "
-                    f"{DELEGATED_ENV_FILE}"
-                )
+        # the same-token refusal guards BOTH sources: a shared token pasted into the
+        # registration's env block is the same one-copy-paste mistake as one pasted into
+        # the designated file, so both are compared against the shared agent token
+        shared_token = repo_env.get(ENV_TOKEN) or user.get(ENV_TOKEN) or ""
+        if shared_token and delegated_token == shared_token:
+            raise ConfigError(
+                f"the delegated server's token is the SAME as the shared agent "
+                f"token — the delegated identity must be a DIFFERENT, narrower "
+                f"token or the separation this feature rests on is gone. Create "
+                f"`omp-delegated` in Vikunja and put THAT token in "
+                f"{DELEGATED_ENV_FILE}"
+            )
         token = delegated_token
     # секрет класса токена: env-слои ТОЛЬКО, коммитимый toml сознательно пропущен
     notify_webhook = (

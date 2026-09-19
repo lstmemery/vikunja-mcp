@@ -2896,15 +2896,19 @@ class Workflow:
         return result
 
     def delegated_move(
-        self, task_id: int, action: str, instruction: str,
-        label: str | None = None, evidence: str | None = None,
+        self, task_id: int, action: str, label: str | None = None,
     ) -> dict:
         """Perform ONE delegated transition the USER explicitly authorized for THIS card
         by instruction in chat (see delegation.py for the design). Five actions exist:
-        mark-done (requires evidence), move-stage (target stage named in the record's
-        `stage` key — ANY column-to-column move on the user's order, including out of
-        Done and into/out of Icebox), triage-to-queue (Backlog -> Queue), add-label,
-        clear-label. Everything else refuses.
+        mark-done (the record carries the verification evidence), move-stage (target
+        stage named in the record's `stage` key — ANY column-to-column move on the
+        user's order, including out of Done and into/out of Icebox), triage-to-queue
+        (Backlog -> Queue), add-label, clear-label. Everything else refuses.
+
+        The record file is the single source of what was authorized: the target action,
+        the label, the target stage, the verbatim user instruction and the evidence all
+        come from the matching [[authorized_move]] block, never from this call — so the
+        audit comment quotes exactly what the record validated.
 
         The gates, in the order they fire:
 
@@ -3006,10 +3010,12 @@ class Workflow:
         if action == "mark-done":
             if stage == "Done":
                 raise WorkflowError(
-                    f"task {task_id} is already in Done — the Done transition stays "
-                    f"human-only in BOTH directions even for delegated moves; if this "
-                    f"card must be reopened, that is a human's click, and work it "
-                    f"revealed goes to file_task as a new finding"
+                    f"task {task_id} is already in Done — mark-done has nothing to "
+                    f"move there. If this card must be reopened, that is a delegated "
+                    f"move-stage with the target stage in the record (the Done "
+                    f"boundary is delegated in BOTH directions on the user's "
+                    f"instruction); work the card revealed goes to file_task as a new "
+                    f"finding"
                 )
             if stage == "Icebox":
                 raise WorkflowError(
@@ -3018,8 +3024,7 @@ class Workflow:
                     f"drags it back to Backlog or Queue first"
                 )
             self._require_review_on_self_authored(task, task_id)
-            audit = audit_text(action, task_id, instruction, record,
-                               self._me()["username"], evidence=evidence)
+            audit = audit_text(record, self._me()["username"])
             try:
                 self.api.add_comment(task_id, audit)
             except (VikunjaError, httpx.HTTPError) as exc:
@@ -3040,7 +3045,7 @@ class Workflow:
                 "record": self._record_summary(record),
             }
         if action == "move-stage":
-            return self._delegated_move_stage(task, stage, task_id, action, instruction, record)
+            return self._delegated_move_stage(task, stage, task_id, action, record)
         if stage == "Done":
             raise WorkflowError(
                 f"task {task_id} is in Done — a closed card stays closed for label "
@@ -3058,7 +3063,7 @@ class Workflow:
                     f"triaged or is in flight"
                 )
             self._move(task_id, "Queue")
-            self._audit_after(task_id, action, instruction, record)
+            self._audit_after(task_id, record)
             return {
                 "moved_to": "Queue", "task_id": task_id, "action": action,
                 "audit": "posted after the move", "record": self._record_summary(record),
@@ -3083,7 +3088,7 @@ class Workflow:
             self._add_label(task, title)
         else:
             self._remove_label(task, title)
-        self._audit_after(task_id, action, instruction, record)
+        self._audit_after(task_id, record)
         return {
             "task_id": task_id, "action": action, "label": title,
             "audit": "posted after the label change",
@@ -3091,8 +3096,7 @@ class Workflow:
         }
 
     def _delegated_move_stage(
-        self, task: dict, stage: str, task_id: int, action: str, instruction: str,
-        record: AuthorizedMove,
+        self, task: dict, stage: str, task_id: int, action: str, record: AuthorizedMove,
     ) -> dict:
         """The 2026-09-18 captain widening: ANY stage-to-stage move on the user's
         recorded instruction. The target comes from the record's `stage` key (the
@@ -3130,10 +3134,7 @@ class Workflow:
             # this feature must not produce.
             if target == "Done":
                 self._require_review_on_self_authored(task, task_id)
-            audit = audit_text(
-                action, task_id, instruction, record, self._me()["username"],
-                evidence=record.evidence,
-            )
+            audit = audit_text(record, self._me()["username"])
             try:
                 self.api.add_comment(task_id, audit)
             except (VikunjaError, httpx.HTTPError) as exc:
@@ -3154,7 +3155,7 @@ class Workflow:
                 "record": self._record_summary(record),
             }
         self._move(task_id, target)
-        self._audit_after(task_id, action, instruction, record)
+        self._audit_after(task_id, record)
         return {
             "moved_to": target, "task_id": task_id, "action": action,
             "audit": "posted after the move", "record": self._record_summary(record),
@@ -3203,9 +3204,7 @@ class Workflow:
                 f"comment unchanged; no record entry or tool call can set it"
             )
 
-    def _audit_after(
-        self, task_id: int, action: str, instruction: str, record: AuthorizedMove,
-    ) -> None:
+    def _audit_after(self, task_id: int, record: AuthorizedMove) -> None:
         """Post the delegated audit AFTER a reversible move, and REFUSE when the write
         fails rather than reporting success about an unaudited transition: the audit
         comment IS the human's evidence trail (its absence would make the move
@@ -3213,7 +3212,7 @@ class Workflow:
         to post the audit manually via the ordinary `comment` tool — which works on
         every stage — and keeps the [delegated-move] marker, so a retry heals the
         trail rather than duplicating the move."""
-        audit = audit_text(action, task_id, instruction, record, self._me()["username"])
+        audit = audit_text(record, self._me()["username"])
         try:
             self.api.add_comment(task_id, audit)
         except (VikunjaError, httpx.HTTPError) as exc:
@@ -3221,7 +3220,7 @@ class Workflow:
                 f"vikunja-mcp: delegated audit comment failed for #{task_id}", exc
             )
             raise WorkflowError(
-                f"the delegated {action} MOVED but its audit comment failed to post "
+                f"the delegated {record.action} MOVED but its audit comment failed to post "
                 f"({exc.__class__.__name__}) — the card is moved and UNAUDITED, which "
                 f"must not stand. Post the audit manually: comment(task_id, "
                 f"'[delegated-move] ...') quoting the user instruction, then report "

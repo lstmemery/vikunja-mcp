@@ -3506,8 +3506,7 @@ def _review_sweep(tmp_path, *, mine: bool = True) -> tuple[dict, dict]:
         # mark-done-from-Review on a recorded instruction is a DELIBERATE transition (the
         # human hand-bounce replaced) and is pinned in test_delegated_move.py, not here —
         # this sweep measures the ordinary surface.
-        "delegated_move": lambda wf, c: wf.delegated_move(
-            c["id"], action="mark-done", instruction="закрой карточку", evidence="проверено"),
+        "delegated_move": lambda wf, c: wf.delegated_move(c["id"], action="mark-done"),
         "review_task(approve)": lambda wf, c: wf.review_task(
             c["id"], verdict="approve", report="ок"),
         "review_task(needs_work)": lambda wf, c: wf.review_task(
@@ -5776,9 +5775,7 @@ def _bounced_card_tool_forms() -> dict[str, list[tuple[str, dict]]]:
         # stage read, so it shows up as a NON-mover in every sweep this table feeds. The
         # armed close-on-recorded-instruction is pinned in test_delegated_move.py; here it
         # measures that no ordinary board state lets the tool move anything.
-        "delegated_move": [("delegated_move", {"task_id": None, "action": "mark-done",
-                                               "instruction": "закрой карточку",
-                                               "evidence": "проверено"})],
+        "delegated_move": [("delegated_move", {"task_id": None, "action": "mark-done"})],
         "file_task": [("file_task", {"title": "находка", "related_task_id": None})],
         # both aim at the neighbour the sweep registers on every board (see below): with no
         # sibling to aim at they would refuse, and a refusal here reads as "does not move the
