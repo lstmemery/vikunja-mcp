@@ -1003,7 +1003,7 @@ def delegated_move(
     BEFORE CALLING: record the user's instruction verbatim in the delegation record
     file (~/.config/vikunja-mcp/delegation-authorized.toml), one [[authorized_move]]
     block per transition: task_id, action, label (label actions only), instruction
-    (the user's own words, quoted), evidence (mark-done only), authorized_at, expires
+    (the user's own words, quoted), evidence (required for mark-done), authorized_at, expires
     (TOML datetimes with timezone). A delegated move fires ONLY on that record — the
     record, not this call, is what authorizes and what the audit comment quotes; no
     entry, no move; expired entries refuse; blanket grants are not expressible.

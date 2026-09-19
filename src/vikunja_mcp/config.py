@@ -138,8 +138,10 @@ class Config:
     # before it reads anything. Armed (VIKUNJA_DELEGATION truthy in the process env,
     # i.e. the `vikunja-delegated` registration set it) this carries the policy and,
     # in load_config below, the designated token swap: a delegated instance reads its
-    # token ONLY from ~/.config/vikunja-mcp/env-delegated and REFUSES the shared agent
-    # token, so the two identities cannot be confused by a config mistake.
+    # token from the DESIGNATED delegated sources only (the registration's own env
+    # block, then ~/.config/vikunja-mcp/env-delegated — never the ordinary repo/user
+    # chain) and REFUSES the shared agent token from either, so the two identities
+    # cannot be confused by a config mistake.
     delegation: DelegationPolicy | None = None
 
 
@@ -189,14 +191,18 @@ def load_config(cwd: Path | None = None, environ: Mapping[str, str] | None = Non
     token = env.get(ENV_TOKEN) or repo_env.get(ENV_TOKEN) or user.get(ENV_TOKEN)
     # DELEGATED MODE (delegation.py): when VIKUNJA_DELEGATION is armed this instance is
     # the `vikunja-delegated` server, and its credential is a SEPARATE, narrower token
-    # (`omp-delegated`) read ONLY from ~/.config/vikunja-mcp/env-delegated. Two refusals
+    # (`omp-delegated`) read from the DESIGNATED delegated sources only: the
+    # registration's own env block first (VIKUNJA_TOKEN — the env the user-managed MCP
+    # registration supplies), then ~/.config/vikunja-mcp/env-delegated. Two refusals
     # make the identity separation load-bearing rather than aspirational:
-    #   * no delegated file / no token in it -> ConfigError. The ordinary chain is
-    #     deliberately NOT consulted: falling back to the shared agent token would hand
-    #     the delegated server the FULL-identity credential and silently undo the
-    #     separate-identity design (one copy-paste away, so it is refused by shape).
-    #   * delegated token EQUALS the shared token -> ConfigError, same reason: the two
-    #     files may disagree, but they may not agree.
+    #   * no token in EITHER source -> ConfigError. The ordinary chain is deliberately
+    #     NOT consulted: falling back to the shared agent token would hand the delegated
+    #     server the FULL-identity credential and silently undo the separate-identity
+    #     design (one copy-paste away, so it is refused by shape).
+    #   * delegated token EQUALS the shared token -> ConfigError, FROM EITHER SOURCE —
+    #     a shared token pasted into the registration's env block is the same
+    #     one-copy-paste mistake as one pasted into the designated file: the two
+    #     identities may disagree, but they may not agree.
     # The swap happens HERE so every downstream consumer (server, claimable, workspace)
     # builds its client on the designated identity without knowing delegation exists.
     # Values are never shown — the errors name files and env var names only.
