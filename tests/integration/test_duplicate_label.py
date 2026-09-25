@@ -97,8 +97,10 @@ def test_second_approve_does_not_400_and_leaves_one_reviewed(dupproj):
     task = boss.create_task(pid, "two approves")
     boss.move_task(pid, view["id"], buckets["Review"], task["id"])
 
-    wf.review_task(task["id"], "approve", "first reviewer")
-    wf.review_task(task["id"], "approve", "second reviewer, re-offered within the tick")
+    wf.review_task(task["id"], "approve", "first reviewer",
+        evidence_reproduced=True)
+    wf.review_task(task["id"], "approve", "second reviewer, re-offered within the tick",
+        evidence_reproduced=True)
 
     assert _labels(boss, task["id"]).count(LABEL_REVIEWED) == 1
     bodies = [c.get("comment") or "" for c in boss.comments(task["id"])]

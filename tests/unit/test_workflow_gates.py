@@ -1,3 +1,5 @@
+from tests.unit.fakes import REVIEW_EVIDENCE_BLOCK
+
 import os
 import time
 
@@ -50,8 +52,10 @@ def test_advance_review_requires_worklog_and_evidence(env):
     api, wf, t = env
     wf.advance(t["id"], to="build", spec="s")
     with pytest.raises(WorkflowError, match="worklog"):
-        wf.advance(t["id"], to="review", worklog="сделано")
-    wf.advance(t["id"], to="review", worklog="сделано", evidence="commit abc123")
+        wf.advance(t["id"], to="review", worklog="сделано",
+            evidence_block=REVIEW_EVIDENCE_BLOCK)
+    wf.advance(t["id"], to="review", worklog="сделано", evidence="commit abc123",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     assert api.stage_of(t["id"]) == "Review"
     joined = "\n".join(api.comments_text(t["id"]))
     assert "[worklog]" in joined and "commit abc123" in joined
@@ -64,6 +68,7 @@ def test_advance_review_report_includes_root_cause(env):
         t["id"], to="review",
         worklog="починил рендер титула", evidence="commit deadbeef",
         root_cause="стейт лобби не подписан на смену экипировки",
+        evidence_block=REVIEW_EVIDENCE_BLOCK,
     )
     report = next(c for c in api.comments_text(t["id"]) if c.startswith("[worklog]"))
     assert "Root cause: стейт лобби не подписан" in report
@@ -74,7 +79,8 @@ def test_advance_review_report_includes_root_cause(env):
 def test_advance_wrong_source_stage(env):
     api, wf, t = env
     with pytest.raises(WorkflowError, match="Build"):
-        wf.advance(t["id"], to="review", worklog="w", evidence="e")  # задача ещё в Design
+        wf.advance(t["id"], to="review", worklog="w", evidence="e",
+            evidence_block=REVIEW_EVIDENCE_BLOCK)  # задача ещё в Design
 
 
 def test_advance_requires_ownership(env):
@@ -285,8 +291,10 @@ def test_return_task_refuses_from_done_the_human_only_transition_run_backwards(e
     accepted = api.add_task("work a human already accepted", "Queue")
     wf.claim(accepted["id"])
     wf.advance(accepted["id"], to="build", spec="сделаю X")
-    wf.advance(accepted["id"], to="review", worklog="сделано", evidence="abc123")
-    wf.review_task(accepted["id"], verdict="approve", report="ок")
+    wf.advance(accepted["id"], to="review", worklog="сделано", evidence="abc123",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
+    wf.review_task(accepted["id"], verdict="approve", report="ок",
+        evidence_reproduced=True)
     api.task_bucket[accepted["id"]] = api.bucket_id("Done")   # the HUMAN moves it — no tool can
     assert api.stage_of(accepted["id"]) == "Done"
 
@@ -390,7 +398,8 @@ def test_decompose_refuses_from_review_including_a_card_already_approved(env):
     reviewed = api.add_task("work under review", "Queue")
     wf.claim(reviewed["id"])
     wf.advance(reviewed["id"], to="build", spec="сделаю X")
-    wf.advance(reviewed["id"], to="review", worklog="сделано", evidence="abc123")
+    wf.advance(reviewed["id"], to="review", worklog="сделано", evidence="abc123",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     assert api.stage_of(reviewed["id"]) == "Review"
     cards_before = len(api.tasks)
 
@@ -412,8 +421,10 @@ def test_decompose_refuses_from_review_including_a_card_already_approved(env):
     approved = api.add_task("approved, waiting for a human's Done", "Queue")
     wf.claim(approved["id"])
     wf.advance(approved["id"], to="build", spec="сделаю Y")
-    wf.advance(approved["id"], to="review", worklog="сделано", evidence="def456")
-    wf.review_task(approved["id"], verdict="approve", report="ок")
+    wf.advance(approved["id"], to="review", worklog="сделано", evidence="def456",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
+    wf.review_task(approved["id"], verdict="approve", report="ок",
+        evidence_reproduced=True)
     cards_before = len(api.tasks)
     with pytest.raises(WorkflowError) as ok:
         wf.decompose(approved["id"], [{"title": "A"}, {"title": "B"}])
@@ -531,8 +542,10 @@ def test_decompose_refuses_from_done_the_other_half_of_the_same_bypass(env):
     accepted = api.add_task("work a human already accepted", "Queue")
     wf.claim(accepted["id"])
     wf.advance(accepted["id"], to="build", spec="сделаю X")
-    wf.advance(accepted["id"], to="review", worklog="сделано", evidence="abc123")
-    wf.review_task(accepted["id"], verdict="approve", report="ок")
+    wf.advance(accepted["id"], to="review", worklog="сделано", evidence="abc123",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
+    wf.review_task(accepted["id"], verdict="approve", report="ок",
+        evidence_reproduced=True)
     api.task_bucket[accepted["id"]] = api.bucket_id("Done")   # the HUMAN moves it — no tool can
     assert api.stage_of(accepted["id"]) == "Done"
     cards_before = len(api.tasks)
@@ -834,7 +847,8 @@ def test_decompose_clears_the_stale_verdict_off_the_card_it_turns_into_an_epic(e
     bounced = api.add_task("работа, отбитая ревью", "Queue")
     wf.claim(bounced["id"])
     wf.advance(bounced["id"], to="build", spec="сделаю X")
-    wf.advance(bounced["id"], to="review", worklog="сделано", evidence="abc123")
+    wf.advance(bounced["id"], to="review", worklog="сделано", evidence="abc123",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     _reviewer().review_task(bounced["id"], verdict="needs_work", report="надо дробить")
     # a NON-verdict label riding along, and it is the load-bearing part of this cell rather than
     # decoration: without it every card here carries at most one label, so a decompose that
@@ -866,8 +880,10 @@ def test_decompose_clears_the_stale_verdict_off_the_card_it_turns_into_an_epic(e
     approved = api.add_task("одобренная работа", "Queue")
     wf.claim(approved["id"])
     wf.advance(approved["id"], to="build", spec="сделаю Y")
-    wf.advance(approved["id"], to="review", worklog="сделано", evidence="def456")
-    _reviewer().review_task(approved["id"], verdict="approve", report="воспроизвёл, причина ясна")
+    wf.advance(approved["id"], to="review", worklog="сделано", evidence="def456",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
+    _reviewer().review_task(approved["id"], verdict="approve", report="воспроизвёл, причина ясна",
+        evidence_reproduced=True)
     api.task_bucket[approved["id"]] = api.bucket_id("Build")   # человек руками, мимо тулов
     assert "reviewed" in _label_titles(api, approved["id"])
 
@@ -1311,7 +1327,8 @@ def test_worklog_comment_is_html_but_markers_still_detected(env):
     api.tasks[t["id"]]["labels"].append({"id": 999, "title": "bug"})
     wf.advance(t["id"], to="build", spec="s")
     wf.advance(t["id"], to="review", worklog="починил", evidence="commit c0ffee",
-               root_cause="the marker was stripped by the HTML round-trip")
+               root_cause="the marker was stripped by the HTML round-trip",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     raw = next(c["comment"] for c in api.comments(t["id"])
                if "[worklog]" in html_to_text(c["comment"]))
     assert raw.startswith("<p>[worklog]")          # stored as HTML
@@ -1370,7 +1387,8 @@ def test_review_flow_for_bug_labels(env):
     api.tasks[t["id"]]["labels"].append({"id": 999, "title": "bug"})
     wf.advance(t["id"], to="build", spec="s")
     wf.advance(t["id"], to="review", worklog="w", evidence="e",
-               root_cause="the state was not subscribed to event X")
+               root_cause="the state was not subscribed to event X",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
 
     # имплементеру (assignee) ревью ПРЕДЛАГАЕТСЯ: с #991 пропуск по авторству условен на
     # require_review_independence, а он по умолчанию false — в соло иначе не отдалась бы
@@ -1388,7 +1406,8 @@ def test_review_flow_for_bug_labels(env):
     # пустой report / кривой verdict / не-Review задача — отказ
     import pytest as _pytest
     with _pytest.raises(WorkflowError):
-        reviewer.review_task(t["id"], verdict="approve", report="  ")
+        reviewer.review_task(t["id"], verdict="approve", report="  ",
+            evidence_reproduced=True)
     with _pytest.raises(WorkflowError):
         reviewer.review_task(t["id"], verdict="lgtm", report="r")
 
@@ -1401,8 +1420,10 @@ def test_review_flow_for_bug_labels(env):
     # после вердикта задача больше не предлагается на ревью (вернулась в Build);
     # доводим снова и апрувим
     wf.advance(t["id"], to="review", worklog="w2", evidence="e2",
-               root_cause="the state was not subscribed to event X")
-    reviewer.review_task(t["id"], verdict="approve", report="воспроизвёл, фикс по причине")
+               root_cause="the state was not subscribed to event X",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
+    reviewer.review_task(t["id"], verdict="approve", report="воспроизвёл, фикс по причине",
+        evidence_reproduced=True)
     assert api.stage_of(t["id"]) == "Review"
     assert any(c.startswith("[review] APPROVE") for c in api.comments_text(t["id"]))
     # свежий APPROVE (новее последнего worklog) закрывает ревью — задача не предлагается
@@ -1415,7 +1436,8 @@ def test_review_offered_for_non_bug_task_kind_change(env):
     предлагается свободному агенту с review_kind='change'."""
     api, wf, t = env
     wf.advance(t["id"], to="build", spec="s")
-    wf.advance(t["id"], to="review", worklog="w", evidence="e")
+    wf.advance(t["id"], to="review", worklog="w", evidence="e",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     reviewer = type(wf)(api, project_id=3)
     reviewer._me_cache = {"id": 77, "username": "agent-reviewer"}
     offered = reviewer.next_task()
@@ -1454,7 +1476,8 @@ def test_review_reoffered_after_needs_work_rework(env):
     api.tasks[t["id"]]["labels"].append({"id": 999, "title": "bug"})
     wf.advance(t["id"], to="build", spec="s")
     wf.advance(t["id"], to="review", worklog="w1", evidence="e1",
-               root_cause="the state was not subscribed to event X")
+               root_cause="the state was not subscribed to event X",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
 
     reviewer = type(wf)(api, project_id=3)
     reviewer._me_cache = {"id": 77, "username": "agent-reviewer"}
@@ -1464,11 +1487,13 @@ def test_review_reoffered_after_needs_work_rework(env):
     assert not reviewer.next_task().get("review")          # в Build — ревьюить нечего
 
     wf.advance(t["id"], to="review", worklog="w2: доработано", evidence="e2",
-               root_cause="the state was not subscribed to event X")
+               root_cause="the state was not subscribed to event X",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     offered = reviewer.next_task()
     assert offered.get("review") is True and offered["task"]["id"] == t["id"]  # re-offer!
 
-    reviewer.review_task(t["id"], verdict="approve", report="теперь по причине")
+    reviewer.review_task(t["id"], verdict="approve", report="теперь по причине",
+        evidence_reproduced=True)
     assert not reviewer.next_task().get("review")          # свежий вердикт закрыл цикл
 
 
@@ -1483,7 +1508,8 @@ def _to_review(wf, task_id, root_cause="the state was not subscribed to event X"
     root_cause=None explicitly, which is what the gate's own tests do."""
     wf.advance(task_id, to="build", spec="s")
     return wf.advance(task_id, to="review", worklog="w", evidence="e",
-                      root_cause=root_cause)
+                      root_cause=root_cause,
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
 
 
 def test_review_approve_adds_reviewed_strips_review_failed(env):
@@ -1492,7 +1518,8 @@ def test_review_approve_adds_reviewed_strips_review_failed(env):
     _to_review(wf, t["id"])
     # на момент апрува на задаче ещё висит review-failed (belt-and-suspenders на всякий)
     api.tasks[t["id"]]["labels"].append({"id": 999, "title": "review-failed"})
-    wf.review_task(t["id"], verdict="approve", report="воспроизвёл, фикс по причине")
+    wf.review_task(t["id"], verdict="approve", report="воспроизвёл, фикс по причине",
+        evidence_reproduced=True)
     titles = _label_titles(api, t["id"])
     assert "reviewed" in titles
     assert "review-failed" not in titles
@@ -1518,11 +1545,13 @@ def test_advance_review_resubmit_strips_review_failed(env):
     api.tasks[t["id"]]["labels"].append({"id": 999, "title": "bug"})
     wf.advance(t["id"], to="build", spec="s")
     wf.advance(t["id"], to="review", worklog="w1", evidence="e1",
-               root_cause="the state was not subscribed to event X")
+               root_cause="the state was not subscribed to event X",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     wf.review_task(t["id"], verdict="needs_work", report="не закрыта причина")
     assert "review-failed" in _label_titles(api, t["id"])  # needs_work повесил
     wf.advance(t["id"], to="review", worklog="w2: доработано", evidence="e2",
-               root_cause="the state was not subscribed to event X")
+               root_cause="the state was not subscribed to event X",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     assert "review-failed" not in _label_titles(api, t["id"])  # ресабмит снял
 
 
@@ -1532,7 +1561,8 @@ def test_advance_review_first_submit_no_review_failed_label(env):
     api.tasks[t["id"]]["labels"].append({"id": 999, "title": "bug"})
     wf.advance(t["id"], to="build", spec="s")
     wf.advance(t["id"], to="review", worklog="w", evidence="e",
-               root_cause="the state was not subscribed to event X")
+               root_cause="the state was not subscribed to event X",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     assert "review-failed" not in _label_titles(api, t["id"])
     assert api.stage_of(t["id"]) == "Review"
 
@@ -1549,7 +1579,8 @@ def test_manual_bounce_of_approved_card_clears_reviewed_on_resubmit(env):
     _to_review(wf, t["id"])
     reviewer = type(wf)(api, project_id=3)
     reviewer._me_cache = {"id": 77, "username": "agent-reviewer"}
-    reviewer.review_task(t["id"], verdict="approve", report="воспроизвёл, фикс по причине")
+    reviewer.review_task(t["id"], verdict="approve", report="воспроизвёл, фикс по причине",
+        evidence_reproduced=True)
     assert "reviewed" in _label_titles(api, t["id"])
     assert api.stage_of(t["id"]) == "Review"
     assert not reviewer.next_task().get("review")   # свежий APPROVE закрыл ревью
@@ -1562,7 +1593,8 @@ def test_manual_bounce_of_approved_card_clears_reviewed_on_resubmit(env):
     assert "reviewed" in _label_titles(api, t["id"])
 
     # агент дорабатывает и ресабмитит в Review -> reviewed должен уйти, review-failed тоже нет
-    wf.advance(t["id"], to="review", worklog="доработал по замечанию человека", evidence="e2")
+    wf.advance(t["id"], to="review", worklog="доработал по замечанию человека", evidence="e2",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     titles = _label_titles(api, t["id"])
     assert "reviewed" not in titles           # ключевая проверка: несвежий вердикт снят
     assert "review-failed" not in titles
@@ -1599,14 +1631,16 @@ def test_resubmit_after_needs_work_clears_review_failed_and_no_reviewed(env):
     api.tasks[t["id"]]["labels"].append({"id": 999, "title": "bug"})
     wf.advance(t["id"], to="build", spec="s")
     wf.advance(t["id"], to="review", worklog="w1", evidence="e1",
-               root_cause="the state was not subscribed to event X")
+               root_cause="the state was not subscribed to event X",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     reviewer = type(wf)(api, project_id=3)
     reviewer._me_cache = {"id": 77, "username": "agent-reviewer"}
     reviewer.review_task(t["id"], verdict="needs_work", report="не закрыта причина")
     assert "review-failed" in _label_titles(api, t["id"])
     assert "reviewed" not in _label_titles(api, t["id"])
     wf.advance(t["id"], to="review", worklog="w2: доработано", evidence="e2",
-               root_cause="the state was not subscribed to event X")
+               root_cause="the state was not subscribed to event X",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     titles = _label_titles(api, t["id"])
     assert "review-failed" not in titles   # ресабмит снял
     assert "reviewed" not in titles        # и не воскресил
@@ -2111,7 +2145,8 @@ def _ownerless_card_in_review(api, wf):
     t = api.add_task("real work", "Queue")
     wf.claim(t["id"])
     wf.advance(t["id"], to="build", spec="approach")
-    wf.advance(t["id"], to="review", worklog="did it", evidence="abc123")
+    wf.advance(t["id"], to="review", worklog="did it", evidence="abc123",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     api.remove_assignee(t["id"], api.me_user["id"])
     offered = wf.next_task()
     assert offered.get("review") is True and offered["task"]["id"] == t["id"], offered
@@ -2235,7 +2270,8 @@ def test_ownerless_card_in_an_active_stage_gets_a_refusal_it_can_act_on():
     for stage in ("Design", "Build"):
         orphan = api.add_task(f"hand-placed in {stage}", stage)
         for label, call in (
-            ("advance", lambda tid: wf.advance(tid, to="review", worklog="w", evidence="e")),
+            ("advance", lambda tid: wf.advance(tid, to="review", worklog="w", evidence="e",
+                evidence_block=REVIEW_EVIDENCE_BLOCK)),
             ("call_human", lambda tid: wf.call_human(tid, "q")),
             ("return_task", lambda tid: wf.return_task(tid, reason="r")),
             ("decompose", lambda tid: wf.decompose(tid, [{"title": "a"}, {"title": "b"}])),
@@ -2688,10 +2724,12 @@ def test_the_per_stage_ownerless_exits_state_only_what_the_board_really_does():
     movers = (
         ("review_task(needs_work)",
          lambda w, tid: w.review_task(tid, verdict="needs_work", report="r")),
-        ("review_task(approve)", lambda w, tid: w.review_task(tid, verdict="approve", report="r")),
+        ("review_task(approve)", lambda w, tid: w.review_task(tid, verdict="approve", report="r",
+            evidence_reproduced=True)),
         ("claim", lambda w, tid: w.claim(tid)),
         ("advance(build)", lambda w, tid: w.advance(tid, to="build", spec="s")),
-        ("advance(review)", lambda w, tid: w.advance(tid, to="review", worklog="w", evidence="e")),
+        ("advance(review)", lambda w, tid: w.advance(tid, to="review", worklog="w", evidence="e",
+            evidence_block=REVIEW_EVIDENCE_BLOCK)),
         ("call_human", lambda w, tid: w.call_human(tid, "q")),
         ("return_task", lambda w, tid: w.return_task(tid, reason="r")),
         ("decompose", lambda w, tid: w.decompose(tid, [{"title": "a"}, {"title": "b"}])),
@@ -2887,7 +2925,8 @@ def test_every_agent_tool_is_graded_for_what_it_does_to_a_stale_verdict(env):
         "APPROVED card back here, and `reviewed` must not survive the re-entry"
     )
     api.tasks[back["id"]]["labels"].append({"id": 905, "title": "review-failed"})
-    wf.advance(back["id"], to="review", worklog="доделал", evidence="deadbeef")
+    wf.advance(back["id"], to="review", worklog="доделал", evidence="deadbeef",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     assert api.stage_of(back["id"]) == "Review"
     assert _label_titles(api, back["id"]) == [], (
         "advance(to='review') resubmitted with a stale verdict still standing — the resubmit is "
@@ -3048,7 +3087,8 @@ def test_a_bug_cannot_reach_review_without_a_root_cause(env):
     api, wf, _ = env
     t = _bug_in_build(api, wf)
     with pytest.raises(WorkflowError) as exc:
-        wf.advance(t["id"], to="review", worklog="fixed it", evidence="a" * 40)
+        wf.advance(t["id"], to="review", worklog="fixed it", evidence="a" * 40,
+            evidence_block=REVIEW_EVIDENCE_BLOCK)
     assert "root_cause" in str(exc.value)
     assert api.stage_of(t["id"]) == "Build", "the refusal must not move the card"
 
@@ -3061,12 +3101,14 @@ def test_the_root_cause_refusal_tells_null_apart_from_blank(env):
     api, wf, _ = env
     absent = _bug_in_build(api, wf)
     with pytest.raises(WorkflowError) as e1:
-        wf.advance(absent["id"], to="review", worklog="w", evidence="e")
+        wf.advance(absent["id"], to="review", worklog="w", evidence="e",
+            evidence_block=REVIEW_EVIDENCE_BLOCK)
     assert "root_cause — arrived as null" in str(e1.value)
 
     blank = _bug_in_build(api, wf)
     with pytest.raises(WorkflowError) as e2:
-        wf.advance(blank["id"], to="review", worklog="w", evidence="e", root_cause="   ")
+        wf.advance(blank["id"], to="review", worklog="w", evidence="e", root_cause="   ",
+            evidence_block=REVIEW_EVIDENCE_BLOCK)
     assert "root_cause — passed, but empty or whitespace-only" in str(e2.value)
 
 
@@ -3074,7 +3116,8 @@ def test_a_bug_with_a_root_cause_advances_and_the_cause_lands_in_the_journal(env
     api, wf, _ = env
     t = _bug_in_build(api, wf)
     wf.advance(t["id"], to="review", worklog="fixed it", evidence="a" * 40,
-               root_cause="the state was never subscribed to event X")
+               root_cause="the state was never subscribed to event X",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     assert api.stage_of(t["id"]) == "Review"
     journal = [c["comment"] for c in api.comments(t["id"]) if "[worklog]" in c["comment"]]
     assert any("Root cause: the state was never subscribed" in c for c in journal)
@@ -3085,7 +3128,8 @@ def test_the_root_cause_gate_does_not_spread_beyond_bugs(env):
     so a change card is untouched. This is the row that fails if the condition is dropped."""
     api, wf, t = env
     wf.advance(t["id"], to="build", spec="s")
-    wf.advance(t["id"], to="review", worklog="did the change", evidence="a" * 40)
+    wf.advance(t["id"], to="review", worklog="did the change", evidence="a" * 40,
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     assert api.stage_of(t["id"]) == "Review"
 
 
@@ -3095,7 +3139,8 @@ def test_an_epic_container_is_exempt_from_the_root_cause_gate(env):
     Positive assert, so removing the exemption reddens this rather than passing silently."""
     api, wf, _ = env
     t = _bug_in_build(api, wf, extra_labels=("epic",))
-    wf.advance(t["id"], to="review", worklog="container", evidence="a" * 40)
+    wf.advance(t["id"], to="review", worklog="container", evidence="a" * 40,
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     assert api.stage_of(t["id"]) == "Review"
 
 

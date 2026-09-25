@@ -1,3 +1,5 @@
+from tests.unit.fakes import REVIEW_EVIDENCE_BLOCK
+
 import io
 import os
 import struct
@@ -60,7 +62,8 @@ def test_happy_path_queue_to_review(project):
     assert picked["task"]["ref"] == f"{boss.get_task(t['id'])['identifier']} ({t['id']})"
     wf1.claim(t["id"])
     wf1.advance(t["id"], to="build", spec="подход: X")
-    wf1.advance(t["id"], to="review", worklog="сделано X", evidence="commit deadbeef")
+    wf1.advance(t["id"], to="review", worklog="сделано X", evidence="commit deadbeef",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     dossier = wf1.get_task(t["id"])
     assert dossier["stage"] == "Review"
     marks = [c["text"].split("\n")[0].split(" ")[0] for c in dossier["comments"]]
@@ -80,7 +83,8 @@ def test_gates_and_no_done(project):
     t = enqueue("гейты")
     wf1.claim(t["id"])
     with pytest.raises(WorkflowError):
-        wf1.advance(t["id"], to="review", worklog="w", evidence="e")  # мимо Build
+        wf1.advance(t["id"], to="review", worklog="w", evidence="e",
+            evidence_block=REVIEW_EVIDENCE_BLOCK)  # мимо Build
     with pytest.raises(WorkflowError):
         wf1.advance(t["id"], to="build", spec="")                     # пустой spec
     with pytest.raises(WorkflowError):

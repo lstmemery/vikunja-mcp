@@ -56,6 +56,9 @@ in the selection at all is in the table's own row for the real client.
 The table lives in `test_the_sweep_is_recorded`'s docstring at the bottom of this file, so that
 every round sits in the same paragraph as the control it is a delta against.
 """
+
+from tests.unit.fakes import REVIEW_EVIDENCE_BLOCK
+
 import pytest
 
 from tests.unit.fakes import FakeAPI
@@ -114,7 +117,8 @@ def test_a_variant_bug_label_still_gates_root_cause(spelling):
     for title in (LABEL_BUG, spelling):
         api, wf, t = _bug_stand(title)
         with pytest.raises(WorkflowError) as exc:
-            wf.advance(t["id"], to="review", worklog="did it", evidence="deadbeef")
+            wf.advance(t["id"], to="review", worklog="did it", evidence="deadbeef",
+                evidence_block=REVIEW_EVIDENCE_BLOCK)
         assert "root_cause" in str(exc.value), (
             f"a card labelled {title!r} must be refused for the CAUSE, not for something else"
         )
@@ -122,6 +126,7 @@ def test_a_variant_bug_label_still_gates_root_cause(spelling):
     api, wf, t = _bug_stand(spelling)
     assert wf.advance(
         t["id"], to="review", worklog="did it", evidence="deadbeef", root_cause="why",
+        evidence_block=REVIEW_EVIDENCE_BLOCK,
     )["moved_to"] == "Review"
 
 
@@ -134,6 +139,7 @@ def test_a_variant_bug_label_still_sets_the_bug_review_rubric(spelling):
     api, wf, t = _bug_stand(spelling)
     pushed = wf.advance(
         t["id"], to="review", worklog="did it", evidence="deadbeef", root_cause="why",
+        evidence_block=REVIEW_EVIDENCE_BLOCK,
     )
     assert pushed["review_needed"] is True
     assert pushed["review_kind"] == "bug"
@@ -215,7 +221,8 @@ def test_a_variant_epic_container_is_not_nudged_for_review_and_is_not_offered_fo
     t = api.add_task("container", "Build", assignee=api.me_user)
     _hand_label(api, t["id"], "Epic")
 
-    pushed = wf.advance(t["id"], to="review", worklog="w", evidence="e")
+    pushed = wf.advance(t["id"], to="review", worklog="w", evidence="e",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     assert "review_needed" not in pushed and "review_kind" not in pushed
 
     api.add_comment(t["id"], "[worklog] a report someone left on the container")
@@ -251,7 +258,8 @@ def test_a_variant_verdict_badge_is_cleared_on_the_way_back_into_review(spelling
     t = api.add_task("job", "Build", assignee=api.me_user)
     _hand_label(api, t["id"], spelling)
 
-    wf.advance(t["id"], to="review", worklog="w", evidence="e")
+    wf.advance(t["id"], to="review", worklog="w", evidence="e",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
 
     left = [label_key(x) for x in _titles(api, t["id"])]
     assert LABEL_REVIEWED not in left, (

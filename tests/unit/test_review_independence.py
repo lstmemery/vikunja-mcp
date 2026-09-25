@@ -40,6 +40,9 @@ moving the gate to AFTER the approve verdict is written -> 3 failed, 0 errors, c
 control (closing, restored) 0 failed, 0 errors, collected 170, clone clean. Collected is equal
 in every round, so each number is a delta against the control and not a different selection.
 """
+
+from tests.unit.fakes import REVIEW_EVIDENCE_BLOCK
+
 import inspect
 
 import pytest
@@ -59,7 +62,8 @@ def _card_in_review(api, wf, *, assigned=True):
     task = api.add_task("job", "Design", assignee=api.me_user)
     wf.advance(task["id"], to="build", spec="s")
     wf.advance(task["id"], to="review", worklog="w", evidence="e",
-               root_cause="the state was not subscribed to event X")
+               root_cause="the state was not subscribed to event X",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     if not assigned:
         api.tasks[task["id"]]["assignees"] = []
     return task
@@ -92,7 +96,10 @@ def test_off_by_default_a_self_verdict_is_still_accepted(verdict, expected_label
     assert wf.require_review_independence is False
     task = _card_in_review(api, wf)
 
-    out = wf.review_task(task["id"], verdict=verdict, report="checked by running")
+    out = wf.review_task(
+        task["id"], verdict=verdict, report="checked by running",
+        evidence_reproduced=True,
+    )
 
     assert out["verdict"] == verdict
     assert expected_label in _labels(api, task["id"])
@@ -129,7 +136,8 @@ def test_off_the_gate_never_resolves_the_caller_identity():
 
     api.me = _boom
     assert wf._me_cache is None
-    wf.review_task(task["id"], verdict="approve", report="r")
+    wf.review_task(task["id"], verdict="approve", report="r",
+        evidence_reproduced=True)
     assert wf._me_cache is None
 
 
@@ -181,7 +189,8 @@ def test_on_a_distinct_reviewer_identity_passes(verdict, expected_label, expecte
     task = _card_in_review(api, implementer)
 
     out = _reviewer(api, require_review_independence=True).review_task(
-        task["id"], verdict=verdict, report="reproduced and checked"
+        task["id"], verdict=verdict, report="reproduced and checked",
+        evidence_reproduced=True,
     )
 
     assert out["verdict"] == verdict
@@ -223,7 +232,8 @@ def test_on_the_gate_survives_a_blacked_out_kanban_copy():
     wf._find_task = lambda tid, *a, **k: (board_copy, "Review")
 
     with pytest.raises(WorkflowError, match="cannot review it"):
-        wf.review_task(task["id"], verdict="approve", report="r")
+        wf.review_task(task["id"], verdict="approve", report="r",
+            evidence_reproduced=True)
 
 
 def test_on_in_a_solo_setup_nobody_can_review_and_the_refusal_says_so():
@@ -238,7 +248,8 @@ def test_on_in_a_solo_setup_nobody_can_review_and_the_refusal_says_so():
     task = _card_in_review(api, wf)
 
     with pytest.raises(WorkflowError) as err:
-        wf.review_task(task["id"], verdict="approve", report="r")
+        wf.review_task(task["id"], verdict="approve", report="r",
+            evidence_reproduced=True)
 
     msg = str(err.value)
     assert "require_review_independence" in msg

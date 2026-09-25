@@ -3,6 +3,9 @@
 A fake would share this module's model of git and prove nothing about the one behaviour that
 matters: that housekeeping can never destroy an agent's unpushed work.
 """
+
+from tests.unit.fakes import REVIEW_EVIDENCE_BLOCK
+
 import fcntl
 import json
 import os
@@ -755,7 +758,8 @@ def test_gc_keeps_a_quiesced_review_tree_only_because_its_card_is_in_review(repo
     reviewing = api.add_task("under review", "Queue")          # card IN Review -> tree lives
     wf.claim(reviewing["id"])
     wf.advance(reviewing["id"], to="build", spec="approach")
-    wf.advance(reviewing["id"], to="review", worklog="done", evidence="abc1234")
+    wf.advance(reviewing["id"], to="review", worklog="done", evidence="abc1234",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
 
     bounced = api.add_task("already back in build", "Queue")   # card NOT in Review -> tree dies
     wf.claim(bounced["id"])
@@ -1086,7 +1090,8 @@ def test_gc_reaps_a_build_tree_once_its_task_reaches_review(repo, tracker):
     wf.claim(task["id"])
     path = Path(ensure_workspace(task["id"], cwd=repo)["path"])
     wf.advance(task["id"], to="build", spec="approach")
-    wf.advance(task["id"], to="review", worklog="done", evidence="abc1234")
+    wf.advance(task["id"], to="review", worklog="done", evidence="abc1234",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     _quiesce(path)
 
     res = gc_workspaces(cwd=repo, workflow=wf)
@@ -1768,7 +1773,8 @@ def _advanced_to_review(repo, api, wf):
     wf.claim(task["id"])
     path = Path(ensure_workspace(task["id"], cwd=repo)["path"])
     wf.advance(task["id"], to="build", spec="approach")
-    wf.advance(task["id"], to="review", worklog="done", evidence="abc1234")
+    wf.advance(task["id"], to="review", worklog="done", evidence="abc1234",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     return task["id"], path
 
 
@@ -8074,7 +8080,8 @@ def _dead_review_tree(api, wf, repo, head, title, *, bounce=False) -> tuple[int,
     task = api.add_task(title, "Queue")
     wf.claim(task["id"])
     wf.advance(task["id"], to="build", spec="approach")
-    wf.advance(task["id"], to="review", worklog="done", evidence="abc1234")
+    wf.advance(task["id"], to="review", worklog="done", evidence="abc1234",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     tree = Path(ensure_workspace(task["id"], role="review", at=head, cwd=repo)["path"])
     if bounce:
         wf.review_task(task["id"], verdict="needs_work", report="repro'd; cause not addressed")

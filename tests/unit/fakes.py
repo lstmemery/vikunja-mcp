@@ -3,6 +3,7 @@ import copy
 import itertools
 
 from vikunja_mcp.api import VikunjaError, label_key
+from vikunja_mcp.evidence import set_evidence_block
 from vikunja_mcp.formatting import html_to_text, text_to_html
 
 # Real Vikunja 2.3.0 auto-creates the reciprocal relation on the OTHER task: write one side
@@ -17,6 +18,29 @@ _INVERSE_RELATION = {
     "precedes": "follows", "follows": "precedes",
     "copiedfrom": "copiedto", "copiedto": "copiedfrom",
 }
+
+REVIEW_EVIDENCE_BLOCK = """## Evidence
+### What changed
+Updated the behavior under test.
+### Verification
+Command: pytest tests/unit -q
+Key output: all selected tests passed
+### Before / after
+Before: the behavior was not verified in the task description.
+After: the required behavior is recorded and reproducible.
+### Artifacts
+tests/unit/; src/vikunja_mcp/
+### Residual risks
+No new risks known.
+### Approve if
+The tests pass and the implementation meets the card requirements.
+"""
+
+
+def seed_review_evidence(api, task_id):
+    """Give a synthetic Review card a valid description packet for reviewer tests."""
+    description = api.get_task(task_id).get("description") or ""
+    api.update_task(task_id, description=set_evidence_block(description, REVIEW_EVIDENCE_BLOCK))
 
 
 class FakeAPI:

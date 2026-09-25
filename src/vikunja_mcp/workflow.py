@@ -24,6 +24,7 @@ from .delegation import (
     ACTIONS, PROTECTED_LABELS, AuthorizedMove, audit_text, find_authorized,
     parse_authorized_file,
 )
+from .evidence import EvidenceBlockError, has_valid_evidence_block, set_evidence_block
 from .formatting import html_to_text
 from .notify import WebhookNotifier
 
@@ -351,8 +352,8 @@ _LOST_ARGUMENT_HINT = (
     "THREE and no longer four: a key dropped in transit, an argument you never passed and an "
     "EXPLICIT null you did pass all arrive here as null — measured; the first two are one and "
     "the same on the wire, and a malformed tag is how the first one actually happens.) "
-    "Still available if re-issuing keeps failing: advance with a SHORT value, then post the "
-    "full text as separate comment() calls marked [worklog]."
+    "For to='review', correct the call emission and include the complete validated "
+    "evidence_block. Comments cannot substitute for the description block."
 )
 
 
@@ -2729,7 +2730,7 @@ class Workflow:
     def advance(
         self, task_id: int, to: str,
         spec: str | None = None, worklog: str | None = None, evidence: str | None = None,
-        root_cause: str | None = None,
+        root_cause: str | None = None, evidence_block: str | None = None,
     ) -> dict:
         to = (to or "").strip().lower()
         if to == "done":
@@ -2824,6 +2825,15 @@ class Workflow:
             report.append(
                 "\n" + card_text(self.language, "worklog_evidence", evidence=evidence.strip())
             )
+            description = self.api.get_task(task_id).get("description") or ""
+            try:
+                updated_description = set_evidence_block(description, evidence_block)
+            except EvidenceBlockError as exc:
+                raise WorkflowError(
+                    f"Review needs an Evidence block in the card description: {exc}"
+                ) from None
+            if updated_description != description:
+                self.api.update_task(task_id, description=updated_description)
             self.api.add_comment(task_id, "\n".join(report))
             # resubmit-reset: ресабмит инвалидирует ЛЮБОЙ прошлый вердикт — снимаем ОБЕ
             # вердикт-метки, и review-failed, и reviewed (#119: человек мог руками вытащить
@@ -3123,7 +3133,10 @@ class Workflow:
             "instruction": record.instruction,
         }
 
-    def review_task(self, task_id: int, verdict: str, report: str) -> dict:
+    def review_task(
+        self, task_id: int, verdict: str, report: str,
+        evidence_reproduced: bool = False,
+    ) -> dict:
         verdict = (verdict or "").strip().lower()
         if verdict not in ("approve", "needs_work"):
             raise WorkflowError("verdict must be 'approve' or 'needs_work'")
@@ -3131,10 +3144,34 @@ class Workflow:
             raise WorkflowError(
                 "report required: what you reproduced/verified by running and why this verdict"
             )
+        if not isinstance(evidence_reproduced, bool):
+            raise WorkflowError("evidence_reproduced must be true or false")
         task, stage = self._find_task(task_id)
         if stage != "Review":
             raise WorkflowError(f"only tasks in Review can be reviewed; this one is in {stage}")
         self._require_review_independence(task)
+        full_task = self.api.get_task(task_id)
+        has_evidence = has_valid_evidence_block(full_task.get("description"))
+        if evidence_reproduced and not has_evidence:
+            raise WorkflowError(
+                "evidence_reproduced cannot be true because the card description has no valid "
+                "Evidence block"
+            )
+        if verdict == "approve" and not has_evidence:
+            raise WorkflowError(
+                "cannot approve: the card description is missing a valid Evidence block; "
+                "record needs_work with the missing evidence in your report"
+            )
+        if verdict == "approve" and not evidence_reproduced:
+            raise WorkflowError(
+                "cannot approve: the description Evidence block was not reproduced; "
+                "record needs_work with the reproduction result"
+            )
+
+        reproduction_note = (
+            "Evidence block reproduced: yes" if evidence_reproduced
+            else "Evidence block reproduced: no"
+        )
 
         # LABELS FIRST, THE VERDICT COMMENT LAST — on BOTH branches, and the order is measured
         # (#1216). It used to be the other way round, and that made a failed label write leave a
@@ -3160,14 +3197,18 @@ class Workflow:
         if verdict == "approve":
             self._add_label(task, LABEL_REVIEWED)
             self._remove_label(task, LABEL_REVIEW_FAILED)
-            self.api.add_comment(task_id, f"[review] APPROVE\n{report.strip()}")
+            self.api.add_comment(
+                task_id, f"[review] APPROVE\n{reproduction_note}\n{report.strip()}"
+            )
             return {
                 "verdict": "approve", "task_id": task_id,
                 "note": "verdict recorded; a human moves the task to Done",
             }
         self._add_label(task, LABEL_REVIEW_FAILED)
         self._remove_label(task, LABEL_REVIEWED)
-        self.api.add_comment(task_id, f"[review] NEEDS WORK\n{report.strip()}")
+        self.api.add_comment(
+            task_id, f"[review] NEEDS WORK\n{reproduction_note}\n{report.strip()}"
+        )
         # An OWNERLESS card bounces to QUEUE, not Build (#705). Build means "someone is working
         # on this"; with no assignee there is no implementer to hand it back TO, and the card
         # measured UNREACHABLE there. Precisely: it can still be READ and commented on
