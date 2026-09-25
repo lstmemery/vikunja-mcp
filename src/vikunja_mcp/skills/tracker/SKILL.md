@@ -503,8 +503,9 @@ where. Here — what must not be broken:
   to read `active` from: it is board state, not config. From there the agent goes on its own:
   `get_task` (the dossier — description, spec, comments) → Design and
   `advance(to='build', spec=...)` → implementation → commit+push of the task's diff →
-  `advance(to='review')` with a report (worklog/evidence; for bugs — root_cause). All the rules
-  below about running a task (the gates, the journal comments, the resume re-check,
+  `advance(to='review', evidence_block=...)` with a report
+  (worklog/evidence; for bugs — `root_cause`). All the rules below about running a task (the gates,
+  journal comments, the resume re-check,
   `call_human`, the tools' note hints) are about it; the orchestrator does not execute them, it
   only pumps the queue.
 - **The agent MAY spawn subagents of its own.** It does the implementation either inline (by the
@@ -633,18 +634,37 @@ where. Here — what must not be broken:
 - Record findings and decisions as you go: "chose X over Y because Z",
   "stepped on gotcha W" — both humans and the agents after you read this.
 - `advance(to='build')` requires a spec — 2-5 sentences on the approach, not an essay.
-- **`advance(to='review')` = the report on the work done**, and the reviewer reads it:
-  - `root_cause` — MANDATORY for bug fixes: the cause of the bug (why it arose —
-    "the state is not subscribed to event X"), not the symptom ("the title did not render");
-  - `worklog` — what was done (the approach, the key files) and HOW it was verified
-    (what you ran, what you observed — verification by RUNNING, not by reading the code);
-  - `evidence` — the sha/link of this task's commit (see the next bullet).
-  Run the verification BEFORE the transition. A report with no cause on a bug is grounds for
-  a human to send the task back to Build. And if this card's deliverable is TEXT with measurable
-  claims (docstrings, code comments, rules), or your report itself is one, then a second
-  independent pass runs over it before `advance` as well —
-  see "A second independent pass over YOUR OWN text": it must be run EARLY, not right
-  before handing in.
+- **`advance(to='review')` = the report plus a description Evidence block.** The worklog is
+  still the audit comment; it is not the human's review packet. Supply `evidence_block` in this
+  exact structure so the tool can validate it, write it at the top of the description, and replace
+  it on resubmission:
+
+  ```markdown
+  ## Evidence
+  ### What changed
+  <summary>
+  ### Verification
+  Command: <command>
+  Key output: <trimmed result>
+  ### Before / after
+  Before: <prior behavior>
+  After: <new behavior>
+  ### Artifacts
+  <paths, or none>
+  ### Residual risks
+  <risks, or none known>
+  ### Approve if
+  <one-line approval condition>
+  ```
+
+  Add one `Command:` / `Key output:` pair per check; both before and after are required, and
+  `Approve if` is one line. Also supply `root_cause` for bug fixes and `evidence` as the sha/link
+  of this task's commit. Run verification BEFORE the transition. A reviewer must rerun the
+  listed commands and call `review_task(..., evidence_reproduced=true)` to approve; a missing or
+  unreproduced block is a `needs_work` verdict. A report with no cause on a bug is grounds for a
+  human to send the task back to Build. If this card's deliverable is text with measurable claims,
+  run a second independent pass over it before `advance`; see "A second independent pass over YOUR
+  OWN text".
 - **"Review needs a report" on a report you KNOW you wrote is NOT "you forgot".**
   The refusal is disjunctive, and since #657 it NAMES both the field and HOW it arrived. There
   are THREE fields it can name, not two: since #718 `root_cause` joined `worklog` and `evidence`,
@@ -703,42 +723,16 @@ where. Here — what must not be broken:
     like an empty string — whereas 50 zero-width ones (ZWSP, U+FEFF, U+2060) are NOT whitespace,
     the guard lets them through, and the card goes to Review with a report that is empty to any
     reader. Checked both ways; do not plug the report with filler.
-  - **The fallback if the retry does not take** (before #938 it was the only prescribed path, and
-    its price is the one the card was filed over: the full report has to be CUT UP):
-    move the card with a SHORT `worklog`, and lay the full
-    report out as separate `comment(task_id, "[worklog] FULL REPORT (1/N) …")` calls BEFORE
-    `advance`. Put the `[worklog]` marker as a PREFIX, and "(1/N)" too — and know what it means,
-    because there is ONE predicate here and it is BLIND TO THE AUTHOR. `get_task` hands the
-    reviewer every comment in order and filters nothing by marker, so a report without the marker
-    does not disappear — it is simply easy to miss for someone scanning by eye. And `next_task`
-    offers a card for review exactly when the MOST RECENT comment STARTING with `[worklog]` is
-    newer than the last `[review]` — and it does not care whether `advance` wrote it or you did by
-    hand. Constructed and checked on a live `Workflow`: after a review verdict the card is not
-    offered; one manual comment with `[worklog]` as its prefix and it is offered AGAIN; the same
-    text with the marker NOT at the start and it is not offered. Two consequences: lay the report
-    chunks down BEFORE `advance` (as written above), and do not write a `[worklog]`-prefixed
-    comment onto a card that already carries a verdict — you will dispatch an extra round of
-    review. Do NOT leave a placeholder like `Worklog: probe` in the `[worklog]` — in even the
-    shortest worklog, write that the full report is in separate comments above, otherwise the
-    card's journal will claim one thing while another was done.
-  - **There is NO THRESHOLD AT ALL — do not guess about it and do not size the report to it.** A
-    round ago this said "nobody knows the threshold", and that was honest exactly until the
-    mechanism was found: since it is the TAG that is lost and not the size, there was nothing to
-    look for. On #657 the threshold could NOT BE REPRODUCED even once: in a live probe through an
-    MCP client, `advance` accepted 5807 characters / 9598 bytes of UTF-8 on the first attempt (the
-    delivered argument; the extra 7 bytes on the card are our own `[spec]\n` prefix). So neither
-    "longer than N always fails" nor "up to N is safe" follows from this, and sizing the report's
-    length to an imagined ceiling is wasted work. Branch on the word `null` in the refusal — it is
-    about the FACT, not about the size. One honest bound on this whole analysis: the mechanism was
-    found in THE harness these agents run under (a tag-structured tool call). A different harness
-    that serialises the call differently may drop an argument for its own reason — "arrived as
-    null" is then the same, and the diagnosis has to be made afresh.
+  - **If a report field is missing or arrives as null, fix the call and retry.** A missing or
+    incomplete `evidence_block` is refused before the card moves; do not put it in comments or
+    split it into `[worklog]` chunks. The description block is the review packet, and comments are
+    supplemental discussion and audit history.
 - **A visually verifiable result — attach a screenshot.** If a human confirms the change is
   right by LOOKING (UI, a rendered page/chart, a generated image, the board's layout) — attach
   a screenshot of the finished result to the card with `attach_file(task_id, path, note=...)`
-  and cite it in the `worklog` as evidence beside the sha. The screenshot is the one you took
-  during verification anyway (the browser tool, the run/verify skill): the card is about
-  ATTACHING what was already taken, there is no separate screenshotting mechanism to invent.
+  and list it in the Evidence block's Artifacts section; the worklog may point to it. The screenshot
+  is the one you took during verification anyway (the browser tool, the run/verify skill): the card
+  is about ATTACHING what was already taken, and there is no separate screenshotting mechanism to invent.
   If you took it with the SHARED browser tool, first check the `Page URL` with a neighbouring
   `browser_snapshot` (the screenshot itself does not print that line) and the file path against
   "Shared resources": the browser is one per session, the screenshot may turn out to be of a
@@ -1044,12 +1038,13 @@ where. Here — what must not be broken:
       of `stable`, while its descendant `b6c7502` carries a green run 31086601577; 1 of 21 task
       commits in the last 40 landings arrived that way (~5 %). Raise the alarm only when nothing
       is above OR the descendant has no run either. But even in the "good" outcome one thing
-      stays true, and it must be said in the report: nobody ran the tree AT your commit — what
-      was green was the neighbour's combined thread.
+      stays true, and it must be said in the review report: nobody ran the tree AT your commit —
+      what was green was the neighbour's combined thread.
     - **THE OUTCOME — ONE look, as the LAST action of the turn.** Both obvious forms are wrong:
       "wait for green" blocks you for minutes and dies together with a killed turn, "ask right
       after the push" almost always lands in an in-flight run. So ask LATER, but by ORDER rather
-      than by waiting: first `advance(to='review')`, the report and `--release`, and only then a
+      than by waiting: first `advance(to='review', evidence_block=...)`, the report and
+      `--release`, and only then a
       single `gh run view <id> --json status,conclusion,jobs`. Measured over 40 runs of
       this repo, each on its FIRST attempt (two were later re-run by hand, and a re-run's
       `updatedAt` carries a HUMAN's delay — 31 min and 3 h 26 min — which is not about CI; the
@@ -1061,12 +1056,11 @@ where. Here — what must not be broken:
       never the critical path at all (16–29 s against `lint-and-unit`'s 38–46 s), the run's length
       is set by `lint-and-unit`, and a GREEN run additionally runs `release` (8–15 s), which a red
       one SKIPS. Hence the conclusion: by the end of the turn the answer is usually already there,
-      and slightly more often in exactly the case the check exists for. **And know WHERE the
-      answer will go: `advance` is already behind you, it will not make it into the
-      `worklog`.** Write it as a separate `comment` on the card — that tool gates neither stage
-      nor ownership, so a card in Review will accept it — and into your summary for the
-      orchestrator. Take the run's id from the first check, and run the command from the MAIN
-      checkout: by this point `--release` has already removed your worktree.
+      and slightly more often in exactly the case the check exists for. If the run is still
+      in flight when the Evidence block is written, list that as a residual risk; the independent
+      reviewer checks the run against the sha and records its result in the review report. Do not
+      add a separate evidence comment. Take the run's id from the first check, and run the
+      command from the MAIN checkout: by this point `--release` has already removed your worktree.
     - **Branch on `status`, NOT on `conclusion`.** `conclusion` is meaningful ONLY at
       `status == "completed"`. An in-flight run was caught live, here it is verbatim:
       `{"conclusion":"","databaseId":30636770459,"status":"in_progress"}` — the verdict is the

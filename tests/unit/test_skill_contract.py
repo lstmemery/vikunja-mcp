@@ -13,6 +13,9 @@ stale on either side. One test below also reads the repo's own CLAUDE.md, becaus
 retry ceiling is DERIVED in both files and two independent copies of one derivation are exactly
 what drifts apart.
 """
+
+from tests.unit.fakes import REVIEW_EVIDENCE_BLOCK, seed_review_evidence
+
 import ast
 import inspect
 import os
@@ -498,7 +501,8 @@ def test_the_evidence_mismatch_escalation_is_one_the_orchestrator_can_execute():
     task_id = api.add_task("its evidence sha never landed", "Queue")["id"]
     wf.claim(task_id)
     wf.advance(task_id, to="build", spec="…")
-    wf.advance(task_id, to="review", worklog="…", evidence="0" * 40)
+    wf.advance(task_id, to="review", worklog="…", evidence="0" * 40,
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     assert api.stage_of(task_id) == "Review", "step 3 sees a card in Review — precondition"
 
     # 1. why the rule cannot say `call_human` here
@@ -1923,7 +1927,8 @@ def test_the_wip_overshoot_the_rulebook_describes_is_one_the_code_produces():
 
     bounced = claim_fresh("reviewed, then bounced")
     wf.advance(bounced, to="build", spec="…")
-    wf.advance(bounced, to="review", worklog="…", evidence="0" * 40)
+    wf.advance(bounced, to="review", worklog="…", evidence="0" * 40,
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     for n in range(3):                       # the pump refills the freed slot, as the tick does
         claim_fresh(f"held {n}")
     assert wf.next_task()["wip"] == {"active": 3, "limit": 3, "free": 0}, "precondition: full"
@@ -3147,7 +3152,8 @@ def test_the_rulebook_quotes_the_saturated_message_and_the_payload_still_renders
 
     bounced = claim_fresh("reviewed, then bounced")
     wf.advance(bounced, to="build", spec="…")
-    wf.advance(bounced, to="review", worklog="…", evidence="0" * 40)
+    wf.advance(bounced, to="review", worklog="…", evidence="0" * 40,
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     for n in range(3):                       # the pump refills the freed slot, as the tick does
         claim_fresh(f"held {n}")
     wf.review_task(bounced, verdict="needs_work", report="not yet")   # around the gate -> 4 of 3
@@ -3308,6 +3314,7 @@ def _review_sweep(tmp_path, *, mine: bool = True) -> tuple[dict, dict]:
         neighbour = api.add_project("neighbour", buckets=workflow.STAGES, identifier="NB")
         wf = workflow.Workflow(api, project_id=3, siblings={"neighbour": neighbour["id"]})
         card = api.add_task("under review", "Review", assignee=api.me_user if mine else None)
+        seed_review_evidence(api, card["id"])
         if not mine:
             api.tasks[card["id"]]["assignees"] = [{"id": 77, "username": "agent-impl"}]
         return api, wf, card
@@ -3325,7 +3332,8 @@ def _review_sweep(tmp_path, *, mine: bool = True) -> tuple[dict, dict]:
         "comment": lambda wf, c: wf.comment(c["id"], "заметка ревьюера"),
         "advance(to='build')": lambda wf, c: wf.advance(c["id"], to="build", spec="s"),
         "advance(to='review')": lambda wf, c: wf.advance(
-            c["id"], to="review", worklog="w", evidence="abc123"),
+            c["id"], to="review", worklog="w", evidence="abc123",
+            evidence_block=REVIEW_EVIDENCE_BLOCK),
         "advance(to='done')": lambda wf, c: wf.advance(c["id"], to="done"),
         "call_human": lambda wf, c: wf.call_human(c["id"], question="какой из двух вариантов?"),
         "return_task": lambda wf, c: wf.return_task(c["id"], reason="не понимаю задачу"),
@@ -3338,7 +3346,8 @@ def _review_sweep(tmp_path, *, mine: bool = True) -> tuple[dict, dict]:
         "delegated_move": lambda wf, c: wf.delegated_move(
             c["id"], action="mark-done", instruction="закрой карточку", evidence="проверено"),
         "review_task(approve)": lambda wf, c: wf.review_task(
-            c["id"], verdict="approve", report="ок"),
+            c["id"], verdict="approve", report="ок",
+            evidence_reproduced=True),
         "review_task(needs_work)": lambda wf, c: wf.review_task(
             c["id"], verdict="needs_work", report="вопрос человеку"),
         "file_task": lambda wf, c: wf.file_task("находка", related_task_id=c["id"]),
@@ -4408,7 +4417,9 @@ def test_the_post_verdict_note_rides_on_a_comment_tool_with_no_stage_or_ownershi
     implementer = {"id": 99, "username": "agent-implementer"}
     assert implementer["id"] != api.me_user["id"], "control: the card must not be the reviewer's"
     card = api.add_task("prose deliverable, reviewed", "Review", assignee=implementer)
-    wf.review_task(card["id"], verdict="approve", report="прогнал tests/unit -q, зелено")
+    seed_review_evidence(api, card["id"])
+    wf.review_task(card["id"], verdict="approve", report="прогнал tests/unit -q, зелено",
+        evidence_reproduced=True)
 
     note = "[review] post-verdict: второй проход вернулся, одна находка — атрибуция"
     assert wf.comment(card["id"], note) == {"commented": card["id"]}, \
@@ -4482,8 +4493,11 @@ def test_only_the_review_tool_writes_a_comment_that_opens_with_its_verdict_line(
     implementer = {"id": 99, "username": "agent-implementer"}
 
     approved = api.add_task("verdict: approve", "Review", assignee=implementer)
-    wf.review_task(approved["id"], verdict="approve", report="перепрогнал замеры, сходится")
+    seed_review_evidence(api, approved["id"])
+    wf.review_task(approved["id"], verdict="approve", report="перепрогнал замеры, сходится",
+        evidence_reproduced=True)
     bounced = api.add_task("verdict: needs_work", "Review", assignee=implementer)
+    seed_review_evidence(api, bounced["id"])
     wf.review_task(bounced["id"], verdict="needs_work", report="утверждение шире своего замера")
 
     assert api.comments_text(approved["id"])[-1].splitlines()[0] == "[review] APPROVE", \
@@ -5580,7 +5594,7 @@ def _bounced_card_tool_forms() -> dict[str, list[tuple[str, dict]]]:
     named, not covered. `to='done'` rides along as a deliberate NON-member: the sweep should measure
     a refusal it expects rather than assume the accepted set has no edges."""
     advance_extra = {"spec": "подход", "worklog": "сделано", "evidence": "abc1234",
-                     "root_cause": "причина"}
+                     "root_cause": "причина", "evidence_block": REVIEW_EVIDENCE_BLOCK}
     return {
         "next_task": [("next_task", {})],
         "claim": [("claim", {"task_id": None})],

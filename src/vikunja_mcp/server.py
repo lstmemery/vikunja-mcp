@@ -695,16 +695,23 @@ def comment(task_id: int, text: str) -> dict:
 def advance(
     task_id: int, to: str,
     spec: str | None = None, worklog: str | None = None, evidence: str | None = None,
-    root_cause: str | None = None,
+    root_cause: str | None = None, evidence_block: str | None = None,
 ) -> dict:
     """Advance YOUR task. to='build' requires spec (approach/design). to='review'
     requires a WORK REPORT: worklog (what was done and how it was verified — by running,
-    not by reading code) + evidence (commit/PR/verification output); for bug fixes
-    root_cause is MANDATORY — the cause of the bug (why it happened), not the symptom;
+    not by reading code) + evidence (commit/PR/verification output) + evidence_block. The
+    Evidence block starts with `## Evidence` and has sections `### What changed`,
+    `### Verification` (one `Command:` and `Key output:` line per check),
+    `### Before / after` (one `Before:` and `After:` line), `### Artifacts`,
+    `### Residual risks`, and `### Approve if` (one line). It is written or replaced
+    at the top of the task description, preserving the remaining description. An incomplete
+    block refuses the transition. The `[worklog]` comment remains an audit trail, not a substitute
+    for the description Evidence block. For bug fixes root_cause is MANDATORY — the cause of the
+    bug (why it happened), not the symptom;
     since #718 that word means a GATE, not a wish: a card labelled `bug` is refused without
     it, by the same disjunctive check that guards worklog and evidence (an epic container is
     exempt — nobody reviews it, so there is no one to owe a cause).
-    The report is posted as a comment for the reviewer to read. There is no transition
+    The worklog report is posted as a comment for the reviewer to read. There is no transition
     to Done — a human moves it to Done after review.
     EVERY task reaching Review returns review_needed=True + review_kind ('bug'|'change')
     so the orchestrator dispatches an independent reviewer — EXCEPT an epic container
@@ -736,18 +743,19 @@ def advance(
     still arrives as null — an
     explicit null, a dropped key and an omitted argument — the tool can report as a STATE but
     never tell apart as a cause (a malformed tag is how the dropped key actually happens).
-    If re-issuing keeps failing, the older workaround still stands: advance
-    with a SHORT worklog and post the full
-    text as separate comment() calls marked [worklog] (say so in the short one, so the
-    journal does not read as a placeholder)."""
+    If re-issuing keeps failing, correct the call emission and retry with the complete
+    evidence_block. Do not split the description Evidence block across comments."""
     return _wf().advance(
-        task_id, to, spec=spec, worklog=worklog, evidence=evidence, root_cause=root_cause
+        task_id, to, spec=spec, worklog=worklog, evidence=evidence, root_cause=root_cause,
+        evidence_block=evidence_block,
     )
 
 
 @_mcp_tool
 @_tool
-def review_task(task_id: int, verdict: str, report: str) -> dict:
+def review_task(
+    task_id: int, verdict: str, report: str, evidence_reproduced: bool = False,
+) -> dict:
     """Independent review of a task in Review (offered via next_task with review_kind). You
     must NOT be the author of the code under review — a separate session reviews it. Check
     for real by RUNNING it, not just reading: review_kind='bug' — reproduce the bug and
@@ -761,7 +769,13 @@ def review_task(task_id: int, verdict: str, report: str) -> dict:
     to QUEUE as free work — in Design/Build an ownerless card can be read and commented
     on but no agent tool can MOVE it or make it anyone's, so your report would sit there
     unanswered. Either way the report stays on the card for whoever picks it up. report
-    is required: what you checked, what you observed, why this verdict.
+    is required: what you checked, what you observed, why this verdict. Before approving, read
+    the complete Evidence block at the top of the description and reproduce every verification
+    command, comparing the key output. Set evidence_reproduced=true only when that succeeded and
+    include the commands and observations in report. approve is refused if the description has no
+    valid Evidence block or evidence_reproduced is false. For missing or unreproducible evidence,
+    record needs_work and explain the refusal in report; the tool records the attestation beside
+    the verdict.
     "You must NOT be the author" is a RULE here and, in most projects, only a rule: by
     default this tool does not check who you are, because in a solo setup one token is the
     whole fleet — author and reviewer authenticate as the SAME assignee, and independence
@@ -771,7 +785,9 @@ def review_task(task_id: int, verdict: str, report: str) -> dict:
     verdict from anyone listed in the card's assignees is refused outright, and the refusal
     tells you to review under the reviewer token instead. Do not set that flag before a
     second identity exists — with one token nobody would be able to review anything."""
-    return _wf().review_task(task_id, verdict, report)
+    return _wf().review_task(
+        task_id, verdict, report, evidence_reproduced=evidence_reproduced
+    )
 
 
 @_mcp_tool

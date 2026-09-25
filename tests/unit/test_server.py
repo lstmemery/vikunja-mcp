@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from tests.unit.fakes import FakeAPI
+from tests.unit.fakes import REVIEW_EVIDENCE_BLOCK
 from vikunja_mcp import server
 from vikunja_mcp.api import VikunjaError
 from vikunja_mcp.config import DEFAULT_LANGUAGE, Config, ConfigError
@@ -241,7 +242,10 @@ def test_scope_gap_401_does_not_duplicate_the_worklog_comment(monkeypatch):
     task = api.add_task("t", "Build", assignee=api.me_user)
     _wire_scope_gap(monkeypatch, Workflow(api, api.project["id"]))
 
-    result = server.advance(task["id"], "review", worklog="did it", evidence="abc123")
+    result = server.advance(
+        task["id"], "review", worklog="did it", evidence="abc123",
+        evidence_block=REVIEW_EVIDENCE_BLOCK,
+    )
 
     worklogs = [c for c in api.comments_text(task["id"]) if c.startswith("[worklog]")]
     assert len(worklogs) == 1, "scope-gap 401 re-ran advance and DUPLICATED the [worklog] comment"

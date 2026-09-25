@@ -8,6 +8,9 @@ label + comment on a DIFFERENT card than the one being advanced), so it is STRIC
 any failure reaching the epic must NOT fail the child's advance nor change its payload. Keys off the
 epic LABEL and the parenttask relation, never structure alone. Idempotent across bounce+re-advance.
 """
+
+from tests.unit.fakes import REVIEW_EVIDENCE_BLOCK
+
 import pytest
 
 from tests.unit.fakes import FakeAPI
@@ -47,7 +50,8 @@ def _epic_comments(api, epic_id):
 def test_marks_epic_when_last_child_reaches_review(env):
     api, wf = env
     epic, (c0, c1) = _epic(api, ["Review", "Build"])
-    res = wf.advance(c1["id"], to="review", worklog="w", evidence="e")
+    res = wf.advance(c1["id"], to="review", worklog="w", evidence="e",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     assert res["moved_to"] == "Review" and res["review_needed"] is True
     assert LABEL_EPIC_READY in _labels(api, epic["id"])
     assert len(_epic_comments(api, epic["id"])) == 1
@@ -59,7 +63,8 @@ def test_done_sibling_counts_as_ready(env):
     still counts, so the last child reaching Review completes the epic."""
     api, wf = env
     epic, (c0, c1) = _epic(api, ["Done", "Build"])
-    wf.advance(c1["id"], to="review", worklog="w", evidence="e")
+    wf.advance(c1["id"], to="review", worklog="w", evidence="e",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     assert LABEL_EPIC_READY in _labels(api, epic["id"])
     assert len(_epic_comments(api, epic["id"])) == 1
 
@@ -70,7 +75,8 @@ def test_no_mark_when_a_sibling_still_below_review(env):
     """Fires only when EVERY sibling is Review-or-Done. One sibling still in Build → no mark."""
     api, wf = env
     epic, (c0, c1, c2) = _epic(api, ["Review", "Build", "Build"])
-    wf.advance(c1["id"], to="review", worklog="w", evidence="e")  # c2 still in Build
+    wf.advance(c1["id"], to="review", worklog="w", evidence="e",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)  # c2 still in Build
     assert LABEL_EPIC_READY not in _labels(api, epic["id"])
     assert _epic_comments(api, epic["id"]) == []
 
@@ -79,7 +85,8 @@ def test_no_mark_for_task_without_parenttask(env):
     """A plain task with no parent → advance→review does nothing epic-related and never crashes."""
     api, wf = env
     t = api.add_task("lonesome", "Build", assignee=api.me_user)
-    res = wf.advance(t["id"], to="review", worklog="w", evidence="e")
+    res = wf.advance(t["id"], to="review", worklog="w", evidence="e",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     assert res["moved_to"] == "Review"
     assert not any(lb["title"] == LABEL_EPIC_READY for lb in api._labels)  # marker label never created
 
@@ -93,7 +100,8 @@ def test_no_mark_when_parent_lacks_epic_label(env):
     c1 = api.add_task("child1", "Build", assignee=api.me_user)
     api.add_relation(c0["id"], parent["id"], "parenttask")
     api.add_relation(c1["id"], parent["id"], "parenttask")
-    wf.advance(c1["id"], to="review", worklog="w", evidence="e")
+    wf.advance(c1["id"], to="review", worklog="w", evidence="e",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     assert LABEL_EPIC_READY not in _labels(api, parent["id"])
 
 
@@ -112,9 +120,11 @@ def test_idempotent_no_double_mark_on_bounce_and_readvance(env):
     or double-label the epic (idempotency keyed on the epic-ready label)."""
     api, wf = env
     epic, (c0, c1) = _epic(api, ["Review", "Build"])
-    wf.advance(c1["id"], to="review", worklog="w", evidence="e")           # marks
+    wf.advance(c1["id"], to="review", worklog="w", evidence="e",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)           # marks
     api.task_bucket[c1["id"]] = api.bucket_id("Build")                     # human/reviewer bounces it
-    wf.advance(c1["id"], to="review", worklog="w2", evidence="e2")         # re-advance — must not re-fire
+    wf.advance(c1["id"], to="review", worklog="w2", evidence="e2",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)         # re-advance — must not re-fire
     assert _labels(api, epic["id"]).count(LABEL_EPIC_READY) == 1
     assert len(_epic_comments(api, epic["id"])) == 1
 
@@ -137,7 +147,8 @@ def test_epic_marker_failure_never_fails_the_child(env, break_method):
         return orig(task_id, *a, **k)
 
     setattr(api, break_method, boom)
-    res = wf.advance(c1["id"], to="review", worklog="did it", evidence="deadbeef")
+    res = wf.advance(c1["id"], to="review", worklog="did it", evidence="deadbeef",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     # payload shape unchanged — the marker adds/removes no keys
     assert set(res) == {"moved_to", "task_id", "review_needed", "review_kind", "note"}
     assert res["moved_to"] == "Review" and res["task_id"] == c1["id"]
@@ -150,7 +161,8 @@ def test_child_payload_shape_unchanged_on_successful_mark(env):
     a pure side effect on the epic, never reported back in the child's payload."""
     api, wf = env
     epic, (c0, c1) = _epic(api, ["Review", "Build"])
-    res = wf.advance(c1["id"], to="review", worklog="w", evidence="e")
+    res = wf.advance(c1["id"], to="review", worklog="w", evidence="e",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     assert set(res) == {"moved_to", "task_id", "review_needed", "review_kind", "note"}
 
 
@@ -212,7 +224,8 @@ def test_marker_failure_is_swallowed_but_logged_to_stderr(env, capsys, exc):
         return orig(task_id, *a, **k)
 
     api.get_task = boom
-    res = wf.advance(c1["id"], to="review", worklog="did it", evidence="deadbeef")
+    res = wf.advance(c1["id"], to="review", worklog="did it", evidence="deadbeef",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
 
     # child wholly unaffected: reached Review, payload shape unchanged (marker adds/removes no keys)
     assert res["moved_to"] == "Review" and api.stage_of(c1["id"]) == "Review"
@@ -229,7 +242,8 @@ def test_successful_mark_writes_nothing_to_stderr_or_stdout(env, capsys):
     leave BOTH channels empty, so stderr stays a real signal and the stdio channel is never touched."""
     api, wf = env
     epic, (c0, c1) = _epic(api, ["Review", "Build"])
-    res = wf.advance(c1["id"], to="review", worklog="w", evidence="e")
+    res = wf.advance(c1["id"], to="review", worklog="w", evidence="e",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     assert LABEL_EPIC_READY in _labels(api, epic["id"])   # happy path actually exercised
     assert res["moved_to"] == "Review"
     captured = capsys.readouterr()
@@ -241,7 +255,8 @@ def test_no_stdout_and_no_stderr_when_marker_is_a_noop(env, capsys):
     """A plain task with no epic parent: the marker is a no-op, and neither channel is written."""
     api, wf = env
     t = api.add_task("lonesome", "Build", assignee=api.me_user)
-    wf.advance(t["id"], to="review", worklog="w", evidence="e")
+    wf.advance(t["id"], to="review", worklog="w", evidence="e",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     captured = capsys.readouterr()
     assert captured.out == "" and captured.err == ""
 
@@ -277,7 +292,8 @@ def test_marker_exception_with_raising_str_does_not_escape_advance(env, capsys):
 
     api.add_label = boom
     # must NOT raise, even though EvilStr.__str__ blows up inside the except handler
-    res = wf.advance(c1["id"], to="review", worklog="did it", evidence="deadbeef")
+    res = wf.advance(c1["id"], to="review", worklog="did it", evidence="deadbeef",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
 
     # child wholly unaffected: reached Review, payload shape unchanged (marker adds/removes no keys)
     assert res["moved_to"] == "Review" and api.stage_of(c1["id"]) == "Review"

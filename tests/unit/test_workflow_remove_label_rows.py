@@ -90,6 +90,9 @@ status.
 The sweep table lives in `test_the_sweep_is_recorded`'s docstring at the bottom, so every round
 sits in the same paragraph as the control it is a delta against.
 """
+
+from tests.unit.fakes import REVIEW_EVIDENCE_BLOCK
+
 import pytest
 
 from tests.unit.fakes import FakeAPI
@@ -166,7 +169,8 @@ def test_every_row_of_one_key_comes_off_not_just_the_first():
         api, wf, t = _stand(rows)
         assert len(_titles(api, t["id"])) == len(rows), "the stand did not build the board"
 
-        wf.advance(t["id"], to="review", worklog="w", evidence="e")
+        wf.advance(t["id"], to="review", worklog="w", evidence="e",
+            evidence_block=REVIEW_EVIDENCE_BLOCK)
 
         left = [label_key(x) for x in _titles(api, t["id"])]
         assert LABEL_REVIEWED not in left, (
@@ -209,7 +213,8 @@ def test_an_ordinary_one_row_board_still_costs_exactly_one_delete():
     api, wf, t = _stand([LABEL_REVIEWED])
     row = api.tasks[t["id"]]["labels"][0]["id"]
 
-    wf.advance(t["id"], to="review", worklog="w", evidence="e")
+    wf.advance(t["id"], to="review", worklog="w", evidence="e",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
 
     assert api.deletes == [(t["id"], row)], (
         f"one row must cost exactly one DELETE, not {api.deletes!r}"
@@ -294,7 +299,8 @@ def test_a_card_with_no_matching_row_sends_no_delete():
     cannot distinguish "matched nothing" from "iterated nothing"."""
     api, wf, t = _stand([LABEL_BLOCKED])
 
-    wf.advance(t["id"], to="review", worklog="w", evidence="e")
+    wf.advance(t["id"], to="review", worklog="w", evidence="e",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
 
     assert api.deletes == [], f"a card with no verdict label must cost no DELETE: {api.deletes!r}"
     assert _titles(api, t["id"]) == [LABEL_BLOCKED], "and the non-matching row is left alone"

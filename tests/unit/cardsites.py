@@ -18,6 +18,9 @@ Driving those sites and reading what LANDS is the check that does not care which
 code took, and this module is what makes it available to the gate without a cycle and without a
 second copy.
 """
+
+from tests.unit.fakes import REVIEW_EVIDENCE_BLOCK
+
 from tests.unit.fakes import FakeAPI
 from vikunja_mcp.workflow import STAGES, Workflow
 
@@ -68,13 +71,16 @@ def drive_every_comment_site(api, wf, tmp_path):
     wf.advance(                                                   # [worklog]
         queued["id"], to="review", worklog="what was done",
         evidence="deadbeef", root_cause="why it happened",
+        evidence_block=REVIEW_EVIDENCE_BLOCK,
     )
     wf.review_task(queued["id"], verdict="needs_work", report="not yet")   # [review] NEEDS WORK
     # needs_work sends the card back to Build, so the rework has to be re-submitted before the
     # second verdict can be cast — that is the real cycle, and it puts a SECOND [worklog] on the
     # card, which is what the offering branch next door compares timestamps against.
-    wf.advance(queued["id"], to="review", worklog="reworked", evidence="c0ffee")
-    wf.review_task(queued["id"], verdict="approve", report="good now")     # [review] APPROVE
+    wf.advance(queued["id"], to="review", worklog="reworked", evidence="c0ffee",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
+    wf.review_task(queued["id"], verdict="approve", report="good now",
+        evidence_reproduced=True)     # [review] APPROVE
 
     parked = api.add_task("parked", "Build", assignee=api.me_user)
     wf.call_human(parked["id"], question="which option?")         # [needs-human]
@@ -110,7 +116,8 @@ def drive_every_comment_site(api, wf, tmp_path):
     epic = api.add_task("epic parent", "Backlog", labels=("epic",))
     child = api.add_task("only child", "Build", assignee=api.me_user)
     api.add_relation(child["id"], epic["id"], "parenttask")
-    wf.advance(child["id"], to="review", worklog="child done", evidence="cafe")
+    wf.advance(child["id"], to="review", worklog="child done", evidence="cafe",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
 
     return [
         text

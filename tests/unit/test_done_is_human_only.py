@@ -48,6 +48,9 @@ One read opt-in removed (`comment`) -> 1 failed, naming it. Guard widened to You
 7 failed. A personal Done gate put back in `return_task`, i.e. the dead code restored -> 1 failed,
 the AST test, which is the only thing that can see a difference behaviour cannot.
 """
+
+from tests.unit.fakes import REVIEW_EVIDENCE_BLOCK
+
 import inspect
 
 import pytest
@@ -112,8 +115,10 @@ def _accepted_card(api, wf, title):
     t = api.add_task(title, "Queue")
     wf.claim(t["id"])
     wf.advance(t["id"], to="build", spec="approach")
-    wf.advance(t["id"], to="review", worklog="did it", evidence="abc123")
-    wf.review_task(t["id"], verdict="approve", report="looks right")
+    wf.advance(t["id"], to="review", worklog="did it", evidence="abc123",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
+    wf.review_task(t["id"], verdict="approve", report="looks right",
+        evidence_reproduced=True)
     api.task_bucket[t["id"]] = api.bucket_id("Done")     # the human's move
     assert api.stage_of(t["id"]) == "Done"
     return t

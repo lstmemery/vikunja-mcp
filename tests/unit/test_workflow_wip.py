@@ -3,6 +3,9 @@
 wip_limit generalises the #38 single-WIP flag (enforce_single_wip == wip_limit 1) and is what
 makes the parallel drain bounded: without it a pump could claim the whole Queue in one tick.
 """
+
+from tests.unit.fakes import REVIEW_EVIDENCE_BLOCK
+
 import pytest
 
 from tests.unit.fakes import FakeAPI
@@ -85,7 +88,8 @@ def test_a_freed_slot_is_reusable():
     api, wf = _env(wip_limit=1)
     first = _hold(api, wf, "first")
     wf.advance(first["id"], to="build", spec="do the thing")
-    wf.advance(first["id"], to="review", worklog="did the thing", evidence="abc1234")
+    wf.advance(first["id"], to="review", worklog="did the thing", evidence="abc1234",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     second = api.add_task("second", "Queue")
     assert wf.claim(second["id"])["claimed"] is True
 
@@ -361,7 +365,8 @@ def test_review_task_ids_includes_cards_i_do_not_own():
     api, wf = _env()
     mine = _hold(api, wf, "mine")
     wf.advance(mine["id"], to="build", spec="approach")
-    wf.advance(mine["id"], to="review", worklog="done", evidence="abc1234")
+    wf.advance(mine["id"], to="review", worklog="done", evidence="abc1234",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     theirs = api.add_task("theirs", "Review")
     assert sorted(wf.review_task_ids()) == sorted([mine["id"], theirs["id"]])
 
@@ -466,7 +471,8 @@ def _bounce_to_over_budget(api, wf, limit):
     the card lands back in Build regardless of how full the board is."""
     bounced = _hold(api, wf, "will be bounced")
     wf.advance(bounced["id"], to="build", spec="s")
-    wf.advance(bounced["id"], to="review", worklog="w", evidence="sha")
+    wf.advance(bounced["id"], to="review", worklog="w", evidence="sha",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     for n in range(limit):                       # the freed slot gets refilled, as the pump does
         _hold(api, wf, f"held {n}")
     assert wf.next_task()["wip"] == {"active": limit, "limit": limit, "free": 0}
@@ -494,7 +500,8 @@ def test_a_second_bounce_overshoots_further():
     second = _hold(api, wf, "second")
     for t in (first, second):
         wf.advance(t["id"], to="build", spec="s")
-        wf.advance(t["id"], to="review", worklog="w", evidence="sha")
+        wf.advance(t["id"], to="review", worklog="w", evidence="sha",
+            evidence_block=REVIEW_EVIDENCE_BLOCK)
     _hold(api, wf, "a")
     _hold(api, wf, "b")
     wf.review_task(first["id"], verdict="needs_work", report="no")
@@ -516,7 +523,8 @@ def test_the_overshoot_clears_when_the_rework_reaches_review():
     """The docs promise it resolves itself rather than needing a human to 'fix the board'."""
     api, wf = _env(wip_limit=3)
     bounced = _bounce_to_over_budget(api, wf, 3)
-    wf.advance(bounced["id"], to="review", worklog="reworked", evidence="sha2")
+    wf.advance(bounced["id"], to="review", worklog="reworked", evidence="sha2",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     assert wf.next_task()["wip"] == {"active": 3, "limit": 3, "free": 0}
 
 

@@ -45,6 +45,9 @@ string again -> 2 failed. That last round is the first pass's actual defect repl
 the one worth keeping: it scored 0 before this file grew a cross-project case with a
 same-project control in the same test.
 """
+
+from tests.unit.fakes import REVIEW_EVIDENCE_BLOCK
+
 import pytest
 
 from tests.unit.fakes import FakeAPI
@@ -92,7 +95,8 @@ def test_a_board_without_the_icebox_column_stays_fully_operational(unmigrated):
     api, wf = unmigrated
     t = api.add_task("job", "Build", assignee=api.me_user)
     assert wf.next_task()["task"]["id"] == t["id"]
-    wf.advance(t["id"], to="review", worklog="did it", evidence="abc123")
+    wf.advance(t["id"], to="review", worklog="did it", evidence="abc123",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     assert api.stage_of(t["id"]) == "Review"
     filed = wf.file_task(title="an ordinary finding")
     assert api.stage_of(filed["filed"]["id"]) == "Backlog"
@@ -219,7 +223,8 @@ def test_no_agent_tool_takes_an_OWNED_card_out_of_icebox(env):
                 "return_task": lambda: wf.return_task(card["id"], reason="x"),
                 "transfer_task": lambda: wf.transfer_task(card["id"], to=999, reason="x"),
                 "advance": lambda: wf.advance(
-                    card["id"], to="review", worklog="w", evidence="e"),
+                    card["id"], to="review", worklog="w", evidence="e",
+                    evidence_block=REVIEW_EVIDENCE_BLOCK),
                 "call_human": lambda: wf.call_human(card["id"], question="q"),
                 "claim": lambda: wf.claim(card["id"]),
             }
@@ -436,10 +441,12 @@ def test_the_frozen_guard_answers_before_the_ownership_one_ever_runs(env):
         lambda: wf.return_task(frozen["id"], reason="x"),
         lambda: wf.decompose(frozen["id"], [{"title": "A"}, {"title": "B"}]),
         lambda: wf.call_human(frozen["id"], question="q"),
-        lambda: wf.review_task(frozen["id"], verdict="approve", report="r"),
+        lambda: wf.review_task(frozen["id"], verdict="approve", report="r",
+            evidence_reproduced=True),
         lambda: wf.transfer_task(frozen["id"], to=999, reason="x"),
         lambda: wf.handoff(frozen["id"], to=999, title="T"),
-        lambda: wf.advance(frozen["id"], to="review", worklog="w", evidence="e"),
+        lambda: wf.advance(frozen["id"], to="review", worklog="w", evidence="e",
+            evidence_block=REVIEW_EVIDENCE_BLOCK),
     ):
         with pytest.raises(WorkflowError) as exc:
             call()

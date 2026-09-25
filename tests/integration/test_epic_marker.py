@@ -10,6 +10,9 @@ no-op in production. This test drives the whole path server → marker → serve
 real epic reaches Review and the epic must gain `epic-ready` + the `[epic-ready]` comment. Read off
 a hollowed sub-dict again and it goes red; the unit tests would not.
 """
+
+from tests.unit.fakes import REVIEW_EVIDENCE_BLOCK
+
 import uuid
 
 import pytest
@@ -68,7 +71,8 @@ def test_epic_marker_fires_against_real_hollowed_related_tasks(epicproj):
     # advance is where the marker must fire, end to end, through the hollowed related read.
     wf1.claim(last["id"])
     wf1.advance(last["id"], to="build", spec="do the last piece")
-    wf1.advance(last["id"], to="review", worklog="did the last piece", evidence="abc123")
+    wf1.advance(last["id"], to="review", worklog="did the last piece", evidence="abc123",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
 
     # THE assertion (behaviour, not shape): the epic now carries `epic-ready` AND the `[epic-ready]`
     # comment — proof the marker worked against the real server. Red if a sub-dict label read returns.

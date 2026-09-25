@@ -1,3 +1,5 @@
+from tests.unit.fakes import REVIEW_EVIDENCE_BLOCK
+
 import re
 
 import pytest
@@ -428,6 +430,7 @@ def test_ownership_gates_RECOVER_a_card_whose_board_copy_lost_its_assignee(env):
     wf.advance(to_review["id"], to="build", spec="approach")
     assert wf.advance(
         to_review["id"], to="review", worklog="what was done", evidence="deadbeef",
+        evidence_block=REVIEW_EVIDENCE_BLOCK,
     )["moved_to"] == "Review"
 
     to_split = api.add_task("blacked out, decomposed", "Queue")

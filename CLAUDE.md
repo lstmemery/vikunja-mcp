@@ -142,6 +142,7 @@ measured shape of both exemptions.
   not just bug fixes — tracker #117: `advance(to='review')` nudges `review_needed` +
   `review_kind` (`'bug'`|`'change'`) for any card WITHOUT the `epic` label, and resets a
   stale verdict). An epic container is the lone exception: its code lives in its children.
+  Review approval requires a complete description Evidence block and reproduced verification.
   **`Icebox` (#1640) is the eighth stage and the ONE OPTIONAL column**: `_bucket` checks
   `REQUIRED_STAGES`, NEVER `STAGES` — widening it fails every tool on every board that has not
   run `setup`, at the next `stable` resolve. The COLUMN gates (it is not in `NEXT_TASK_STAGES`);

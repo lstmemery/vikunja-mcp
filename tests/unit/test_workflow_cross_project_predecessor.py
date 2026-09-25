@@ -14,6 +14,9 @@ Measured before the fix, with a same-project control in the same round:
 
 The control refusing is what says the probe measured anything at all.
 """
+
+from tests.unit.fakes import REVIEW_EVIDENCE_BLOCK
+
 import pytest
 
 from tests.unit.fakes import FakeAPI
@@ -375,7 +378,8 @@ def test_the_advance_to_review_latch_carries_the_escape_too(env):
     control = api.add_task("control succ", "Build", assignee=api.me_user)
     api.add_relation(control["id"], control_pred["id"], "follows")
     with pytest.raises(WorkflowError) as exc:
-        wf.advance(control["id"], to="review", worklog="w", evidence="s")
+        wf.advance(control["id"], to="review", worklog="w", evidence="s",
+            evidence_block=REVIEW_EVIDENCE_BLOCK)
     assert _ESCAPE_LEAD not in str(exc.value)
     assert "get it back to Review first" in str(exc.value)
 
@@ -383,7 +387,8 @@ def test_the_advance_to_review_latch_carries_the_escape_too(env):
     succ = api.add_task("succ", "Build", assignee=api.me_user)
     api.add_relation(succ["id"], far["id"], "follows")
     with pytest.raises(WorkflowError) as exc:
-        wf.advance(succ["id"], to="review", worklog="w", evidence="s")
+        wf.advance(succ["id"], to="review", worklog="w", evidence="s",
+            evidence_block=REVIEW_EVIDENCE_BLOCK)
     msg = str(exc.value)
     assert "get it back to Review first" not in msg, msg
     assert _ESCAPE_LEAD in msg
@@ -395,7 +400,8 @@ def test_the_advance_to_review_latch_carries_the_escape_too(env):
     near = api.add_task("near", "Build")
     api.add_relation(succ["id"], near["id"], "follows")
     with pytest.raises(WorkflowError) as exc:
-        wf.advance(succ["id"], to="review", worklog="w", evidence="s")
+        wf.advance(succ["id"], to="review", worklog="w", evidence="s",
+            evidence_block=REVIEW_EVIDENCE_BLOCK)
     mixed = str(exc.value)
     assert "get it back to Review first" in mixed and _ESCAPE_LEAD in mixed, mixed
     assert ".." not in mixed, mixed

@@ -114,6 +114,7 @@ import sys
 import pytest
 
 from tests.unit.fakes import FakeAPI
+from tests.unit.fakes import REVIEW_EVIDENCE_BLOCK
 from vikunja_mcp.workflow import STAGES, Workflow, WorkflowError
 
 PROBE_SERVER = pathlib.Path(__file__).with_name("_stdio_arg_probe_server.py")
@@ -167,41 +168,18 @@ def test_review_refusal_lists_both_fields_when_both_are_unusable(env):
     assert "worklog" in unusable and "evidence" in unusable
 
 
-def test_review_refusal_offers_the_workaround_instead_of_an_identical_retry(env):
-    """VMCP-279 (938) INVERTED this pin, and the inversion is the deliberate kind this file's
-    neighbour demands: "a card that does want to reword the refusal has to edit the expected
-    substrings here in the same commit".
-
-    What it used to hold was "an identical retry is NOT the fix", and that was the honest
-    reading for as long as the mechanism was unknown — the loss had never been reproduced, so
-    a retry addressed no cause. It is reproduced now, and the cause makes a re-issue the
-    RIGHT move rather than a gamble: the value is dropped in the CALLER's emission, by an
-    opening tag written without its namespace prefix, which is never recognised as a parameter
-    and so never becomes a JSON key. Nothing about the content, the size or the position was
-    ever the problem, so re-sending the same text is what fixes it.
-
-    The discriminator behind the flip holds POSITION and LENGTH constant and varies only the
-    tag — long `worklog` first, a 40-space `evidence` second, answering `arrived as null` with
-    the tag malformed and `passed, but empty or whitespace-only` with it correct — with the
-    same 40 spaces sent ALONE arriving blank, which is what makes the sentinel readable at all.
-    Its neighbour test_argument_ORDER_does_not_change_what_arrives closes the other half.
-
-    Both directions stay pinned, because this text has now been wrong in BOTH: the retired
-    "NOT the fix" must not creep back, and neither may the older over-claim it replaced. The
-    fallback has to survive too — a re-issue is not guaranteed, and an agent whose second
-    attempt also loses the tag still needs the chunking route."""
+def test_review_refusal_requires_a_complete_description_evidence_block(env):
+    """The report fields alone no longer let a task reach Review. The new requirement is
+    observable at Workflow.advance and must be named in the refusal."""
     api, wf, t = env
     wf.advance(t["id"], to="build", spec="s")
     with pytest.raises(WorkflowError) as exc:
-        wf.advance(t["id"], to="review", evidence="a" * 40)
+        wf.advance(
+            t["id"], to="review", worklog="changed and ran checks", evidence="a" * 40,
+        )
     msg = str(exc.value)
-    assert "RE-ISSUE THE CALL" in msg, "the refusal must name the fix the measurement supports"
-    assert "an identical retry is NOT the fix" not in msg, (
-        "the pre-#938 advice is back: the loss is a caller-side tag, so re-issuing DOES "
-        f"address it, and telling agents otherwise sends them straight to chunking: {msg}"
-    )
-    assert "will not change that" not in msg, "the old over-claim must not creep back"
-    assert "comment()" in msg and "[worklog]" in msg
+    assert "Evidence block" in msg
+    assert "description" in msg
 
 
 def test_build_refusal_gets_the_same_treatment(env):
@@ -213,7 +191,7 @@ def test_build_refusal_gets_the_same_treatment(env):
         wf.advance(t["id"], to="build", spec="  ")
     assert "arrived as null" in str(absent.value)
     assert "empty or whitespace" in str(blank.value)
-    assert "comment()" in str(absent.value)
+    assert "RE-ISSUE THE CALL" in str(absent.value)
 
 
 def test_a_usable_report_still_advances_and_lands_verbatim(env):
@@ -224,7 +202,10 @@ def test_a_usable_report_still_advances_and_lands_verbatim(env):
     # CHARACTERS and 36 BYTES, because 17 of the 19 are Cyrillic and cost two bytes each — the
     # eyeball figure this comment used to carry (~35 K / ~65 KB) was low by 2.2x and 2.3x.
     worklog = "проверено запуском\n" * 4096
-    wf.advance(t["id"], to="review", worklog=worklog, evidence="a" * 40)
+    wf.advance(
+        t["id"], to="review", worklog=worklog, evidence="a" * 40,
+        evidence_block=REVIEW_EVIDENCE_BLOCK,
+    )
     assert api.stage_of(t["id"]) == "Review"
     landed = [c for c in api.comments_text(t["id"]) if c.startswith("[worklog]")][-1]
     assert landed.count("проверено запуском") == 4096
@@ -250,7 +231,10 @@ def _drive_probe_server(cases):
         params = StdioServerParameters(
             command=sys.executable, args=[str(PROBE_SERVER)],
             env={**os.environ,
-                 "PYTHONPATH": str(pathlib.Path(__file__).parents[2] / "src")},
+                 "PYTHONPATH": os.pathsep.join(filter(None, (
+                     str(pathlib.Path(__file__).parents[2] / "src"),
+                     os.environ.get("PYTHONPATH", ""),
+                 )))},
         )
         out = []
         async with stdio_client(params) as (read, write):
@@ -300,6 +284,30 @@ def test_large_worklog_crosses_the_mcp_boundary_byte_exact(payload):
     assert got["worklog_len"] == len(payload)
     assert got["worklog_head"] == payload[:24]
     assert got["worklog_tail"] == payload[-24:]
+
+
+def test_evidence_block_crosses_the_mcp_boundary_byte_exact():
+    block = "## Evidence\n### Verification\nCommand: pytest\nKey output: 8 passed"
+    (is_error, got), = _drive_probe_server([
+        ("advance", {"task_id": 1022, "to": "review", "evidence_block": block}),
+    ])
+
+    assert not is_error, got
+    assert got["evidence_block_len"] == len(block)
+    assert got["evidence_block_head"] == block[:24]
+    assert got["evidence_block_tail"] == block[-24:]
+
+
+def test_review_task_passes_the_reproduction_attestation_through_the_mcp_tool():
+    (is_error, got), = _drive_probe_server([
+        ("review_task", {
+            "task_id": 1022, "verdict": "approve", "report": "reproduced",
+            "evidence_reproduced": True,
+        }),
+    ])
+
+    assert not is_error, got
+    assert got["evidence_reproduced"] is True
 
 
 def test_argument_ORDER_does_not_change_what_arrives():
@@ -457,8 +465,8 @@ def test_docs_quote_the_state_phrase_the_tool_actually_emits(surface):
     else:
         text = server.advance.__doc__ or ""
     assert phrase in text, f"{surface} must quote the phrase the refusal emits"
-    # ...and both must carry the workaround, not just the diagnosis.
-    assert "comment(" in text and "[worklog]" in text
+    # ...and both must direct the caller to the description Evidence block.
+    assert "evidence_block" in text and "description" in text
 
 
 def _doc_surface(surface: str) -> str:
@@ -983,6 +991,12 @@ def test_advance_keeps_worklog_optional_in_its_schema():
     assert advance_schema["properties"]["worklog"]["anyOf"] == [
         {"type": "string"}, {"type": "null"},
     ]
+    assert advance_schema["properties"]["evidence_block"]["anyOf"] == [
+        {"type": "string"}, {"type": "null"},
+    ]
     assert set(tools["review_task"].input_schema["required"]) == {
         "task_id", "verdict", "report",
     }
+    assert tools["review_task"].input_schema["properties"]["evidence_reproduced"][
+        "default"
+    ] is False
