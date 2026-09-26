@@ -701,7 +701,8 @@ def advance(
     requires a WORK REPORT: worklog (what was done and how it was verified — by running,
     not by reading code) + evidence (commit/PR/verification output) + evidence_block. The
     Evidence block starts with `## Evidence` and has sections `### What changed`,
-    `### Verification` (one `Command:` and `Key output:` line per check),
+    `### Verification` (one `Command:` and `Key output:` line per check; each Command is the
+    exact copy-pasteable shell command that was run, prefixed with `cd <working-directory> &&`),
     `### Before / after` (one `Before:` and `After:` line), `### Artifacts`,
     `### Residual risks`, and `### Approve if` (one line). It is written or replaced
     at the top of the task description, preserving the remaining description. An incomplete
