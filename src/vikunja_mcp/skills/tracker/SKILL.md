@@ -644,7 +644,7 @@ where. Here — what must not be broken:
   ### What changed
   <summary>
   ### Verification
-  Command: <command>
+  Command: cd <working-directory> && <exact, copy-pasteable command>
   Key output: <trimmed result>
   ### Before / after
   Before: <prior behavior>
@@ -657,7 +657,10 @@ where. Here — what must not be broken:
   <one-line approval condition>
   ```
 
-  Add one `Command:` / `Key output:` pair per check; both before and after are required, and
+  Add one `Command:` / `Key output:` pair per check. `Command:` must be the exact shell command
+  that was run, prefixed with `cd <working-directory> &&` so its working directory is explicit;
+  do not substitute a prose summary such as “offline pytest selection.” `Key output:` is the
+  trimmed output observed from that same invocation. Both before and after are required, and
   `Approve if` is one line. Also supply `root_cause` for bug fixes and `evidence` as the sha/link
   of this task's commit. Run verification BEFORE the transition. A reviewer must rerun the
   listed commands and call `review_task(..., evidence_reproduced=true)` to approve; a missing or
