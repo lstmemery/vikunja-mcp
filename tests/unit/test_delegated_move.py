@@ -48,9 +48,17 @@ def record_block(
     label=None,
     instruction="close card 968 after review",
     evidence=None,
-    authorized_at="2026-09-16T08:00:00Z",
-    expires="2026-09-17T00:00:00Z",
+    authorized_at=None,
+    expires=None,
 ):
+    # Workflow authorization checks use the live UTC clock, so happy-path records must
+    # remain valid regardless of when the suite is run.
+    if authorized_at is None:
+        issued = datetime.now(timezone.utc).replace(microsecond=0)
+        authorized_at = issued.isoformat().replace("+00:00", "Z")
+    if expires is None:
+        issued = datetime.fromisoformat(authorized_at.replace("Z", "+00:00"))
+        expires = (issued + timedelta(days=1)).isoformat().replace("+00:00", "Z")
     parts = [
         "[[authorized_move]]",
         f"task_id = {task_id}",
