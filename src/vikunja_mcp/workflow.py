@@ -3943,9 +3943,23 @@ class Workflow:
         self.api.add_comment(task_id, text.strip())
         return {"commented": task_id}
 
+    @staticmethod
+    def _audit_metadata(task: dict) -> dict:
+        parent_id = task.get("parent_task_id")
+        if parent_id is None:
+            parents = (task.get("related_tasks") or {}).get("parenttask") or []
+            parent_id = parents[0].get("id") if parents else None
+        return {
+            "created": task.get("created"),
+            "updated": task.get("updated"),
+            "done_at": task.get("done_at"),
+            "parent_task_id": parent_id,
+        }
+
     def get_task(self, task_id: int) -> dict:
         """Full dossier: unlike _summary (next_task/claim), the description is NOT
         truncated and related is added — a compact dict {relation_kind: [{"id", "title"}, ...]}.
+        Creation/update/completion timestamps and `parent_task_id` are included for audit use.
         attachments lists each file's METADATA only ({id, name, mime, size}) — no bytes, so a
         card that is nothing but a screenshot is SEEN, not guessed at; fetch the bytes with
         download_attachment(task_id, attachment_id) using the `id` here."""
@@ -3983,6 +3997,7 @@ class Workflow:
             "id": task["id"],
             "ref": self._ref(task),
             "title": task["title"],
+            **self._audit_metadata(task),
             "priority": task.get("priority", 0),
             "description": task.get("description") or "",
             "stage": stage,
@@ -3998,6 +4013,72 @@ class Workflow:
                 for c in raw_comments
             ],
             **({"icebox": icebox} if icebox else {}),
+        }
+
+    @staticmethod
+    def _audit_cutoff(value: str | None, name: str) -> datetime | None:
+        if value is None:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except (AttributeError, ValueError):
+            raise WorkflowError(f"{name} must be an ISO 8601 timestamp") from None
+        if parsed.tzinfo is None:
+            raise WorkflowError(f"{name} must include a timezone in its ISO 8601 timestamp")
+        return parsed.astimezone(timezone.utc)
+
+    def list_tasks(
+        self, stage: str | None = None, created_before: str | None = None,
+        updated_before: str | None = None,
+    ) -> dict:
+        """Exhaustive project task inventory; tasks absent from the board retain stage=None."""
+        created_cutoff = self._audit_cutoff(created_before, "created_before")
+        updated_cutoff = self._audit_cutoff(updated_before, "updated_before")
+        stages = {
+            task["id"]: bucket["title"]
+            for bucket in self._board()
+            for task in bucket.get("tasks") or []
+        }
+        tasks = self.api.project_tasks(self.project_id)
+        inventory = []
+        for task in tasks:
+            task_stage = stages.get(task["id"])
+            if stage is not None and task_stage != stage:
+                continue
+
+            def before(field: str, cutoff: datetime | None) -> bool:
+                if cutoff is None:
+                    return True
+                value = task.get(field)
+                if not value:
+                    return False
+                parsed = self._audit_cutoff(value, field)
+                return parsed is not None and parsed < cutoff
+
+            if not before("created", created_cutoff) or not before("updated", updated_cutoff):
+                continue
+            relations = task.get("related_tasks") or {}
+            children = relations.get("subtask") or []
+            child_ids = [child["id"] for child in children]
+            labels = [label.get("title") for label in task.get("labels") or []]
+            inventory.append({
+                "id": task["id"],
+                "ref": self._ref(task),
+                "title": task["title"],
+                "stage": task_stage,
+                "done": bool(task.get("done")),
+                **self._audit_metadata(task),
+                "child_task_ids": child_ids,
+                "labels": labels,
+                "is_epic": Workflow._has_label(task, LABEL_EPIC),
+                "children_all_done": bool(child_ids) and all(
+                    stages.get(child_id) == "Done" for child_id in child_ids
+                ),
+            })
+        return {
+            "scope": f"project {self.project_id}",
+            "count": len(inventory),
+            "results": inventory,
         }
 
     def search(self, query: str) -> dict:

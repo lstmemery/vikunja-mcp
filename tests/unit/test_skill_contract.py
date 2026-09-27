@@ -3326,6 +3326,7 @@ def _review_sweep(tmp_path, *, mine: bool = True) -> tuple[dict, dict]:
         "next_task": lambda wf, c: wf.next_task(),
         "claim": lambda wf, c: wf.claim(c["id"]),
         "get_task": lambda wf, c: wf.get_task(c["id"]),
+        "list_tasks": lambda wf, c: wf.list_tasks(),
         # read-only like get_task: SUCCEEDS from Review and must leave the card exactly
         # where it stands — the mover assert below counts on that staying true
         "search": lambda wf, c: wf.search("under review"),
@@ -3383,10 +3384,10 @@ def test_exactly_ONE_agent_tool_walks_a_card_out_of_Review(tmp_path):
     purpose: a number that a test reddens goes stale LOUDLY, which is the only way it may be
     written down here at all.
 
-    Driven off `server._DEFERRED_TOOLS` rather than a hand-written list, so a 13th agent tool
-    cannot join the surface and quietly go unswept. Said in the right ORDER, because the first
+    Driven off `server._DEFERRED_TOOLS` rather than a hand-written list, so an additional agent
+    tool cannot join the surface and quietly go unswept. Said in the right ORDER, because the first
     version of this sentence had it backwards: the sweep runs FIRST (it is the opening statement
-    of the body — all 16 calls complete), and only then does the coverage block compare the
+    of the body — all calls complete), and only then does the coverage block compare the
     exposed set against the swept labels. The SIZE assert is what an added tool trips; the
     `unswept` assert catches the other direction, a tool present in both places but missing a
     sweep entry. That coverage check is the half a hand-written sweep cannot have.
@@ -3414,7 +3415,7 @@ def test_exactly_ONE_agent_tool_walks_a_card_out_of_Review(tmp_path):
 
     # COVERAGE: every tool the server really exposes is in the table above
     exposed = {fn.__name__ for fn in server._DEFERRED_TOOLS}
-    assert len(exposed) == 16, f"the agent tool surface changed size: {sorted(exposed)}"
+    assert len(exposed) == 17, f"the agent tool surface changed size: {sorted(exposed)}"
     unswept = exposed - {label.split("(")[0] for label in swept}
     assert not unswept, f"agent tools added to the server but not swept from Review: {unswept}"
 
@@ -5602,6 +5603,9 @@ def _bounced_card_tool_forms() -> dict[str, list[tuple[str, dict]]]:
         # read-only like get_task: answers with hits, writes nothing, so it must show up as a
         # non-mover in every sweep this table feeds
         "search": [("search", {"query": "дренаж"})],
+        "list_tasks": [("list_tasks", {
+            "stage": None, "created_before": None, "updated_before": None,
+        })],
         "comment": [("comment", {"task_id": None, "text": "заметка"})],
         "advance": [
             (f"advance(to={to!r})", {"task_id": None, "to": to, **advance_extra})

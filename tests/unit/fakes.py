@@ -427,6 +427,12 @@ class FakeAPI:
         )
         return t
 
+    def project_tasks(self, project_id):
+        return [
+            self.get_task(task["id"]) for task in self.tasks.values()
+            if task.get("project_id") == project_id
+        ]
+
     def search_tasks(self, query):
         # 1:1 with GET /tasks?s=… (api.search_tasks): the WHOLE query as ONE substring over
         # title AND description; hits from EVERY readable project, tasks in a _forbidden

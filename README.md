@@ -150,13 +150,14 @@ the hook emits nothing.
 
 Then run the loop. `/loop 10m` for unattended work, plain `/loop` when you're watching.
 
-## The fifteen tools
+## The sixteen tools
 
 | Tool | Gate / behavior |
 | --- | --- |
 | `next_task()` | One thing, in order: your active Design/Build card (including one bounced back from Your Call), then a Queue card already assigned to you, then a card in Review awaiting an independent verdict, then the top free Queue card. Never offers Backlog, a `blocked`-labeled card, or an epic container. |
 | `claim(task_id)` | Queue → Design only, and only under the WIP limit. Assign-then-verify: it assigns you, re-reads the card, and backs off if someone else won the same window. |
-| `get_task(task_id)` | The dossier: description, stage, assignees, labels, attachments, full comment thread. |
+| `get_task(task_id)` | The dossier: description, stage, assignees, labels, attachments, timestamps, parent-task ID, full comment thread. |
+| `list_tasks(stage=, created_before=, updated_before=)` | Complete project audit inventory, including timestamps, epic labels, parent/child IDs, and whether every child is in Done. Cutoffs are ISO 8601; unbucketed tasks remain visible with no stage. Read-only. |
 | `search(query)` | Find cards by a keyword, board-wide — the duplicate check before `file_task`. The whole query is matched as ONE substring over title and description, so pass one distinctive word. Read-only; every hit carries `id`, `ref`, `project_id`, `done`, and its stage when it is on this board. |
 | `comment(task_id, text)` | A progress note on the card. |
 | `advance(task_id, to, spec=, worklog=, evidence=, evidence_block=)` | `to="build"` needs a `spec`; `to="review"` needs a `worklog`, an `evidence` sha, and a complete Evidence block, which is written or replaced at the top of the description. `to="done"` is always rejected. The card must be assigned to you. |

@@ -2790,6 +2790,7 @@ _VERDICT_POLICY = {
     "attach_file":         "NO-MOVE",
     "download_attachment": "NO-MOVE",
     "search":              "NO-MOVE",  # read-only lookup; answers with hits, writes nothing
+    "list_tasks":          "NO-MOVE",  # project-wide read-only audit inventory
 }
 
 
@@ -2843,12 +2844,10 @@ def test_every_agent_tool_is_graded_for_what_it_does_to_a_stale_verdict(env):
     not per stage: five routes over four tools, since `advance` holds two calls and needs both.
     It is NOT claimed that a CLEARS tool is REACHABLE from every stage carrying a verdict — the
     stage gates that decide that are pinned by their own tests above. Nor is every ROW of the grid
-    driven: `review_task` (SETS) and the SIX NO-MOVE rows are graded and never called here,
-    because what holds them is the COVERAGE sweep, not a route. Six, not the seven this sentence
-    claimed until #693's third round: the grid is 12 rows = 4 CLEARS + 1 KEEPS + 1 SETS + 6
-    NO-MOVE (re-derived twice, by regex over the literal and by importing the module, and 12
-    agrees with the live `@_mcp_tool` surface). Seven is the count of UNDRIVEN rows — 12 minus
-    the 5 driven — so naming `review_task` separately counted it twice. This test is about the
+    driven: `review_task` (SETS) and the NO-MOVE rows are graded and never called here,
+    because what holds them is the COVERAGE sweep, not a route. The grid's membership is pinned
+    against the live `@_mcp_tool` surface above, so adding a read-only tool requires an explicit
+    NO-MOVE grade. The un-driven rows are the non-movers plus `review_task`; this test is about the
     label, never about the gate.
 
     MUTATION-CHECKED, selection `tests/unit/test_workflow_gates.py`, `__pycache__` deleted and then

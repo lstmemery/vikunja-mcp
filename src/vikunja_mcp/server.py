@@ -629,8 +629,25 @@ def get_task(task_id: int) -> dict:
     """Task dossier: full (untruncated) description, stage, assignees, labels, related
     (linked tasks by relation kind), attachments (metadata only — {id, name, mime, size};
     a card may be nothing but a screenshot, so CHECK this and download_attachment it rather
-    than guessing from an empty description) and all comments."""
+    than guessing from an empty description), creation/update/completion timestamps,
+    parent_task_id, and all comments."""
     return _wf().get_task(task_id)
+
+
+@_mcp_tool
+@_tool
+def list_tasks(
+    stage: str | None = None, created_before: str | None = None,
+    updated_before: str | None = None,
+) -> dict:
+    """Read the complete project task inventory for board audits. Optional exact `stage`,
+    `created_before`, and `updated_before` ISO 8601 timestamps filter results; every hit
+    includes created/updated/done_at, epic labels, parent_task_id, child_task_ids, and
+    children_all_done (based on the Done board column). Unbucketed tasks remain visible with
+    stage=null. This tool never changes tasks."""
+    return _wf().list_tasks(
+        stage=stage, created_before=created_before, updated_before=updated_before
+    )
 
 
 @_mcp_tool
