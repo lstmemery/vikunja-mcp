@@ -33,11 +33,9 @@ Backlog → Queue → Design → Build → Review → [human] → Done
 ```
 
 16 agent tools (`next_task`, `claim`, `get_task`, `list_tasks`, `search`, `comment`, `advance`,
-`call_human`, `return_task`, `decompose`, `file_task`, `review_task`,
-`attach_file`, `download_attachment`, `handoff`, `transfer_task`); agents can
-never move a task to Done — the armed `vikunja-delegated` server's `delegated_move` is the ONE
-exception, on a recorded instruction. Gates are guardrails for agents; the real security boundary
-is the scoped API token.
+`call_human`, `return_task`, `decompose`, `file_task`, `review_task`, `attach_file`,
+`download_attachment`, `handoff`, `transfer_task`). Done is human-only except armed `delegated_move`
+on recorded instruction; the scoped API token is the security boundary.
 
 ## Commands
 
