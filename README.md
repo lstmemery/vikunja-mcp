@@ -20,7 +20,7 @@
 
 Most task-tracker integrations are CRUD wrappers: they hand an agent `create_task`,
 `update_task`, `delete_task` and hope the prompt keeps it honest. This one does the opposite.
-It exposes fifteen narrow tools, and each one refuses the moves that would break the process:
+It exposes sixteen narrow tools, and each one refuses the moves that would break the process:
 
 ```
 Backlog → Queue → Design → Build → Review → [human] → Done
