@@ -668,7 +668,10 @@ class Workflow:
             for t in (bucket.get("tasks") or [])
         ]
 
-    def _wip_limit_with_origin(self) -> tuple[int, str]:
+    @staticmethod
+    def _wip_limit_with_origin_for(
+        wip_limit: int | None, enforce_single_wip: bool,
+    ) -> tuple[int, str]:
         """The slot count AND the breadcrumb saying which knob produced it, resolved by ONE
         branch structure so the two can never disagree (tracker #517).
 
@@ -685,16 +688,28 @@ class Workflow:
         `enforce_single_wip` stopped being the only knob: an agent hitting a surprising "WIP
         limit reached" could no longer tell whether a human committed the number, whether the
         legacy flag was still on, or whether nothing was configured at all — three different
-        next actions, and the third is not even a toml edit. Computed HERE rather than in a
-        sibling helper on purpose: a second copy of this if/elif is a lie waiting to happen,
-        and a message that names the wrong knob is worse than one that names none."""
-        if self.wip_limit is not None:
-            return self.wip_limit, "the `wip_limit` key in the repo's .vikunja-mcp.toml"
-        if self.enforce_single_wip:
+        next actions, and the third is not even a toml edit. Computed in this ONE helper so the
+        live workflow and the server's fresh-config check share the same precedence: a second
+        copy of this if/elif is a lie waiting to happen, and a message that names the wrong knob
+        is worse than one that names none."""
+        if wip_limit is not None:
+            return wip_limit, "the `wip_limit` key in the repo's .vikunja-mcp.toml"
+        if enforce_single_wip:
             return 1, "`enforce_single_wip = true` in the repo's .vikunja-mcp.toml"
         return DEFAULT_WIP_LIMIT, (
             "the built-in default — the repo's .vikunja-mcp.toml sets no `wip_limit`"
         )
+
+    @classmethod
+    def effective_wip_limit_for(
+        cls, wip_limit: int | None, enforce_single_wip: bool,
+    ) -> int:
+        """Resolve a config's WIP limit with the same precedence used by a live Workflow."""
+        return cls._wip_limit_with_origin_for(wip_limit, enforce_single_wip)[0]
+
+    def _wip_limit_with_origin(self) -> tuple[int, str]:
+        """Resolve this workflow's limit and its refusal breadcrumb in one place."""
+        return self._wip_limit_with_origin_for(self.wip_limit, self.enforce_single_wip)
 
     def _effective_wip_limit(self) -> int:
         """How many active tasks this token may CLAIM its way into. ALWAYS a number — the gate is

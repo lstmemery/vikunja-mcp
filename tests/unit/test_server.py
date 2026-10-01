@@ -37,6 +37,76 @@ def test_tool_errors_are_returned_not_raised(monkeypatch, tmp_path):
     assert "error" in result
 
 
+def test_claim_requires_restart_when_the_loaded_wip_limit_is_stale(monkeypatch, tmp_path):
+    """A committed WIP edit must stop claim before tracker I/O; restart loads it without
+    rebuilding onto a different configured server or project."""
+    config_path = tmp_path / ".vikunja-mcp.toml"
+    config_path.write_text(
+        '[tracker]\nurl = "https://tracker.example"\nproject_id = 42\nwip_limit = 3\n'
+    )
+    (tmp_path / ".vikunja-mcp.env").write_text("VIKUNJA_TOKEN=test-token\n")
+    monkeypatch.chdir(tmp_path)
+    for key in ("VIKUNJA_URL", "VIKUNJA_TOKEN", "VIKUNJA_PROJECT_ID"):
+        monkeypatch.delenv(key, raising=False)
+
+    apis = []
+    built_targets = []
+
+    def fake_api(url, token):
+        built_targets.append((url, token))
+        if not apis:
+            api = FakeAPI(buckets=STAGES)
+            api.project["id"] = 42
+            api.url = url
+            apis.append(api)
+        return apis[0]
+
+    monkeypatch.setattr(server, "VikunjaAPI", fake_api)
+    monkeypatch.setattr(server, "_workflow", None)
+    monkeypatch.setattr(server, "_workflow_token", None)
+    monkeypatch.setattr(server, "_workflow_url", None)
+    monkeypatch.setattr(server, "_workflow_project_id", None)
+
+    loaded = server._wf()
+    api = loaded.api
+    for index in range(3):
+        api.add_task(
+            f"active-{index}", "Build", assignee=api.me_user,
+        )
+    queued = api.add_task("new task", "Queue")
+
+    config_path.write_text(
+        '[tracker]\nurl = "https://tracker.example"\nproject_id = 42\nwip_limit = 16\n'
+    )
+    stale_result = server.claim(queued["id"])
+
+    assert "error" in stale_result
+    assert "3" in stale_result["error"] and "16" in stale_result["error"]
+    assert "restart" in stale_result["error"].lower()
+    assert api.view_tasks_calls == 0
+    assert api.stage_of(queued["id"]) == "Queue"
+    assert api.tasks[queued["id"]]["assignees"] == []
+    assert server._workflow is loaded
+    assert loaded.api.url == "https://tracker.example"
+    assert loaded.project_id == 42
+    assert built_targets == [("https://tracker.example", "test-token")]
+
+    # A fresh process cache sees the new policy while using the same configured target.
+    server._reset_workflow_cache()
+    restarted = server._wf()
+    assert restarted._effective_wip_limit() == 16
+    assert restarted.api.url == "https://tracker.example"
+    assert restarted.project_id == 42
+    assert built_targets == [
+        ("https://tracker.example", "test-token"),
+        ("https://tracker.example", "test-token"),
+    ]
+
+    claimed = server.claim(queued["id"])
+    assert claimed["claimed"] is True
+    assert api.stage_of(queued["id"]) == "Design"
+
+
 def test_tool_catches_transport_errors_with_hint(monkeypatch):
     """httpx-исключения (сеть/VPN недоступны) не должны ронять сервер сырым traceback'ом."""
     class BoomWorkflow:

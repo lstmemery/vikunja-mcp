@@ -5701,6 +5701,17 @@ def _sweep_card_movers(monkeypatch, tmp_path, assignee: bool = True,
                 else:   # download needs something to download, or it dies before its gate
                     kwargs["attachment_id"] = wf.attach_file(
                         card["id"], str(probe))["attachment_id"]
+            if fn.__name__ == "claim":
+                # The server now rereads WIP policy before claim; keep this sweep on its
+                # in-memory Workflow rather than the host's local tracker config.
+                monkeypatch.setattr(
+                    server, "load_config",
+                    lambda wf=wf: config.Config(
+                        url="https://tracker.example", token="unit-token",
+                        project_id=wf.project_id, enforce_single_wip=wf.enforce_single_wip,
+                        wip_limit=wf.wip_limit,
+                    ),
+                )
             result = fn(**kwargs)
             # "moved AND did not report an error". The conjunction has a known blind spot: a tool
             # that moves the card and THEN fails would be counted a non-mover. No agent tool does

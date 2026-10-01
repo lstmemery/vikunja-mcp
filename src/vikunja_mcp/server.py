@@ -412,6 +412,32 @@ def _wf() -> Workflow:
     return _workflow
 
 
+def _require_current_wip_limit(workflow: Workflow) -> None:
+    """Refuse claim when the repo policy changed after this Workflow was loaded.
+
+    Read only the current policy value from config; the cached Workflow stays bound to its
+    original API URL and project until the MCP server restarts.
+    """
+    try:
+        cfg = load_config()
+    except Exception as exc:
+        raise ConfigError(
+            "Cannot verify the current WIP limit from config; claim stopped before contacting "
+            "Vikunja. Fix the config and restart this MCP server before claiming"
+        ) from exc
+
+    loaded_limit = workflow._effective_wip_limit()
+    current_limit = Workflow.effective_wip_limit_for(
+        cfg.wip_limit, cfg.enforce_single_wip,
+    )
+    if loaded_limit != current_limit:
+        raise ConfigError(
+            f"WIP limit changed while this MCP server was running "
+            f"(loaded {loaded_limit}, current config {current_limit}). Restart this MCP server "
+            "to apply the new limit before claiming"
+        )
+
+
 def _reload_workflow_from_disk() -> bool:
     """Rebuild the cached Workflow from a FRESH read of config to pick up a token ROTATED in
     .vikunja-mcp.env while the server runs — but ONLY when that token actually CHANGED, and ONLY
@@ -610,7 +636,9 @@ def claim(task_id: int) -> dict:
     enforce_single_wip = true, else the default of 3. Claim refuses once you already hold N
     active Design/Build tasks — "WIP limit reached (N/N) — you already hold #… Finish one
     (advance to Review) or return_task it before claiming another". next_task's `wip` payload
-    reports the same limit and how many slots are free.
+    reports the same limit and how many slots are free. If the effective limit changes in the
+    repo config while this server runs, claim stops before contacting Vikunja and reports both
+    values; restart this MCP server to load the new policy.
     The gate guards THIS transition, and is NOT an invariant on the active count: a card
     re-enters Build WITHOUT passing it when review_task(verdict='needs_work') bounces it back
     from Review, or when a human moves it out of Your Call (or hand-places an assigned card in
@@ -620,7 +648,9 @@ def claim(task_id: int) -> dict:
     reviewed work). Claim keeps refusing while over budget and reports the true count
     ("WIP limit reached (4/3)"), and the overshoot clears itself when the rework reaches
     Review."""
-    return _wf().claim(task_id)
+    workflow = _wf()
+    _require_current_wip_limit(workflow)
+    return workflow.claim(task_id)
 
 
 @_mcp_tool
