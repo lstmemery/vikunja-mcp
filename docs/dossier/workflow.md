@@ -1444,3 +1444,28 @@ neighbour's, and no new key has to be threaded through `_offboard_predecessor`»
   при этом слегка кривая (из Icebox карточка МОЖЕТ вернуться в Backlog, из Done — нет), и
   это принято сознательно в обмен на то, что мёртвая колонка не встречает человека первой
   каждый раз.
+
+## Description Evidence and the approval gate (#1022)
+
+The review packet is now written into the task description, because the card's human approver
+needs to read it without scrolling the comment history. `advance(to='review')` requires the
+plain-text `evidence_block` with six sections — What changed, Verification, Before / after,
+Artifacts, Residual risks, and Approve if — and stores its escaped HTML form at the top of the
+description. Each verification command must be followed by its key output; Before and After are
+one line apiece. The tool replaces its own prior marked block and retains the rest of the
+description. `[worklog]` remains the audit comment, not the review packet.
+
+`review_task(approve)` reads the task description and refuses unless that block is complete,
+at the top, and accompanied by the reviewer's explicit `evidence_reproduced=true` attestation.
+The reviewer runs each listed command and records the observed results in the report. The tool
+cannot execute arbitrary commands or prove the human's execution; it checks and records the
+attestation. `needs_work` remains available when evidence is missing or cannot be reproduced and
+stores `Evidence block reproduced: no` with the rejection.
+
+The FakeAPI suite measures refusal before a description write, worklog comment, or stage move for
+missing and malformed blocks; placement and replacement while preserving card context; both MCP
+argument boundaries; and the approval and rejection paths. The focused offline selection passed
+221 tests in 9.39 seconds on 2026-09-25. The live tracker was deliberately not used: the
+assignment reserves the test card and description readback for the coordinator. Therefore the
+Vikunja HTML sanitizer's treatment of the hidden block markers and the final rendered phone view
+remain unmeasured until that user-run check.

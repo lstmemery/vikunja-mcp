@@ -31,7 +31,10 @@ from vikunja_mcp import server as srv
 class _ReportingWorkflow:
     """Answers with what reached the tool body instead of talking to Vikunja."""
 
-    def advance(self, task_id, to, spec=None, worklog=None, evidence=None, root_cause=None):
+    def advance(
+        self, task_id, to, spec=None, worklog=None, evidence=None, root_cause=None,
+        evidence_block=None,
+    ):
         return {
             "task_id": task_id,
             "to": to,
@@ -40,6 +43,9 @@ class _ReportingWorkflow:
             "spec_len": -1 if spec is None else len(spec),
             "evidence_len": -1 if evidence is None else len(evidence),
             "root_cause_len": -1 if root_cause is None else len(root_cause),
+            "evidence_block_len": -1 if evidence_block is None else len(evidence_block),
+            "evidence_block_head": (evidence_block or "")[:24],
+            "evidence_block_tail": (evidence_block or "")[-24:],
             "worklog_head": (worklog or "")[:24],
             "worklog_tail": (worklog or "")[-24:],
         }
@@ -58,10 +64,11 @@ class _ReportingWorkflow:
         # The CONTROL for the two above: the cross-project door that already existed.
         return {"project_id": project_id, "project_id_type": type(project_id).__name__}
 
-    def review_task(self, task_id, verdict, report):
+    def review_task(self, task_id, verdict, report, evidence_reproduced=False):
         return {
             "task_id": task_id,
             "verdict": verdict,
+            "evidence_reproduced": evidence_reproduced,
             "report_len": len(report),
             "report_head": report[:24],
             "report_tail": report[-24:],

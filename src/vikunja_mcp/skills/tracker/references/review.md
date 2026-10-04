@@ -70,7 +70,14 @@ one assignee) review is initiated by the same side that wrote the change — by 
   description, spec, worklog, and on a second round the previous `[review]` as well: the card came
   back from Review for a reason), verify BY RUNNING (not by reading the code), look for obvious
   regressions nearby and record the verdict `review_task(task_id, verdict='approve'|
-  'needs_work', report=...)`. **Record the `review_task` verdict IMMEDIATELY, as soon as you are
+  'needs_work', evidence_reproduced=..., report=...)`. Read the Evidence block at the top of the
+  description and rerun each listed verification command. Set `evidence_reproduced=true` only
+  when the block is complete and the observed key outputs match. If the block is missing or
+  incomplete, or a verification cannot be reproduced, record `needs_work` with
+  `evidence_reproduced=false` and explain the gap. The tool refuses `approve` without both a
+  valid description block and a positive reproduction attestation; `needs_work` remains the
+  rejection path. Include the exact commands and observed outputs in the review report.
+  **Record the `review_task` verdict IMMEDIATELY, as soon as you are
   sure** — do not put it off to the very end after optional extra checks: a turn killed by a
   limit or an error BEFORE the call loses the verdict entirely and the review has to be
   repeated from scratch. **And your report is the same kind of text with measurable claims as the

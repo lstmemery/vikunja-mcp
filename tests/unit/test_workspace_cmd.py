@@ -3,6 +3,9 @@
 A fake would share this module's model of git and prove nothing about the one behaviour that
 matters: that housekeeping can never destroy an agent's unpushed work.
 """
+
+from tests.unit.fakes import REVIEW_EVIDENCE_BLOCK
+
 import fcntl
 import json
 import os
@@ -146,16 +149,20 @@ def _ps_field(pid: int, field: str) -> str:
 def _live_parent(pid: int) -> set[int]:
     """The pid's parent, when that parent is something the reaper may legitimately wait out.
 
-    Two parents it may not. PID 1 (or a blank answer, i.e. the child has just exited) means there
-    is nothing left to wait for. THIS process means the stand-in was launched by the test runner
-    rather than by git, and waiting on it would hang out the whole deadline and then fail on
-    pytest's own pid. Not reachable with today's two stand-ins — both are spawned by git — but it
-    costs one comparison to keep it unreachable rather than merely undocumented.
+    Only the checkout is ours to wait for. PID 1 (or a blank answer, i.e. the child has just
+    exited), this pytest process, and a supervisor that adopted the child are not. In particular,
+    a user systemd can reap orphaned stand-ins instead of PID 1; treating that long-lived service
+    as the checkout makes teardown wait forever. The waitable parents are the parked checkout's
+    `git reset --hard` and the fetch test's `git fetch`.
     """
     ppid = _ps_field(pid, "ppid")
     if not ppid.isdigit() or int(ppid) <= 1 or int(ppid) == os.getpid():
         return set()
-    return {int(ppid)}
+    parent = int(ppid)
+    command = _process_command(parent)
+    if "reset --hard" not in command and "git fetch " not in command:
+        return set()
+    return {parent}
 
 
 def _process_command(pid: int) -> str:
@@ -755,7 +762,8 @@ def test_gc_keeps_a_quiesced_review_tree_only_because_its_card_is_in_review(repo
     reviewing = api.add_task("under review", "Queue")          # card IN Review -> tree lives
     wf.claim(reviewing["id"])
     wf.advance(reviewing["id"], to="build", spec="approach")
-    wf.advance(reviewing["id"], to="review", worklog="done", evidence="abc1234")
+    wf.advance(reviewing["id"], to="review", worklog="done", evidence="abc1234",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
 
     bounced = api.add_task("already back in build", "Queue")   # card NOT in Review -> tree dies
     wf.claim(bounced["id"])
@@ -1086,7 +1094,8 @@ def test_gc_reaps_a_build_tree_once_its_task_reaches_review(repo, tracker):
     wf.claim(task["id"])
     path = Path(ensure_workspace(task["id"], cwd=repo)["path"])
     wf.advance(task["id"], to="build", spec="approach")
-    wf.advance(task["id"], to="review", worklog="done", evidence="abc1234")
+    wf.advance(task["id"], to="review", worklog="done", evidence="abc1234",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     _quiesce(path)
 
     res = gc_workspaces(cwd=repo, workflow=wf)
@@ -1616,6 +1625,26 @@ def test_the_reaper_never_waits_on_the_test_runner_itself(tmp_path):
         proc.wait()
 
 
+@pytest.mark.parametrize("command", ["git reset --hard --no-recurse-submodules", "git fetch origin"])
+def test_the_reaper_waits_on_each_parked_git_parent(monkeypatch, command):
+    monkeypatch.setitem(
+        globals(), "_ps_field", lambda _pid, field: "42" if field == "ppid" else command
+    )
+    monkeypatch.setitem(globals(), "_process_command", lambda _pid: command)
+
+    assert _live_parent(123) == {42}
+
+
+def test_the_reaper_does_not_wait_on_a_supervisor_that_adopts_a_stand_in(monkeypatch):
+    monkeypatch.setitem(
+        globals(), "_ps_field",
+        lambda _pid, field: "42" if field == "ppid" else "/usr/lib/systemd/systemd --user",
+    )
+    monkeypatch.setitem(globals(), "_process_command", lambda _pid: "systemd --user")
+
+    assert _live_parent(123) == set()
+
+
 # --- VMCP-110 (580): the two refusal CHANNELS are different shapes, and both ends need a net ---
 
 def test_the_two_refusal_channels_are_not_interchangeable(repo, monkeypatch, capsys):
@@ -1768,7 +1797,8 @@ def _advanced_to_review(repo, api, wf):
     wf.claim(task["id"])
     path = Path(ensure_workspace(task["id"], cwd=repo)["path"])
     wf.advance(task["id"], to="build", spec="approach")
-    wf.advance(task["id"], to="review", worklog="done", evidence="abc1234")
+    wf.advance(task["id"], to="review", worklog="done", evidence="abc1234",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     return task["id"], path
 
 
@@ -4949,7 +4979,9 @@ def test_the_walk_RECORDS_what_it_could_not_read_instead_of_swallowing_it(tmp_pa
         closed.chmod(0o700)                          # or tmp_path cleanup cannot remove it
 
 
-def test_a_denied_probe_says_so_END_TO_END_beside_the_names_it_did_reach(repo, tracker, tmp_path):
+def test_a_denied_probe_says_so_END_TO_END_beside_the_names_it_did_reach(
+    repo, tracker, tmp_path, monkeypatch
+):
     """VMCP-281 (940) end to end: the state the card is about, on a real repo and a real merge.
 
     `overwritten_ignored` PRESENT and NON-EMPTY while the walk was denied somewhere — before this
@@ -4968,15 +5000,22 @@ def test_a_denied_probe_says_so_END_TO_END_beside_the_names_it_did_reach(repo, t
     closed = repo / "out" / "closed"
     closed.mkdir()
     (closed / "unnameable.txt").write_text("bytes the report can never list\n")
-    closed.chmod(0o000)
     assert _git(repo, "status", "--porcelain") == "", "ignored, so invisible as always"
 
+    # A real chmod-denied directory makes git itself refuse to replace `out`, before
+    # the end-to-end report can be assembled. Inject the walk error at os.walk's callback
+    # boundary while leaving the tree readable, so `_expand_if_directory` still records and
+    # propagates it through a successful merge.
+    walk = os.walk
+
+    def walk_with_denial(top, *args, **kwargs):
+        if Path(top) == repo / "out":
+            kwargs["onerror"](PermissionError(13, "Permission denied", str(repo / "out/closed")))
+        yield from walk(top, *args, **kwargs)
+
+    monkeypatch.setattr(workspace_cmd.os, "walk", walk_with_denial)
     _land_on_origin(tmp_path, "denied", {"out": "upstream takes that name\n"})
-    try:
-        res = gc_workspaces(cwd=repo, workflow=wf)
-    finally:
-        if closed.exists():
-            closed.chmod(0o700)
+    res = gc_workspaces(cwd=repo, workflow=wf)
 
     state = res["main_checkout"]
     assert state.get("overwritten_ignored"), (
@@ -8074,7 +8113,8 @@ def _dead_review_tree(api, wf, repo, head, title, *, bounce=False) -> tuple[int,
     task = api.add_task(title, "Queue")
     wf.claim(task["id"])
     wf.advance(task["id"], to="build", spec="approach")
-    wf.advance(task["id"], to="review", worklog="done", evidence="abc1234")
+    wf.advance(task["id"], to="review", worklog="done", evidence="abc1234",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     tree = Path(ensure_workspace(task["id"], role="review", at=head, cwd=repo)["path"])
     if bounce:
         wf.review_task(task["id"], verdict="needs_work", report="repro'd; cause not addressed")

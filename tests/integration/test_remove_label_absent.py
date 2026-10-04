@@ -32,6 +32,8 @@ import pytest
 from tests.integration.conftest import BASE
 from vikunja_mcp.api import VikunjaAPI, VikunjaError, label_key
 
+pytestmark = pytest.mark.skipif(not BASE, reason="VIKUNJA_TEST_URL not set")
+
 
 @pytest.fixture(scope="module")
 def rmproj(boss_jwt):

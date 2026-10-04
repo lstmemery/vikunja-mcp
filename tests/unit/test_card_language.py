@@ -97,6 +97,9 @@ it holds at 2 only because the round localises the bracket in the `ru` column to
 Latin run behind. Keeping `[claim]` in the `ru` cell would redden the new test as well — that
 variant was not run, and is written here as a prediction, not a round.
 """
+
+from tests.unit.fakes import REVIEW_EVIDENCE_BLOCK
+
 import re
 
 import pytest
@@ -202,7 +205,8 @@ def test_a_card_written_in_one_language_is_still_classified_after_the_flip():
         task = api.add_task("a card", "Queue")
         writer.claim(task["id"])
         writer.advance(task["id"], to="build", spec="the approach")
-        writer.advance(task["id"], to="review", worklog="what was done", evidence="deadbeef")
+        writer.advance(task["id"], to="review", worklog="what was done", evidence="deadbeef",
+            evidence_block=REVIEW_EVIDENCE_BLOCK)
 
         # the human flips .vikunja-mcp.toml; the next session's Workflow reads the OTHER language
         reader = Workflow(api, project_id=3, language=reader_language)
@@ -218,7 +222,8 @@ def test_a_card_written_in_one_language_is_still_classified_after_the_flip():
         )
 
         # ...and the verdict still takes it back off the offering, from the other side of the flip
-        reader.review_task(task["id"], verdict="approve", report="fine")
+        reader.review_task(task["id"], verdict="approve", report="fine",
+            evidence_reproduced=True)
         assert reader.next_task().get("review") is not True, (
             "a verdict written under the reader's language no longer suppresses the offering, so "
             "the same card would be dispatched to a reviewer on every tick"
@@ -332,10 +337,13 @@ def test_the_verdict_tokens_do_not_translate():
     task = api.add_task("a card", "Queue")
     wf.claim(task["id"])
     wf.advance(task["id"], to="build", spec="подход")
-    wf.advance(task["id"], to="review", worklog="сделано", evidence="deadbeef")
+    wf.advance(task["id"], to="review", worklog="сделано", evidence="deadbeef",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     wf.review_task(task["id"], verdict="needs_work", report="ещё нет")
-    wf.advance(task["id"], to="review", worklog="переделано", evidence="c0ffee")
-    wf.review_task(task["id"], verdict="approve", report="теперь хорошо")
+    wf.advance(task["id"], to="review", worklog="переделано", evidence="c0ffee",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
+    wf.review_task(task["id"], verdict="approve", report="теперь хорошо",
+        evidence_reproduced=True)
     verdicts = [c for c in api.comments_text(task["id"]) if c.startswith("[review]")]
     assert [v.split("\n")[0] for v in verdicts] == ["[review] NEEDS WORK", "[review] APPROVE"]
 

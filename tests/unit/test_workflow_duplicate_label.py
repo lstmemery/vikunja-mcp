@@ -148,6 +148,9 @@ beat was measured on that one. Control (unmutated): 0 failed / 0 errors / 156 co
     selection size as the row above, so the two are comparable and the 0 there is the mutation
     being invisible rather than the selection having shrunk out from under it
 """
+
+from tests.unit.fakes import REVIEW_EVIDENCE_BLOCK
+
 import pytest
 
 from tests.unit.fakes import FakeAPI
@@ -219,10 +222,13 @@ def test_second_approve_leaves_exactly_one_reviewed(env):
     review."""
     api, wf, t = env
     wf.advance(t["id"], to="build", spec="s")
-    wf.advance(t["id"], to="review", worklog="w", evidence="abc123")
+    wf.advance(t["id"], to="review", worklog="w", evidence="abc123",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
 
-    wf.review_task(t["id"], "approve", "first reviewer")
-    wf.review_task(t["id"], "approve", "second reviewer, re-offered within the tick")
+    wf.review_task(t["id"], "approve", "first reviewer",
+        evidence_reproduced=True)
+    wf.review_task(t["id"], "approve", "second reviewer, re-offered within the tick",
+        evidence_reproduced=True)
 
     assert _titles(api, t["id"]).count(LABEL_REVIEWED) == 1
     joined = "\n".join(api.comments_text(t["id"]))
@@ -299,7 +305,8 @@ def test_epic_ready_marker_still_fires_through_the_resigned_helper(env):
     api.add_relation(child["id"], epic["id"], "parenttask")
 
     wf.advance(child["id"], to="build", spec="s")
-    wf.advance(child["id"], to="review", worklog="w", evidence="abc123")
+    wf.advance(child["id"], to="review", worklog="w", evidence="abc123",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
 
     assert "epic-ready" in _titles(api, epic["id"])
     assert any(c.startswith("[epic-ready]") for c in api.comments_text(epic["id"]))
@@ -349,7 +356,8 @@ def test_epic_ready_on_parents_where_a_human_typed_the_marker_CAPITALISED(env):
     )
 
     wf.advance(child["id"], to="build", spec="s")
-    wf.advance(child["id"], to="review", worklog="w", evidence="abc123")
+    wf.advance(child["id"], to="review", worklog="w", evidence="abc123",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
 
     assert _epic_ready(api, first["id"]) == (1, 0), (
         "the human already marked it: one label, and NO second [epic-ready] comment. This read "
@@ -539,14 +547,16 @@ def test_a_failed_label_write_leaves_no_verdict_comment_behind(env):
     thing under test and only a failure can see it."""
     api, wf, t = env
     wf.advance(t["id"], to="build", spec="s")
-    wf.advance(t["id"], to="review", worklog="w", evidence="abc123")
+    wf.advance(t["id"], to="review", worklog="w", evidence="abc123",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
 
     def explode(task_id, label_id):
         raise VikunjaError(500, "the label write failed")
 
     api.add_label = explode
     with pytest.raises(VikunjaError):
-        wf.review_task(t["id"], "approve", "a report that must NOT reach the card")
+        wf.review_task(t["id"], "approve", "a report that must NOT reach the card",
+            evidence_reproduced=True)
 
     assert not any(c.startswith("[review]") for c in api.comments_text(t["id"]))
     assert LABEL_REVIEWED not in _titles(api, t["id"])
@@ -565,7 +575,8 @@ def test_the_new_failure_mode_is_the_recoverable_one(env):
     human handing someone the id still lands a verdict."""
     api, wf, t = env
     wf.advance(t["id"], to="build", spec="s")
-    wf.advance(t["id"], to="review", worklog="w", evidence="abc123")
+    wf.advance(t["id"], to="review", worklog="w", evidence="abc123",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     api.tasks[t["id"]]["assignees"] = []          # a reviewer is not the card's own assignee
 
     def explode(task_id, text):
@@ -574,7 +585,8 @@ def test_the_new_failure_mode_is_the_recoverable_one(env):
     real_add_comment = api.add_comment
     api.add_comment = explode
     with pytest.raises(VikunjaError):
-        wf.review_task(t["id"], "approve", "a report that never lands")
+        wf.review_task(t["id"], "approve", "a report that never lands",
+            evidence_reproduced=True)
     api.add_comment = real_add_comment
 
     assert _titles(api, t["id"]) == [LABEL_REVIEWED]

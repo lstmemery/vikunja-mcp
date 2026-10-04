@@ -552,12 +552,15 @@ class VikunjaAPI:
     # And as in `view_tasks`, hitting the ceiling RAISES rather than returning what it has. A
     # truncated list is indistinguishable from rows that are genuinely gone, and absence is what
     # the callers act on.
-    def _paged_list(self, path: str, params: dict | None = None) -> list:
+    def _paged_list(
+        self, path: str, params: dict | None = None, *, empty_pages_to_stop: int = 1
+    ) -> list:
         page_size = self._page_size()   # None = the server never told us; see VMCP-89
         merged: list = []
         seen: set = set()
         unproven_pages = 0              # pages `max_items_per_page` did NOT account for
         page = 1
+        empty_pages = 0
         while True:
             if unproven_pages >= _MAX_UNPROVEN_PAGES:
                 stated = (
@@ -606,7 +609,12 @@ class VikunjaAPI:
             # requests where this reader spends 2, with the unproven-page ceiling never firing
             # because every page is FULL.
             if not items:
-                break
+                empty_pages += 1
+                if empty_pages >= empty_pages_to_stop:
+                    break
+                page += 1
+                continue
+            empty_pages = 0
             added_new = False
             for item in items:
                 # every list endpoint here returns objects with an `id`; the repr fallback only
@@ -632,6 +640,15 @@ class VikunjaAPI:
     # --- tasks ---
     def get_task(self, task_id: int) -> dict:
         return self._req("GET", f"/tasks/{task_id}")
+
+    def project_tasks(self, project_id: int) -> list[dict]:
+        """Exhaustively read the project's tasks, including tasks outside its kanban buckets."""
+        # A single empty filtered page is not treated as end-of-list: this endpoint's paging
+        # can serve an empty page before later rows. Two consecutive empty pages are the stop
+        # signal; repeated non-empty pages still stop through `_paged_list`'s dedupe rule.
+        return self._paged_list(
+            "/tasks", params={"project_id": project_id}, empty_pages_to_stop=2
+        )
 
     def search_tasks(self, query: str) -> list:
         # GET /tasks is the collection route (NOT /tasks/all — absent from the route table on

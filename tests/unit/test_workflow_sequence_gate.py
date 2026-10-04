@@ -1,3 +1,5 @@
+from tests.unit.fakes import REVIEW_EVIDENCE_BLOCK
+
 import pytest
 
 from tests.unit.fakes import FakeAPI
@@ -332,7 +334,8 @@ def test_advance_review_latched_by_unfinished_predecessor(env):
     succ = api.add_task("succ", "Build", assignee=api.me_user)
     api.add_relation(succ["id"], pred["id"], "follows")
     with pytest.raises(WorkflowError) as exc:
-        wf.advance(succ["id"], to="review", worklog="done", evidence="sha")
+        wf.advance(succ["id"], to="review", worklog="done", evidence="sha",
+            evidence_block=REVIEW_EVIDENCE_BLOCK)
     msg = str(exc.value)
     assert pred["identifier"] in msg
     assert "Build" in msg
@@ -346,7 +349,8 @@ def test_advance_review_allowed_when_predecessor_at_review(env):
     pred = api.add_task("pred", "Review")
     succ = api.add_task("succ", "Build", assignee=api.me_user)
     api.add_relation(succ["id"], pred["id"], "follows")
-    res = wf.advance(succ["id"], to="review", worklog="done", evidence="sha")
+    res = wf.advance(succ["id"], to="review", worklog="done", evidence="sha",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     assert res["moved_to"] == "Review"
     assert api.stage_of(succ["id"]) == "Review"
 
@@ -356,7 +360,8 @@ def test_advance_review_allowed_when_predecessor_done(env):
     pred = api.add_task("pred", "Done")
     succ = api.add_task("succ", "Build", assignee=api.me_user)
     api.add_relation(succ["id"], pred["id"], "follows")
-    assert wf.advance(succ["id"], to="review", worklog="d", evidence="s")["moved_to"] == "Review"
+    assert wf.advance(succ["id"], to="review", worklog="d", evidence="s",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)["moved_to"] == "Review"
 
 
 def test_advance_review_not_latched_by_parenttask_only(env):
@@ -366,7 +371,8 @@ def test_advance_review_not_latched_by_parenttask_only(env):
     parent = api.add_task("epic", "Backlog", labels=("epic",))
     child = api.add_task("child", "Build", assignee=api.me_user)
     api.add_relation(child["id"], parent["id"], "parenttask")
-    assert wf.advance(child["id"], to="review", worklog="d", evidence="s")["moved_to"] == "Review"
+    assert wf.advance(child["id"], to="review", worklog="d", evidence="s",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)["moved_to"] == "Review"
 
 
 def test_advance_review_latched_by_blocked_relation(env):
@@ -376,7 +382,8 @@ def test_advance_review_latched_by_blocked_relation(env):
     succ = api.add_task("succ", "Build", assignee=api.me_user)
     api.add_relation(succ["id"], pred["id"], "blocked")
     with pytest.raises(WorkflowError) as exc:
-        wf.advance(succ["id"], to="review", worklog="d", evidence="s")
+        wf.advance(succ["id"], to="review", worklog="d", evidence="s",
+            evidence_block=REVIEW_EVIDENCE_BLOCK)
     assert pred["identifier"] in str(exc.value)
     assert api.stage_of(succ["id"]) == "Build"
 
@@ -426,7 +433,8 @@ def test_bounce_scenario_end_to_end(env):
     s = api.add_task("S successor", "Queue", priority=5)
     api.add_relation(s["id"], p["id"], "follows")
     # 1. P -> Review; S unlocks
-    wf.advance(p["id"], to="review", worklog="did P", evidence="sha-p")
+    wf.advance(p["id"], to="review", worklog="did P", evidence="sha-p",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     assert api.stage_of(p["id"]) == "Review"
     # 2. claim S (predecessor ready at Review) and move it into Build
     wf.claim(s["id"])
@@ -438,7 +446,8 @@ def test_bounce_scenario_end_to_end(env):
     assert api.stage_of(p["id"]) == "Build"
     # 4. advance(S,'review') is now latched
     with pytest.raises(WorkflowError) as exc:
-        wf.advance(s["id"], to="review", worklog="did S", evidence="sha-s")
+        wf.advance(s["id"], to="review", worklog="did S", evidence="sha-s",
+            evidence_block=REVIEW_EVIDENCE_BLOCK)
     assert p["identifier"] in str(exc.value)
     assert "Build" in str(exc.value)
     assert api.stage_of(s["id"]) == "Build"
@@ -447,10 +456,12 @@ def test_bounce_scenario_end_to_end(env):
     assert nxt["resume"] is True
     assert nxt["task"]["id"] == p["id"]
     # 6. rework P back to Review
-    wf.advance(p["id"], to="review", worklog="reworked P", evidence="sha-p2")
+    wf.advance(p["id"], to="review", worklog="reworked P", evidence="sha-p2",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     assert api.stage_of(p["id"]) == "Review"
     # 7. now S may advance to Review
-    res = wf.advance(s["id"], to="review", worklog="did S", evidence="sha-s")
+    res = wf.advance(s["id"], to="review", worklog="did S", evidence="sha-s",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     assert res["moved_to"] == "Review"
     assert api.stage_of(s["id"]) == "Review"
 
@@ -527,7 +538,8 @@ def test_decompose_ordered_tail_unlocks_after_head_reaches_review(env):
     # drive the head all the way to Review
     wf.claim(created[0]["id"])
     wf.advance(created[0]["id"], to="build", spec="approach")
-    wf.advance(created[0]["id"], to="review", worklog="did head", evidence="sha")
+    wf.advance(created[0]["id"], to="review", worklog="did head", evidence="sha",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     assert api.stage_of(created[0]["id"]) == "Review"
     # now the tail unlocks
     assert wf.claim(created[1]["id"])["claimed"] is True

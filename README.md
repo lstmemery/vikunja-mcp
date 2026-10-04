@@ -20,7 +20,7 @@
 
 Most task-tracker integrations are CRUD wrappers: they hand an agent `create_task`,
 `update_task`, `delete_task` and hope the prompt keeps it honest. This one does the opposite.
-It exposes fifteen narrow tools, and each one refuses the moves that would break the process:
+It exposes sixteen narrow tools, and each one refuses the moves that would break the process:
 
 ```
 Backlog → Queue → Design → Build → Review → [human] → Done
@@ -32,7 +32,8 @@ Backlog → Queue → Design → Build → Review → [human] → Done
   There is no argument to `advance` that reaches `Done` — an agent that tries is told
   *only a human moves a task to Done after review*.
 - **`Queue → Design → Build → Review` is the agent loop.** Claim a task, write a spec to leave
-  Design, produce a worklog and an evidence sha to leave Build.
+  Design, produce a worklog, an evidence sha, and a complete Evidence block in the description
+  to leave Build.
 - **`Your Call`** is the side branch for when an agent needs a decision it should not make
   alone. It keeps its assignment and its context; the human answers on the card.
 
@@ -53,7 +54,7 @@ point. So the process is enforced where the decision happens:
 | --- | --- |
 | doesn't grade its own homework | `advance(to="done")` — always rejected, Done is human-only |
 | writes down a plan before coding | `advance(to="build")` without a `spec` |
-| says what it did and where | `advance(to="review")` without a `worklog` **and** an `evidence` sha |
+| gives a phone-readable review packet | `advance(to="review")` without a `worklog`, an `evidence` sha, and a complete description Evidence block |
 | works on one thing at a time | `claim` past the project's WIP limit |
 | escalates instead of guessing | `call_human` exists, and parks the card without dropping it |
 | leaves a trail a human can audit | every transition writes a marked comment on the card |
@@ -69,7 +70,11 @@ markers, the labels and the stage are what the tools wrote as the agents moved i
 <img src="docs/images/task-trail.png" alt="A task's comment trail: claim, spec, worklog with an evidence sha, and an independent review verdict" width="820">
 
 Read top to bottom, that is `claim` → `advance(to="build", spec=…)` → `advance(to="review",
-worklog=…, evidence=…)` → a **different** agent's `review_task(verdict="approve", report=…)`.
+worklog=…, evidence=…, evidence_block=…)` → a **different** agent's
+`review_task(verdict="approve", evidence_reproduced=true, report=…)`. `advance` writes the
+validated Evidence block at the top of the description and keeps the existing `[worklog]` audit
+comment. An approval requires the reviewer to reproduce the block's verification commands; a
+missing or unreproduced block takes the `needs_work` path.
 The `reviewed` label is what the verdict left behind; the card now sits in Review waiting for
 a human to sign it off. Every task gets that review, not just bug fixes — only an `epic`
 container is exempt, because its code lives in its children.
@@ -145,17 +150,18 @@ the hook emits nothing.
 
 Then run the loop. `/loop 10m` for unattended work, plain `/loop` when you're watching.
 
-## The fifteen tools
+## The sixteen tools
 
 | Tool | Gate / behavior |
 | --- | --- |
 | `next_task()` | One thing, in order: your active Design/Build card (including one bounced back from Your Call), then a Queue card already assigned to you, then a card in Review awaiting an independent verdict, then the top free Queue card. Never offers Backlog, a `blocked`-labeled card, or an epic container. |
 | `claim(task_id)` | Queue → Design only, and only under the WIP limit. Assign-then-verify: it assigns you, re-reads the card, and backs off if someone else won the same window. |
-| `get_task(task_id)` | The dossier: description, stage, assignees, labels, attachments, full comment thread. |
+| `get_task(task_id)` | The dossier: description, stage, assignees, labels, attachments, timestamps, parent-task ID, full comment thread. |
+| `list_tasks(stage=, created_before=, updated_before=)` | Complete project audit inventory, including timestamps, epic labels, parent/child IDs, and whether every child is in Done. Cutoffs are ISO 8601; unbucketed tasks remain visible with no stage. Read-only. |
 | `search(query)` | Find cards by a keyword, board-wide — the duplicate check before `file_task`. The whole query is matched as ONE substring over title and description, so pass one distinctive word. Read-only; every hit carries `id`, `ref`, `project_id`, `done`, and its stage when it is on this board. |
 | `comment(task_id, text)` | A progress note on the card. |
-| `advance(task_id, to, spec=, worklog=, evidence=)` | `to="build"` needs a `spec`; `to="review"` needs a `worklog` **and** an `evidence` sha. `to="done"` is always rejected. The card must be assigned to you. |
-| `review_task(task_id, verdict, report)` | `approve` or `needs_work`, with a report of what you ran. Applies the `reviewed` / `review-failed` label; `needs_work` sends the card back to the implementer in Build. You must not be the author — enforceable as a hard gate once a second identity exists. |
+| `advance(task_id, to, spec=, worklog=, evidence=, evidence_block=)` | `to="build"` needs a `spec`; `to="review"` needs a `worklog`, an `evidence` sha, and a complete Evidence block, which is written or replaced at the top of the description. `to="done"` is always rejected. The card must be assigned to you. |
+| `review_task(task_id, verdict, report, evidence_reproduced=false)` | `approve` requires a valid description Evidence block and `evidence_reproduced=true`; otherwise record `needs_work`. Includes the reproduction attestation with the report and applies the `reviewed` / `review-failed` label. You must not be the author — enforceable as a hard gate once a second identity exists. |
 | `call_human(task_id, question)` | Design/Build → Your Call, keeping your assignment. Posts the question and, if configured, pings a webhook. |
 | `return_task(task_id, reason)` | For *external* blockers (no access, a dependency missing, someone else's service down). Unassigns you, adds `blocked`, returns the card to Backlog for re-triage. |
 | `decompose(task_id, subtasks)` | Splits your own oversized task into ≥2 Queue subtasks linked to the parent; the parent becomes an `epic` container in Backlog. |

@@ -32,12 +32,10 @@ Backlog → Queue → Design → Build → Review → [human] → Done
                   Your Call         (+ independent review of EVERY task in Review)
 ```
 
-14 agent tools (`next_task`, `claim`, `get_task`, `comment`, `advance`,
-`call_human`, `return_task`, `decompose`, `file_task`, `review_task`,
-`attach_file`, `download_attachment`, `handoff`, `transfer_task`); agents can
-never move a task to Done —
-that transition is human-only by design. Gates are guardrails for agents; the
-real security boundary is the scoped API token.
+16 agent tools (`next_task`, `claim`, `get_task`, `list_tasks`, `search`, `comment`, `advance`,
+`call_human`, `return_task`, `decompose`, `file_task`, `review_task`, `attach_file`,
+`download_attachment`, `handoff`, `transfer_task`). Done is human-only except armed `delegated_move`
+on recorded instruction; the scoped API token is the security boundary.
 
 ## Commands
 
@@ -142,6 +140,7 @@ measured shape of both exemptions.
   not just bug fixes — tracker #117: `advance(to='review')` nudges `review_needed` +
   `review_kind` (`'bug'`|`'change'`) for any card WITHOUT the `epic` label, and resets a
   stale verdict). An epic container is the lone exception: its code lives in its children.
+  Review approval requires a complete description Evidence block and reproduced verification.
   **`Icebox` (#1640) is the eighth stage and the ONE OPTIONAL column**: `_bucket` checks
   `REQUIRED_STAGES`, NEVER `STAGES` — widening it fails every tool on every board that has not
   run `setup`, at the next `stable` resolve. The COLUMN gates (it is not in `NEXT_TASK_STAGES`);

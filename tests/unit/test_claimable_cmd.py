@@ -5,6 +5,9 @@ loop pre-launch idle check. The key set and the exit-code split (0 = the check R
 1 = the check FAILED) are public API: renaming a key or repurposing an exit code
 breaks the hub's check.
 """
+
+from tests.unit.fakes import REVIEW_EVIDENCE_BLOCK, seed_review_evidence
+
 import copy
 import io
 import json
@@ -127,13 +130,15 @@ def test_dogfood_the_solo_review_offer_terminates_instead_of_looping():
     wf = Workflow(api, project_id=3)
     for i in range(25):
         t = api.add_task(f"shipped {i}", "Review", assignee=api.me_user)
+        seed_review_evidence(api, t["id"])
         api.add_comment(t["id"], f"[worklog]\nWorklog: shipped {i}\n\nEvidence: sha{i}")
 
     rounds = 0
     while (offer := wf.next_task()).get("task") is not None:
         rounds += 1
         assert rounds <= 25, "the review offer never runs out — the no-op boot loop is back"
-        wf.review_task(offer["task"]["id"], verdict="approve", report="checked by running")
+        wf.review_task(offer["task"]["id"], verdict="approve", report="checked by running",
+            evidence_reproduced=True)
 
     assert rounds == 25
     assert classify_next(wf.next_task()) == {
@@ -747,7 +752,8 @@ def _card_in_review_written_by_the_caller() -> tuple[FakeAPI, dict]:
     task = api.add_task("shipped", "Queue")
     wf.claim(task["id"])
     wf.advance(task["id"], to="build", spec="the plan")
-    wf.advance(task["id"], to="review", worklog="the report", evidence="deadbeef")
+    wf.advance(task["id"], to="review", worklog="the report", evidence="deadbeef",
+        evidence_block=REVIEW_EVIDENCE_BLOCK)
     return api, task
 
 

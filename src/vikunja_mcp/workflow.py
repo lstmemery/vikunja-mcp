@@ -24,6 +24,7 @@ from .delegation import (
     ACTIONS, PROTECTED_LABELS, AuthorizedMove, audit_text, find_authorized,
     parse_authorized_file,
 )
+from .evidence import EvidenceBlockError, has_valid_evidence_block, set_evidence_block
 from .formatting import html_to_text
 from .notify import WebhookNotifier
 
@@ -351,8 +352,8 @@ _LOST_ARGUMENT_HINT = (
     "THREE and no longer four: a key dropped in transit, an argument you never passed and an "
     "EXPLICIT null you did pass all arrive here as null — measured; the first two are one and "
     "the same on the wire, and a malformed tag is how the first one actually happens.) "
-    "Still available if re-issuing keeps failing: advance with a SHORT value, then post the "
-    "full text as separate comment() calls marked [worklog]."
+    "For to='review', correct the call emission and include the complete validated "
+    "evidence_block. Comments cannot substitute for the description block."
 )
 
 
@@ -2729,7 +2730,7 @@ class Workflow:
     def advance(
         self, task_id: int, to: str,
         spec: str | None = None, worklog: str | None = None, evidence: str | None = None,
-        root_cause: str | None = None,
+        root_cause: str | None = None, evidence_block: str | None = None,
     ) -> dict:
         to = (to or "").strip().lower()
         if to == "done":
@@ -2824,6 +2825,15 @@ class Workflow:
             report.append(
                 "\n" + card_text(self.language, "worklog_evidence", evidence=evidence.strip())
             )
+            description = self.api.get_task(task_id).get("description") or ""
+            try:
+                updated_description = set_evidence_block(description, evidence_block)
+            except EvidenceBlockError as exc:
+                raise WorkflowError(
+                    f"Review needs an Evidence block in the card description: {exc}"
+                ) from None
+            if updated_description != description:
+                self.api.update_task(task_id, description=updated_description)
             self.api.add_comment(task_id, "\n".join(report))
             # resubmit-reset: ресабмит инвалидирует ЛЮБОЙ прошлый вердикт — снимаем ОБЕ
             # вердикт-метки, и review-failed, и reviewed (#119: человек мог руками вытащить
@@ -3123,7 +3133,10 @@ class Workflow:
             "instruction": record.instruction,
         }
 
-    def review_task(self, task_id: int, verdict: str, report: str) -> dict:
+    def review_task(
+        self, task_id: int, verdict: str, report: str,
+        evidence_reproduced: bool = False,
+    ) -> dict:
         verdict = (verdict or "").strip().lower()
         if verdict not in ("approve", "needs_work"):
             raise WorkflowError("verdict must be 'approve' or 'needs_work'")
@@ -3131,10 +3144,34 @@ class Workflow:
             raise WorkflowError(
                 "report required: what you reproduced/verified by running and why this verdict"
             )
+        if not isinstance(evidence_reproduced, bool):
+            raise WorkflowError("evidence_reproduced must be true or false")
         task, stage = self._find_task(task_id)
         if stage != "Review":
             raise WorkflowError(f"only tasks in Review can be reviewed; this one is in {stage}")
         self._require_review_independence(task)
+        full_task = self.api.get_task(task_id)
+        has_evidence = has_valid_evidence_block(full_task.get("description"))
+        if evidence_reproduced and not has_evidence:
+            raise WorkflowError(
+                "evidence_reproduced cannot be true because the card description has no valid "
+                "Evidence block"
+            )
+        if verdict == "approve" and not has_evidence:
+            raise WorkflowError(
+                "cannot approve: the card description is missing a valid Evidence block; "
+                "record needs_work with the missing evidence in your report"
+            )
+        if verdict == "approve" and not evidence_reproduced:
+            raise WorkflowError(
+                "cannot approve: the description Evidence block was not reproduced; "
+                "record needs_work with the reproduction result"
+            )
+
+        reproduction_note = (
+            "Evidence block reproduced: yes" if evidence_reproduced
+            else "Evidence block reproduced: no"
+        )
 
         # LABELS FIRST, THE VERDICT COMMENT LAST — on BOTH branches, and the order is measured
         # (#1216). It used to be the other way round, and that made a failed label write leave a
@@ -3160,14 +3197,18 @@ class Workflow:
         if verdict == "approve":
             self._add_label(task, LABEL_REVIEWED)
             self._remove_label(task, LABEL_REVIEW_FAILED)
-            self.api.add_comment(task_id, f"[review] APPROVE\n{report.strip()}")
+            self.api.add_comment(
+                task_id, f"[review] APPROVE\n{reproduction_note}\n{report.strip()}"
+            )
             return {
                 "verdict": "approve", "task_id": task_id,
                 "note": "verdict recorded; a human moves the task to Done",
             }
         self._add_label(task, LABEL_REVIEW_FAILED)
         self._remove_label(task, LABEL_REVIEWED)
-        self.api.add_comment(task_id, f"[review] NEEDS WORK\n{report.strip()}")
+        self.api.add_comment(
+            task_id, f"[review] NEEDS WORK\n{reproduction_note}\n{report.strip()}"
+        )
         # An OWNERLESS card bounces to QUEUE, not Build (#705). Build means "someone is working
         # on this"; with no assignee there is no implementer to hand it back TO, and the card
         # measured UNREACHABLE there. Precisely: it can still be READ and commented on
@@ -3902,9 +3943,23 @@ class Workflow:
         self.api.add_comment(task_id, text.strip())
         return {"commented": task_id}
 
+    @staticmethod
+    def _audit_metadata(task: dict) -> dict:
+        parent_id = task.get("parent_task_id")
+        if parent_id is None:
+            parents = (task.get("related_tasks") or {}).get("parenttask") or []
+            parent_id = parents[0].get("id") if parents else None
+        return {
+            "created": task.get("created"),
+            "updated": task.get("updated"),
+            "done_at": task.get("done_at"),
+            "parent_task_id": parent_id,
+        }
+
     def get_task(self, task_id: int) -> dict:
         """Full dossier: unlike _summary (next_task/claim), the description is NOT
         truncated and related is added — a compact dict {relation_kind: [{"id", "title"}, ...]}.
+        Creation/update/completion timestamps and `parent_task_id` are included for audit use.
         attachments lists each file's METADATA only ({id, name, mime, size}) — no bytes, so a
         card that is nothing but a screenshot is SEEN, not guessed at; fetch the bytes with
         download_attachment(task_id, attachment_id) using the `id` here."""
@@ -3942,6 +3997,7 @@ class Workflow:
             "id": task["id"],
             "ref": self._ref(task),
             "title": task["title"],
+            **self._audit_metadata(task),
             "priority": task.get("priority", 0),
             "description": task.get("description") or "",
             "stage": stage,
@@ -3957,6 +4013,72 @@ class Workflow:
                 for c in raw_comments
             ],
             **({"icebox": icebox} if icebox else {}),
+        }
+
+    @staticmethod
+    def _audit_cutoff(value: str | None, name: str) -> datetime | None:
+        if value is None:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except (AttributeError, ValueError):
+            raise WorkflowError(f"{name} must be an ISO 8601 timestamp") from None
+        if parsed.tzinfo is None:
+            raise WorkflowError(f"{name} must include a timezone in its ISO 8601 timestamp")
+        return parsed.astimezone(timezone.utc)
+
+    def list_tasks(
+        self, stage: str | None = None, created_before: str | None = None,
+        updated_before: str | None = None,
+    ) -> dict:
+        """Exhaustive project task inventory; tasks absent from the board retain stage=None."""
+        created_cutoff = self._audit_cutoff(created_before, "created_before")
+        updated_cutoff = self._audit_cutoff(updated_before, "updated_before")
+        stages = {
+            task["id"]: bucket["title"]
+            for bucket in self._board()
+            for task in bucket.get("tasks") or []
+        }
+        tasks = self.api.project_tasks(self.project_id)
+        inventory = []
+        for task in tasks:
+            task_stage = stages.get(task["id"])
+            if stage is not None and task_stage != stage:
+                continue
+
+            def before(field: str, cutoff: datetime | None) -> bool:
+                if cutoff is None:
+                    return True
+                value = task.get(field)
+                if not value:
+                    return False
+                parsed = self._audit_cutoff(value, field)
+                return parsed is not None and parsed < cutoff
+
+            if not before("created", created_cutoff) or not before("updated", updated_cutoff):
+                continue
+            relations = task.get("related_tasks") or {}
+            children = relations.get("subtask") or []
+            child_ids = [child["id"] for child in children]
+            labels = [label.get("title") for label in task.get("labels") or []]
+            inventory.append({
+                "id": task["id"],
+                "ref": self._ref(task),
+                "title": task["title"],
+                "stage": task_stage,
+                "done": bool(task.get("done")),
+                **self._audit_metadata(task),
+                "child_task_ids": child_ids,
+                "labels": labels,
+                "is_epic": Workflow._has_label(task, LABEL_EPIC),
+                "children_all_done": bool(child_ids) and all(
+                    stages.get(child_id) == "Done" for child_id in child_ids
+                ),
+            })
+        return {
+            "scope": f"project {self.project_id}",
+            "count": len(inventory),
+            "results": inventory,
         }
 
     def search(self, query: str) -> dict:

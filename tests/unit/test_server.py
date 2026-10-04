@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from tests.unit.fakes import FakeAPI
+from tests.unit.fakes import REVIEW_EVIDENCE_BLOCK
 from vikunja_mcp import server
 from vikunja_mcp.api import VikunjaError
 from vikunja_mcp.config import DEFAULT_LANGUAGE, Config, ConfigError
@@ -18,7 +19,7 @@ def test_exposes_exactly_the_workflow_tools():
     tools = asyncio.run(server.mcp.list_tools())
     names = {t.name for t in tools}
     assert names == {
-        "next_task", "claim", "get_task", "search", "comment",
+        "next_task", "claim", "get_task", "list_tasks", "search", "comment",
         "advance", "call_human", "return_task", "decompose", "review_task",
         "file_task", "download_attachment", "attach_file",
         "handoff", "transfer_task",
@@ -241,7 +242,10 @@ def test_scope_gap_401_does_not_duplicate_the_worklog_comment(monkeypatch):
     task = api.add_task("t", "Build", assignee=api.me_user)
     _wire_scope_gap(monkeypatch, Workflow(api, api.project["id"]))
 
-    result = server.advance(task["id"], "review", worklog="did it", evidence="abc123")
+    result = server.advance(
+        task["id"], "review", worklog="did it", evidence="abc123",
+        evidence_block=REVIEW_EVIDENCE_BLOCK,
+    )
 
     worklogs = [c for c in api.comments_text(task["id"]) if c.startswith("[worklog]")]
     assert len(worklogs) == 1, "scope-gap 401 re-ran advance and DUPLICATED the [worklog] comment"
@@ -901,7 +905,7 @@ print(json.dumps({"seen": seen, "tools": tools}))
 def test_no_non_mcp_cli_path_imports_the_mcp_sdk():
     """#521: --version / setup / install-skill / claimable / workspace must all run with ZERO
     mcp-rooted modules loaded; only touching the server (server.mcp / _server()) may import the
-    SDK — and when it does, all 12 tools are still registered by the deferred registry.
+    SDK — and when it does, all tools are still registered by the deferred registry.
     RED if the module-level `from mcp.server import MCPServer` / `mcp = MCPServer(...)` comes back
     (verified by reintroducing it: every path then reports ~107 mcp modules)."""
     probe = subprocess.run(
@@ -917,7 +921,7 @@ def test_no_non_mcp_cli_path_imports_the_mcp_sdk():
         assert modules == [], f"{path} imported the MCP SDK: {modules[:5]}... ({len(modules)})"
     # The negative assertions above are only meaningful if the SDK CAN be imported at all:
     assert data["seen"]["touched server.mcp"], "the lazy build imported no SDK — probe is vacuous"
-    assert len(data["tools"]) == 15, data["tools"]
+    assert len(data["tools"]) == 16, data["tools"]
 
 
 def test_the_lazy_server_is_a_single_cached_instance():
