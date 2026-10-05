@@ -112,6 +112,50 @@ against. Coda, because it cuts the other way — 668's implementer and its
 reviewer both re-measured that figure RIGHT, so what the sweep could not see
 there was a missing ATTRIBUTION, not a stale total.
 
+**And that blind spot is not a property of FIGURE sweeps — it was re-measured on a WORD
+sweep, where it reported the DEFINING FILE clean (tracker #1685).** Flattening before
+matching is not a new idea here: six test modules already do it rather than read line by
+line — `test_repo_quotation_claims.py`, `test_skill_contract.py` and
+`test_advance_report_arguments.py` over a whole file, `test_repo_browser_isolation.py`
+over a CLAUDE.md slice, `test_rulebook_cross_references.py` over a pointer, and this
+section's own scanner over a paragraph. What stayed scoped to stale figures is the HEADER
+of the rule above — its remedy sentence was already general — and no HAND sweep had
+carried it across. `699d402` (VMCP-318 (1462)) landed the retraction below and, in the
+SAME commit, the copy at :318; VMCP-320 (1486) later cleared a surviving copy in a test
+file and told its taker to sweep the tree for the rest. That sweep was a line-scoped
+intersection — `git grep -niE 'silent[a-z]*'` piped through `grep -i skip` — every hit was
+read, and it reported no further site. Re-run at `45843e3`, a `':!uv.lock'` pathspec
+changing none of the arithmetic: 33 lines, and NOT ONE of them in this file, the one
+carrying the retraction. THREE of its seven `silent*` occurrences sit in that retraction's
+orbit and not one shares a line with a `skip` — `:283`, its own topic sentence; `:286`,
+whose preceding line ends "the skips are"; and `:318`, the copy VMCP-323 (1685) cleared
+below. Those three line numbers are `45843e3`'s, and this insertion has already moved
+them — locate them by text. Read the 33 as a negative answer that was never about this
+file, not as one site slipping through it.
+
+Priced as a DIFF against those 33, the way this section prices the other one: read each
+file whole, collapse every whitespace run to one space, then pair the two words within a
+window. ±120 characters adds TEN sites, ±60 adds four, ±400 adds 31, all at `45843e3`.
+None of the ten is a collision of unrelated topics — but "genuine" is the wrong bar,
+because the window cannot enforce it and the cost does not arrive where you expect. TWO of
+the ten pair the word with a marker literal or a retired test NAME rather than with the
+event, and the nearer of those — `docs/dossier/releases.md:479`, a `silently` 61
+characters from a ci-skip marker literal in the NEXT sentence — is admitted at ±120, not
+at ±400. Nor is there a clean setting to retreat to: ±60 already misses `:318` (about 85
+flattened characters back to `skips`, 66 forward to the next one), while the occurrence
+±120 still cannot reach is `:283`, 174 characters from any `skip` — so the width that
+would catch the retraction's own topic sentence is well past the width that admits the
+marker literals.
+
+And an exact-phrase grep is no refuge, which is the half that transfers. `silent skip`
+occurs 11 times at that tree read whole and case-insensitively; `git grep -F 'silent skip'`,
+the instrument 1486's own text prescribes, returns NINE. It loses one to a line wrap —
+`test_repo_browser_isolation.py:710`, where the phrase itself straddles the break — and one
+to case, `SILENT skip` in `skills/tracker/references/gc-report.md`. Two misses in eleven, on
+a phrase short enough to look unmissable. Hence the form 1486's own reviewer reached in a
+post-verdict note, sharper than that card's "the copy that gets missed is the one nobody
+thought to grep": THE COPY THAT GETS MISSED IS THE ONE THE GREP SHAPE CANNOT EXPRESS.
+
 **A mutation sweep opens with an UNMUTATED CONTROL round on the SAME selection,
 and every round count is a DELTA against it.** Sweeps here are hand-run — edit
 the source, `pytest`, read the summary line, restore — and that summary line is
@@ -180,17 +224,22 @@ it is the workflow this file mandates** (tracker #888). The record is written on
 ran on; the push then goes through `git fetch origin && git rebase origin/main && <re-run the
 gates> && git push`, and the re-run covers the GATES and not the PROSE. So the absolute lands
 describing a tree that is in no history, and it does so through the one step nobody can skip. The
-"last change" the paragraph above tells you to measure after is not YOURS — at `wip_limit = 3` two
-siblings are landing beside you and the release bot bumps after every green one, so staleness is
-the ordinary case, not the edge. Measured on card 840's landing at `04c126b`: the commit message
-says `1136 passed` and the docstring record says `200 collected`, while that card's own reviewer
+"last change" the paragraph above tells you to measure after is USUALLY not yours — at
+`wip_limit = 3` two siblings are landing beside you and the release bot bumps after every green
+one, so staleness is the ordinary case, not the edge. "Usually" is doing real work in that
+sentence, and the next paragraph is the case where the mover was the author. Measured on card
+840's landing at `04c126b`: the commit message says `1136 passed` and the docstring record says
+`200 collected`, while that card's own reviewer
 re-ran both on that very sha and got 1139 and 203, a sibling with three tests having landed in
 between — and the same card's `[worklog]` carries the right 1139, so the author DID re-measure, for
 the tracker and not for the prose. The sweep's own deltas reproduced exactly and no pin was blind:
 what breaks is only the figure that certifies round and control measured the same tree, which is
 the whole point of the cross-check. Two remedies, and the second is not the one that suggests
-itself. The rule — measure a tree-property figure AFTER the last rebase, immediately before the
-push — now lives in SKILL.md beside that chain, where the re-run is already prescribed. And the
+itself. The rule — "A FIGURE OR A QUOTATION claimed as a property of the TREE is measured AFTER the
+last rebase", and right before the push — now lives in SKILL.md beside that chain, where the re-run
+is already prescribed. That is the LIVE wording: #888 wrote the rule scoped to FIGURES, #1794
+widened both copies — the subject of the next paragraph — and this gloss kept the narrower noun
+through that landing, which is what this sentence closes. And the
 ANCHOR: `N at `<sha>`` extends to sweep records, so `test_measured_figure_anchors.py` can resolve
 the tree; it checks the LABEL and not the value, which is enough, because a named tree is one a
 reader can open. **A gate that DERIVES `collected` and compares it to the record is deliberately
@@ -199,6 +248,103 @@ turns an unrelated card's docstring edit into a red suite in a hot file), and he
 second full pytest run on top. Already-landed records in other cards are left alone: where they
 carry an anchor it is honest for its own tree, and where they do not, the rule is for FUTURE
 records.
+
+**A QUOTATION goes stale by the same mechanism, and the NOUN was the defect** (tracker #1794, out
+of VMCP-330 (1777)'s own post-mortem). `e57bc3f` landed a line in `references/deletions.md` naming
+the relocated rule as *"And the FORM matters too"* — a phrase no OTHER file of the tree held (the
+claiming file held it, which is the whole reason the check subtracts that file), because the
+SKILL.md line it copied was written in that same commit and then trimmed. The author's account: in
+a later round of size-trimming, `too` was cut from the SKILL.md line and the quotation already
+written was left alone. `3d0ffaf` corrected it to *"And the FORM matters"*. Re-derived here rather
+than taken from the card: `e57bc3f^` carries no `FORM matters` line in SKILL.md at all, `e57bc3f`
+carries it WITHOUT `too`, `git log -S` on the fabricated form returned 2 at `3d0ffaf` and 3 at
+`05bda7e` — the third being the commit that wrote this account, since `-S` lists whatever CHANGED
+the string's occurrence count and spelling the phantom out put it back into the tracked corpus, a
+point the #1784 paragraph below makes of `git grep -F` and not of this command — and `e57bc3f`'s
+author-date equals its commit-date with a bot bump for a parent. So **NOTHING
+REBASED AND NO SIBLING WAS INVOLVED** — author, quotation and cut sat in one working tree, which is
+why the rebase framing of the rule above read as not applying. That agent's own second-pass auditor
+had warned it that the prose stood on a tree which had moved under it; its response was to
+re-derive every NUMBER and leave the quotations, which is precisely what the rule said.
+
+THE ASYMMETRY IS IN DETECTION, and it runs the wrong way: a stale number eventually disagrees with
+a re-run, while a stale quotation reads as authoritative forever and nothing downstream ever
+contradicts it.
+
+NEITHER GATE FIRED, and the cross-reference one cannot be made to without three changes.
+`test_rulebook_cross_references.py` exists for exactly this, and driven against the `e57bc3f`
+wording its `_TRIGGER` does not match. The part worth having is that the OBVIOUS repair does
+nothing: adding `scratchpad` to `_NOUN` still does not match, because the ` of ` connector blocks
+it independently: with `scratchpad` added, the same sentence is still silent while ` of ` stands
+and FIRES once it is removed. Widen
+it far enough to fire and run the real test body against the CORRECTED tree, and it goes red on
+`deletions.md`'s *"And the FORM matters"*, a string SKILL.md:412 does carry. So do not read this as
+a two-word fix. `test_repo_quotation_claims.py` keys on `_CLAIM_TRIGGERS`, a short closed list of
+assertive idioms that an em-dash gloss does not use; driven on the sentence it returns nothing.
+Read that symbol rather than any paraphrase of it, here included — #1784 may move it, and an
+enumeration written here would then be one more stale claim about the tree. This paragraph's first
+draft DID enumerate them, and the gate went red on itself: naming the idioms made the sentence
+assert them, and at least one is a regex spelling rather than a tree literal.
+
+So #1794 widened the rule's NOUN rather than its evidence: SKILL.md now reads
+"A FIGURE OR A QUOTATION", CLAUDE.md "a tree-property figure — or a QUOTATION —", the mover
+sentence names YOUR OWN later edit beside a sibling's landing, and the practical step is one
+command per span — `git grep -F` a ONE-LINE FRAGMENT of it, requiring a hit OUTSIDE the file making
+the claim.
+
+TWO THINGS ABOUT THAT COMMAND, both found by RUNNING it on this card's own prose rather than
+reasoning about it. The FRAGMENT is the first: `git grep -F` matches within a LINE, these files
+wrap at about 100 characters, and a quoted span long enough to wrap returns NOTHING however
+faithfully it was copied — the exemplar below fires BOTH modes at once, since that span no-hits
+even inside SKILL.md, where it also wraps. The second is how to read a MISS, and it is the one
+that nearly shipped unstated: applied literally to the very bullet it sits in, the rule no-hits
+on SKILL.md's own quotation of
+card 840's COMMIT MESSAGE, because `git ls-files` does not carry commit messages and that span can
+therefore never have a tree hit. The ruler first, because the count that stood here named none:
+every double-quoted span OPENING on an added line of the diff, put through the prescribed command.
+By that ruler 6 at `05bda7e` miss, for reasons of that kind and every one of them benign. The
+figure that stood here was five, and it dropped one of the six without saying which. Several of them would serve
+and they are not equivalent: the retracted phantom above is a class BOTH copies of the rule name,
+while this file's own scare-quoted `last change` is a phrase credited to the paragraph above, which
+does not carry it — a class neither copy names. It is the unstated ruler and not the digit that is
+this paragraph's complaint in miniature.
+Both failures are safe in DIRECTION — a false alarm, not a
+silent pass — but an author who "corrects" a true quotation on the strength of one has made the
+tree worse. So both copies now say to grep a FRAGMENT and to read a MISS as a PROMPT and not a
+verdict, and SKILL.md names the exemption classes inline rather than pointing at them, because it
+ships in the wheel standalone — a consumer reaches neither this file nor CLAUDE.md's own list.
+
+THE SIZE COST IS NOT "NOTHING", AND IT IS NOT SYMMETRIC. SKILL.md went 126 450 -> 126 460
+characters against a ceiling of 126 470, so its headroom falls 20 -> 10; that half was paid for by
+condensing connective prose in its own bullet, with every quoted string and every figure of the
+#840 record left byte-identical — one METHOD span, `git show`, went with the connective prose — and
+the fuller account of #840 sitting above, naming the sha `04c126b` that SKILL.md never did.
+CLAUDE.md went 40 528 -> 40 642 against 40 652, and that is the half worth recording: its headroom
+falls 124 -> 10, so this one card spent 92% of what the repo rulebook had. Neither ceiling moved
+and neither documented bound under SKILL.md's ceiling was approached: the ratio band's FLOOR at
+126 022, and — well above it — the 126 428 BELOW which the live ratio drops under the pinned CENTRE
+(`3.11 x 40 652` = 126 427.72) and two mutation rounds recorded in `test_rulebook_size.py` silently
+stop reproducing. This paragraph first called 126 428 the floor, which both of its sources say
+outright it is not. The next rule entering either file will have to move a ceiling — and with
+SKILL.md's ceiling where it is, the ratio assert permits a CLAUDE.md
+ceiling no higher than **40 796** (126 470 / 3.10 = 40 796.77; at 40 797 it goes RED). That bound
+earns its space because the FIRST figure written here was 40 896: carried over from a ceiling-bump
+plan this card abandoned, never re-derived, and RED rather than merely loose. A stale tree-property
+figure, in the paragraph about stale tree-property figures, caught by the second independent pass
+and not by its author.
+
+Whether the GATE should widen to match is a separate decision, parked on VMCP-331 (1784), which
+reports six further live quotation defects across the rulebook set. One hazard for whoever takes
+it: `UNVERIFIABLE_QUOTATION_CLAIMS` is consumed by an EQUALITY, so an entry the scanner does not
+produce turns that gate RED — and if `_CLAIM_TRIGGERS` widens far enough to reach a sentence shaped
+like this paragraph's own first one, this file becomes a detected offender and needs its entry
+added in the same commit. Two more measurements for that card, both from this one's second pass.
+The `_NOUN` widening above costs at least TWO false reds, not one — `dispatch-depth.md`'s
+*"every time"* goes red beside `deletions.md`'s. And this very paragraph puts the phantom back
+into the tracked corpus: `git grep -F` on the fabricated form was a miss before it and is a hit
+now, which is exactly the case that gate's own refusal warns about — a phantom stops being an
+offender the moment any other tracked file quotes it, including one merely discussing the
+mistake.
 
 **And inflation is the friendlier half.** That stand was rebuilt on 2026-08-02:
 the same pre-622 sha exported twice, once with `.git` and once without, one
@@ -315,14 +461,15 @@ rather than softening it. `test_repo_quotation_claims.py` ALREADY declares
 `requires_git_checkout` — its own comment calls a missing `.git` "NOT APPLICABLE,
 not broken" — and already applies it to three of its six tests, and those three ARE
 three of the 61 skips. So the prescribed stand today is the worst of both: eleven
-loud failures and three silent holes in one module. Completing the marker moves the
-11 into the skip column, the archive stand then reads `control 0 failed` with
-`collected` still 1401, and the sweep this section governs proceeds blind — which
-this file rates as the worse error, since a table that lies in MINUS reads a live
-pin as blind and invites deleting it. The narrow measurement that settles it, the
-module alone: in a clone `collected 15 items` / 15 passed / 0 failed / 0 skipped,
-in the extraction `collected 15 items` / 11 failed / 1 passed / 3 skipped. Same
-`collected`, different stand, and only the skip count separates them.
+loud failures and three holes in one module that already read as ordinary skips.
+Completing the marker moves the 11 into the skip column, the archive stand then reads
+`control 0 failed` with `collected` still 1401, and the sweep this section governs
+proceeds blind — which this file rates as the worse error, since a table that lies in
+MINUS reads a live pin as blind and invites deleting it. The narrow measurement that
+settles it, the module alone: in a clone
+`collected 15 items` / 15 passed / 0 failed / 0 skipped, in the extraction
+`collected 15 items` / 11 failed / 1 passed / 3 skipped. Same `collected`, different
+stand, and only the skip count separates them.
 
 **`rsync -a --exclude .venv` is withdrawn on a DIFFERENT finding, and it is TWO
 instruments, not one — which is where this card's own first wording was too wide.**

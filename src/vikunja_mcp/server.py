@@ -412,6 +412,32 @@ def _wf() -> Workflow:
     return _workflow
 
 
+def _require_current_wip_limit(workflow: Workflow) -> None:
+    """Refuse claim when the repo policy changed after this Workflow was loaded.
+
+    Read only the current policy value from config; the cached Workflow stays bound to its
+    original API URL and project until the MCP server restarts.
+    """
+    try:
+        cfg = load_config()
+    except Exception as exc:
+        raise ConfigError(
+            "Cannot verify the current WIP limit from config; claim stopped before contacting "
+            "Vikunja. Fix the config and restart this MCP server before claiming"
+        ) from exc
+
+    loaded_limit = workflow._effective_wip_limit()
+    current_limit = Workflow.effective_wip_limit_for(
+        cfg.wip_limit, cfg.enforce_single_wip,
+    )
+    if loaded_limit != current_limit:
+        raise ConfigError(
+            f"WIP limit changed while this MCP server was running "
+            f"(loaded {loaded_limit}, current config {current_limit}). Restart this MCP server "
+            "to apply the new limit before claiming"
+        )
+
+
 def _reload_workflow_from_disk() -> bool:
     """Rebuild the cached Workflow from a FRESH read of config to pick up a token ROTATED in
     .vikunja-mcp.env while the server runs — but ONLY when that token actually CHANGED, and ONLY
@@ -610,7 +636,9 @@ def claim(task_id: int) -> dict:
     enforce_single_wip = true, else the default of 3. Claim refuses once you already hold N
     active Design/Build tasks — "WIP limit reached (N/N) — you already hold #… Finish one
     (advance to Review) or return_task it before claiming another". next_task's `wip` payload
-    reports the same limit and how many slots are free.
+    reports the same limit and how many slots are free. If the effective limit changes in the
+    repo config while this server runs, claim stops before contacting Vikunja and reports both
+    values; restart this MCP server to load the new policy.
     The gate guards THIS transition, and is NOT an invariant on the active count: a card
     re-enters Build WITHOUT passing it when review_task(verdict='needs_work') bounces it back
     from Review, or when a human moves it out of Your Call (or hand-places an assigned card in
@@ -620,7 +648,9 @@ def claim(task_id: int) -> dict:
     reviewed work). Claim keeps refusing while over budget and reports the true count
     ("WIP limit reached (4/3)"), and the overshoot clears itself when the rework reaches
     Review."""
-    return _wf().claim(task_id)
+    workflow = _wf()
+    _require_current_wip_limit(workflow)
+    return workflow.claim(task_id)
 
 
 @_mcp_tool
@@ -879,12 +909,18 @@ def decompose(task_id: int, subtasks: list[dict], ordered: bool = False) -> dict
 def file_task(
     title: str, description: str = "", priority: int = 0,
     related_task_id: int | None = None, project_id: int | None = None,
-    queue: bool = False, icebox: bool = False,
+    queue: bool = False, icebox: bool = False, breaks: str = "",
 ) -> dict:
     """File a task DISCOVERED mid-work (a bug/tech-debt OUTSIDE your current task) into
     Backlog for human triage. WHEN: you hit a problem unrelated to the current task with
     nowhere to put it — park it here, do NOT fix it silently and do NOT drag it into your
-    diff. This is NOT splitting your own large task — use decompose for that (it puts
+    diff.
+    BREAKS IS REQUIRED (#1987) for every filing except queue=True: one sentence naming what
+    goes wrong — for a user, an agent or a tool run — if this is never fixed. It becomes the
+    first line of the card. If you cannot name one, DO NOT FILE: a finding about text (a
+    wording, a stale figure, a claim wider than its measurement, a blind spot in a prose gate)
+    is dropped, not parked in Backlog or Icebox. The call refuses without it, nothing created.
+    This is NOT splitting your own large task — use decompose for that (it puts
     subtasks in Queue with a parenttask). Files into Backlog (NOT Queue — a human
     prioritizes), marks it with a [filed-by-agent] comment and, if related_task_id is
     given, adds a 'related' relation to the task it was found during. No ownership needed
@@ -931,12 +967,13 @@ def file_task(
     is still the string to echo. One case the ref cannot cover: if the call RAISES after
     the card was created (a scope gap on the move/relation/marker write), the card exists
     but you got no id and no ref — say so plainly rather than reconstructing either.
-    ICEBOX OPT-IN: pass icebox=True for a finding that is REAL but very minor — cosmetic
-    legacy, wording, a nit in code nobody maintains — the kind you would otherwise drop in
-    Backlog knowing full well no human will ever prioritise it. The card lands in the Icebox
-    column labelled `icebox`: the freezer. Use it to keep Backlog meaning "a human still owes
-    this a decision"; do NOT use it to park work you simply did not want to do, and do not
-    treat filing there as having addressed the finding — say in your report that you froze it.
+    ICEBOX OPT-IN: pass icebox=True for a BEHAVIOUR defect that is real but very minor — in
+    legacy or code nobody maintains — the kind you would otherwise drop in Backlog knowing full
+    well no human will ever prioritise it. Never for wording: that is dropped, not frozen. The
+    card lands in the Icebox column labelled `icebox`: the freezer. Use it to keep Backlog
+    meaning "a human still owes this a decision"; do NOT use it to park work you simply did
+    not want to do, and do not treat filing there as having addressed the finding — say in
+    your report that you froze it.
     Not combinable with queue=True (opposite instructions — refused, nothing created). It IS
     allowed cross-project, unlike queue: another project's Queue injects work their human never
     sanctioned, another project's Icebox wakes nobody. If the target board predates this stage
@@ -947,6 +984,7 @@ def file_task(
     return _wf().file_task(
         title, description=description, priority=priority,
         related_task_id=related_task_id, project_id=project_id, queue=queue, icebox=icebox,
+        breaks=breaks,
     )
 
 
