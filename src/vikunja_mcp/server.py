@@ -1,6 +1,7 @@
 """stdio MCP server. Gates live in Workflow; this is thin wiring and clear errors."""
 import os
 import sys
+import tomllib
 from functools import wraps
 
 import httpx
@@ -420,7 +421,9 @@ def _require_current_wip_limit(workflow: Workflow) -> None:
     """
     try:
         cfg = load_config()
-    except Exception as exc:
+    # These are the loader's expected refusal/read failures: semantic ConfigError, malformed
+    # TOML, filesystem access, or text decoding. Programmer errors such as TypeError propagate.
+    except (ConfigError, tomllib.TOMLDecodeError, OSError, UnicodeError) as exc:
         raise ConfigError(
             "Cannot verify the current WIP limit from config; claim stopped before contacting "
             "Vikunja. Fix the config and restart this MCP server before claiming"

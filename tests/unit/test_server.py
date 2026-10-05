@@ -2,6 +2,7 @@ import asyncio
 import json
 import subprocess
 import sys
+import tomllib
 
 import httpx
 
@@ -106,6 +107,49 @@ def test_claim_requires_restart_when_the_loaded_wip_limit_is_stale(monkeypatch, 
     claimed = server.claim(queued["id"])
     assert claimed["claimed"] is True
     assert api.stage_of(queued["id"]) == "Design"
+
+
+@pytest.mark.parametrize("error_kind", ["config", "toml", "filesystem", "decode"])
+def test_claim_reports_expected_config_loader_errors_as_restart_guidance(
+    monkeypatch, error_kind,
+):
+    """Expected config failures retain the actionable closed-claim response."""
+    if error_kind == "config":
+        error = ConfigError("invalid configuration")
+    elif error_kind == "toml":
+        with pytest.raises(tomllib.TOMLDecodeError) as exc_info:
+            tomllib.loads("tracker = [")
+        error = exc_info.value
+    elif error_kind == "filesystem":
+        error = OSError("configuration file unreadable")
+    else:
+        error = UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    monkeypatch.setattr(server, "_wf", lambda: object())
+
+    def fail_to_load_config():
+        raise error
+
+    monkeypatch.setattr(server, "load_config", fail_to_load_config)
+
+    result = server.claim(7)
+
+    assert "error" in result
+    assert "Cannot verify the current WIP limit" in result["error"]
+    assert "restart" in result["error"].lower()
+
+
+def test_claim_propagates_unexpected_config_loader_bug(monkeypatch):
+    """Programmer errors from the loader must keep their traceback and type."""
+    monkeypatch.setattr(server, "_wf", lambda: object())
+
+    def fail_to_load_config():
+        raise TypeError("synthetic internal failure")
+
+    monkeypatch.setattr(server, "load_config", fail_to_load_config)
+
+    with pytest.raises(TypeError, match="synthetic internal failure"):
+        server.claim(7)
 
 
 def test_tool_catches_transport_errors_with_hint(monkeypatch):
