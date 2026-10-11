@@ -1068,7 +1068,11 @@ def delegated_move(
       mark-done: move the card to Done ON the user's explicit close instruction.
         Requires evidence (what was verified and how). REFUSED for a card the agent's
         own account created unless the independent `reviewed` label is already on it —
-        an agent never certifies its own work. Audit comment posted BEFORE the move.
+        VIKUNJA_DELEGATION_AGENT_MARK_DONE opts out of that guard. The record and audit
+        remain mandatory. Audit comment posted BEFORE the move.
+      move-stage: move to the record's stage, including out of Done or Icebox.
+        A Done target uses the same review guard and opt-out as mark-done; every
+        move touching Done audits BEFORE moving. Unknown and no-op stages refuse.
       triage-to-queue: move a Backlog card to Queue on the user's explicit "work on
         this" instruction (the human hand-bounce this replaces). The card stays
         UNASSIGNED and claimable like any human-triaged card.
@@ -1078,10 +1082,12 @@ def delegated_move(
 
     BEFORE CALLING: record the user's instruction verbatim in the delegation record
     file (~/.config/vikunja-mcp/delegation-authorized.toml), one [[authorized_move]]
-    block per transition: task_id, action, label (label actions only), instruction
-    (the user's own words, quoted), evidence (mark-done only), authorized_at, expires
+    block per transition: task_id, action, stage (move-stage only), label (label actions only),
+    instruction (the user's own words, quoted), evidence (required for mark-done),
+    authorized_at, expires
     (TOML datetimes with timezone). A delegated move fires ONLY on that record; no
     entry, no move; expired entries refuse; blanket grants are not expressible.
+    The record supplies the audit quote and evidence; call arguments cannot override it.
 
     The move lands with a dated [delegated-move] audit comment quoting the
     instruction — the human audits it on the card and revokes (token, server entry,
